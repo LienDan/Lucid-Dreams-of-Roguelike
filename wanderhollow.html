@@ -5477,7 +5477,7 @@ function newPlayer() {
     maxCharge: 60, charge: 60, corruption: 0,
     equipment: { hand: null, offhand: null, body: null, head: null, feet: null, ring: null, amulet: null, gloves: null, cloak: null },
     inventory: [],
-    knownSpells: ['magicmissile'], knownTechniques: [], knownRecipes: [],
+    knownSpells: [], knownTechniques: [], knownRecipes: [],
     knownCyberIds: [], installedCyber: [], cyberSlots: 3,
     mutations: [],
     buffs: {}, statusPoison: 0, statusFear: 0, statusConfuse: 0, alive: true, kind: 'player', name: 'You',
@@ -6064,7 +6064,8 @@ function movePlayer(dx, dy) {
         log(player.stamina > 20 ? 'You swim through the cold water.' : 'You are getting exhausted swimming!');
         endTurn(); return;
       }
-      log("You're too exhausted to swim! You flounder and take damage.");
+      player.x = nx; player.y = ny;
+      log("You're too exhausted to swim properly! You flounder and take damage.");
       player.hp -= 3;
       if (player.hp <= 0) { onDeath(player, null); return; }
       endTurn(); return;
@@ -6627,37 +6628,105 @@ function importSave() {
 }
 
 // ---- character creation: archetype presets (quick start) + full custom point-buy ----
+// v2 overhaul: rebuilt from scratch against the full current ability roster (10 martial schools,
+// 17 magic schools, cybernetics, eldritch mutations) instead of the old handful of early-build
+// classes. Every archetype below grants gear + starting abilities that actually match its theme,
+// and none of them silently hand out Magic Missile unless the class is genuinely an arcane caster
+// who picked it. Custom and Random are handled separately in showArchetypePicker/archetypeChoice.
 const ARCHETYPES = [
-  { id:'warrior', name:'Warrior', desc:'A hardened melee fighter. Strong and tough from the start.',
+  // ---- martial: weapon-school classes ----
+  { id:'warrior', name:'Warrior', desc:'A hardened melee fighter, front and center. Strong and tough from the start.',
     apply: () => { player.str+=4; player.con+=2; player.gold+=100;
-      const sw=makeItem('longsword',0,Math.random), ar=makeItem('leather',0,Math.random);
-      player.equipment.hand=sw; player.equipment.body=ar; player.knownTechniques.push('precisestrike','shieldwall'); } },
-  { id:'mage', name:'Mage', desc:'A scholar of the arcane, wielding spells over steel.',
-    apply: () => { player.int+=4; player.wis+=2; player.gold+=60;
-      const st=makeItem('staff',0,Math.random), ro=makeItem('robe',0,Math.random);
-      player.equipment.hand=st; player.equipment.body=ro; player.knownSpells.push('firebolt','heal'); } },
-  { id:'rogue', name:'Rogue', desc:'Quick, cunning, and always ready with a blade.',
+      player.equipment.hand=makeItem('longsword',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
+      player.knownTechniques.push('precisestrike','shieldwall'); } },
+  { id:'lancer', name:'Lancer', desc:'Disciplined spear-fighter who controls the fight from range and up close alike.',
+    apply: () => { player.str+=3; player.dex+=2; player.con+=1; player.gold+=90;
+      player.equipment.hand=makeItem('spear',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
+      player.knownTechniques.push('piercingthrust','guardstance'); } },
+  { id:'ranger', name:'Ranger', desc:'A survivalist marksman at home in the wilds, picking foes off from a distance.',
+    apply: () => { player.dex+=4; player.con+=1; player.wis+=1; player.gold+=80;
+      player.equipment.hand=makeItem('bow',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
+      player.knownTechniques.push('aimedshot','eagleeye'); } },
+  { id:'duelist', name:'Duelist', desc:'A blade in each hand, weaving offense and defense in the same breath.',
+    apply: () => { player.dex+=4; player.str+=1; player.con+=1; player.gold+=85;
+      player.equipment.hand=makeItem('rapier',0,Math.random); player.equipment.offhand=makeItem('off_hand_dagger',0,Math.random);
+      player.knownTechniques.push('twinslash','crossparry'); } },
+  { id:'rogue', name:'Rogue', desc:'Quick, cunning, and always ready to find the gap in someone\'s guard.',
     apply: () => { player.dex+=4; player.int+=2; player.gold+=90;
-      const dg=makeItem('dagger',0,Math.random), ar=makeItem('leather',0,Math.random);
-      player.equipment.hand=dg; player.equipment.body=ar; player.knownTechniques.push('precisestrike'); } },
-  { id:'ranger', name:'Ranger', desc:'A survivalist marksman at home in the wilds.',
-    apply: () => { player.dex+=3; player.str+=2; player.con+=1; player.gold+=80;
-      const bw=makeItem('bow',0,Math.random), ar=makeItem('leather',0,Math.random);
-      player.equipment.hand=bw; player.equipment.body=ar; player.knownTechniques.push('aimedshot'); } },
-  { id:'necromancer', name:'Necromancer', desc:'A student of death, commanding the fallen.',
+      player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
+      player.knownTechniques.push('quickstab','shadowstep'); } },
+  { id:'brawler', name:'Brawler', desc:'No weapon needed — just fists, elbows, and a willingness to get close.',
+    apply: () => { player.str+=3; player.dex+=2; player.con+=2; player.gold+=60;
+      player.equipment.body=makeItem('leather',0,Math.random); player.equipment.gloves=makeItem('gloves',0,Math.random);
+      player.knownTechniques.push('ironfist','sweepingkick'); } },
+  { id:'berserker', name:'Berserker', desc:'Fights harder the more it costs — spends blood to buy fury.',
+    apply: () => { player.str+=4; player.con+=3; player.gold+=70;
+      player.equipment.hand=makeItem('waraxe',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
+      player.knownTechniques.push('ragingblow','recklessswing'); } },
+  { id:'monk', name:'Monk', desc:'A disciplined martial artist who channels inner stillness into devastating strikes.',
+    apply: () => { player.wis+=3; player.dex+=2; player.con+=1; player.gold+=55;
+      player.equipment.body=makeItem('robe',0,Math.random); player.equipment.gloves=makeItem('gloves',0,Math.random);
+      player.knownTechniques.push('meditativestrike','kiflow'); } },
+  { id:'commander', name:'Commander', desc:'A battlefield tactician who holds the line and turns the tide with a shout.',
+    apply: () => { player.str+=2; player.wis+=2; player.con+=2; player.gold+=95;
+      player.equipment.hand=makeItem('longsword',0,Math.random); player.equipment.offhand=makeItem('shield',0,Math.random); player.equipment.body=makeItem('chainmail',0,Math.random);
+      player.knownTechniques.push('battlecry','shieldwall'); } },
+  // ---- arcane & elemental casters ----
+  { id:'mage', name:'Mage', desc:'A scholar of the raw arcane, wielding spells over steel.',
+    apply: () => { player.int+=4; player.wis+=2; player.gold+=60;
+      player.equipment.hand=makeItem('staff',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.knownSpells.push('magicmissile','shield'); } },
+  { id:'elementalist', name:'Elementalist', desc:'Hurls fire and ice with equal enthusiasm and very little subtlety.',
+    apply: () => { player.int+=4; player.con+=2; player.gold+=65;
+      player.equipment.hand=makeItem('wand_fire',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.knownSpells.push('firebolt','frostbolt'); } },
+  { id:'stormcaller', name:'Stormcaller', desc:'Calls down wind and lightning to scatter foes before they can close in.',
+    apply: () => { player.int+=3; player.wis+=2; player.dex+=1; player.gold+=65;
+      player.equipment.hand=makeItem('oak_staff',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.knownSpells.push('galewind','lightningjavelin'); } },
+  { id:'chronomancer', name:'Chronomancer', desc:'Bends the flow of time around themself, just slightly, just enough.',
+    apply: () => { player.int+=3; player.dex+=2; player.wis+=1; player.gold+=65;
+      player.equipment.hand=makeItem('wand_arcane',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.knownSpells.push('accelerate','foresight'); } },
+  { id:'illusionist', name:'Illusionist', desc:'Wins fights by making sure the enemy can never quite tell where you are.',
+    apply: () => { player.int+=3; player.dex+=3; player.gold+=65;
+      player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.knownSpells.push('mirrorimage','phantomstep'); } },
+  // ---- life, death & nature casters ----
+  { id:'paladin', name:'Paladin', desc:'A holy warrior — armored, devout, and lethal to anything undead.',
+    apply: () => { player.str+=2; player.wis+=3; player.con+=1; player.gold+=90;
+      player.equipment.hand=makeItem('holy_mace',0,Math.random); player.equipment.body=makeItem('chainmail',0,Math.random);
+      player.knownSpells.push('smite','purify'); } },
+  { id:'druid', name:'Druid', desc:'Speaks for the wild places, calling on thorns, roots, and old green magic.',
+    apply: () => { player.wis+=4; player.con+=2; player.gold+=55;
+      player.equipment.hand=makeItem('oak_staff',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.knownSpells.push('thornwhip','naturesward'); } },
+  { id:'necromancer', name:'Necromancer', desc:'A student of death, commanding the fallen to fight in their own place.',
     apply: () => { player.int+=4; player.con+=2; player.gold+=70;
-      const dg=makeItem('dagger',0,Math.random), ro=makeItem('robe',0,Math.random);
-      player.equipment.hand=dg; player.equipment.body=ro; player.knownSpells.push('summonskeleton','drain'); } },
+      player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.knownSpells.push('summonskeleton','drain'); } },
+  { id:'bloodmage', name:'Blood Mage', desc:'Pays for power in their own blood, and it always seems to be worth it.',
+    apply: () => { player.int+=3; player.con+=3; player.gold+=60;
+      player.equipment.hand=makeItem('stiletto',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.knownSpells.push('bloodpact','hemorrhage'); } },
+  { id:'summoner', name:'Summoner', desc:'Prefers to let something else do the fighting, and calls it out of thin air.',
+    apply: () => { player.int+=3; player.wis+=3; player.gold+=60;
+      player.equipment.hand=makeItem('staff',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.knownSpells.push('summonwolf','summonspirit'); } },
+  { id:'alchemist', name:'Alchemist', desc:'Turns flasks, gas, and volatile compounds into a surprisingly deep bag of tricks.',
+    apply: () => { player.int+=3; player.con+=2; player.dex+=1; player.gold+=75;
+      player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.inventory.push(makeItem('antidote',0,Math.random));
+      player.knownSpells.push('alchemistfire','acidflask'); } },
+  // ---- fringe: cybernetics & eldritch mutation ----
   { id:'cyberadept', name:'Cyber-Adept', desc:'Augmented flesh and steel — you paid a fortune for your first implant.',
     apply: () => { player.dex+=2; player.int+=2; player.str+=1; player.gold+=50;
-      const dg=makeItem('dagger',0,Math.random), ar=makeItem('leather',0,Math.random);
-      player.equipment.hand=dg; player.equipment.body=ar;
+      player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
       player.knownCyberIds.push('reflexbooster'); player.installedCyber.push('reflexbooster');
       const c=CYBERNETICS.find(x=>x.id==='reflexbooster'); if (c.apply) c.apply(); } },
-  { id:'occultist', name:'Occultist', desc:'You have already glimpsed something you cannot unsee.',
+  { id:'occultist', name:'Occultist', desc:'You have already glimpsed something you cannot unsee, and it changed you.',
     apply: () => { player.int+=2; player.wis+=2; player.con+=1; player.gold+=50;
-      const dg=makeItem('dagger',0,Math.random), ro=makeItem('robe',0,Math.random);
-      player.equipment.hand=dg; player.equipment.body=ro;
+      player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
       player.mutations.push('chitinoushide'); player.corruption=15;
       const m=MUTATIONS.find(x=>x.id==='chitinoushide'); if (m.apply) m.apply(); } },
 ];
@@ -6678,25 +6747,29 @@ function mainMenuChoice(letter) {
   if (letter === 'c') { openHelp(); return; }
   if (letter === 'd' && hasSaveGame()) { deleteSaveGame(); showMainMenu(); return; }
 }
+// Custom and Random sit at the front (before the letter-indexed premade classes) since they're
+// the two most commonly used entry points: Custom for players who want full control, Random for
+// players who just want to jump in. ARCHETYPES itself holds only the premade classes, offset by 2.
 function showArchetypePicker() {
   gameState = 'create_archetype';
   let html = '';
+  html += `<div class="modal-opt" onclick="simulateKey('a')">[a] <b>Custom</b> — build your own from scratch with a point-buy system.</div>`;
+  html += `<div class="modal-opt" onclick="simulateKey('b')">[b] <b>Random</b> — roll a random premade class and just go.</div>`;
   ARCHETYPES.forEach((a, i) => {
-    const letter = String.fromCharCode(97 + i);
+    const letter = String.fromCharCode(97 + i + 2);
     html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] <b>${a.name}</b> — ${a.desc}</div>`;
   });
-  const customLetter = String.fromCharCode(97 + ARCHETYPES.length);
-  html += `<div class="modal-opt" onclick="simulateKey('${customLetter}')">[${customLetter}] <b>Custom</b> — build your own from scratch with a point-buy system.</div>`;
   html += `<div class="modal-opt" onclick="simulateKey('<')" style="margin-top:6px">[&lt;] Back to Main Menu</div>`;
   renderModal('Choose Your Path', html, 'Letter/click to choose, &lt; to go back.');
 }
 function archetypeChoice(letter) {
   if (letter === '<') { showMainMenu(); return; }
-  const idx = letter.charCodeAt(0) - 97;
-  player = newPlayer();
-  if (idx === ARCHETYPES.length) { creationDraft = { points: CREATION_POINTS, statAdds:{str:0,dex:0,int:0,con:0,wis:0}, abilities:[], abilityCat:'spells', gold:0, items:[] }; showCreateStats(); return; }
+  if (letter === 'a') { player = newPlayer(); creationDraft = { points: CREATION_POINTS, statAdds:{str:0,dex:0,int:0,con:0,wis:0}, abilities:[], abilityCat:'spells', gold:0, items:[] }; showCreateStats(); return; }
+  if (letter === 'b') { player = newPlayer(); const arch = choice(Math.random, ARCHETYPES); arch.apply(); player.scenario = 'archetype:' + arch.id; log(`*** Random roll: you are a ${arch.name}! ***`); showStartScreen(); return; }
+  const idx = letter.charCodeAt(0) - 97 - 2;
   const arch = ARCHETYPES[idx];
   if (!arch) return;
+  player = newPlayer();
   arch.apply();
   player.scenario = 'archetype:' + arch.id;
   showStartScreen();
@@ -6936,9 +7009,13 @@ function generateMutationGuideHTML() {
 }
 const GUIDE_SECTIONS = [
   { id:'start', label:'Start', html: () => `
-    <div class="modal-opt">New games begin with a character creator: pick a ready-made archetype (Warrior, Mage, Rogue,
-    Ranger, Necromancer, Cyber-Adept, Occultist) for a quick start, or Custom to build your own from a
-    ${CREATION_POINTS}-point budget.</div>
+    <div class="modal-opt">New games begin with a character creator. <b>Custom</b> lets you build your own from a
+    ${CREATION_POINTS}-point budget, and <b>Random</b> rolls a premade class for you if you just want to jump in.
+    Beyond those two, there are ${ARCHETYPES.length} ready-made classes spanning every weapon school (Warrior,
+    Lancer, Ranger, Duelist, Rogue, Brawler, Berserker, Monk, Commander), every school of magic (Mage, Elementalist,
+    Stormcaller, Chronomancer, Illusionist, Paladin, Druid, Necromancer, Blood Mage, Summoner, Alchemist), and the
+    fringe paths of Cyber-Adept and Occultist. Each starts with gear and abilities that actually fit its theme — you
+    won't find yourself handed a spell that has nothing to do with your class.</div>
     <div class="modal-opt">Custom creation has three steps — Attributes, Abilities, then Gold &amp; Equipment — and you
     can freely move <b>[&lt;] Back</b> to an earlier step at any point to change your mind; nothing you've already
     chosen is lost while you do. On the Abilities step, press <b>1-4</b> (or click the tabs) to switch between four
