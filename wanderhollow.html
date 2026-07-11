@@ -117,6 +117,10 @@
   <div class="titlebar">
     <h1>Wanderhollow</h1>
     <span class="sub">an infinite roguelike &mdash; press <b style="color:var(--amber)">?</b> for help</span>
+    <div style="margin-left:auto; align-self:center; display:flex; align-items:center; gap:12px; font-size:11px; color:var(--text-dim);">
+      <button id="audio-mute-btn" onclick="Sound.toggleMute()" title="Mute/unmute all sound" style="background:none;border:1px solid var(--line);color:var(--amber);cursor:pointer;padding:2px 9px;font-family:inherit;font-size:13px;border-radius:2px;">🔊</button>
+      <label style="display:flex;align-items:center;gap:5px;">SFX<input type="range" min="0" max="100" value="70" oninput="Sound.setSfxVolume(this.value/100)" style="width:64px;"></label>
+    </div>
   </div>
 
   <div class="layout">
@@ -197,6 +201,221 @@
   </div>
 
 <script>
+// ===================== SOUND MANAGER =====================
+// Everything below is synthesized live with the Web Audio API — there are no
+// external audio files. This keeps the game a single portable HTML file and
+// sidesteps autoplay/loading issues entirely. NOTE: uses `actx` for the audio
+// context (NOT `ctx`, which the renderer already uses for the canvas).
+const Sound = (function () {
+  let actx = null;
+  let master = null, sfxBus = null;
+  let muted = false;
+  let sfxVol = 0.7;
+  let lastFootstepAt = 0;
+  let unlocked = false;
+
+  function ensureCtx() {
+    if (actx) return true;
+    try {
+      actx = new (window.AudioContext || window.webkitAudioContext)();
+      master = actx.createGain(); master.gain.value = 1; master.connect(actx.destination);
+      sfxBus = actx.createGain(); sfxBus.gain.value = sfxVol; sfxBus.connect(master);
+      return true;
+    } catch (e) { return false; }
+  }
+
+  function unlock() {
+    if (!ensureCtx()) return;
+    if (actx.state === 'suspended') actx.resume();
+    unlocked = true;
+  }
+
+  function now() { return actx.currentTime; }
+
+  // ---- low-level synthesis primitives ----
+  function envGain(g, t0, o) {
+    const a = o.a != null ? o.a : 0.005, d = o.d != null ? o.d : 0.08, s = o.s != null ? o.s : 0,
+          r = o.r != null ? o.r : 0.08, peak = o.peak != null ? o.peak : 0.4;
+    g.gain.cancelScheduledValues(t0);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), t0 + a);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak * Math.max(0.001, s)), t0 + a + d);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + a + d + r);
+    return t0 + a + d + r;
+  }
+
+  function tone(freq, o) {
+    o = o || {};
+    const t0 = now() + (o.delay || 0);
+    const osc = actx.createOscillator();
+    osc.type = o.type || 'sine';
+    osc.frequency.setValueAtTime(freq, t0);
+    if (o.slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(1, o.slideTo), t0 + (o.slideDur || 0.15));
+    if (o.detune) osc.detune.setValueAtTime(o.detune, t0);
+    const g = actx.createGain();
+    let outNode = osc;
+    if (o.filterFreq) {
+      const f = actx.createBiquadFilter();
+      f.type = o.filterType || 'lowpass';
+      f.frequency.setValueAtTime(o.filterFreq, t0);
+      if (o.filterQ) f.Q.setValueAtTime(o.filterQ, t0);
+      osc.connect(f); outNode = f;
+    }
+    outNode.connect(g); g.connect(sfxBus);
+    const end = envGain(g, t0, o);
+    osc.start(t0); osc.stop(end + 0.05);
+    return { osc, g, end };
+  }
+
+  function noiseBurst(o) {
+    o = o || {};
+    const t0 = now() + (o.delay || 0);
+    const dur = o.dur || 0.15;
+    const bufSize = Math.max(1, Math.floor(actx.sampleRate * dur));
+    const buf = actx.createBuffer(1, bufSize, actx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    const src = actx.createBufferSource(); src.buffer = buf;
+    const filt = actx.createBiquadFilter();
+    filt.type = o.filterType || 'bandpass';
+    filt.frequency.setValueAtTime(o.filterFreq || 1200, t0);
+    filt.Q.setValueAtTime(o.filterQ || 1, t0);
+    const g = actx.createGain();
+    src.connect(filt); filt.connect(g); g.connect(sfxBus);
+    const end = envGain(g, t0, Object.assign({ a: 0.002, d: dur * 0.3, s: 0.15, r: dur * 0.6, peak: 0.35 }, o));
+    src.start(t0); src.stop(end + 0.05);
+    return { src, g, end };
+  }
+
+  function chord(freqs, o) {
+    freqs.forEach((f, i) => tone(f, Object.assign({}, o, { delay: (o && o.delay || 0) + i * (o && o.strum || 0) })));
+  }
+
+  // ---- named sound effects ----
+  const FX = {
+    // combat
+    hit() { noiseBurst({ dur: 0.08, filterFreq: 900, filterType: 'lowpass', peak: 0.35 }); tone(140, { type: 'triangle', a: 0.001, d: 0.05, r: 0.06, peak: 0.3 }); },
+    critHit() { noiseBurst({ dur: 0.1, filterFreq: 1400, peak: 0.45 }); tone(220, { type: 'square', a: 0.001, d: 0.06, r: 0.08, peak: 0.3 }); tone(440, { type: 'sine', delay: 0.04, a: 0.001, d: 0.08, r: 0.1, peak: 0.25 }); },
+    enemyHit() { noiseBurst({ dur: 0.07, filterFreq: 700, peak: 0.28 }); tone(110, { type: 'triangle', a: 0.001, d: 0.05, r: 0.05, peak: 0.22 }); },
+    playerHurt() { noiseBurst({ dur: 0.1, filterFreq: 500, filterType: 'lowpass', peak: 0.4 }); tone(160, { type: 'sawtooth', slideTo: 90, slideDur: 0.15, a: 0.001, d: 0.1, r: 0.12, peak: 0.28 }); },
+    miss() { tone(300, { type: 'sine', slideTo: 500, slideDur: 0.1, a: 0.002, d: 0.05, r: 0.08, peak: 0.15 }); },
+    enemyMiss() { tone(220, { type: 'sine', slideTo: 340, slideDur: 0.1, a: 0.002, d: 0.05, r: 0.08, peak: 0.12 }); },
+    breathWeapon() { noiseBurst({ dur: 0.4, filterFreq: 500, filterType: 'lowpass', peak: 0.5 }); tone(80, { type: 'sawtooth', slideTo: 50, slideDur: 0.4, a: 0.01, d: 0.2, r: 0.3, peak: 0.35 }); },
+    secondWind() { chord([440, 660, 880], { type: 'sine', strum: 0.06, a: 0.01, d: 0.15, r: 0.25, peak: 0.3 }); },
+
+    // death
+    monsterDeath() { tone(220, { type: 'sawtooth', slideTo: 60, slideDur: 0.3, a: 0.002, d: 0.15, r: 0.2, peak: 0.3 }); noiseBurst({ dur: 0.15, filterFreq: 300, peak: 0.2 }); },
+    npcDeath() { tone(180, { type: 'sawtooth', slideTo: 50, slideDur: 0.35, a: 0.002, d: 0.15, r: 0.25, peak: 0.28 }); },
+    playerDeath() { [523, 466, 392, 311, 220].forEach((f, i) => tone(f, { type: 'sine', delay: i * 0.22, a: 0.01, d: 0.3, r: 0.4, peak: 0.32 })); },
+
+    // items / economy
+    pickup() { tone(500, { type: 'sine', slideTo: 750, slideDur: 0.08, a: 0.002, d: 0.05, r: 0.08, peak: 0.22 }); },
+    gold() { tone(1100, { type: 'square', a: 0.001, d: 0.03, r: 0.05, peak: 0.12 }); tone(1500, { type: 'square', delay: 0.05, a: 0.001, d: 0.03, r: 0.08, peak: 0.12 }); },
+    equip() { noiseBurst({ dur: 0.05, filterFreq: 2500, filterType: 'highpass', peak: 0.2 }); tone(600, { type: 'square', a: 0.001, d: 0.03, r: 0.04, peak: 0.12 }); },
+    unequip() { tone(400, { type: 'square', slideTo: 300, slideDur: 0.06, a: 0.001, d: 0.03, r: 0.05, peak: 0.1 }); },
+    drop() { tone(200, { type: 'triangle', slideTo: 120, slideDur: 0.08, a: 0.001, d: 0.04, r: 0.06, peak: 0.18 }); },
+    eat() { noiseBurst({ dur: 0.1, filterFreq: 1800, filterType: 'bandpass', peak: 0.22 }); },
+    drink() { tone(300, { type: 'sine', slideTo: 260, slideDur: 0.15, a: 0.005, d: 0.08, r: 0.12, peak: 0.2 }); noiseBurst({ dur: 0.1, filterFreq: 1200, peak: 0.1 }); },
+    chest() { noiseBurst({ dur: 0.2, filterFreq: 400, filterType: 'lowpass', peak: 0.3 }); chord([440, 660, 880], { type: 'triangle', strum: 0.05, a: 0.005, d: 0.1, r: 0.2, peak: 0.16 }); },
+
+    // crafting / trade
+    craftSuccess() { chord([392, 523, 659], { type: 'triangle', strum: 0.06, a: 0.005, d: 0.1, r: 0.18, peak: 0.22 }); },
+    craftFail() { tone(180, { type: 'square', slideTo: 120, slideDur: 0.15, a: 0.002, d: 0.08, r: 0.15, peak: 0.2 }); },
+    tradeBuy() { tone(700, { type: 'sine', a: 0.001, d: 0.04, r: 0.06, peak: 0.16 }); tone(1000, { delay: 0.05, type: 'sine', a: 0.001, d: 0.04, r: 0.08, peak: 0.14 }); },
+    tradeSell() { tone(1000, { type: 'sine', a: 0.001, d: 0.04, r: 0.06, peak: 0.16 }); tone(700, { delay: 0.05, type: 'sine', a: 0.001, d: 0.04, r: 0.08, peak: 0.14 }); },
+
+    // movement / world
+    door() { noiseBurst({ dur: 0.3, filterFreq: 350, filterType: 'lowpass', peak: 0.18 }); tone(120, { type: 'sawtooth', slideTo: 90, slideDur: 0.3, a: 0.02, d: 0.15, r: 0.2, peak: 0.1 }); },
+    gate() { noiseBurst({ dur: 0.45, filterFreq: 250, filterType: 'lowpass', peak: 0.25 }); tone(80, { type: 'sawtooth', slideTo: 55, slideDur: 0.45, a: 0.03, d: 0.2, r: 0.3, peak: 0.14 }); },
+    stairs() { tone(300, { type: 'sine', slideTo: 180, slideDur: 0.25, a: 0.005, d: 0.12, r: 0.2, peak: 0.2 }); },
+    stairsUp() { tone(220, { type: 'sine', slideTo: 380, slideDur: 0.25, a: 0.005, d: 0.12, r: 0.2, peak: 0.2 }); },
+    shrine() { chord([392, 587, 784], { type: 'sine', strum: 0.08, a: 0.02, d: 0.3, r: 0.4, peak: 0.22 }); },
+    trap() { noiseBurst({ dur: 0.12, filterFreq: 2000, peak: 0.35 }); tone(90, { type: 'square', a: 0.001, d: 0.06, r: 0.08, peak: 0.25 }); },
+    splash() { noiseBurst({ dur: 0.18, filterFreq: 1500, filterType: 'bandpass', peak: 0.22 }); tone(200, { type: 'sine', slideTo: 100, slideDur: 0.15, a: 0.002, d: 0.08, r: 0.1, peak: 0.12 }); },
+    bump() { tone(90, { type: 'square', a: 0.001, d: 0.03, r: 0.04, peak: 0.15 }); },
+    blink() { tone(300, { type: 'sine', slideTo: 900, slideDur: 0.12, a: 0.002, d: 0.06, r: 0.1, peak: 0.2 }); tone(1200, { delay: 0.11, type: 'sine', a: 0.001, d: 0.03, r: 0.06, peak: 0.14 }); },
+    summon() { tone(200, { type: 'sawtooth', slideTo: 500, slideDur: 0.3, a: 0.02, d: 0.15, r: 0.2, peak: 0.2 }); noiseBurst({ dur: 0.25, filterFreq: 900, delay: 0.05, peak: 0.15 }); },
+
+    footstepGrass() { const f = 400 + Math.random() * 100; noiseBurst({ dur: 0.05, filterFreq: f, filterType: 'bandpass', peak: 0.06 }); },
+    footstepStone() { noiseBurst({ dur: 0.04, filterFreq: 2200 + Math.random() * 400, filterType: 'highpass', peak: 0.07 }); },
+    footstepSand() { noiseBurst({ dur: 0.06, filterFreq: 1000 + Math.random() * 300, filterType: 'bandpass', peak: 0.05 }); },
+
+    // social / quests
+    questAccept() { tone(500, { type: 'triangle', slideTo: 650, slideDur: 0.1, a: 0.003, d: 0.06, r: 0.1, peak: 0.18 }); },
+    questComplete() { chord([523, 659, 784, 1046], { type: 'triangle', strum: 0.07, a: 0.005, d: 0.12, r: 0.25, peak: 0.24 }); },
+    marriage() { chord([523, 659, 784, 1046, 1318], { type: 'sine', strum: 0.09, a: 0.01, d: 0.2, r: 0.4, peak: 0.24 }); },
+    childBorn() { chord([440, 587, 740, 880], { type: 'sine', strum: 0.1, a: 0.02, d: 0.25, r: 0.5, peak: 0.22 }); },
+    restComplete() { tone(392, { type: 'sine', slideTo: 523, slideDur: 0.2, a: 0.02, d: 0.15, r: 0.3, peak: 0.18 }); },
+    discovery() { chord([440, 554, 659], { type: 'sine', strum: 0.06, a: 0.01, d: 0.15, r: 0.3, peak: 0.2 }); },
+    guardAlert() { [0, 0.15, 0.3].forEach(dl => tone(880, { type: 'square', delay: dl, a: 0.001, d: 0.06, r: 0.06, peak: 0.18 })); },
+    levelUp() { chord([392, 523, 659, 784, 1046], { type: 'triangle', strum: 0.08, a: 0.005, d: 0.15, r: 0.35, peak: 0.28 }); },
+
+    // UI
+    uiOpen() { tone(500, { type: 'sine', slideTo: 700, slideDur: 0.08, a: 0.002, d: 0.04, r: 0.08, peak: 0.14 }); },
+    uiClose() { tone(500, { type: 'sine', slideTo: 350, slideDur: 0.08, a: 0.002, d: 0.04, r: 0.08, peak: 0.12 }); },
+    uiSelect() { tone(700, { type: 'square', a: 0.001, d: 0.02, r: 0.04, peak: 0.1 }); },
+    uiError() { tone(160, { type: 'square', a: 0.001, d: 0.06, r: 0.08, peak: 0.18 }); tone(140, { type: 'square', delay: 0.09, a: 0.001, d: 0.06, r: 0.1, peak: 0.16 }); },
+
+    // spellcasting (varied by element)
+    castFire() { noiseBurst({ dur: 0.18, filterFreq: 1600, peak: 0.2 }); tone(180, { type: 'sawtooth', slideTo: 400, slideDur: 0.15, a: 0.003, d: 0.08, r: 0.15, peak: 0.22 }); },
+    castFrost() { chord([1046, 1318, 1568], { type: 'sine', strum: 0.03, a: 0.002, d: 0.1, r: 0.2, peak: 0.16 }); },
+    castLightning() { noiseBurst({ dur: 0.06, filterFreq: 3000, peak: 0.3 }); tone(900, { type: 'square', a: 0.001, d: 0.03, r: 0.06, peak: 0.2 }); },
+    castPoison() { tone(220, { type: 'sawtooth', detune: 20, slideTo: 180, slideDur: 0.25, a: 0.01, d: 0.15, r: 0.2, peak: 0.18 }); },
+    castHoly() { chord([523, 659, 784], { type: 'sine', strum: 0.05, a: 0.01, d: 0.15, r: 0.3, peak: 0.2 }); },
+    castNecro() { tone(140, { type: 'sawtooth', slideTo: 90, slideDur: 0.3, a: 0.01, d: 0.15, r: 0.25, peak: 0.2 }); },
+    castArcane() { tone(600, { type: 'sine', slideTo: 900, slideDur: 0.15, a: 0.003, d: 0.08, r: 0.15, peak: 0.18 }); },
+    castHeal() { chord([440, 587, 740], { type: 'sine', strum: 0.06, a: 0.01, d: 0.15, r: 0.3, peak: 0.2 }); },
+    castSummon() { tone(200, { type: 'sawtooth', slideTo: 500, slideDur: 0.3, a: 0.02, d: 0.15, r: 0.2, peak: 0.2 }); },
+    castBlood() { tone(160, { type: 'sawtooth', slideTo: 100, slideDur: 0.2, a: 0.005, d: 0.1, r: 0.2, peak: 0.2 }); },
+    spellFail() { tone(150, { type: 'square', a: 0.001, d: 0.05, r: 0.08, peak: 0.15 }); },
+  };
+
+  function play(name) {
+    if (!ensureCtx() || muted) return;
+    if (actx.state === 'suspended') { actx.resume(); }
+    const fn = FX[name];
+    if (fn) { try { fn(); } catch (e) { /* ignore synth errors */ } }
+  }
+
+  // maps a spell object to the right elemental cast sound
+  function castSpell(spell) {
+    if (!spell) return;
+    const id = (spell.id || '').toLowerCase();
+    const school = spell.school || '';
+    if (spell.type === 'heal' || spell.type === 'cleanse' || spell.type === 'purify' || /heal|renew|wardskin|bless|shield/.test(id)) { play('castHeal'); return; }
+    if (spell.type === 'summon' || spell.type === 'raise' || /summon|animate|raise/.test(id)) { play('castSummon'); return; }
+    if (spell.type === 'bloodtap' || spell.type === 'lifetap' || spell.type === 'bloodbuff' || spell.type === 'bloodarmor' || /blood|sanguine|hemorr/.test(id)) { play('castBlood'); return; }
+    if (school === 'Holy' || /smite|radiant|divine/.test(id)) { play('castHoly'); return; }
+    if (school === 'Necromancy' || /skeleton|zombie|corpse|bone|soul/.test(id)) { play('castNecro'); return; }
+    if (/fire|flame|ember|scorch|ignite|volcan/.test(id)) { play('castFire'); return; }
+    if (/frost|ice|cold|chill/.test(id)) { play('castFrost'); return; }
+    if (/lightning|shock|storm|thunder/.test(id)) { play('castLightning'); return; }
+    if (/poison|gas|acid|toxic|caustic|venom/.test(id)) { play('castPoison'); return; }
+    play('castArcane');
+  }
+
+  function footstep(tile, isDungeon) {
+    const t0 = Date.now();
+    if (t0 - lastFootstepAt < 90) return; // throttle rapid-fire moves
+    lastFootstepAt = t0;
+    if (isDungeon) { play('footstepStone'); return; }
+    if (!tile) { play('footstepGrass'); return; }
+    if (tile.biome === 'desert' || tile.biome === 'beach') { play('footstepSand'); return; }
+    if (tile.feature === 'road' || tile.feature === 'gate') { play('footstepStone'); return; }
+    play('footstepGrass');
+  }
+
+  function setSfxVolume(v) { sfxVol = Math.max(0, Math.min(1, v)); if (sfxBus) sfxBus.gain.value = sfxVol; }
+  function toggleMute() {
+    muted = !muted;
+    if (master) master.gain.value = muted ? 0 : 1;
+    const btn = document.getElementById('audio-mute-btn');
+    if (btn) btn.textContent = muted ? '🔇' : '🔊';
+  }
+
+  return { play, castSpell, footstep, unlock, setSfxVolume, toggleMute };
+})();
+
 // ===================== DATA TABLES =====================
 
 let SEED = Math.floor(Math.random() * 1e9);
@@ -3325,6 +3544,7 @@ function equipItem(it) {
   player.equipment[slot] = it;
   applyStatBonuses(it);
   player.inventory = player.inventory.filter(i => i.uid !== it.uid);
+  Sound.play('equip');
   log(`You equip ${it.name}.`);
   updateSidebar();
 }
@@ -3334,6 +3554,7 @@ function unequipSlot(slot) {
   removeStatBonuses(it);
   player.equipment[slot] = null;
   player.inventory.push(it);
+  Sound.play('unequip');
   log(`You unequip ${it.name}.`);
   updateSidebar();
 }
@@ -3341,6 +3562,7 @@ function unequipSlot(slot) {
 function dropItem(it) {
   placeItemAt(player.x, player.y, it);
   player.inventory = player.inventory.filter(i => i.uid !== it.uid);
+  Sound.play('drop');
   log(`You drop ${it.name}.`);
   updateSidebar();
   endTurn();
@@ -3365,7 +3587,7 @@ function blinkPlayer(range) {
   for (let i = 0; i < 30; i++) {
     const nx = player.x + randInt(Math.random, -range, range);
     const ny = player.y + randInt(Math.random, -range, range);
-    if (curWalkable(nx, ny) && !entityAt(nx, ny)) { player.x = nx; player.y = ny; log('You teleport in a flash of light.'); return; }
+    if (curWalkable(nx, ny) && !entityAt(nx, ny)) { player.x = nx; player.y = ny; Sound.play('blink'); log('You teleport in a flash of light.'); return; }
   }
   log('The teleport fails to find a safe landing spot.');
 }
@@ -3388,6 +3610,7 @@ function confirmBlinkTarget(wx, wy) {
   const spell = pendingBlink.spell;
   if (!paySpellCost(spell)) { log(spell.mp ? 'Not enough mana.' : 'You are too weak for that.'); return; }
   player.x = wx; player.y = wy;
+  Sound.play('blink');
   log('You teleport in a flash of light.');
   pendingBlink = null; gameState = 'playing';
   endTurn();
@@ -3403,18 +3626,18 @@ function useStairs() {
     const lvl = curDungeonLevel();
     const t = curTileAt(player.x, player.y);
     if (t && t.feature === 'waystone') { warpToDungeonEntrance(); return; }
-    if (player.x === lvl.downStairs.x && player.y === lvl.downStairs.y) descend();
+    if (player.x === lvl.downStairs.x && player.y === lvl.downStairs.y) { Sound.play('stairs'); descend(); }
     else log('No stairs down here.');
   } else {
     const t = curTileAt(player.x, player.y);
-    if (t && t.feature === 'dungeon_entrance') enterDungeon(t.dungeonId);
+    if (t && t.feature === 'dungeon_entrance') { Sound.play('gate'); enterDungeon(t.dungeonId); }
     else log('Nothing to enter here.');
   }
 }
 function useStairsUp() {
   if (curIsDungeon()) {
     const lvl = curDungeonLevel();
-    if (player.x === lvl.upStairs.x && player.y === lvl.upStairs.y) ascend();
+    if (player.x === lvl.upStairs.x && player.y === lvl.upStairs.y) { Sound.play('stairsUp'); ascend(); }
     else log('No stairs up here.');
   } else log("You can't go up here.");
 }
@@ -3423,6 +3646,7 @@ function useStairsUp() {
 
 function openTrade(npc) {
   gameState = 'trade'; dialogueNPC = npc; tradeMode = 'buy';
+  Sound.play('uiOpen');
   renderTrade();
 }
 function renderTrade() {
@@ -3445,8 +3669,9 @@ function tradeTransact(letter) {
     const it = npc.shop[idx];
     if (!it) return;
     const price = Math.round(it.value * 1.2);
-    if (player.gold < price) { log("You can't afford that."); return; }
+    if (player.gold < price) { Sound.play('uiError'); log("You can't afford that."); return; }
     player.gold -= price; player.inventory.push(it); npc.shop.splice(idx, 1);
+    Sound.play('tradeBuy');
     log(`You buy ${it.name} for ${price}g.`);
   } else {
     const list = player.inventory.filter(i => i.type !== 'misc');
@@ -3455,6 +3680,7 @@ function tradeTransact(letter) {
     const price = Math.round(it.value * 0.45);
     player.gold += price;
     player.inventory = player.inventory.filter(i => i.uid !== it.uid);
+    Sound.play('tradeSell');
     log(`You sell ${it.name} for ${price}g.`);
   }
   updateSidebar();
@@ -3465,6 +3691,7 @@ function tradeTransact(letter) {
 function closeModal() {
   gameState = 'playing'; dialogueNPC = null; invSelected = null;
   document.getElementById('modal').classList.add('hidden');
+  Sound.play('uiClose');
   render();
 }
 
@@ -3472,6 +3699,7 @@ function closeModal() {
 
 
 function openCharacterSheet() {
+  Sound.play('uiOpen');
   gameState = 'character';
   renderCharacterSheet();
 }
@@ -3510,6 +3738,7 @@ function spendStat(idx) {
   updateSidebar();
 }
 function openSpellbook() {
+  Sound.play('uiOpen');
   gameState = 'spellbook';
   renderSpellbook();
 }
@@ -3639,6 +3868,7 @@ function startBountyQuest(npc) {
     target: species, need, progress: 0, rewardGold: need * 12, rewardXp: need * 6, done: false,
     desc: `Slay ${need} ${base.name}${need>1?'s':''} for ${npc.name} of ${npc.home}.` };
   player.quests.push(q);
+  Sound.play('questAccept');
   log(`New quest: ${q.desc}`);
 }
 function startExploreQuest(npc) {
@@ -3646,6 +3876,7 @@ function startExploreQuest(npc) {
     target: null, need: 1, progress: 0, rewardGold: 40, rewardXp: 30, done: false,
     desc: `Explore any dungeon for ${npc.name} of ${npc.home}.` };
   player.quests.push(q);
+  Sound.play('questAccept');
   log(`New quest: ${q.desc}`);
 }
 function checkBountyQuests(monsterId) {
@@ -3762,6 +3993,7 @@ function levelUp() {
   player.statPoints += 2;
   let msg = `*** You reached level ${player.level}! (+2 stat points) ***`;
   if (player.level % 3 === 0) { player.talentPoints++; msg += ' A new talent is available (press T).'; }
+  Sound.play('levelUp');
   log(msg);
 }
 
@@ -3780,7 +4012,7 @@ function hasIngredients(recipe) { return recipe.inputs.every(inp => countMateria
 function craftRecipe(recipeId) {
   const r = RECIPES.find(x => x.id === recipeId);
   if (!r || !player.knownRecipes.includes(recipeId)) return;
-  if (!hasIngredients(r)) { log("You don't have the ingredients for that."); return; }
+  if (!hasIngredients(r)) { Sound.play('craftFail'); log("You don't have the ingredients for that."); return; }
   let saved = 0;
   for (const inp of r.inputs) {
     if ((player.craftYieldChance || 0) > 0 && Math.random() < player.craftYieldChance) { saved++; continue; }
@@ -3789,6 +4021,7 @@ function craftRecipe(recipeId) {
   const qty = (r.output.qty || 1) + (r.category === 'cooking' ? (player.cookingYieldBonus || 0) : 0);
   let out = null;
   for (let i = 0; i < qty; i++) { out = makeItem(r.output.id, 0, Math.random); player.inventory.push(out); }
+  Sound.play('craftSuccess');
   log(qty > 1 ? `You craft ${qty}x ${out.name}.` : `You craft ${out.name}.`);
   if (saved > 0) log('Your skill meant some ingredients were not consumed.');
   updateSidebar();
@@ -3818,7 +4051,7 @@ function compareItem(it) {
 const INV_FILTERS = ['all','weapon','armor','consumable','material','misc'];
 const PAGE_SIZE = 20;
 let invSelectedSlot = null;
-function openInventory() { gameState = 'inventory'; invSelected = null; invSelectedSlot = null; if (!player.invFilter) player.invFilter='all'; if (!player.invPage) player.invPage=0; renderInventory(); }
+function openInventory() { Sound.play('uiOpen'); gameState = 'inventory'; invSelected = null; invSelectedSlot = null; if (!player.invFilter) player.invFilter='all'; if (!player.invPage) player.invPage=0; renderInventory(); }
 function filteredInventory() {
   if (player.invFilter === 'all') return player.inventory.filter(i=>i.type!=='corpse');
   return player.inventory.filter(i => i.type === player.invFilter);
@@ -3885,7 +4118,7 @@ function pickUp() {
   if (!items.length) { log('There is nothing here to pick up.'); return; }
   const real = items.find(i => i.type !== 'corpse');
   if (!real) { log('There is a corpse here. (Some spells can make use of it.)'); return; }
-  if (real.id === 'gold') { player.gold += (real.amount || 1); log(`You pick up ${real.amount || 1} gold.`); }
+  if (real.id === 'gold') { player.gold += (real.amount || 1); Sound.play('gold'); log(`You pick up ${real.amount || 1} gold.`); }
   else {
     const qty = real.amount || 1;
     // Weapons/armor/chests are never merged (each can have its own mods/tier), everything else stacks by id.
@@ -3893,6 +4126,7 @@ function pickUp() {
     const existing = stackable ? player.inventory.find(i => i.id === real.id) : null;
     if (existing) { existing.amount = (existing.amount || 1) + qty; }
     else { real.amount = qty; player.inventory.push(real); }
+    Sound.play('pickup');
     log(`You pick up ${real.name}${qty>1?` x${qty}`:''}.`);
   }
   removeItemAt(player.x, player.y, real.uid);
@@ -3913,6 +4147,7 @@ function fireRangedWeapon() {
 
 // ---- quest log ----
 function openQuestLog() {
+  Sound.play('uiOpen');
   gameState = 'questlog';
   let html = '';
   const active = player.quests.filter(q => !q.done);
@@ -3932,6 +4167,7 @@ function openQuestLog() {
 
 // ---- crafting UI ----
 function openCraft() {
+  Sound.play('uiOpen');
   gameState = 'craft';
   renderCraft();
 }
@@ -3957,6 +4193,7 @@ function proposeMarriage(npc) {
   if ((npc.affection||0) < 80) { log(`${npc.name} does not know you well enough yet.`); return; }
   npc.spouse = true; npc.hostile = false;
   player.spouse = { uid: npc.uid, name: npc.name };
+  Sound.play('marriage');
   log(`*** ${npc.name} accepts! You are now married. ***`);
   closeModal();
 }
@@ -4000,7 +4237,7 @@ function directionsRumor(npc) {
 
 // ---- training v2: spells AND recipes ----
 let trainEntries = [];
-function openTrain(npc) { gameState = 'train'; dialogueNPC = npc; renderTrain(); }
+function openTrain(npc) { Sound.play('uiOpen'); gameState = 'train'; dialogueNPC = npc; renderTrain(); }
 function renderTrain() {
   const npc = dialogueNPC;
   trainEntries = [];
@@ -4035,6 +4272,7 @@ function trainLearn(letter) {
 // ---- gift picker ----
 let giftList = [];
 function openGiftPicker(npc) {
+  Sound.play('uiOpen');
   gameState = 'giftpick'; dialogueNPC = npc;
   giftList = player.inventory.filter(i => i.type !== 'corpse' && i.type !== 'chest').slice(0, 20);
   let html = '';
@@ -4218,6 +4456,7 @@ function spawnAlly(monsterId, duration, nameOverride) {
   if (player.allyArmorBonus) a.armor = (a.armor || 0) + player.allyArmorBonus;
   if (nameOverride) a.name = nameOverride;
   player.allies.push(a);
+  Sound.play('summon');
   return a;
 }
 
@@ -4239,7 +4478,7 @@ let spellOrder = [];
 
 // ---- talents v2: tiers + prerequisites ----
 let talentPurchasable = [];
-function openTalents() { gameState = 'talents'; renderTalents(); }
+function openTalents() { Sound.play('uiOpen'); gameState = 'talents'; renderTalents(); }
 function renderTalents() {
   let html = `<div class="npcline">Talent points: ${player.talentPoints} &nbsp; <span class="dim">(Character Level ${player.level})</span></div>`;
   const byTier = {};
@@ -4294,6 +4533,7 @@ function completeQuest(q) {
   gainXP(q.rewardXp);
   const giver = findNPCByUid(q.giverId);
   if (giver) giver.affection = (giver.affection || 0) + 15;
+  Sound.play('questComplete');
   log(`*** Quest complete: ${q.desc} (+${q.rewardGold}g, +${q.rewardXp}xp${giver ? ', +15 affection' : ''}) ***`);
 }
 function giveGift(npc, item) {
@@ -4303,6 +4543,7 @@ function giveGift(npc, item) {
   npc.affection = (npc.affection || 0) + inc;
   npc.giftCount = (npc.giftCount || 0) + 1;
   player.inventory = player.inventory.filter(i => i.uid !== item.uid);
+  Sound.play('tradeBuy');
   log(`You give ${item.name} to ${npc.name}. (+${inc} affection)`);
   updateSidebar();
   openDialogue(npc);
@@ -4320,7 +4561,7 @@ function doRest() {
   const interval = setInterval(() => {
     const full = player.hp >= player.maxHp && player.mp >= player.maxMp;
     if (gameState !== 'playing' || full || ticks >= 80 || !autoRunActive) {
-      if (full) player.secondWindCharges = player.secondWindMax || 0;
+      if (full) { player.secondWindCharges = player.secondWindMax || 0; Sound.play('restComplete'); }
       autoRunActive = false; clearInterval(interval); render(); return;
     }
     const threat = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 6 && hasLOS(player.x,player.y,m.x,m.y));
@@ -4459,6 +4700,7 @@ function commitCrime(regionKey, amount) {
   player.bounties = player.bounties || {};
   player.bounties[regionKey] = (player.bounties[regionKey] || 0) + amount;
   alertGuards(regionKey);
+  Sound.play('guardAlert');
   log(`Word spreads of your crime — guards here are now alert to you. (+${amount} bounty)`);
 }
 function currentRegionBounty() {
@@ -4515,6 +4757,7 @@ function confirmSpellTarget(letter) {
 // ---- tomes: alternate way to learn spells, from loot & chests ----
 
 function openChest(chestItem) {
+  Sound.play('chest');
   player.inventory = player.inventory.filter(i => i.uid !== chestItem.uid);
   const tier = chestItem.tier || 0;
   const n = randInt(Math.random, 2, 4);
@@ -4559,13 +4802,15 @@ function onDeath(def, killer) {
     if ((player.secondWindCharges || 0) > 0) {
       player.secondWindCharges--;
       player.hp = 1;
+      Sound.play('secondWind');
       log('*** Death itself recoils — Second Wind saves you at the last moment! ***');
       updateSidebar();
       return;
     }
-    def.alive = false; def.hp = 0; gameOver(); return;
+    def.alive = false; def.hp = 0; Sound.play('playerDeath'); gameOver(); return;
   }
   def.alive = false; def.hp = 0;
+  Sound.play(def.kind === 'npc' ? 'npcDeath' : 'monsterDeath');
   log(`${def.name} dies!`);
   if (killer === player) {
     gainXP(def.xp || 1);
@@ -4666,6 +4911,7 @@ function toggleSpouseFollow(npc) {
   closeModal();
 }
 function openFamily() {
+  Sound.play('uiOpen');
   gameState = 'look';
   let html = `<div class="npcline">Spouse: ${player.spouse ? player.spouse.name + (findNPCByUid(player.spouse.uid) && findNPCByUid(player.spouse.uid).following ? ' (traveling with you)' : ' (at home)') : 'none'}</div>`;
   html += `<div class="npcline">Children: ${player.kids}</div>`;
@@ -4690,12 +4936,14 @@ function tryForChild(npc) {
   child.name = choice(Math.random, FIRST_NAMES) + ' ' + (npc.name.split(' ').slice(-1)[0]);
   c.npcs.push(child);
   player.children.push({ uid: child.uid, name: child.name });
+  Sound.play('childBorn');
   log(`You and ${npc.name} welcome a child, ${child.name}, into your family! (Children: ${player.kids})`);
   closeModal();
 }
 
 // ---- dialogue v5: crime hook, spouse follow toggle, family view, married flavor ----
 function openDialogue(npc) {
+  Sound.play('uiOpen');
   gameState = 'dialogue';
   dialogueNPC = npc;
   const opts = [];
@@ -4986,6 +5234,7 @@ function lookAtWorldPos(wx, wy) {
   renderModal('Examine', describeTile(curTileAt(wx, wy)), 'Esc to close.');
 }
 function openLook() {
+  Sound.play('uiOpen');
   gameState = 'look';
   const visRadius = curIsDungeon() ? 8 : 10;
   let html = '';
@@ -5037,6 +5286,7 @@ function warpToDungeonEntrance() {
 }
 
 function openTravel(opts) {
+  Sound.play('uiOpen');
   opts = opts || {};
   if (!opts.bypass) {
     if (!isAtWaystoneNow()) {
@@ -5160,6 +5410,7 @@ function checkKingdomDiscovery() {
   player.discoveredKingdoms = player.discoveredKingdoms || [];
   if (!player.discoveredKingdoms.includes(k.key)) {
     player.discoveredKingdoms.push(k.key);
+    Sound.play('discovery');
     log(`*** You have entered ${k.name}. ${k.history} ***`);
   }
 }
@@ -5172,6 +5423,7 @@ function checkFastTravelDiscovery() {
     player.knownSettlements = player.knownSettlements || [];
     if (!player.knownSettlements.includes(c.settlement.name)) {
       player.knownSettlements.push(c.settlement.name);
+      Sound.play('discovery');
       log(`${c.settlement.name}'s waystone flickers on — it now links to your travel network.`);
     }
   }
@@ -5322,6 +5574,7 @@ function applyEffectToTarget(spell, t) {
 function castSpell(spellId) {
   const spell = findAbilityById(spellId);
   if (!spell || !isAbilityKnown(spellId)) { log("You don't know that ability."); return; }
+  Sound.castSpell(spell);
 
   if (spell.type === 'lifetap') {
     let selfCost = spell.selfCost;
@@ -5503,7 +5756,7 @@ function doAttack(att, def) {
   const attName = isPlayer ? 'You' : att.name;
   const defName = def === player ? 'you' : def.name;
   if (def === player && (player.dodgeChance || 0) > 0 && Math.random() < player.dodgeChance) { log(`You nimbly dodge ${attName === 'You' ? 'the' : att.name + "'s"} attack!`); return; }
-  if (!rollHit(att, def)) { log(`${attName} miss${isPlayer ? '' : 'es'} ${defName}.`); return; }
+  if (!rollHit(att, def)) { Sound.play(isPlayer ? 'miss' : 'enemyMiss'); log(`${attName} miss${isPlayer ? '' : 'es'} ${defName}.`); return; }
   let dmg = randInt(Math.random, dmgRange[0], dmgRange[1]) + Math.floor(effStr(att) / 4);
   if (isPlayer) {
     dmg += (player.cyberDmgBonus || 0);
@@ -5526,6 +5779,7 @@ function doAttack(att, def) {
   if (Math.random() < critChance) { dmg *= (2 + (isPlayer ? (player.critDmgBonus || 0) : 0)); crit = true; }
   dmg = Math.max(1, Math.round(dmg));
   def.hp -= dmg;
+  if (def === player) Sound.play('playerHurt'); else if (isPlayer) Sound.play(crit ? 'critHit' : 'hit'); else Sound.play('enemyHit');
   log(`${attName} hit${isPlayer ? '' : 's'} ${defName} for ${dmg}${crit ? ' (critical!)' : ''}.`);
   if (weapon && weapon.lifesteal) att.hp = Math.min(att.maxHp, att.hp + Math.round(dmg * weapon.lifesteal));
   if (!isPlayer && att.lifesteal) att.hp = Math.min(att.maxHp, att.hp + Math.round(dmg * 0.5));
@@ -5566,6 +5820,7 @@ function performBreathWeapon(m) {
   if (m.breathWeapon === 'fire' && getBuff('resistfire') > 0) dmg = Math.round(dmg * 0.4);
   if (m.breathWeapon === 'frost' && getBuff('resistfrost') > 0) dmg = Math.round(dmg * 0.4);
   player.hp -= dmg;
+  Sound.play('breathWeapon');
   log(`${m.name} unleashes a devastating blast of ${m.breathWeapon}! You take ${dmg} damage.`);
   if (m.breathWeapon === 'fire') {
     const destroyed = scorchArea(player.x, player.y, 3);
@@ -6055,29 +6310,35 @@ function movePlayer(dx, dy) {
       const flying = getBuff('flight') > 0;
       if (hasRaft || flying || player.freeSwim || getBuff('waterbreathing') > 0) {
         player.x = nx; player.y = ny;
+        Sound.play('splash');
         log(hasRaft ? 'You paddle your raft across the water.' : flying ? 'You soar over the water.' : 'You swim easily across.');
         endTurn(); return;
       }
       if ((player.stamina || 0) > 0) {
         player.x = nx; player.y = ny;
         player.stamina = Math.max(0, player.stamina - 8);
+        Sound.play('splash');
         log(player.stamina > 20 ? 'You swim through the cold water.' : 'You are getting exhausted swimming!');
         endTurn(); return;
       }
       player.x = nx; player.y = ny;
+      Sound.play('splash');
       log("You're too exhausted to swim properly! You flounder and take damage.");
       player.hp -= 3;
       if (player.hp <= 0) { onDeath(player, null); return; }
       endTurn(); return;
     }
+    Sound.play('bump');
     log("You can't go that way.");
     return;
   }
   player.x = nx; player.y = ny;
+  Sound.footstep(t, curIsDungeon());
   if (curIsDungeon() && t.hiddenTrap && !t.trapTriggered) {
     t.trapTriggered = true; t.glyph = '^'; t.color = '#c93a3a';
     const dmg = randInt(Math.random, 4, 11);
     player.hp -= dmg;
+    Sound.play('trap');
     log(`A hidden trap triggers! You take ${dmg} damage.`);
     if (player.hp <= 0) { onDeath(player, null); return; }
   }
@@ -6096,9 +6357,10 @@ function movePlayer(dx, dy) {
       () => { player.int += 1; return '+1 INT'; },
     ];
     const result = choice(Math.random, boons)();
+    Sound.play('shrine');
     log(`*** An ancient shrine blesses you: ${result}! ***`);
   }
-  if (!curIsDungeon() && t && t.feature === 'door') log('You pass through a door.');
+  if (!curIsDungeon() && t && t.feature === 'door') { Sound.play('door'); log('You pass through a door.'); }
   endTurn();
 }
 
@@ -6138,7 +6400,7 @@ function endTurn() {
 }
 
 // ---- cybernetics management ('Y'): install/uninstall within slot limit ----
-function openCybernetics() { gameState = 'cyber'; renderCybernetics(); }
+function openCybernetics() { Sound.play('uiOpen'); gameState = 'cyber'; renderCybernetics(); }
 function renderCybernetics() {
   const slots = player.cyberSlots || 3;
   let html = `<div class="npcline">Cyber Slots: ${player.installedCyber.length}/${slots} &nbsp; Charge: ${Math.round(player.charge)}/${player.maxCharge}</div>`;
@@ -6184,7 +6446,7 @@ function toggleCyber(letter) {
 }
 
 // ---- eldritch / mutations screen ('U'): corruption, known mutations, ritual site ----
-function openEldritch() { gameState = 'eldritch'; renderEldritch(); }
+function openEldritch() { Sound.play('uiOpen'); gameState = 'eldritch'; renderEldritch(); }
 function renderEldritch() {
   let html = `<div class="npcline">Corruption: ${Math.round(player.corruption)}</div>`;
   html += `<div class="trade-col-title">Mutations</div>`;
@@ -6255,6 +6517,7 @@ function useItem(it) {
   if (it.effect === 'placewaypoint') { plantWaystoneShard(it); return; }
   if (it.effect === 'recall') { beginBypassTravel({ type: 'item', item: it }); return; }
   if (it.type !== 'consumable' && it.type !== 'scroll') { log("You can't use that directly. Try equipping it."); return; }
+  Sound.play(it.glyph === '%' ? 'eat' : 'drink');
   let consumed = true;
   switch (it.effect) {
     case 'heal': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You consume ${it.name} and recover ${amt} HP.`); break; }
@@ -6937,6 +7200,7 @@ function finishCustomCreation() {
 function gameOver() {
   gameState = 'gameover';
   player.alive = false;
+  Sound.play('playerDeath');
   log('*** YOU HAVE DIED ***');
   const html = `<div class="npcline">You fell at level ${player.level} on turn ${turnCount}, carrying ${player.gold} gold.</div>
     <div class="modal-opt" onclick="simulateKey('a')" style="margin-top:10px">[a] Return to Main Menu</div>
@@ -6958,6 +7222,7 @@ function initGame() {
   window.addEventListener('keydown', handleKey);
   if (canvas.addEventListener) {
     canvas.addEventListener('click', (evt) => {
+      Sound.unlock();
       if (gameState !== 'playing' && gameState !== 'blinktarget') return;
       const rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : { left:0, top:0 };
       const vv = curView();
@@ -7261,10 +7526,11 @@ function runGuideSearch() {
   results.slice(0, 40).forEach(r => { body += `<div class="modal-opt"><span class="dim">[${r.section}]</span> ${r.sent}</div>`; });
   renderModal('Guide Search Results', `<div style="margin-bottom:8px">${tabBar}</div>${searchBar}<hr>${body}`, 'Esc to close.');
 }
-function openHelp() { gameState = 'help'; renderGuideTab(guideCurrentTab || 'start'); }
+function openHelp() { Sound.play('uiOpen'); gameState = 'help'; renderGuideTab(guideCurrentTab || 'start'); }
 
 // ---- save/load menu (accessible mid-game via 'P') ----
 function openSaveLoadMenu() {
+  Sound.play('uiOpen');
   gameState = 'saveload';
   let html = `<div class="modal-opt" onclick="simulateKey('a')">[a] Save Game</div>`;
   html += `<div class="modal-opt" onclick="simulateKey('b')">[b] Load Game${hasSaveGame() ? '' : ' (no save found)'}</div>`;
@@ -7281,6 +7547,7 @@ function saveLoadChoice(letter) {
 
 // ---- input v11 (final): main menu, character creation, cybernetics/eldritch, save/load ----
 function handleKey(e) {
+  Sound.unlock();
   const key = e.key;
 
   if (gameState === 'mainmenu') { if (/^[a-z]$/.test(key)) mainMenuChoice(key); return; }
