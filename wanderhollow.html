@@ -956,7 +956,109 @@ const TECHNIQUES = [
   { id:'battlerecovery', name:'Battle Recovery', resource:'stamina', mp:15, type:'heal', power:[10,18], range:0, school:'Defense', desc:'Years of training let you fight through pain and keep going.' },
   { id:'fortify', name:'Fortify', resource:'stamina', mp:12, type:'buff', stat:'armor', power:10, dur:14, range:0, school:'Defense', desc:'You brace your whole body, ready for a prolonged fight.' },
   { id:'vigilantguard', name:'Vigilant Guard', resource:'stamina', mp:9, type:'buff', stat:'evasion', power:0.15, dur:12, range:0, school:'Defense', desc:'Every sense sharpens, watching for the next attack.' },
+  // ---- Swordsmanship: tier 3-5 ----
+  { id:'riposte', name:'Riposte', resource:'stamina', mp:16, type:'damage', power:[14,24], range:1, school:'Swordsmanship', tier:3, desc:'A perfectly timed counter-cut after reading your opponent\'s stance.' },
+  { id:'crescentmoonslash', name:'Crescent Moon Slash', resource:'stamina', mp:22, type:'damage', power:[18,30], range:1, aoe:true, aoeRadius:1, school:'Swordsmanship', tier:3, desc:'A wide, arcing cut that catches everything around you.' },
+  { id:'thousandcuts', name:'Thousand Cuts', resource:'stamina', mp:30, type:'damage', power:[26,42], range:1, school:'Swordsmanship', tier:4, desc:'A blur of strikes too fast to individually parry.' },
+  { id:'heavensedge', name:"Heaven's Edge", resource:'stamina', mp:45, type:'damage', power:[40,64], range:1, destructive:false, school:'Swordsmanship', tier:5, desc:'A single strike said to have split mountains, in the right hands.' },
+  // ---- Spearplay: tier 3-5 ----
+  { id:'dragonfangthrust', name:'Dragonfang Thrust', resource:'stamina', mp:20, type:'damage', power:[17,28], range:3, school:'Spearplay', tier:3, desc:'A thrust with the full weight of your body behind it, reaching further than seems possible.' },
+  { id:'whirlingpolearm', name:'Whirling Polearm', resource:'stamina', mp:26, type:'damage', power:[16,26], range:1, aoe:true, aoeRadius:2, school:'Spearplay', tier:4, desc:'You spin your spear in a wide, punishing arc.' },
+  { id:'skypiercer', name:'Sky-Piercer', resource:'stamina', mp:42, type:'execute', power:[35,55], range:3, school:'Spearplay', tier:5, desc:'A legendary thrust said to be able to bring down flying beasts.' },
+  // ---- Archery: tier 3-5 ----
+  { id:'piercingvolley', name:'Piercing Volley', resource:'stamina', mp:20, type:'damage', power:[15,25], range:8, school:'Archery', tier:3, desc:'Arrows loosed with enough force to punch through armor.' },
+  { id:'stormofarrows', name:'Storm of Arrows', resource:'stamina', mp:32, type:'damage', power:[12,20], range:7, aoe:true, aoeRadius:3, school:'Archery', tier:4, desc:'A blackening rain of arrows falls across the battlefield.' },
+  { id:'phoenixarrow', name:'Phoenix Arrow', resource:'stamina', mp:40, type:'damage', power:[30,48], range:9, destructive:true, igniteGround:true, school:'Archery', tier:5, desc:'A single burning arrow that ignites everything it touches.' },
+  // ---- Brawling: tier 3-5 ----
+  { id:'dragonstrike', name:'Dragon Strike', resource:'stamina', mp:22, type:'damage', power:[18,29], range:1, school:'Brawling', tier:3, desc:'A strike channeling the full force of your spirit through your fist.' },
+  { id:'hundredpalmstrike', name:'Hundred Palm Strike', resource:'stamina', mp:30, type:'damage', power:[24,38], range:1, school:'Brawling', tier:4, desc:'An overwhelming flurry of palm strikes.' },
+  { id:'worldbreaker', name:'World-Breaker Fist', resource:'stamina', mp:48, type:'damage', power:[42,66], range:1, aoe:true, aoeRadius:1, school:'Brawling', tier:5, desc:'A single punch legends say could crack the earth itself.' },
+  // ---- Defense: tier 3-5 ----
+  { id:'ironwall', name:'Iron Wall', resource:'stamina', mp:20, type:'buff', stat:'armor', power:16, dur:14, range:0, school:'Defense', tier:3, desc:'You become an immovable bulwark for a time.' },
+  { id:'lastbastion', name:'Last Bastion', resource:'stamina', mp:30, type:'heal', power:[24,36], range:0, school:'Defense', tier:4, desc:'Sheer force of will lets you keep standing.' },
+  { id:'unbreakable', name:'Unbreakable', resource:'stamina', mp:45, type:'buff', stat:'armor', power:28, dur:16, range:0, school:'Defense', tier:5, desc:'For a time, nothing can bring you down.' },
 ];
+
+// ===================== TECHNIQUE EXPANSION: 5 new schools, full tier progression =====================
+TECHNIQUES.push(
+  // ---- Daggers (dex/crit-focused assassination) ----
+  { id:'quickstab', name:'Quick Stab', resource:'stamina', mp:8, type:'damage', power:[6,11], range:1, school:'Daggers', tier:1, desc:'A fast stab aimed at an unguarded gap.' },
+  { id:'throatslit', name:'Throat Slit', resource:'stamina', mp:10, type:'execute', power:[8,14], range:1, school:'Daggers', tier:1, desc:'A precise cut meant to end a fight quickly.' },
+  { id:'shadowstep', name:'Shadow Step', resource:'stamina', mp:12, type:'blinklike', power:4, range:0, school:'Daggers', tier:2, desc:'You slip through the shadows to a new position.' },
+  { id:'poisonedblade', name:'Poisoned Blade', resource:'stamina', mp:11, type:'damage', power:[9,15], range:1, school:'Daggers', tier:2, poison:3, desc:'A coated blade that leaves a lingering toxin in the wound.' },
+  { id:'backstab', name:'Backstab', resource:'stamina', mp:18, type:'execute', power:[16,26], range:1, school:'Daggers', tier:3, desc:'A vicious strike that punishes an inattentive foe severely.' },
+  { id:'garrote', name:'Garrote', resource:'stamina', mp:16, type:'debuff', stat:'dex', power:-10, dur:8, range:1, school:'Daggers', tier:3, desc:'A choking hold that leaves your foe gasping and slow.' },
+  { id:'thousandneedles', name:'Thousand Needles', resource:'stamina', mp:26, type:'damage', power:[20,32], range:1, aoe:true, aoeRadius:1, school:'Daggers', tier:4, poison:4, desc:'A blurring flurry of small, precise, envenomed cuts.' },
+  { id:'deathmark', name:'Death Mark', resource:'stamina', mp:34, type:'execute', power:[30,48], range:1, school:'Daggers', tier:4, desc:'You mark a foe for death, and death does not disappoint.' },
+  { id:'thousandfacedassassin', name:'Thousand-Faced Assassin', resource:'stamina', mp:50, type:'execute', power:[48,74], range:1, school:'Daggers', tier:5, desc:'A killing strike perfected over a lifetime spent unseen.' },
+  // ---- Dual Wielding ----
+  { id:'twinslash', name:'Twin Slash', resource:'stamina', mp:12, type:'damage', power:[10,17], range:1, school:'Dual Wielding', tier:1, desc:'Both blades strike as one.' },
+  { id:'crossparry', name:'Cross Parry', resource:'stamina', mp:10, type:'buff', stat:'armor', power:7, dur:10, range:0, school:'Dual Wielding', tier:1, desc:'Crossed blades turn aside an incoming blow.' },
+  { id:'whirlingblades', name:'Whirling Blades', resource:'stamina', mp:18, type:'damage', power:[13,21], range:1, aoe:true, aoeRadius:1, school:'Dual Wielding', tier:2, desc:'Both blades spin in a lethal blur around you.' },
+  { id:'flurryofsteel', name:'Flurry of Steel', resource:'stamina', mp:22, type:'damage', power:[18,29], range:1, school:'Dual Wielding', tier:3, desc:'An unrelenting alternating assault.' },
+  { id:'blademirror', name:'Blade Mirror', resource:'stamina', mp:20, type:'buff', stat:'crit', power:0.2, dur:14, range:0, school:'Dual Wielding', tier:3, desc:'Perfect synchronization between both blades sharpens every strike.' },
+  { id:'stormofblades', name:'Storm of Blades', resource:'stamina', mp:34, type:'damage', power:[28,44], range:1, aoe:true, aoeRadius:2, school:'Dual Wielding', tier:4, desc:'A cyclone of steel that no single foe can escape.' },
+  { id:'thousandbladewaltz', name:'Thousand-Blade Waltz', resource:'stamina', mp:52, type:'damage', power:[46,72], range:1, aoe:true, aoeRadius:2, school:'Dual Wielding', tier:5, desc:'A dance of death — every foe nearby falls before it ends.' },
+  // ---- Berserker Arts (high risk/reward, HP-fueled) ----
+  { id:'ragingblow', name:'Raging Blow', resource:'stamina', mp:10, type:'bloodbuff', stat:'str', power:4, dur:10, selfCostPct:0.05, range:0, school:'Berserker Arts', tier:1, desc:'You spend a sliver of your own blood to fuel your fury.' },
+  { id:'recklessswing', name:'Reckless Swing', resource:'stamina', mp:14, type:'damage', power:[14,24], range:1, school:'Berserker Arts', tier:2, desc:'An all-or-nothing swing that leaves you exposed.' },
+  { id:'bloodfrenzy', name:'Blood Frenzy', resource:'stamina', mp:20, type:'bloodbuff', stat:'str', power:8, dur:14, selfCostPct:0.1, range:0, school:'Berserker Arts', tier:2, desc:'The more you bleed, the harder you hit.' },
+  { id:'skullcrusher', name:'Skullcrusher', resource:'stamina', mp:26, type:'damage', power:[22,36], range:1, school:'Berserker Arts', tier:3, desc:'A devastating overhead blow with your whole body behind it.' },
+  { id:'undyingrage', name:'Undying Rage', resource:'stamina', mp:32, type:'bloodbuff', stat:'str', power:12, dur:16, selfCostPct:0.15, range:0, school:'Berserker Arts', tier:4, desc:'Pain no longer registers — only the fight remains.' },
+  { id:'cataclysmicslam', name:'Cataclysmic Slam', resource:'stamina', mp:40, type:'damage', power:[34,54], range:1, aoe:true, aoeRadius:2, school:'Berserker Arts', tier:4, desc:'You slam the ground with enough force to stagger everything nearby.' },
+  { id:'worldender', name:"World-Ender's Fury", resource:'stamina', mp:55, type:'bloodbuff', stat:'str', power:20, dur:20, selfCostPct:0.2, range:0, school:'Berserker Arts', tier:5, desc:'A legendary battle-fury that turns you into a force of nature.' },
+  // ---- Monastic Arts (ki/stamina, techniques + self-buffs) ----
+  { id:'meditativestrike', name:'Meditative Strike', resource:'stamina', mp:9, type:'damage', power:[8,15], range:1, school:'Monastic Arts', tier:1, desc:'A single strike delivered with perfect clarity of mind.' },
+  { id:'kiflow', name:'Ki Flow', resource:'stamina', mp:10, type:'heal', power:[9,16], range:0, school:'Monastic Arts', tier:1, desc:'You circulate your inner energy to mend small wounds.' },
+  { id:'innerbalance', name:'Inner Balance', resource:'stamina', mp:14, type:'buff', stat:'evasion', power:0.18, dur:14, range:0, school:'Monastic Arts', tier:2, desc:'Perfect stillness makes you hard to hit.' },
+  { id:'palmofthevoid', name:'Palm of the Void', resource:'stamina', mp:20, type:'damage', power:[16,27], range:1, school:'Monastic Arts', tier:3, desc:'A strike that seems to pass through armor entirely.' },
+  { id:'risingphoenixkick', name:'Rising Phoenix Kick', resource:'stamina', mp:26, type:'damage', power:[20,32], range:1, destructive:true, igniteGround:true, school:'Monastic Arts', tier:3, desc:'A blazing kick that leaves fire in its wake.' },
+  { id:'thousandyearstillness', name:'Thousand-Year Stillness', resource:'stamina', mp:35, type:'heal', power:[30,46], range:0, school:'Monastic Arts', tier:4, desc:'A meditative state so deep it heals body and mind alike.' },
+  { id:'enlightenedfist', name:'Enlightened Fist', resource:'stamina', mp:50, type:'damage', power:[44,68], range:1, school:'Monastic Arts', tier:5, desc:'A strike delivered from a place beyond anger, beyond fear — only clarity.' },
+  // ---- Tactics (leadership / battlefield control, mostly buffs and debuffs) ----
+  { id:'batttlecry', name:'Battle Cry', resource:'stamina', mp:10, type:'buff', stat:'str', power:3, dur:12, range:0, school:'Tactics', tier:1, desc:'A rallying shout that steels your resolve.' },
+  { id:'exploitweakness', name:'Exploit Weakness', resource:'stamina', mp:12, type:'debuff', stat:'armor', power:-6, dur:10, range:5, school:'Tactics', tier:1, desc:'You spot a gap in your foe\'s defenses and call it out.' },
+  { id:'coordinatedstrike', name:'Coordinated Strike', resource:'stamina', mp:16, type:'buff', stat:'crit', power:0.12, dur:12, range:0, school:'Tactics', tier:2, desc:'Precise timing turns every follow-up strike lethal.' },
+  { id:'demoralizingshout', name:'Demoralizing Shout', resource:'stamina', mp:18, type:'debuff', stat:'fear', power:1, dur:8, range:5, aoe:true, aoeRadius:2, school:'Tactics', tier:2, desc:'A shout that shakes the resolve of everything nearby.' },
+  { id:'commandingpresence', name:'Commanding Presence', resource:'stamina', mp:24, type:'buff', stat:'armor', power:12, dur:14, range:0, school:'Tactics', tier:3, desc:'Your bearing alone makes you harder to bring down.' },
+  { id:'masterstrategist', name:'Master Strategist', resource:'stamina', mp:32, type:'buff', stat:'crit', power:0.2, dur:16, range:0, school:'Tactics', tier:4, desc:'You read the flow of battle three moves ahead.' },
+  { id:'grandcampaign', name:'Grand Campaign', resource:'stamina', mp:48, type:'buff', stat:'str', power:10, dur:20, range:0, school:'Tactics', tier:5, desc:'The tactics of a hundred legendary battles, distilled into a single moment of perfect command.' },
+);
+
+// ===================== TECHNIQUE EXPANSION PART 2: rounding out mid-tiers across every school =====================
+TECHNIQUES.push(
+  { id:'feint', name:'Feint', resource:'stamina', mp:9, type:'debuff', stat:'armor', power:-4, dur:8, range:1, school:'Swordsmanship', tier:2, desc:'A false opening that draws out a costly overreaction.' },
+  { id:'blademomentum', name:'Blade Momentum', resource:'stamina', mp:14, type:'buff', stat:'crit', power:0.1, dur:10, range:0, school:'Swordsmanship', tier:2, desc:'Building speed with every successive strike.' },
+  { id:'spearwall', name:'Spear Wall', resource:'stamina', mp:16, type:'buff', stat:'armor', power:9, dur:10, range:0, school:'Spearplay', tier:2, desc:'A defensive hedge of steel points.' },
+  { id:'longreach', name:'Long Reach', resource:'stamina', mp:11, type:'damage', power:[10,18], range:4, school:'Spearplay', tier:2, desc:'You strike from a distance your foe didn\'t expect.' },
+  { id:'huntersmark', name:"Hunter's Mark", resource:'stamina', mp:9, type:'debuff', stat:'armor', power:-5, dur:12, range:6, school:'Archery', tier:2, desc:'A marked target is a doomed one.' },
+  { id:'multilshot', name:'Multi-Shot', resource:'stamina', mp:14, type:'damage', power:[8,14], range:6, aoe:true, aoeRadius:1, school:'Archery', tier:2, desc:'Several arrows loosed at once, fanning out.' },
+  { id:'ironpalm', name:'Iron Palm', resource:'stamina', mp:12, type:'damage', power:[10,17], range:1, school:'Brawling', tier:2, desc:'Years of conditioning turn your palm into a weapon.' },
+  { id:'countergrapple', name:'Counter Grapple', resource:'stamina', mp:14, type:'execute', power:[10,18], range:1, school:'Brawling', tier:2, desc:'You turn your opponent\'s own momentum against them.' },
+  { id:'braceforimpact', name:'Brace for Impact', resource:'stamina', mp:11, type:'buff', stat:'armor', power:8, dur:10, range:0, school:'Defense', tier:2, desc:'A stance built to absorb the next heavy blow.' },
+  { id:'secondwindstance', name:'Second Wind Stance', resource:'stamina', mp:16, type:'heal', power:[14,22], range:0, school:'Defense', tier:2, desc:'Trained breathing lets you recover mid-fight.' },
+  { id:'huntersinstinct', name:"Hunter's Instinct", resource:'stamina', mp:10, type:'buff', stat:'crit', power:0.1, dur:10, range:0, school:'Daggers', tier:1, desc:'Sharpened senses spot the perfect moment to strike.' },
+  { id:'twinfangflurry', name:'Twin Fang Flurry', resource:'stamina', mp:22, type:'damage', power:[16,26], range:1, school:'Daggers', tier:3, poison:2, desc:'Rapid alternating cuts, each one laced with venom.' },
+  { id:'defensiveweave', name:'Defensive Weave', resource:'stamina', mp:12, type:'buff', stat:'evasion', power:0.12, dur:10, range:0, school:'Dual Wielding', tier:2, desc:'Both blades constantly in motion, deflecting incoming attacks.' },
+  { id:'executionersduet', name:"Executioner's Duet", resource:'stamina', mp:28, type:'execute', power:[22,36], range:1, school:'Dual Wielding', tier:3, desc:'Two blades converging on the same fatal point.' },
+  { id:'bloodrite', name:'Blood Pact', resource:'stamina', mp:16, type:'bloodbuff', stat:'str', power:5, dur:12, selfCostPct:0.06, range:0, school:'Berserker Arts', tier:1, desc:'A small sacrifice for a burst of savage power.' },
+  { id:'furiousassault', name:'Furious Assault', resource:'stamina', mp:22, type:'damage', power:[18,30], range:1, school:'Berserker Arts', tier:3, desc:'An unrestrained assault that leaves nothing held back.' },
+  { id:'stillmind', name:'Still Mind', resource:'stamina', mp:11, type:'buff', stat:'crit', power:0.08, dur:12, range:0, school:'Monastic Arts', tier:1, desc:'A clear mind finds every opening.' },
+  { id:'crushinglotusfist', name:'Crushing Lotus Fist', resource:'stamina', mp:30, type:'damage', power:[24,38], range:1, school:'Monastic Arts', tier:4, desc:'A strike that blossoms with devastating internal force.' },
+  { id:'rallyingbanner', name:'Rallying Banner', resource:'stamina', mp:14, type:'buff', stat:'str', power:4, dur:12, range:0, school:'Tactics', tier:1, desc:'A raised banner steadies every nearby heart.' },
+  { id:'flankingmaneuver', name:'Flanking Maneuver', resource:'stamina', mp:20, type:'debuff', stat:'armor', power:-8, dur:10, range:5, school:'Tactics', tier:3, desc:'You expose the weak point in a coordinated advance.' },
+  { id:'ambushtactics', name:'Ambush Tactics', resource:'stamina', mp:18, type:'buff', stat:'crit', power:0.15, dur:10, range:0, school:'Tactics', tier:3, desc:'Preparation and patience pay off in a single devastating opening.' },
+  { id:'perfectparry', name:'Perfect Parry', resource:'stamina', mp:14, type:'buff', stat:'armor', power:10, dur:8, range:0, school:'Swordsmanship', tier:2, desc:'A timed block that turns aside even a heavy blow.' },
+  { id:'lungingstrike', name:'Lunging Strike', resource:'stamina', mp:13, type:'damage', power:[12,20], range:3, school:'Spearplay', tier:2, desc:'You close distance and strike in one fluid motion.' },
+  { id:'trackingshot', name:'Tracking Shot', resource:'stamina', mp:12, type:'damage', power:[11,19], range:8, school:'Archery', tier:2, desc:'A shot that seems to curve toward its mark.' },
+  { id:'ironbodytechnique', name:'Iron Body Technique', resource:'stamina', mp:18, type:'buff', stat:'armor', power:11, dur:12, range:0, school:'Brawling', tier:3, desc:'Your body hardens like tempered steel for a time.' },
+  { id:'shieldbash', name:'Shield Bash', resource:'stamina', mp:11, type:'damage', power:[9,16], range:1, school:'Defense', tier:1, desc:'A brutal bash that staggers your opponent.' },
+  { id:'venomedge', name:'Venom Edge', resource:'stamina', mp:15, type:'damage', power:[11,18], range:1, poison:2, school:'Daggers', tier:2, desc:'A quick cut coated in a fast-acting toxin.' },
+  { id:'dualstormfinisher', name:'Dual Storm Finisher', resource:'stamina', mp:38, type:'damage', power:[32,50], range:1, school:'Dual Wielding', tier:4, desc:'A finishing combination meant to end a fight outright.' },
+  { id:'painisweakness', name:'Pain Is Weakness', resource:'stamina', mp:24, type:'bloodbuff', stat:'str', power:9, dur:14, selfCostPct:0.12, range:0, school:'Berserker Arts', tier:3, desc:'You embrace the pain and let it fuel you further.' },
+  { id:'ki_burst', name:'Ki Burst', resource:'stamina', mp:16, type:'damage', power:[13,22], range:1, aoe:true, aoeRadius:1, school:'Monastic Arts', tier:2, desc:'A sudden release of inner energy that staggers everything nearby.' },
+  { id:'divideandconquer', name:'Divide and Conquer', resource:'stamina', mp:26, type:'debuff', stat:'str', power:-8, dur:10, range:5, school:'Tactics', tier:3, desc:'Isolating a single foe from the rest makes them far easier to bring down.' },
+);
 
 // ---- cybernetics: installed augments powered by Charge; some passive, some active ----
 // Passive ones apply/remove a permanent-while-installed stat bonus. Active ones are cast like
@@ -994,6 +1096,97 @@ const CYBERNETICS = [
   { id:'overloaddischarge', name:'Neural Overload Discharge', category:'Exotic', activation:'active', resource:'charge', mp:24, type:'damage', power:[10,18], range:5, aoe:true, aoeRadius:2, desc:'Discharges raw current through anything nearby.' },
 ];
 
+// ===================== CYBERNETICS EXPANSION: fill existing categories + 4 new ones, full tier progression =====================
+CYBERNETICS.push(
+  // ---- Combat: tier 2-5 ----
+  { id:'servomuscle', name:'Servo-Muscle Weave', category:'Combat', activation:'passive', tier:2, desc:'Synthetic fibers augment your natural muscle.', apply:()=>{ player.str+=4; }, remove:()=>{ player.str-=4; } },
+  { id:'combatstims2', name:'Combat Stim Dispenser II', category:'Combat', activation:'active', resource:'charge', mp:26, type:'buff', stat:'str', power:9, dur:14, range:0, tier:3, desc:'A refined stim cocktail, more potent and longer-lasting.' },
+  { id:'monobladearm', name:'Monoblade Forearm', category:'Combat', activation:'active', resource:'charge', mp:22, type:'damage', power:[16,28], range:1, tier:3, desc:'A retractable blade edged at the molecular level.' },
+  { id:'juggernautframe', name:'Juggernaut Frame', category:'Combat', activation:'passive', tier:4, desc:'A full skeletal reinforcement turns you into a walking tank.', apply:()=>{ player.str+=6; player.cyberArmor=(player.cyberArmor||0)+4; }, remove:()=>{ player.str-=6; player.cyberArmor=(player.cyberArmor||0)-4; } },
+  { id:'annihilationfist', name:'Annihilation Fist', category:'Combat', activation:'active', resource:'charge', mp:45, type:'damage', power:[36,58], range:1, tier:5, desc:'A prototype servo-fist that hits with the force of a small vehicle collision.' },
+  // ---- Mobility: tier 2-5 ----
+  { id:'gyrostabilizer', name:'Gyro-Stabilizer', category:'Mobility', activation:'passive', tier:2, desc:'Inner-ear balance implant.', apply:()=>{ player.dex+=3; }, remove:()=>{ player.dex-=3; } },
+  { id:'phaseshiftboots', name:'Phase-Shift Boots', category:'Mobility', activation:'active', resource:'charge', mp:20, type:'blinklike', power:8, range:0, tier:3, desc:'Boots that briefly phase you out of normal space.' },
+  { id:'wallrunners', name:'Wall-Runner Grips', category:'Mobility', activation:'passive', tier:3, desc:'Adhesive palm and boot pads.', apply:()=>{ player.dex+=4; }, remove:()=>{ player.dex-=4; } },
+  { id:'gravcoil', name:'Grav-Coil Harness', category:'Mobility', activation:'active', resource:'charge', mp:30, type:'buff', stat:'flight', power:1, dur:30, range:0, tier:4, desc:'A gravity-defying harness lets you drift over any terrain.' },
+  { id:'quantumblink', name:'Quantum Blink Array', category:'Mobility', activation:'active', resource:'charge', mp:50, type:'blinklike', power:40, range:0, tier:5, desc:'Folds space around you across a genuinely absurd distance.' },
+  // ---- Sensory: tier 2-5 ----
+  { id:'thermaloptics', name:'Thermal Optics', category:'Sensory', activation:'passive', tier:2, desc:'See the world in heat.', apply:()=>{ player.permaNightVision=true; }, remove:()=>{} },
+  { id:'predictiveaim', name:'Predictive Aim Assist', category:'Sensory', activation:'passive', tier:3, desc:'A ballistics computer wired into your vision.', apply:()=>{ player.critBonus=(player.critBonus||0)+0.1; }, remove:()=>{ player.critBonus-=0.1; } },
+  { id:'neuraluplink', name:'Neural Uplink', category:'Sensory', activation:'passive', tier:3, desc:'Direct data-feed into your cortex.', apply:()=>{ player.int+=4; }, remove:()=>{ player.int-=4; } },
+  { id:'omniscan', name:'Omni-Scan Array', category:'Sensory', activation:'active', resource:'charge', mp:24, type:'utility', range:0, tier:4, desc:'A full-spectrum scan of everything nearby.' },
+  { id:'oraclecore', name:'Oracle Core', category:'Sensory', activation:'passive', tier:5, desc:'A prototype precognition chip, decades ahead of anything on the market.', apply:()=>{ player.critBonus=(player.critBonus||0)+0.15; player.dodgeChance=(player.dodgeChance||0)+0.1; }, remove:()=>{ player.critBonus-=0.15; player.dodgeChance-=0.1; } },
+  // ---- Defense: tier 2-5 ----
+  { id:'nanoweave2', name:'Nanoweave Mesh II', category:'Defense', activation:'passive', tier:2, desc:'A denser weave of self-repairing nanofiber.', apply:()=>{ player.cyberArmor=(player.cyberArmor||0)+5; }, remove:()=>{ player.cyberArmor=(player.cyberArmor||0)-5; } },
+  { id:'autododge', name:'Autonomic Dodge Reflex', category:'Defense', activation:'passive', tier:3, desc:'Reflex wiring that moves your body before you consciously react.', apply:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.06; }, remove:()=>{ player.dodgeChance-=0.06; } },
+  { id:'hardenedplating', name:'Hardened Subdermal Plating', category:'Defense', activation:'passive', tier:4, desc:'Military-grade plating fused directly to bone.', apply:()=>{ player.cyberArmor=(player.cyberArmor||0)+8; player.maxHp+=15; player.hp+=15; }, remove:()=>{ player.cyberArmor=(player.cyberArmor||0)-8; player.maxHp-=15; } },
+  { id:'lastditchprotocol', name:'Last-Ditch Protocol', category:'Defense', activation:'active', resource:'charge', mp:40, type:'heal', power:[40,60], range:0, tier:5, desc:'An emergency full-system medical override, saved for when everything else fails.' },
+  // ---- Exotic: tier 2-5 ----
+  { id:'plasmalance', name:'Plasma Lance', category:'Exotic', activation:'active', resource:'charge', mp:32, type:'damage', power:[24,38], range:6, destructive:true, igniteGround:true, tier:3, desc:'A superheated plasma bolt that ignites whatever it touches.' },
+  { id:'singularitygrenade', name:'Singularity Grenade Launcher', category:'Exotic', activation:'active', resource:'charge', mp:38, type:'damage', power:[20,32], range:6, aoe:true, aoeRadius:3, tier:4, desc:'Fires a grenade that briefly folds space around its target.' },
+  { id:'orbitalstrikebeacon', name:'Orbital Strike Beacon', category:'Exotic', activation:'active', resource:'charge', mp:55, type:'damage', power:[45,70], range:8, aoe:true, aoeRadius:3, destructive:true, tier:5, desc:'A one-use-per-recharge marker that calls down fire from something far above.' },
+  { id:'antimattercore', name:'Antimatter Core Implant', category:'Exotic', activation:'active', resource:'charge', mp:60, type:'damage', power:[55,85], range:5, aoe:true, aoeRadius:3, destructive:true, tier:5, desc:'A barely-stable prototype power core repurposed as a weapon of last resort.' },
+  // ---- Neural (new category: hacking, debuffs, control) ----
+  { id:'glitchpulse', name:'Glitch Pulse', category:'Neural', activation:'active', resource:'charge', mp:14, type:'debuff', stat:'dex', power:-6, dur:8, range:5, tier:1, desc:'A disorienting pulse that scrambles a target\'s motor signals.' },
+  { id:'dataspike', name:'Data Spike', category:'Neural', activation:'active', resource:'charge', mp:12, type:'damage', power:[8,14], range:5, tier:1, desc:'A focused burst of malicious code, translated into raw pain.' },
+  { id:'firewallmind', name:'Firewall Mind', category:'Neural', activation:'passive', tier:2, desc:'Hardened mental defenses against intrusion and fear alike.', apply:()=>{ player.int+=3; }, remove:()=>{ player.int-=3; } },
+  { id:'signaljam', name:'Signal Jammer', category:'Neural', activation:'active', resource:'charge', mp:18, type:'debuff', stat:'dex', power:-9, dur:10, range:6, aoe:true, aoeRadius:2, tier:2, desc:'Jams the coordination of every hostile signal-bearing system nearby.' },
+  { id:'malwareinjection', name:'Malware Injection', category:'Neural', activation:'active', resource:'charge', mp:24, type:'damage', power:[16,26], range:5, tier:3, desc:'Corrupted code that causes real, physical damage in augmented targets.' },
+  { id:'mindjack', name:'Mindjack Protocol', category:'Neural', activation:'active', resource:'charge', mp:30, type:'debuff', stat:'str', power:-10, dur:12, range:5, tier:4, desc:'Briefly seizes control of a target\'s motor cortex.' },
+  { id:'systemcrash', name:'System Crash', category:'Neural', activation:'active', resource:'charge', mp:45, type:'damage', power:[30,48], range:6, aoe:true, aoeRadius:3, tier:5, desc:'A cascading failure you force into every nearby augmented system.' },
+  // ---- Weapons Systems (new category: heavier installed weapons) ----
+  { id:'wristblade', name:'Wrist Blade Mk. I', category:'Weapons Systems', activation:'active', resource:'charge', mp:14, type:'damage', power:[10,18], range:1, tier:1, desc:'A basic retractable forearm blade.' },
+  { id:'flechettegun', name:'Flechette Gun', category:'Weapons Systems', activation:'active', resource:'charge', mp:18, type:'damage', power:[12,20], range:6, tier:2, desc:'A subdermal launcher firing a spray of tiny darts.' },
+  { id:'incendiaryturret', name:'Shoulder Incendiary Turret', category:'Weapons Systems', activation:'active', resource:'charge', mp:26, type:'damage', power:[16,26], range:6, destructive:true, igniteGround:true, tier:3, desc:'A mounted turret that fires an incendiary charge.' },
+  { id:'railcannon', name:'Rail Cannon Arm', category:'Weapons Systems', activation:'active', resource:'charge', mp:34, type:'damage', power:[26,42], range:8, tier:4, desc:'A full forearm replacement built around a rail accelerator.' },
+  { id:'siegebattery', name:'Siege Battery Array', category:'Weapons Systems', activation:'active', resource:'charge', mp:58, type:'damage', power:[50,78], range:8, aoe:true, aoeRadius:2, destructive:true, tier:5, desc:'Illegal in eleven nations. A full siege weapon crammed into a chest cavity.' },
+  // ---- Bio-Augment (new category: organic/HP-focused augments) ----
+  { id:'synthblood', name:'Synthetic Blood Filter', category:'Bio-Augment', activation:'passive', tier:1, desc:'Filters toxins from your bloodstream automatically.', apply:()=>{ player.poisonDmgReduction=(player.poisonDmgReduction||0)+0.2; }, remove:()=>{ player.poisonDmgReduction-=0.2; } },
+  { id:'organcloning', name:'Redundant Organ Cloning', category:'Bio-Augment', activation:'passive', tier:2, desc:'Backup organs grown and stored subdermally.', apply:()=>{ player.maxHp+=20; player.hp+=20; }, remove:()=>{ player.maxHp-=20; } },
+  { id:'adrenalpump', name:'Adrenal Pump System', category:'Bio-Augment', activation:'active', resource:'charge', mp:16, type:'heal', power:[16,26], range:0, tier:2, desc:'Floods your system with a precisely-dosed stimulant.' },
+  { id:'boneweave', name:'Bone Density Weave', category:'Bio-Augment', activation:'passive', tier:3, desc:'Your skeleton is reinforced with a synthetic lattice.', apply:()=>{ player.maxHp+=25; player.con+=2; }, remove:()=>{ player.maxHp-=25; player.con-=2; } },
+  { id:'regenmesh', name:'Regenerative Mesh', category:'Bio-Augment', activation:'passive', tier:4, desc:'A living mesh under the skin that accelerates all healing.', apply:()=>{ player.mutationRegen=(player.mutationRegen||0)+2; }, remove:()=>{ player.mutationRegen=(player.mutationRegen||0)-2; } },
+  { id:'phoenixprotocol', name:'Phoenix Protocol', category:'Bio-Augment', activation:'active', resource:'charge', mp:50, type:'heal', power:[50,75], range:0, tier:5, desc:'A last-resort full-body regeneration cascade.' },
+  // ---- Stealth (new category) ----
+  { id:'opticalcamo', name:'Optical Camo Weave', category:'Stealth', activation:'active', resource:'charge', mp:20, type:'buff', stat:'invis', power:1, dur:15, range:0, tier:2, desc:'Bends light around you for a short time.' },
+  { id:'silentservos', name:'Silent Servos', category:'Stealth', activation:'passive', tier:2, desc:'Sound-dampened joint actuators.', apply:()=>{ player.dex+=3; }, remove:()=>{ player.dex-=3; } },
+  { id:'shadowcloak', name:'Shadow Cloak Generator', category:'Stealth', activation:'active', resource:'charge', mp:30, type:'buff', stat:'invis', power:1, dur:25, range:0, tier:4, desc:'A refined cloaking field that lasts far longer.' },
+  { id:'ghostprotocol', name:'Ghost Protocol', category:'Stealth', activation:'active', resource:'charge', mp:45, type:'buff', stat:'invis', power:1, dur:40, range:0, tier:5, desc:'A prototype full-spectrum stealth system. You simply aren\'t there.' },
+);
+
+// ===================== CYBERNETICS EXPANSION PART 2: tier 1 entries so every category has a full ladder =====================
+CYBERNETICS.push(
+  { id:'basicplating', name:'Basic Plating', category:'Combat', activation:'passive', tier:1, desc:'Entry-level armor plates.', apply:()=>{ player.cyberArmor=(player.cyberArmor||0)+2; }, remove:()=>{ player.cyberArmor=(player.cyberArmor||0)-2; } },
+  { id:'servopunch', name:'Servo-Assisted Punch', category:'Combat', activation:'active', resource:'charge', mp:12, type:'damage', power:[7,13], range:1, tier:1, desc:'A basic hydraulic-assisted strike.' },
+  { id:'spinaltap', name:'Spinal Reflex Tap', category:'Mobility', activation:'passive', tier:1, desc:'Basic reflex acceleration.', apply:()=>{ player.dex+=2; }, remove:()=>{ player.dex-=2; } },
+  { id:'springheels', name:'Spring-Loaded Heels', category:'Mobility', activation:'active', resource:'charge', mp:10, type:'blinklike', power:3, range:0, tier:1, desc:'A short mechanical hop, nothing fancy.' },
+  { id:'lowlightoptics', name:'Low-Light Optics', category:'Sensory', activation:'passive', tier:1, desc:'Basic light amplification.', apply:()=>{ player.permaNightVision=true; }, remove:()=>{} },
+  { id:'motiontracker', name:'Motion Tracker', category:'Sensory', activation:'active', resource:'charge', mp:8, type:'utility', range:0, tier:1, desc:'A basic sonar ping of the immediate area.' },
+  { id:'basicweave', name:'Basic Nanoweave', category:'Defense', activation:'passive', tier:1, desc:'A thin layer of protective fiber.', apply:()=>{ player.cyberArmor=(player.cyberArmor||0)+2; }, remove:()=>{ player.cyberArmor=(player.cyberArmor||0)-2; } },
+  { id:'shockabsorbers', name:'Shock Absorber Joints', category:'Defense', activation:'passive', tier:1, desc:'Basic joint dampening.', apply:()=>{ player.con+=1; }, remove:()=>{ player.con-=1; } },
+  { id:'sparkgun', name:'Spark Gun', category:'Exotic', activation:'active', resource:'charge', mp:16, type:'damage', power:[10,18], range:5, tier:1, desc:'An entry-level arc weapon, crude but functional.' },
+  { id:'staticfield', name:'Static Field Emitter', category:'Exotic', activation:'passive', tier:1, desc:'A faint personal static field.', apply:()=>{ player.cyberArmor=(player.cyberArmor||0)+1; player.dex+=1; }, remove:()=>{ player.cyberArmor=(player.cyberArmor||0)-1; player.dex-=1; } },
+  { id:'basicfirewall', name:'Basic Firewall', category:'Neural', activation:'passive', tier:1, desc:'Minimal intrusion protection.', apply:()=>{ player.int+=1; }, remove:()=>{ player.int-=1; } },
+  { id:'staticknife', name:'Static Blade', category:'Weapons Systems', activation:'active', resource:'charge', mp:10, type:'damage', power:[8,14], range:1, tier:1, desc:'A crude but serviceable retractable knife.' },
+  { id:'ironlung', name:'Iron Lung Filter', category:'Bio-Augment', activation:'passive', tier:1, desc:'Filters airborne toxins.', apply:()=>{ player.poisonDmgReduction=(player.poisonDmgReduction||0)+0.1; }, remove:()=>{ player.poisonDmgReduction-=0.1; } },
+  { id:'quietstep', name:'Quiet Step Padding', category:'Stealth', activation:'passive', tier:1, desc:'Sound-dampened footwear integration.', apply:()=>{ player.dex+=1; }, remove:()=>{ player.dex-=1; } },
+  { id:'basiccloak', name:'Basic Cloak Field', category:'Stealth', activation:'active', resource:'charge', mp:14, type:'buff', stat:'invis', power:1, dur:10, range:0, tier:1, desc:'A rudimentary short-lived stealth field.' },
+  { id:'painkillerdrip', name:'Painkiller Drip', category:'Bio-Augment', activation:'active', resource:'charge', mp:12, type:'heal', power:[10,16], range:0, tier:1, desc:'A basic combat stimulant drip.' },
+  { id:'targetinglaser', name:'Targeting Laser', category:'Weapons Systems', activation:'passive', tier:2, desc:'A laser sight wired into your aim.', apply:()=>{ player.critBonus=(player.critBonus||0)+0.05; }, remove:()=>{ player.critBonus-=0.05; } },
+  { id:'reinforcedjoints', name:'Reinforced Joints', category:'Combat', activation:'passive', tier:2, desc:'Sturdier joint assemblies.', apply:()=>{ player.str+=3; }, remove:()=>{ player.str-=3; } },
+  { id:'ampedreflexes', name:'Amped Reflexes', category:'Mobility', activation:'passive', tier:3, desc:'Reflex response tuned well past human norms.', apply:()=>{ player.dex+=5; }, remove:()=>{ player.dex-=5; } },
+  { id:'panopticlens', name:'Panoptic Lens', category:'Sensory', activation:'passive', tier:4, desc:'Near-360-degree situational awareness.', apply:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.08; }, remove:()=>{ player.dodgeChance-=0.08; } },
+  { id:'titanplating', name:'Titan-Grade Plating', category:'Defense', activation:'passive', tier:4, desc:'Military-surplus heavy plating.', apply:()=>{ player.cyberArmor=(player.cyberArmor||0)+7; }, remove:()=>{ player.cyberArmor=(player.cyberArmor||0)-7; } },
+  { id:'overclockcore', name:'Overclock Core', category:'Neural', activation:'passive', tier:4, desc:'Pushes your neural processing well past rated limits.', apply:()=>{ player.int+=5; player.critBonus=(player.critBonus||0)+0.05; }, remove:()=>{ player.int-=5; player.critBonus-=0.05; } },
+  { id:'boostedmetabolism', name:'Boosted Metabolism', category:'Bio-Augment', activation:'passive', tier:2, desc:'Faster natural recovery, at the cost of appetite.', apply:()=>{ player.mutationRegen=(player.mutationRegen||0)+1; }, remove:()=>{ player.mutationRegen=(player.mutationRegen||0)-1; } },
+  { id:'phaseblade', name:'Phase Blade', category:'Weapons Systems', activation:'active', resource:'charge', mp:28, type:'damage', power:[18,30], range:1, tier:3, desc:'A blade that briefly phases through armor before striking.' },
+  { id:'combatdrone', name:'Combat Drone Bay', category:'Weapons Systems', activation:'active', resource:'charge', mp:36, type:'damage', power:[22,36], range:6, tier:4, desc:'Deploys a small autonomous drone to strafe a target.' },
+  { id:'neurospike', name:'Neurospike Launcher', category:'Neural', activation:'active', resource:'charge', mp:20, type:'debuff', stat:'int', power:-8, dur:10, range:5, tier:2, desc:'A small dart that scrambles higher cognitive function.' },
+  { id:'empfist', name:'EMP Knuckles', category:'Combat', activation:'active', resource:'charge', mp:18, type:'debuff', stat:'dex', power:-7, dur:8, range:1, tier:2, desc:'A short-range EMP burst delivered by a direct hit.' },
+  { id:'graftedmuscle', name:'Grafted Muscle Fiber', category:'Bio-Augment', activation:'passive', tier:2, desc:'Denser synthetic muscle tissue.', apply:()=>{ player.str+=3; }, remove:()=>{ player.str-=3; } },
+  { id:'voidcoreheart', name:'Void Core Heart', category:'Exotic', activation:'passive', tier:5, desc:'Your natural heart, replaced with something that shouldn\'t work but does.', apply:()=>{ player.maxHp+=35; player.maxCharge=(player.maxCharge||60)+30; player.charge=(player.charge||60)+30; }, remove:()=>{ player.maxHp-=35; player.maxCharge-=30; } },
+);
+
 // ---- eldritch mutations: gained via corruption; permanent once acquired; active ones cost HP ----
 const MUTATIONS = [
   { id:'chitinoushide', name:'Chitinous Hide', category:'Physical', activation:'passive', corruptionReq:0, desc:'Patches of hardened, insect-like plating spread across your skin.', apply:()=>{ player.mutationArmor=(player.mutationArmor||0)+3; } },
@@ -1025,6 +1218,97 @@ const MUTATIONS = [
   { id:'ninthdoor', name:'The Ninth Door', category:'Aberrant', activation:'active', corruptionReq:40, resource:'hp', mp:16, type:'travelbypass', power:0, range:0, desc:'Your mind carves a door where none should exist, opening onto the waystone network from anywhere — no waystone required, only a piece of yourself.' },
   { id:'apotheosis', name:'Apotheosis', category:'Aberrant', activation:'passive', corruptionReq:60, desc:'You are becoming something else entirely.', apply:()=>{ player.str+=2; player.dex+=2; player.int+=2; player.con+=2; player.wis+=2; } },
 ];
+
+// ===================== MUTATION EXPANSION: fill existing categories + 4 new ones, tier progression via corruptionReq =====================
+MUTATIONS.push(
+  // ---- Physical: tier 3-5 ----
+  { id:'boneclub', name:'Bone Club', category:'Physical', activation:'active', corruptionReq:30, resource:'hp', selfCost:11, type:'damage', power:[16,26], range:1, desc:'A protruding bone spur you can wield as a bludgeon.' },
+  { id:'carapaceplating', name:'Carapace Plating', category:'Physical', activation:'passive', corruptionReq:35, desc:'Thick, overlapping chitin plates now cover most of your torso.', apply:()=>{ player.mutationArmor=(player.mutationArmor||0)+6; player.maxHp+=20; player.hp+=20; } },
+  { id:'goliathframe', name:'Goliath Frame', category:'Physical', activation:'passive', corruptionReq:45, desc:'Your entire skeleton has thickened and lengthened.', apply:()=>{ player.str+=5; player.maxHp+=25; player.hp+=25; } },
+  { id:'titanmaw', name:"Titan's Maw", category:'Physical', activation:'active', corruptionReq:55, resource:'hp', selfCost:18, type:'execute', power:[32,50], range:1, desc:'Your jaw unhinges into something no longer entirely human.' },
+  // ---- Psychic: tier 3-5 ----
+  { id:'mindshatter_mut', name:'Mind Shatter', category:'Psychic', activation:'active', corruptionReq:30, resource:'hp', selfCost:12, type:'damage', power:[18,28], range:5, desc:'A focused psychic blow that leaves the target reeling.' },
+  { id:'psionicdominance', name:'Psionic Dominance', category:'Psychic', activation:'active', corruptionReq:40, resource:'hp', selfCost:14, type:'debuff', stat:'str', power:-12, dur:12, range:5, desc:'You force your will directly into a foe\'s nervous system.' },
+  { id:'astralprojection', name:'Astral Projection', category:'Psychic', activation:'active', corruptionReq:45, resource:'hp', selfCost:15, type:'blinklike', power:15, range:0, desc:'Your body follows where your mind has already gone.' },
+  { id:'psychicdominion', name:'Psychic Dominion', category:'Psychic', activation:'active', corruptionReq:60, resource:'hp', selfCost:22, type:'damage', power:[35,54], range:6, aoe:true, aoeRadius:3, desc:'A wave of pure mental force that shatters the minds of everything nearby.' },
+  // ---- Elemental: tier 3-5 ----
+  { id:'infernoglands', name:'Inferno Glands', category:'Elemental', activation:'active', corruptionReq:30, resource:'hp', selfCost:13, type:'damage', power:[20,32], range:5, destructive:true, igniteGround:true, desc:'Glands that secrete a substance which ignites on contact with air.' },
+  { id:'glacialform', name:'Glacial Form', category:'Elemental', activation:'active', corruptionReq:35, resource:'hp', selfCost:14, type:'damage', power:[18,29], range:5, desc:'Your arm briefly crystallizes into living ice, shattering on impact.' },
+  { id:'stormheart', name:'Storm Heart', category:'Elemental', activation:'passive', corruptionReq:40, desc:'Lightning now visibly arcs beneath your skin.', apply:()=>{ player.mutationDmgBonus=(player.mutationDmgBonus||0)+5; } },
+  { id:'magmablood', name:'Magma Blood', category:'Elemental', activation:'active', corruptionReq:55, resource:'hp', selfCost:20, type:'damage', power:[34,52], range:5, aoe:true, aoeRadius:2, destructive:true, igniteGround:true, desc:'You open a vein and molten blood erupts outward.' },
+  // ---- Aberrant: tier 3-5 (beyond capstone) ----
+  { id:'realityfray', name:'Reality Fray', category:'Aberrant', activation:'active', corruptionReq:50, resource:'hp', selfCost:18, type:'debuff', stat:'dex', power:-14, dur:12, range:5, aoe:true, aoeRadius:2, desc:'The space around your target briefly forgets how to behave.' },
+  { id:'manyeyedgaze', name:'Many-Eyed Gaze', category:'Aberrant', activation:'passive', corruptionReq:35, desc:'Additional eyes have opened across your face and neck.', apply:()=>{ player.critBonus=(player.critBonus||0)+0.1; } },
+  { id:'writhingform', name:'Writhing Form', category:'Aberrant', activation:'active', corruptionReq:45, resource:'hp', selfCost:16, type:'damage', power:[26,40], range:1, aoe:true, aoeRadius:2, desc:'Your body briefly loses its human shape entirely.' },
+  // ---- Void/Cosmic (new category) ----
+  { id:'starlitveins', name:'Starlit Veins', category:'Void/Cosmic', activation:'passive', corruptionReq:15, desc:'Faint points of light move beneath your skin like a captured night sky.', apply:()=>{ player.int+=2; } },
+  { id:'gravitywell', name:'Gravity Well', category:'Void/Cosmic', activation:'active', corruptionReq:25, resource:'hp', selfCost:10, type:'debuff', stat:'dex', power:-9, dur:10, range:5, desc:'A pocket of distorted gravity briefly forms around your target.' },
+  { id:'entropytouch', name:'Entropy Touch', category:'Void/Cosmic', activation:'active', corruptionReq:35, resource:'hp', selfCost:13, type:'execute', power:[20,32], range:1, desc:'Your touch accelerates decay by several thousand years in an instant.' },
+  { id:'cosmicinsight', name:'Cosmic Insight', category:'Void/Cosmic', activation:'passive', corruptionReq:30, desc:'You perceive threads of causality other minds cannot.', apply:()=>{ player.critBonus=(player.critBonus||0)+0.08; player.int+=2; } },
+  { id:'blackholesingularity', name:'Black Hole Singularity', category:'Void/Cosmic', activation:'active', corruptionReq:65, resource:'hp', selfCost:24, type:'damage', power:[40,62], range:5, aoe:true, aoeRadius:3, desc:'A pinprick singularity you tear open and immediately close.' },
+  { id:'starcollapse', name:'Star Collapse', category:'Void/Cosmic', activation:'active', corruptionReq:75, resource:'hp', selfCost:30, type:'damage', power:[60,90], range:6, aoe:true, aoeRadius:3, destructive:true, desc:'For one impossible instant, you channel the death throes of a dying star.' },
+  // ---- Predatory (new category: beast-like traits) ----
+  { id:'sharpenedsenses', name:'Sharpened Senses', category:'Predatory', activation:'passive', corruptionReq:5, desc:'Your senses have sharpened well past human norms.', apply:()=>{ player.dex+=2; } },
+  { id:'pouncingstrike', name:'Pouncing Strike', category:'Predatory', activation:'active', corruptionReq:15, resource:'hp', selfCost:7, type:'damage', power:[12,20], range:2, desc:'You close distance in a single predatory lunge.' },
+  { id:'packinstinct', name:'Pack Instinct', category:'Predatory', activation:'passive', corruptionReq:20, desc:'An instinctive rapport with beasts around you.', apply:()=>{ player.allyHpBonus=(player.allyHpBonus||0)+0.15; } },
+  { id:'venomousbite', name:'Venomous Bite', category:'Predatory', activation:'active', corruptionReq:25, resource:'hp', selfCost:9, type:'damage', power:[14,22], range:1, poison:4, desc:'Your bite now carries a potent, fast-acting venom.' },
+  { id:'apexpredatorform', name:'Apex Predator Form', category:'Predatory', activation:'passive', corruptionReq:40, desc:'You have become something that hunts, first and foremost.', apply:()=>{ player.str+=4; player.dex+=4; } },
+  { id:'savagemauling', name:'Savage Mauling', category:'Predatory', activation:'active', corruptionReq:50, resource:'hp', selfCost:17, type:'damage', power:[30,46], range:1, desc:'A frenzied mauling attack that leaves nothing clean about the wound.' },
+  // ---- Plague (new category: poison/disease themed) ----
+  { id:'toxicsweat', name:'Toxic Sweat', category:'Plague', activation:'passive', corruptionReq:10, desc:'Your very sweat has become mildly caustic.', apply:()=>{ player.poisonDmgReduction=(player.poisonDmgReduction||0)+0.15; } },
+  { id:'plaguebreath', name:'Plague Breath', category:'Plague', activation:'active', corruptionReq:25, resource:'hp', selfCost:11, type:'debuff', stat:'poison', power:5, dur:8, range:4, aoe:true, aoeRadius:2, desc:'A single exhaled breath of pure contagion.' },
+  { id:'rottingaura', name:'Rotting Aura', category:'Plague', activation:'passive', corruptionReq:30, desc:'Plants wilt and food spoils faster near you — and so do your enemies.', apply:()=>{ player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.1; } },
+  { id:'contagionburst', name:'Contagion Burst', category:'Plague', activation:'active', corruptionReq:40, resource:'hp', selfCost:15, type:'debuff', stat:'poison', power:8, dur:10, range:5, aoe:true, aoeRadius:3, desc:'A rupturing pustule releases a cloud of virulent disease.' },
+  { id:'plaguelord', name:'Plague Lord', category:'Plague', activation:'passive', corruptionReq:55, desc:'You have become a walking epidemic given human shape.', apply:()=>{ player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.2; player.maxHp+=20; player.hp+=20; } },
+  // ---- Symbiotic (new category: parasite/hivemind themed) ----
+  { id:'symbioticlatch', name:'Symbiotic Latch', category:'Symbiotic', activation:'passive', corruptionReq:15, desc:'Something has attached itself just beneath your shoulder blade — and it helps.', apply:()=>{ player.mutationRegen=(player.mutationRegen||0)+1; } },
+  { id:'sharedpain', name:'Shared Pain', category:'Symbiotic', activation:'active', corruptionReq:25, resource:'hp', selfCost:10, type:'lifetap', power:[14,22], range:5, desc:'A parasitic tendril siphons vitality from a foe into you.' },
+  { id:'hivecall', name:'Hive Call', category:'Symbiotic', activation:'active', corruptionReq:35, resource:'hp', selfCost:14, type:'summon', summonId:'nanite_swarm', duration:50, range:0, desc:'You call forth a swarm bonded to your own biology.' },
+  { id:'symbiotearmor', name:'Symbiote Armor', category:'Symbiotic', activation:'passive', corruptionReq:40, desc:'A living second skin has grown to protect you.', apply:()=>{ player.mutationArmor=(player.mutationArmor||0)+5; player.mutationRegen=(player.mutationRegen||0)+1; } },
+  { id:'greatersymbiosis', name:'Greater Symbiosis', category:'Symbiotic', activation:'passive', corruptionReq:55, desc:'You and your passenger have become nearly impossible to tell apart.', apply:()=>{ player.maxHp+=30; player.mutationRegen=(player.mutationRegen||0)+2; } },
+);
+
+// ===================== MUTATION EXPANSION PART 2: low-tier entries so every category has an accessible entry point =====================
+MUTATIONS.push(
+  { id:'thickenedskin', name:'Thickened Skin', category:'Physical', activation:'passive', corruptionReq:0, desc:'Your skin has toughened slightly.', apply:()=>{ player.mutationArmor=(player.mutationArmor||0)+1; } },
+  { id:'denseligaments', name:'Dense Ligaments', category:'Physical', activation:'passive', corruptionReq:5, desc:'Stronger connective tissue throughout your body.', apply:()=>{ player.str+=1; } },
+  { id:'boneclaws', name:'Bone Claws', category:'Physical', activation:'active', corruptionReq:5, resource:'hp', selfCost:4, type:'damage', power:[6,11], range:1, desc:'Small bone protrusions along your knuckles.' },
+  { id:'minorclairvoyance', name:'Minor Clairvoyance', category:'Psychic', activation:'passive', corruptionReq:5, desc:'Faint flashes of insight.', apply:()=>{ player.critBonus=(player.critBonus||0)+0.03; } },
+  { id:'psychicwhisper', name:'Psychic Whisper', category:'Psychic', activation:'active', corruptionReq:5, resource:'hp', selfCost:4, type:'debuff', stat:'dex', power:-4, dur:6, range:4, desc:'A faint, unsettling whisper only your target can hear.' },
+  { id:'wakingdreams', name:'Waking Dreams', category:'Psychic', activation:'passive', corruptionReq:20, desc:'The boundary between waking and dreaming has thinned.', apply:()=>{ player.wis+=2; } },
+  { id:'warmblood', name:'Warm Blood', category:'Elemental', activation:'passive', corruptionReq:5, desc:'Your blood runs slightly warmer than it should.', apply:()=>{ player.mutationFrost=(player.mutationFrost||0)+1; } },
+  { id:'sparkfingers', name:'Spark Fingers', category:'Elemental', activation:'active', corruptionReq:10, resource:'hp', selfCost:5, type:'damage', power:[7,13], range:3, desc:'A small crackle of static discharge from your fingertips.' },
+  { id:'emberskin', name:'Ember Skin', category:'Elemental', activation:'passive', corruptionReq:15, desc:'Faint warmth radiates from your skin.', apply:()=>{ player.mutationDmgBonus=(player.mutationDmgBonus||0)+2; } },
+  { id:'unsettlingpresence', name:'Unsettling Presence', category:'Aberrant', activation:'passive', corruptionReq:5, desc:'People find it hard to place what\'s wrong about you.', apply:()=>{ player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.05; } },
+  { id:'flickeringform', name:'Flickering Form', category:'Aberrant', activation:'active', corruptionReq:15, resource:'hp', selfCost:6, type:'blinklike', power:3, range:0, desc:'You briefly lose cohesion and reappear nearby.' },
+  { id:'faintstarlight', name:'Faint Starlight', category:'Void/Cosmic', activation:'passive', corruptionReq:0, desc:'A barely-visible shimmer follows your movements.', apply:()=>{ player.int+=1; } },
+  { id:'voidwhisper', name:'Void Whisper', category:'Void/Cosmic', activation:'active', corruptionReq:10, resource:'hp', selfCost:5, type:'debuff', stat:'dex', power:-5, dur:8, range:5, desc:'Something briefly speaks through you, and your foe flinches.' },
+  { id:'keensmell', name:'Keen Smell', category:'Predatory', activation:'passive', corruptionReq:0, desc:'Your sense of smell has sharpened considerably.', apply:()=>{ player.dex+=1; } },
+  { id:'clawedfingers', name:'Clawed Fingers', category:'Predatory', activation:'active', corruptionReq:5, resource:'hp', selfCost:4, type:'damage', power:[6,10], range:1, desc:'Short but sharp claws have grown in.' },
+  { id:'huntersgait', name:"Hunter's Gait", category:'Predatory', activation:'passive', corruptionReq:10, desc:'You move with an unnervingly efficient, low gait.', apply:()=>{ player.dex+=2; } },
+  { id:'mildfever', name:'Mild Fever', category:'Plague', activation:'passive', corruptionReq:0, desc:'A low fever that never quite breaks — nor slows you down.', apply:()=>{ player.con+=1; } },
+  { id:'infectiousbite', name:'Infectious Bite', category:'Plague', activation:'active', corruptionReq:10, resource:'hp', selfCost:5, type:'damage', power:[7,12], range:1, poison:2, desc:'A minor bite carrying a mild but real infection.' },
+  { id:'minorparasite', name:'Minor Parasite', category:'Symbiotic', activation:'passive', corruptionReq:0, desc:'A small, harmless-seeming passenger has taken up residence.', apply:()=>{ player.mutationRegen=(player.mutationRegen||0)+0.5; } },
+  { id:'boundcompanion', name:'Bound Companion', category:'Symbiotic', activation:'active', corruptionReq:15, resource:'hp', selfCost:8, type:'lifetap', power:[9,15], range:4, desc:'Your passenger reaches out and takes what it needs — sharing some back with you.' },
+  { id:'granitehide', name:'Granite Hide', category:'Physical', activation:'passive', corruptionReq:20, desc:'Patches of stone-like hardness across your forearms.', apply:()=>{ player.mutationArmor=(player.mutationArmor||0)+4; } },
+  { id:'seconstomach', name:'Second Stomach', category:'Physical', activation:'passive', corruptionReq:10, desc:'An extra digestive organ that makes food go further.', apply:()=>{ player.cookingHealBonus=(player.cookingHealBonus||0)+0.15; } },
+  { id:'empathicbond', name:'Empathic Bond', category:'Psychic', activation:'passive', corruptionReq:15, desc:'You feel the pain of those around you — and share your strength with them too.', apply:()=>{ player.allyHpBonus=(player.allyHpBonus||0)+0.1; } },
+  { id:'frostbite_mut', name:'Frostbite Touch', category:'Elemental', activation:'active', corruptionReq:20, resource:'hp', selfCost:9, type:'damage', power:[13,21], range:1, desc:'Your touch leaves flesh blackened with frost.' },
+  { id:'echoingvoid', name:'Echoing Void', category:'Void/Cosmic', activation:'passive', corruptionReq:20, desc:'A faint echo of somewhere else lingers around you.', apply:()=>{ player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.08; } },
+  { id:'ambushinstinct', name:'Ambush Instinct', category:'Predatory', activation:'passive', corruptionReq:15, desc:'You have a predator\'s patience for the perfect moment.', apply:()=>{ player.critBonus=(player.critBonus||0)+0.05; } },
+  { id:'sporecloud', name:'Spore Cloud', category:'Plague', activation:'active', corruptionReq:15, resource:'hp', selfCost:8, type:'debuff', stat:'poison', power:3, dur:6, range:3, aoe:true, aoeRadius:1, desc:'A small burst of infectious spores.' },
+  { id:'sharedstrength', name:'Shared Strength', category:'Symbiotic', activation:'passive', corruptionReq:20, desc:'Your passenger lends you a fraction of its own vigor.', apply:()=>{ player.str+=2; player.con+=1; } },
+  { id:'ossifiedjoints', name:'Ossified Joints', category:'Physical', activation:'passive', corruptionReq:25, desc:'Your joints have hardened into something closer to stone than bone.', apply:()=>{ player.maxHp+=12; } },
+  { id:'farsight', name:'Farsight', category:'Psychic', activation:'passive', corruptionReq:25, desc:'You occasionally glimpse events before they happen.', apply:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.04; } },
+  { id:'thermalvision', name:'Thermal Vision', category:'Predatory', activation:'passive', corruptionReq:20, desc:'Your eyes have adapted to see body heat.', apply:()=>{ player.permaNightVision=true; } },
+  { id:'crystallineveins', name:'Crystalline Veins', category:'Elemental', activation:'passive', corruptionReq:25, desc:'Faint crystal growths trace along your veins.', apply:()=>{ player.mutationArmor=(player.mutationArmor||0)+3; player.mutationDmgBonus=(player.mutationDmgBonus||0)+2; } },
+  { id:'quietcorruption', name:'Quiet Corruption', category:'Void/Cosmic', activation:'passive', corruptionReq:10, desc:'The change is spreading, slowly, and you\'ve stopped fighting it.', apply:()=>{ player.int+=1; player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.04; } },
+  { id:'boundhunger', name:'Bound Hunger', category:'Symbiotic', activation:'active', corruptionReq:30, resource:'hp', selfCost:11, type:'lifetap', power:[18,28], range:5, desc:'Your passenger feeds directly, and shares the spoils.' },
+  { id:'diseasedaura', name:'Diseased Aura', category:'Plague', activation:'passive', corruptionReq:20, desc:'A faint sickly aura surrounds you at all times.', apply:()=>{ player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.06; } },
+  { id:'ravenousmaw', name:'Ravenous Maw', category:'Predatory', activation:'active', corruptionReq:35, resource:'hp', selfCost:13, type:'lifetap', power:[20,32], range:1, desc:'Rows of extra teeth make short work of anything they close on.' },
+  { id:'stellardrift', name:'Stellar Drift', category:'Void/Cosmic', activation:'active', corruptionReq:20, resource:'hp', selfCost:9, type:'blinklike', power:5, range:0, desc:'You drift, briefly, through the space between spaces.' },
+  { id:'theconsuming', name:'The Consuming', category:'Void/Cosmic', activation:'active', corruptionReq:70, resource:'hp', selfCost:26, type:'execute', power:[45,68], range:1, desc:'For a moment, your target simply stops being real.' },
+);
 
 // ---- expanded talent tree: technique/cybernetic/eldritch talents + tier 5 capstones ----
 TALENTS_V2.push(
@@ -1702,6 +1986,85 @@ SPELLS.push(
 ['poisoncloud','causticgas'].forEach(id => { const s = SPELLS.find(x => x.id === id); if (s) { s.gasCloud = true; s.gasKind = 'poison'; } });
 (function tagHallucinogenicGas() { const s = SPELLS.find(x => x.id === 'hallucinogenicmist'); if (s) { s.gasCloud = true; s.gasKind = 'confuse'; } })();
 
+// ===================== SPELL EXPANSION: real power tiers across every school + 2 new schools =====================
+SPELLS.push(
+  // ---- Arcane: tier 2-5 (the "firebolt -> fireball -> meteor -> sun" progression lives partly here, partly in the new Elemental Mastery school below) ----
+  { id:'arcanelance', name:'Arcane Lance', mp:14, type:'damage', power:[14,24], range:6, school:'Arcane', tier:2, desc:'A focused lance of raw magical force.' },
+  { id:'manaburn', name:'Mana Burn', mp:18, type:'damage', power:[18,30], range:6, school:'Arcane', tier:3, desc:'Volatile magic that burns through any ward.' },
+  { id:'novaburst', name:'Nova Burst', mp:28, type:'damage', power:[24,38], range:5, aoe:true, aoeRadius:2, school:'Arcane', tier:3, desc:'A concentrated implosion of pure arcane energy.' },
+  { id:'starfallcascade', name:'Starfall Cascade', mp:42, type:'damage', power:[36,56], range:6, aoe:true, aoeRadius:3, destructive:true, school:'Arcane', tier:4, desc:'You tear a hole in the sky and let a fragment of falling star through.' },
+  { id:'realityunraveling', name:'Reality Unraveling', mp:65, type:'damage', power:[55,85], range:7, aoe:true, aoeRadius:3, destructive:true, school:'Arcane', tier:5, desc:'For one instant, the rules governing reality itself bend to your will.' },
+  // ---- Elemental Mastery (NEW school): the flagship fire/frost/lightning tier progression ----
+  { id:'fireball', name:'Fireball', mp:14, type:'damage', power:[12,22], range:6, aoe:true, aoeRadius:2, destructive:true, igniteGround:true, school:'Elemental Mastery', tier:2, desc:'A roaring ball of flame that bursts on impact.' },
+  { id:'greaterfireball', name:'Greater Fireball', mp:24, type:'damage', power:[22,36], range:6, aoe:true, aoeRadius:2, destructive:true, igniteGround:true, school:'Elemental Mastery', tier:3, desc:'A larger, hungrier fireball that leaves a lasting inferno behind.' },
+  { id:'meteorswarm', name:'Meteor Swarm', mp:40, type:'damage', power:[34,54], range:7, aoe:true, aoeRadius:3, destructive:true, igniteGround:true, school:'Elemental Mastery', tier:4, desc:'You call down a cluster of blazing meteors.' },
+  { id:'sunfirecataclysm', name:'Sunfire Cataclysm', mp:70, type:'damage', power:[60,95], range:8, aoe:true, aoeRadius:4, destructive:true, igniteGround:true, school:'Elemental Mastery', tier:5, desc:'A fragment of the sun itself, called down and unleashed. Nothing about this is subtle.' },
+  { id:'icespear', name:'Ice Spear', mp:12, type:'damage', power:[10,18], range:6, school:'Elemental Mastery', tier:2, desc:'A javelin of solid ice hurled with bone-breaking force.' },
+  { id:'glacialburst', name:'Glacial Burst', mp:22, type:'damage', power:[18,30], range:5, aoe:true, aoeRadius:2, school:'Elemental Mastery', tier:3, desc:'A sudden eruption of ice and freezing wind.' },
+  { id:'absolutezero', name:'Absolute Zero', mp:38, type:'damage', power:[30,48], range:6, aoe:true, aoeRadius:3, school:'Elemental Mastery', tier:4, desc:'You draw all warmth from the air itself.' },
+  { id:'thelongwinter', name:'The Long Winter', mp:65, type:'damage', power:[52,80], range:7, aoe:true, aoeRadius:4, school:'Elemental Mastery', tier:5, desc:'A localized, brief ice age, over almost as soon as it began.' },
+  { id:'chainlightning', name:'Chain Lightning', mp:16, type:'damage', power:[14,24], range:6, aoe:true, aoeRadius:2, school:'Elemental Mastery', tier:2, desc:'Lightning that arcs from foe to foe.' },
+  { id:'thunderstrike', name:'Thunderstrike', mp:26, type:'damage', power:[22,36], range:6, school:'Elemental Mastery', tier:3, desc:'A single, devastating bolt from a clear sky.' },
+  // ---- Storm Magic (NEW school) ----
+  { id:'galewind', name:'Gale Wind', mp:10, type:'debuff', stat:'dex', power:-6, dur:8, range:5, school:'Storm Magic', tier:1, desc:'A gust strong enough to throw off any foe\'s footing.' },
+  { id:'lightningjavelin', name:'Lightning Javelin', mp:14, type:'damage', power:[12,20], range:7, school:'Storm Magic', tier:1, desc:'A spear of crackling electricity.' },
+  { id:'thunderclap', name:'Thunderclap', mp:18, type:'debuff', stat:'fear', power:1, dur:6, range:4, aoe:true, aoeRadius:2, school:'Storm Magic', tier:2, desc:'A deafening clap that rattles nerves as much as eardrums.' },
+  { id:'ridethelightning', name:'Ride the Lightning', mp:20, type:'blinklike', power:8, range:0, school:'Storm Magic', tier:2, desc:'You become lightning, briefly, and strike somewhere new.' },
+  { id:'tornado', name:'Tornado', mp:32, type:'damage', power:[22,36], range:6, aoe:true, aoeRadius:3, school:'Storm Magic', tier:3, desc:'A localized funnel of destructive wind.' },
+  { id:'hurricaneforce', name:'Hurricane Force', mp:44, type:'damage', power:[32,50], range:6, aoe:true, aoeRadius:3, school:'Storm Magic', tier:4, desc:'A miniature hurricane, called and released in a single moment.' },
+  { id:'eyeofthestorm', name:'Eye of the Storm', mp:68, type:'damage', power:[54,82], range:7, aoe:true, aoeRadius:4, school:'Storm Magic', tier:5, desc:'You become the calm center of a storm that annihilates everything around it.' },
+  { id:'staticfield_spell', name:'Static Field', mp:16, type:'buff', stat:'armor', power:9, dur:12, range:0, school:'Storm Magic', tier:2, desc:'A crackling personal ward of contained electricity.' },
+  // ---- Alchemy: real gas/poison tier progression (Caustic Gas already fixed to be a real cloud) ----
+  { id:'toxicbloom', name:'Toxic Bloom', mp:16, type:'debuff', stat:'poison', power:6, dur:8, range:5, aoe:true, aoeRadius:2, gasCloud:true, gasKind:'poison', school:'Alchemy', tier:2, desc:'A billowing, larger cloud of concentrated toxin.' },
+  { id:'plaguetide', name:'Plague Tide', mp:28, type:'debuff', stat:'poison', power:10, dur:10, range:6, aoe:true, aoeRadius:3, gasCloud:true, gasKind:'poison', school:'Alchemy', tier:3, desc:'A rolling tide of virulent, lingering plague.' },
+  { id:'miasmicapocalypse', name:'Miasmic Apocalypse', mp:50, type:'debuff', stat:'poison', power:16, dur:14, range:7, aoe:true, aoeRadius:4, gasCloud:true, gasKind:'poison', school:'Alchemy', tier:5, desc:'A gas cloud that could reasonably be described as a small ecological disaster.' },
+  { id:'volatilecatalyst', name:'Volatile Catalyst', mp:20, type:'damage', power:[16,26], range:5, destructive:true, igniteGround:true, school:'Alchemy', tier:2, desc:'An unstable compound that erupts violently on contact.' },
+  { id:'philosophersfire', name:"Philosopher's Fire", mp:32, type:'damage', power:[26,42], range:6, aoe:true, aoeRadius:2, destructive:true, igniteGround:true, school:'Alchemy', tier:4, desc:'An alchemical fire said to be unquenchable by ordinary means.' },
+  { id:'greaterhealingpotion_spell', name:'Alchemical Restoration', mp:18, type:'heal', power:[22,34], range:0, school:'Alchemy', tier:2, desc:'A rapid-brew restorative drawn directly through your own magic.' },
+  // ---- Necromancy: more tiers ----
+  { id:'boneshatter', name:'Bone Shatter', mp:14, type:'damage', power:[13,22], range:5, school:'Necromancy', tier:2, desc:'A cracking force that shatters bone even through armor.' },
+  { id:'deathcoil', name:'Death Coil', mp:20, type:'drain', power:[16,26], range:5, school:'Necromancy', tier:3, desc:'A coiling void of necrotic energy that both harms and sustains you.' },
+  { id:'soulharvest', name:'Soul Harvest', mp:30, type:'drain', power:[24,38], range:5, aoe:true, aoeRadius:2, school:'Necromancy', tier:4, desc:'You tear the vitality from everything nearby at once.' },
+  { id:'armyofthedead', name:'Army of the Dead', mp:55, type:'summon', summonId:'skeleton', duration:80, range:0, school:'Necromancy', tier:5, desc:'The ground splits and the dead answer in numbers.' },
+  { id:'summonwraith_spell', name:'Summon Wraith', mp:24, type:'summon', summonId:'wraith', duration:60, range:0, school:'Necromancy', tier:3, desc:'A restless spirit answers your call, bound to your service.' },
+  { id:'lichform_spell', name:'Lichform Ritual', mp:60, type:'buff', stat:'armor', power:20, dur:40, range:0, school:'Necromancy', tier:5, desc:'You briefly shed the trappings of the living entirely.' },
+  // ---- Holy: more tiers ----
+  { id:'holyfire', name:'Holy Fire', mp:16, type:'smite', power:[15,25], range:6, school:'Holy', tier:2, desc:'Consecrated flame that burns hottest against the wicked.' },
+  { id:'divinejudgment', name:'Divine Judgment', mp:30, type:'smite', power:[26,42], range:6, aoe:true, aoeRadius:2, school:'Holy', tier:3, desc:'A column of holy light descends without warning.' },
+  { id:'angelicdescent', name:'Angelic Descent', mp:55, type:'summon', summonId:'spirit', duration:70, range:0, school:'Holy', tier:5, desc:'You call upon something that answers as a being of pure light.' },
+  { id:'sanctuaryfield', name:'Sanctuary Field', mp:26, type:'heal', power:[26,40], range:0, school:'Holy', tier:3, desc:'A field of protective light mends wounds and steadies nerves.' },
+  { id:'wrathofthefaithful', name:'Wrath of the Faithful', mp:48, type:'smite', power:[42,64], range:7, aoe:true, aoeRadius:3, school:'Holy', tier:4, desc:'The combined fury of every prayer ever answered, focused into one strike.' },
+  // ---- Nature: more tiers ----
+  { id:'naturesswrath', name:"Nature's Wrath", mp:20, type:'damage', power:[16,27], range:5, aoe:true, aoeRadius:2, school:'Nature', tier:3, desc:'The forest itself lashes out at your command.' },
+  { id:'earthquake', name:'Earthquake', mp:34, type:'damage', power:[26,40], range:6, aoe:true, aoeRadius:3, school:'Nature', tier:4, desc:'The ground itself buckles and heaves.' },
+  { id:'worldtreeblessing', name:"World Tree's Blessing", mp:55, type:'heal', power:[45,68], range:0, school:'Nature', tier:5, desc:'A blessing drawn from the roots of the oldest tree in the world.' },
+  { id:'summondrake', name:'Summon Drake', mp:38, type:'summon', summonId:'wyrmling', duration:70, range:0, school:'Nature', tier:4, desc:'A young dragon answers the call of the wild.' },
+  // ---- Chronomancy: more tiers ----
+  { id:'timestop', name:'Time Stop', mp:50, type:'debuff', stat:'dex', power:-20, dur:8, range:6, aoe:true, aoeRadius:3, school:'Chronomancy', tier:5, desc:'For a handful of heartbeats, everything around you nearly stops moving.' },
+  { id:'agereversal', name:'Age Reversal', mp:32, type:'heal', power:[30,46], range:0, school:'Chronomancy', tier:4, desc:'You unwind your own wounds back to a moment before they existed.' },
+  { id:'temporalrift', name:'Temporal Rift', mp:22, type:'blinklike', power:12, range:0, school:'Chronomancy', tier:3, desc:'You step through a fold where a moment ago and a moment from now briefly touch.' },
+  // ---- Golem Magic: more tiers ----
+  { id:'summonirongolem', name:'Summon Iron Golem', mp:26, type:'summon', summonId:'iron_golem', duration:70, range:0, school:'Golem Magic', tier:4, desc:'You animate a construct of solid iron.' },
+  { id:'summoncolossus', name:'Summon Colossus', mp:55, type:'summon', summonId:'stone_titan', duration:80, range:0, school:'Golem Magic', tier:5, desc:'You breathe life into a construct the size of a small building.' },
+  { id:'runicreinforcement', name:'Runic Reinforcement', mp:18, type:'buff', stat:'armor', power:14, dur:16, range:0, school:'Golem Magic', tier:3, desc:'Protective runes bind themselves to your armor.' },
+  // ---- Summoning: more tiers ----
+  { id:'summonhellhound', name:'Summon Hellhound', mp:22, type:'summon', summonId:'hellhound', duration:60, range:0, school:'Summoning', tier:3, desc:'A hound from somewhere unpleasant answers your call.' },
+  { id:'summonelementallord', name:'Summon Elemental Lord', mp:48, type:'summon', summonId:'frost_giant_king', duration:75, range:0, school:'Summoning', tier:5, desc:'You call something that most summoners would never dare to.' },
+  { id:'summonspiderqueen', name:'Summon Broodmother', mp:34, type:'summon', summonId:'broodmother_spider', duration:65, range:0, school:'Summoning', tier:4, desc:'Something ancient and many-legged answers, bound loosely to your will.' },
+  // ---- Blood Magic: more tiers ----
+  { id:'hemoclasm', name:'Hemoclasm', mp:26, type:'execute', power:[20,32], selfCostPct:0.1, range:1, school:'Blood Magic', tier:3, desc:'A brutal ritual strike fueled by your own blood.' },
+  { id:'bloodgodscovenant', name:"Blood God's Covenant", mp:50, type:'bloodbuff', stat:'str', power:14, dur:22, selfCostPct:0.18, range:0, school:'Blood Magic', tier:5, desc:'A pact sealed in blood, granting terrible strength for a terrible price.' },
+  { id:'crimsonlance', name:'Crimson Lance', mp:18, type:'lifetap', power:[16,26], range:5, school:'Blood Magic', tier:2, desc:'A spear of your own vitality, hurled and drawn back doubled.' },
+  // ---- Illusion: more tiers ----
+  { id:'mirrorarmy', name:'Mirror Army', mp:28, type:'buff', stat:'crit', power:0.25, dur:16, range:0, school:'Illusion', tier:3, desc:'A dozen illusory duplicates make you nearly impossible to pin down.' },
+  { id:'nightmarerealm', name:'Nightmare Realm', mp:48, type:'debuff', stat:'fear', power:1, dur:14, range:6, aoe:true, aoeRadius:3, school:'Illusion', tier:5, desc:'For a moment, everyone nearby is trapped in their own worst dream.' },
+  { id:'massconfusion', name:'Mass Confusion', mp:26, type:'debuff', stat:'dex', power:-10, dur:10, range:5, aoe:true, aoeRadius:2, gasCloud:true, gasKind:'confuse', school:'Illusion', tier:3, desc:'A disorienting field that leaves everyone within it stumbling.' },
+  // ---- Restoration: more tiers ----
+  { id:'massheal', name:'Mass Heal', mp:34, type:'heal', power:[35,52], range:0, school:'Restoration', tier:4, desc:'A wave of restorative light washing over you and everything friendly nearby.' },
+  { id:'reviveally', name:'Revive Ally', mp:45, type:'heal', power:[50,50], range:0, school:'Restoration', tier:5, desc:'A desperate, powerful ritual to pull an ally back from the brink.' },
+  { id:'sanctuaryward', name:'Sanctuary Ward', mp:24, type:'buff', stat:'armor', power:16, dur:18, range:0, school:'Restoration', tier:3, desc:'A steady, powerful ward against further harm.' },
+);
+
 
 // ---- expanded talent tree with prerequisites (tiers) ----
 
@@ -1753,7 +2116,7 @@ const CREATION_STARTING_ITEM_POOL = ITEM_BASES.filter(b => ['weapon','armor'].in
 const CREATION_MAX_STARTING_CYBER = 3;
 // The four ability categories selectable during custom creation, each a full point-buy pool.
 const CREATION_ABILITY_CATS = [
-  { key:'spells', label:'Spells', pool: () => SPELLS.filter(s => (s.mp||8) <= 12), costFn: CREATION_SPELL_COST, tagOf: (a) => a.school },
+  { key:'spells', label:'Spells', pool: () => SPELLS, costFn: CREATION_SPELL_COST, tagOf: (a) => a.school },
   { key:'techniques', label:'Techniques', pool: () => TECHNIQUES, costFn: CREATION_TECHNIQUE_COST, tagOf: (a) => a.school },
   { key:'eldritch', label:'Eldritch Mutations', pool: () => MUTATIONS, costFn: CREATION_MUTATION_COST, tagOf: (a) => a.category },
   { key:'cyber', label:'Cyberware', pool: () => CYBERNETICS, costFn: CREATION_CYBER_COST, tagOf: (a) => a.category },
@@ -1818,6 +2181,7 @@ OVERWORLD_BOSSES.forEach(b => {
 });
 
 // ---- faction tagging for every pre-existing monster (drives theme-aware dungeon placement) ----
+const UNDEAD_IDS = new Set(['skeleton','zombie','mummy','wraith','lich','bog-zombie','giantbat','skeleton_archer','skeleton_warrior','zombie_crawler','banshee','revenant','death_knight','plague_zombie','lich_acolyte','crypt_stalker']);
 const LEGACY_MONSTER_FACTIONS = {
   rabbit:'beast', deer:'beast', gull:'beast', crab:'beast', boar:'beast', wolf:'beast', spider:'beast',
   bear:'beast', bandit:'human', scorpion:'beast', jackal:'beast', vulture:'beast', yeti:'beast',
@@ -1843,7 +2207,7 @@ for (const id in LEGACY_MONSTER_FACTIONS) if (MONSTER_BASES[id] && !MONSTER_BASE
 const BOSS_POWER = {
   banditchief:1, alphawolf:1, orcwarlord:2, vampire:3, lich:3, demonlord:5, ancientdragon:6,
   ancient_wyrm:6, frost_yeti_king:4, elder_treant:5, desert_wyrm:4, bog_horror:4,
-  alpha_direwolf:4, thunderbird:3, corrupted_colossus:6,
+  alpha_direwolf:4, thunderbird:3, corrupted_colossus:6, spiderqueen:3,
   goblin_overlord:2, orc_warchief:3, stone_titan:4, iron_sovereign:6, the_harbinger:6,
   abyssal_leviathan:4, the_maw:2, frost_giant_king:4, core_overmind:5, verdant_horror:3,
 };
@@ -6639,24 +7003,37 @@ const GUIDE_SECTIONS = [
     you. ${ITEM_BASES.filter(b=>b.type==='material').length} crafting materials feed the Crafting screen (K).</div>` },
   { id:'magic', label:'Magic', html: () => `
     <div class="modal-opt">z opens your unified Abilities screen (spells, techniques, active cybernetics, active
-    mutations together). Below is the full spell reference across all eleven schools:</div>
+    mutations together). ${SPELLS.length} spells across ${new Set(SPELLS.map(s=>s.school)).size} schools, spanning a real
+    power range within each element — e.g. Firebolt → Fireball → Greater Fireball → Meteor Swarm → Sunfire Cataclysm is
+    the same fire damage type at five wildly different power tiers, not five names for the same number. Fire-flavored
+    spells genuinely ignite and spread across flammable terrain; gas/cloud spells (Caustic Gas, Toxic Bloom, Plague Tide,
+    Miasmic Apocalypse) leave a real lingering cloud that affects anyone who walks through it later. Below is the full
+    spell reference across all schools:</div>
     ${generateSpellGuideHTML()}` },
   { id:'techniques', label:'Techniques', html: () => `
-    <div class="modal-opt">Martial techniques cost Stamina, not Mana — a full combat path for non-casters. Learn them
-    from weapon trainers or Technique Manuals, exactly like spells. Full list:</div>
+    <div class="modal-opt">Martial techniques cost Stamina, not Mana — a full combat path for non-casters.
+    ${TECHNIQUES.length} techniques across ${new Set(TECHNIQUES.map(s=>s.school)).size} schools (including Daggers, Dual
+    Wielding, Berserker Arts, Monastic Arts, and Tactics), each with its own tier-1-through-5 progression from a basic
+    maneuver to a legendary finisher. Learn them from weapon trainers or Technique Manuals, exactly like spells. Full
+    list:</div>
     ${generateTechniqueGuideHTML()}` },
   { id:'cybernetics', label:'Cybernetics', html: () => `
     <div class="modal-opt"><b>Y</b> opens Cybernetics management. Acquire blueprints by buying from a Cybersmith NPC
     (found in cities and Scrapworks settlements) or finding Cyberware Chips as loot, then install them — you have a
     limited number of slots (3 to start, more via talents). Passive cybernetics apply a permanent-while-installed bonus;
     active ones are cast like spells (from the Abilities screen) and cost Charge, a resource separate from Mana/Stamina
-    that regenerates on its own. Full list:</div>
+    that regenerates on its own. ${CYBERNETICS.length} cybernetics across ${new Set(CYBERNETICS.map(s=>s.category)).size}
+    categories (including Neural, Weapons Systems, Bio-Augment, and Stealth), ranging from a basic Wrist Blade to
+    prototype tech like the Antimatter Core Implant or Quantum Blink Array. Full list:</div>
     ${generateCyberGuideHTML()}` },
   { id:'eldritch', label:'Eldritch', html: () => `
     <div class="modal-opt"><b>U</b> opens the Eldritch screen, showing your Corruption and known mutations. Mutations are
     permanent bodily/mental changes gained by drinking Mutagen vials (loot) or performing a ritual at a Forbidden Altar
     (a rare point of interest) — rituals cost HP and raise Corruption, which in turn unlocks access to deeper, stranger
-    mutations. Passive mutations apply automatically; active ones cost HP to use, like blood magic. Full list:</div>
+    mutations. Passive mutations apply automatically; active ones cost HP to use, like blood magic. ${MUTATIONS.length}
+    mutations across ${new Set(MUTATIONS.map(s=>s.category)).size} categories (including Void/Cosmic, Predatory, Plague,
+    and Symbiotic), gated by Corruption from 0 all the way to campaign-ending horrors like Star Collapse and The
+    Consuming. Full list:</div>
     ${generateMutationGuideHTML()}` },
   { id:'talents', label:'Talents', html: () => `
     <div class="modal-opt">T opens Talents. One point every 3 levels. Five tiers: Tier 1 open from the start; Tier 2
@@ -6714,6 +7091,22 @@ const GUIDE_SECTIONS = [
     items — full stats shown, not just the ground biome). Scroll the mouse wheel over the map to zoom.</div>` },
   { id:'meta', label:'Meta', html: () => `
     <div class="modal-opt"><b>Changelog:</b></div>
+    <div class="modal-opt"><b>Spells/cyberware/techniques/eldritch quantity + power-tier overhaul:</b> every ability
+    pool expanded past 100 (${SPELLS.length} spells, ${TECHNIQUES.length} techniques, ${CYBERNETICS.length} cybernetics,
+    ${MUTATIONS.length} mutations — 430 total). Added new schools/categories throughout: Elemental Mastery and Storm
+    Magic for spells; Daggers, Dual Wielding, Berserker Arts, Monastic Arts, and Tactics for techniques; Neural, Weapons
+    Systems, Bio-Augment, and Stealth for cybernetics; Void/Cosmic, Predatory, Plague, and Symbiotic for mutations. Real
+    power tiers within each theme now exist end to end — Firebolt (weak, cheap) through Fireball, Greater Fireball,
+    Meteor Swarm, up to Sunfire Cataclysm (an actual sun fragment) at the top, and the same tiering logic runs through
+    frost, lightning, poison/gas, necromancy, holy, and more. Every new fire/gas ability plugs into the terrain-physics
+    engine from the prior pass (real ignition/spread, real lingering gas clouds), and every new teleport ability uses
+    player-directed targeting rather than a random landing spot.</div>
+    <div class="modal-opt">Bugs found and fixed during this pass: a spell/talent post-processing step from an earlier
+    change had accidentally been relocated ahead of the data it modified (breaking Caustic Gas's real gas cloud and
+    Firebolt's ground ignition without any error message — just silent no-ops), and a global monster-faction lookup set
+    (<code>UNDEAD_IDS</code>) had been accidentally deleted entirely during an earlier edit, which would have crashed
+    the game the moment any Holy-school smite spell was cast. Both were caught by actually casting/applying all 430
+    abilities in a simulated arena and checking the results, not by reading the code.</div>
     <div class="modal-opt"><b>Talents, crafting, cooking & alchemy overhaul:</b> talent tree expanded from 39 to
     ${TALENTS_V2.length}, now covering cooking, alchemy, and swimming as real build paths (not just combat/magic),
     each with genuine mechanical hooks (heal/buff potency, ingredient efficiency, thrown-weapon damage, dodge, thorns,
