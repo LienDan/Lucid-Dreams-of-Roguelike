@@ -4,11 +4,13 @@
 <meta charset="UTF-8">
 <title>Wanderhollow — A Roguelike</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=JetBrains+Mono:wght@400;500;700&family=VT323&family=Silkscreen:wght@400;700&family=IM+Fell+English&family=MedievalSharp&family=Special+Elite&display=swap');
 
   :root{
     --bg:#0a0908;
     --panel:#0f0d0a;
+    --panel-rgb:15,13,10;
+    --panel-alpha:1;
     --amber:#c98a3a;
     --amber-dim:#7a5628;
     --amber-bright:#e8ab52;
@@ -17,13 +19,83 @@
     --hp:#b0392f;
     --mp:#2f6fb0;
     --line:#241f16;
+    --ui-scale:1;
+    --font-body:'JetBrains Mono', 'Consolas', monospace;
+    --font-heading:'Cinzel', serif;
   }
   *{box-sizing:border-box;}
+  /* All text sizing in this file is expressed in rem (1rem = 10px at 100% scale) so that
+     the Font Scale setting resizes TEXT ONLY. Panel widths, padding, and button hitboxes
+     stay in px and never move — that's what previously caused the whole HUD to grow/shrink
+     and overlap when the scale changed. */
+  html{ font-size:calc(10px * var(--ui-scale)); }
   html,body{
     margin:0; padding:0; height:100%; background:var(--bg); color:var(--text);
-    font-family:'JetBrains Mono', 'Consolas', monospace;
+    font-family:var(--font-body);
     overflow:hidden;
   }
+  /* ============ body font variants ============ */
+  body.font-body-pixel{ --font-body:'VT323', 'Silkscreen', monospace; }
+  body.font-body-blocky{ --font-body:'Silkscreen', 'VT323', monospace; }
+  body.font-body-serif{ --font-body:'IM Fell English', Georgia, 'Times New Roman', serif; }
+  body.font-body-sans{ --font-body:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  body.font-body-fantasy{ --font-body:'MedievalSharp', 'Cinzel', serif; }
+  body.font-body-typewriter{ --font-body:'Special Elite', 'Courier New', monospace; }
+
+  /* Pixel/8-bit fonts render visually smaller than the default mono font at the
+     same declared size, so every text size in the game gets bumped back up to a
+     readable size whenever one of these fonts is active. VT323 shrinks the most,
+     so it gets the larger bump; Silkscreen ("8-Bit") gets a smaller one. */
+  body.font-body-pixel .sidebar, body.font-body-pixel .log, body.font-body-pixel .modal{ font-size:1.8rem; letter-spacing:0.5px; }
+  body.font-body-blocky .sidebar, body.font-body-blocky .log, body.font-body-blocky .modal{ font-size:1.5rem; letter-spacing:0.5px; }
+
+  body.font-body-pixel .titlebar .sub, body.font-body-pixel .loc-row{ font-size:1.6rem; }
+  body.font-body-blocky .titlebar .sub, body.font-body-blocky .loc-row{ font-size:1.4rem; }
+
+  body.font-body-pixel .sidebar h2{ font-size:1.6rem; }
+  body.font-body-blocky .sidebar h2{ font-size:1.45rem; }
+
+  body.font-body-pixel .bar-text, body.font-body-pixel .keyhint{ font-size:1.5rem; }
+  body.font-body-blocky .bar-text, body.font-body-blocky .keyhint{ font-size:1.3rem; }
+
+  body.font-body-pixel .modal h3{ font-size:2rem; }
+  body.font-body-blocky .modal h3{ font-size:1.8rem; }
+
+  body.font-body-pixel .modal-hint,
+  body.font-body-pixel .settings-tab,
+  body.font-body-pixel .settings-value,
+  body.font-body-pixel .settings-btn,
+  body.font-body-pixel .guide-tab{ font-size:1.55rem; }
+  body.font-body-blocky .modal-hint,
+  body.font-body-blocky .settings-tab,
+  body.font-body-blocky .settings-value,
+  body.font-body-blocky .settings-btn,
+  body.font-body-blocky .guide-tab{ font-size:1.4rem; }
+
+  body.font-body-pixel .settings-label b{ font-size:1.7rem; }
+  body.font-body-blocky .settings-label b{ font-size:1.5rem; }
+  body.font-body-pixel .settings-label span,
+  body.font-body-pixel .settings-choice{ font-size:1.5rem; }
+  body.font-body-blocky .settings-label span,
+  body.font-body-blocky .settings-choice{ font-size:1.3rem; }
+
+  body.font-body-pixel .title-tagline,
+  body.font-body-pixel .title-footer{ font-size:1.5rem; }
+  body.font-body-blocky .title-tagline,
+  body.font-body-blocky .title-footer{ font-size:1.3rem; }
+  body.font-body-pixel .title-menu-opt{ font-size:1.7rem; }
+  body.font-body-blocky .title-menu-opt{ font-size:1.55rem; }
+
+  body.font-body-pixel .hud-floating::before{ font-size:1.4rem; }
+  body.font-body-blocky .hud-floating::before{ font-size:1.2rem; }
+
+  /* Some text (guide tabs, keybind list, header audio controls, trade tabs) is
+     rendered with an inline font-size in the markup. Target it by its inline
+     style attribute so it still scales up with these fonts. */
+  body.font-body-pixel .modal [style*="font-size"],
+  body.font-body-pixel .titlebar [style*="font-size"]{ font-size:1.5rem !important; }
+  body.font-body-blocky .modal [style*="font-size"],
+  body.font-body-blocky .titlebar [style*="font-size"]{ font-size:1.3rem !important; }
   /* subtle scanline / vignette signature */
   body::before{
     content:''; position:fixed; inset:0; pointer-events:none; z-index:50;
@@ -40,10 +112,10 @@
     border-bottom:1px solid var(--line); background:var(--panel);
   }
   .titlebar h1{
-    font-family:'Cinzel', serif; font-size:20px; letter-spacing:2px; color:var(--amber-bright);
+    font-family:var(--font-heading); font-size:2rem; letter-spacing:2px; color:var(--amber-bright);
     margin:0; font-weight:700; text-transform:uppercase;
   }
-  .titlebar .sub{ color:var(--text-dim); font-size:12px; letter-spacing:1px; }
+  .titlebar .sub{ color:var(--text-dim); font-size:1.2rem; letter-spacing:1px; }
 
   .layout{
     display:flex; height:calc(100vh - 41px);
@@ -58,21 +130,21 @@
   }
   .loc-row{
     display:flex; justify-content:space-between; width:100%; max-width:816px;
-    font-size:12px; color:var(--amber); padding:6px 2px; letter-spacing:0.5px;
+    font-size:1.2rem; color:var(--amber); padding:6px 2px; letter-spacing:0.5px;
   }
   .log{
     width:100%; max-width:816px; height:118px; overflow-y:auto; margin-top:8px;
-    background:var(--panel); border:1px solid var(--line); padding:6px 10px;
-    font-size:12.5px; line-height:1.5; color:var(--text-dim);
+    background:rgba(var(--panel-rgb),var(--panel-alpha)); border:1px solid var(--line); padding:6px 10px;
+    font-size:1.25rem; line-height:1.5; color:var(--text-dim);
   }
   .log div:last-child{ color:var(--text); }
 
   .sidebar{
-    width:270px; flex-shrink:0; background:var(--panel); border-left:1px solid var(--line);
-    padding:14px; overflow-y:auto; font-size:12.5px;
+    width:270px; flex-shrink:0; background:rgba(var(--panel-rgb),var(--panel-alpha)); border-left:1px solid var(--line);
+    padding:14px; overflow-y:auto; font-size:1.25rem;
   }
   .sidebar h2{
-    font-family:'Cinzel', serif; font-size:12px; letter-spacing:1.5px; color:var(--amber);
+    font-family:var(--font-heading); font-size:1.2rem; letter-spacing:1.5px; color:var(--amber);
     text-transform:uppercase; margin:16px 0 8px; border-bottom:1px solid var(--line); padding-bottom:4px;
   }
   .sidebar h2:first-child{ margin-top:0; }
@@ -82,34 +154,194 @@
   .barfill.mp{ background:linear-gradient(to right, #1c3f6b, var(--mp)); }
   .barfill.stamina{ background:linear-gradient(to right, #6b5a1c, #b0932f); }
   .barfill.charge{ background:linear-gradient(to right, #1c5a6b, #2fb0a0); }
-  .bar-text{ font-size:11px; color:var(--text-dim); margin-bottom:8px; }
-  .keyhint{ color:var(--text-dim); font-size:11px; line-height:1.6; }
+  .bar-text{ font-size:1.1rem; color:var(--text-dim); margin-bottom:8px; }
+  .keyhint{ color:var(--text-dim); font-size:1.1rem; line-height:1.6; }
   .keyhint b{ color:var(--amber); }
 
   .hidden{ display:none !important; }
   .modal-backdrop{
     position:fixed; inset:0; background:rgba(0,0,0,0.72); z-index:100;
-    display:flex; align-items:center; justify-content:center;
+    display:flex; align-items:center; justify-content:center; overflow:hidden;
   }
   .modal{
-    background:var(--panel); border:1px solid var(--amber-dim); min-width:380px; max-width:560px;
-    max-height:80vh; overflow-y:auto; padding:18px 22px; box-shadow:0 8px 40px rgba(0,0,0,0.6);
+    background:rgba(var(--panel-rgb),var(--panel-alpha)); border:1px solid var(--amber-dim); min-width:380px; max-width:560px;
+    max-height:80vh; overflow-y:auto; overflow-x:hidden; padding:18px 22px; box-shadow:0 8px 40px rgba(0,0,0,0.6);
   }
+  .modal.modal-wide{ max-width:720px; }
   .modal h3{
-    font-family:'Cinzel', serif; color:var(--amber-bright); letter-spacing:1px; margin:0 0 12px;
-    border-bottom:1px solid var(--line); padding-bottom:8px; font-size:16px;
+    font-family:var(--font-heading); color:var(--amber-bright); letter-spacing:1px; margin:0 0 12px;
+    border-bottom:1px solid var(--line); padding-bottom:8px; font-size:1.6rem;
   }
   .modal-opt{ padding:4px 2px; cursor:default; }
   .modal-opt:hover{ color:var(--amber-bright); }
   .npcline{ color:var(--text); margin:4px 0; }
   .dim{ color:var(--text-dim); }
   .trade-col-title{ color:var(--amber); margin:8px 0 4px; }
-  .modal-hint{ margin-top:14px; padding-top:8px; border-top:1px solid var(--line); color:var(--text-dim); font-size:11.5px; }
+  .modal-hint{ margin-top:14px; padding-top:8px; border-top:1px solid var(--line); color:var(--text-dim); font-size:1.15rem; }
   .charstats hr{ border:none; border-top:1px solid var(--line); margin:8px 0; }
 
   ::-webkit-scrollbar{ width:8px; height:8px; }
   ::-webkit-scrollbar-track{ background:var(--bg); }
   ::-webkit-scrollbar-thumb{ background:var(--amber-dim); }
+
+  /* ============ title screen ============ */
+  #title-screen{
+    position:fixed; inset:0; z-index:200; display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(ellipse at 50% 40%, #1c1409 0%, #0a0908 68%);
+    overflow:hidden;
+  }
+  #title-screen.hidden{ display:none !important; }
+  .title-embers{ position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+  .title-embers span{
+    position:absolute; bottom:-10px; width:3px; height:3px; border-radius:50%;
+    background:var(--amber-bright); box-shadow:0 0 6px 1px var(--amber-bright); opacity:0;
+    animation-name:emberRise; animation-timing-function:linear; animation-iteration-count:infinite;
+  }
+  @keyframes emberRise{
+    0%{ transform:translateY(0) translateX(0); opacity:0; }
+    8%{ opacity:0.85; }
+    92%{ opacity:0.25; }
+    100%{ transform:translateY(-104vh) translateX(var(--drift,20px)); opacity:0; }
+  }
+  .reduce-motion .title-embers{ display:none; }
+  .title-content{ position:relative; z-index:1; text-align:center; padding:20px; }
+  .title-frame{
+    border:1px solid var(--amber-dim); padding:44px 60px; background:rgba(10,9,8,0.35);
+    box-shadow:0 0 0 1px #000, 0 0 60px rgba(0,0,0,0.5);
+  }
+  .title-logo{
+    font-family:var(--font-heading); font-size:5.2rem; letter-spacing:9px; color:var(--amber-bright);
+    text-shadow:0 0 24px rgba(232,171,82,0.45), 0 0 3px rgba(232,171,82,0.9);
+    text-transform:uppercase; margin:0; font-weight:700;
+  }
+  .title-tagline{
+    text-align:center; color:var(--text-dim); letter-spacing:3px; margin-top:10px;
+    font-size:1.15rem; text-transform:uppercase;
+  }
+  .title-menu{ margin-top:36px; display:flex; flex-direction:column; gap:6px; min-width:320px; }
+  .title-menu-opt{
+    padding:11px 22px; border:1px solid var(--line); background:rgba(201,138,58,0.03);
+    cursor:pointer; text-align:center; letter-spacing:1.5px; font-size:1.3rem; color:var(--text);
+    transition:border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .title-menu-opt:hover{ border-color:var(--amber); color:var(--amber-bright); background:rgba(201,138,58,0.09); }
+  .title-menu-opt.disabled{ opacity:0.35; cursor:default; pointer-events:none; }
+  .title-menu-opt b{ color:var(--amber); margin-right:6px; }
+  .title-footer{ text-align:center; margin-top:26px; font-size:1.05rem; color:var(--text-dim); letter-spacing:1px; }
+
+  /* ============ settings screen ============ */
+  .settings-tabs{ display:flex; flex-wrap:wrap; gap:2px 14px; border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:12px; }
+  .settings-tab{ cursor:pointer; font-size:1.15rem; letter-spacing:0.5px; color:var(--text-dim); padding:2px 0; white-space:nowrap; }
+
+  .guide-tabs{ display:flex; flex-wrap:wrap; gap:4px 12px; border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:10px; }
+  .guide-tab{ cursor:pointer; font-size:1.1rem; letter-spacing:0.3px; color:var(--text-dim); white-space:nowrap; padding:2px 0; }
+  .guide-tab.active{ color:var(--amber-bright); text-decoration:underline; }
+  .settings-tab.active{ color:var(--amber-bright); text-decoration:underline; }
+
+  /* Each settings row is a label (left) + control (right) when the control is
+     compact (toggle, slider, color swatch). Rows whose control is a wide
+     choice-group (many pill buttons, e.g. font pickers) use .settings-row--stacked
+     instead: the label sits on its own line and the pills get the FULL row width
+     to wrap into, so they never push buttons off the edge of the modal. */
+  .settings-row{
+    display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between;
+    gap:6px 14px; padding:10px 2px; border-bottom:1px solid rgba(36,31,22,0.6);
+  }
+  .settings-row:last-child{ border-bottom:none; }
+  .settings-label{ flex:1 1 200px; min-width:0; }
+  .settings-label b{ color:var(--text); display:block; font-size:1.25rem; }
+  .settings-label span{ color:var(--text-dim); font-size:1.1rem; display:block; margin-top:2px; }
+  .settings-control{ flex:0 1 auto; max-width:100%; display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+  .settings-control input[type=range]{ width:120px; max-width:100%; accent-color:var(--amber); }
+  .settings-value{ color:var(--amber); font-size:1.15rem; min-width:34px; text-align:right; }
+
+  .settings-row--stacked{ flex-direction:column; align-items:stretch; }
+  .settings-row--stacked .settings-label{ flex-basis:auto; }
+  .settings-row--stacked .settings-control{ width:100%; max-width:100%; justify-content:flex-start; margin-top:2px; }
+
+  .toggle-switch{ position:relative; width:38px; height:20px; flex-shrink:0; cursor:pointer; }
+  .toggle-switch input{ opacity:0; width:0; height:0; }
+  .toggle-track{ position:absolute; inset:0; background:#241f16; border:1px solid var(--line); border-radius:10px; transition:background 0.15s; }
+  .toggle-switch input:checked + .toggle-track{ background:var(--amber-dim); border-color:var(--amber); }
+  .toggle-track::after{ content:''; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:var(--text-dim); transition:transform 0.15s, background 0.15s; }
+  .toggle-switch input:checked + .toggle-track::after{ transform:translateX(18px); background:var(--amber-bright); }
+  .settings-choicegroup{ display:flex; gap:6px; flex-wrap:wrap; width:100%; max-width:100%; }
+  .settings-choice{
+    padding:5px 12px; border:1px solid var(--line); cursor:pointer; font-size:1.1rem; color:var(--text-dim);
+    letter-spacing:0.5px; white-space:nowrap;
+  }
+  .settings-choice.active{ border-color:var(--amber); color:var(--amber-bright); background:rgba(201,138,58,0.08); }
+  .settings-btn{
+    display:inline-block; margin-top:4px; padding:6px 14px; border:1px solid var(--amber-dim); cursor:pointer;
+    color:var(--amber); font-size:1.15rem; letter-spacing:0.5px;
+  }
+  .settings-btn:hover{ border-color:var(--amber); color:var(--amber-bright); }
+
+  /* ============ accessibility themes ============ */
+  body.theme-contrast{ --bg:#000; --panel:#000; --panel-rgb:0,0,0; --text:#ffffff; --text-dim:#b8b8b8; --line:#555; --amber:#ffb84d; --amber-bright:#ffd280; --amber-dim:#a86b1f; }
+  body.theme-contrast .barwrap{ border-color:#888; }
+  body.theme-colorblind{ --hp:#c9660a; --mp:#3d6fd8; }
+  body.theme-colorblind .barfill.hp{ background:linear-gradient(to right, #7a3d00, var(--hp)); }
+
+  /* ============ header font (headings: title, sidebar section labels, modal
+     titles, title-screen logo) — mirrors the body font options below, plus
+     "Decorative" (Cinzel), which is the default and stays heading-only. ============ */
+  body.font-heading-mono{ --font-heading:'JetBrains Mono','Consolas',monospace; }
+  body.font-heading-pixel{ --font-heading:'VT323','Silkscreen',monospace; }
+  body.font-heading-blocky{ --font-heading:'Silkscreen','VT323',monospace; }
+  body.font-heading-serif{ --font-heading:'IM Fell English', Georgia, 'Times New Roman', serif; }
+  body.font-heading-sans{ --font-heading:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  body.font-heading-fantasy{ --font-heading:'MedievalSharp', 'Cinzel', serif; }
+  body.font-heading-typewriter{ --font-heading:'Special Elite', 'Courier New', monospace; }
+
+  /* Cinzel's baked-in letter-spacing (used per-selector above) is too wide for
+     every other font, so tighten it back up whenever a non-decorative heading
+     font is active. Title-logo keeps a little extra since it's much larger. */
+  body[class*="font-heading-"] .titlebar h1,
+  body[class*="font-heading-"] .sidebar h2,
+  body[class*="font-heading-"] .modal h3{ letter-spacing:0.5px; }
+  body[class*="font-heading-"] .title-logo{ letter-spacing:2px; }
+
+  /* Pixel/8-bit render small here too, same as they do for body text. */
+  body.font-heading-pixel .titlebar h1{ font-size:2.6rem; }
+  body.font-heading-pixel .sidebar h2{ font-size:1.5rem; }
+  body.font-heading-pixel .modal h3{ font-size:2.1rem; }
+  body.font-heading-pixel .title-logo{ font-size:6.4rem; }
+  body.font-heading-blocky .titlebar h1{ font-size:2.3rem; }
+  body.font-heading-blocky .sidebar h2{ font-size:1.35rem; }
+  body.font-heading-blocky .modal h3{ font-size:1.9rem; }
+  body.font-heading-blocky .title-logo{ font-size:5.8rem; }
+
+  /* ============ compact HUD ============ */
+  body.compact-hud .sidebar{ padding:8px; font-size:1.15rem; }
+  body.compact-hud .sidebar h2{ margin:9px 0 5px; font-size:1.05rem; }
+  body.compact-hud .barwrap{ height:10px; }
+  body.compact-hud .bar-text{ margin-bottom:4px; font-size:1rem; }
+  body.compact-hud .keyhint{ display:none; }
+  body.compact-hud.font-body-pixel .sidebar{ font-size:1.5rem; }
+  body.compact-hud.font-body-pixel .sidebar h2{ font-size:1.4rem; }
+  body.compact-hud.font-body-pixel .bar-text{ font-size:1.3rem; }
+  body.compact-hud.font-body-blocky .sidebar{ font-size:1.3rem; }
+  body.compact-hud.font-body-blocky .sidebar h2{ font-size:1.25rem; }
+  body.compact-hud.font-body-blocky .bar-text{ font-size:1.15rem; }
+
+  /* ============ reduced motion ============ */
+  .reduce-motion *{ animation-duration:0.001s !important; transition-duration:0.001s !important; }
+
+  /* ============ movable / resizable HUD ============ */
+  .hud-floating{
+    position:fixed !important; z-index:60; resize:both; overflow:auto;
+    min-width:180px; min-height:100px; max-width:96vw; max-height:92vh;
+    box-shadow:0 4px 24px rgba(0,0,0,0.6);
+  }
+  .hud-floating::before{
+    content:'⠿ drag · corner to resize'; display:block; position:sticky; top:-14px; left:0; right:0;
+    margin:-14px -14px 8px; padding:4px 10px; background:var(--amber-dim); color:#100c06;
+    font-size:1rem; letter-spacing:0.5px; cursor:move; user-select:none; z-index:2;
+  }
+  .log.hud-floating::before{ margin:-6px -10px 6px; }
+  .hud-floating.dragging{ opacity:0.85; box-shadow:0 8px 40px rgba(0,0,0,0.8); }
+  body.hud-unlocked .sidebar, body.hud-unlocked .log{ cursor:default; }
 </style>
 </head>
 <body>
@@ -119,7 +351,8 @@
     <span class="sub">an infinite roguelike &mdash; press <b style="color:var(--amber)">?</b> for help</span>
     <div style="margin-left:auto; align-self:center; display:flex; align-items:center; gap:12px; font-size:11px; color:var(--text-dim);">
       <button id="audio-mute-btn" onclick="Sound.toggleMute()" title="Mute/unmute all sound" style="background:none;border:1px solid var(--line);color:var(--amber);cursor:pointer;padding:2px 9px;font-family:inherit;font-size:13px;border-radius:2px;">🔊</button>
-      <label style="display:flex;align-items:center;gap:5px;">SFX<input type="range" min="0" max="100" value="70" oninput="Sound.setSfxVolume(this.value/100)" style="width:64px;"></label>
+      <label style="display:flex;align-items:center;gap:5px;">SFX<input type="range" min="0" max="100" value="70" oninput="Sound.setSfxVolume(this.value/100); setSetting('sfxVolume', this.value/100, true)" style="width:64px;"></label>
+      <button onclick="openSettingsFromHeader()" title="Settings" style="background:none;border:1px solid var(--line);color:var(--amber);cursor:pointer;padding:2px 9px;font-family:inherit;font-size:13px;border-radius:2px;">⚙</button>
     </div>
   </div>
 
@@ -193,10 +426,22 @@
   </div>
 
   <div class="modal-backdrop hidden" id="modal">
-    <div class="modal">
+    <div class="modal" id="modal-inner">
       <h3 id="modal-title">-</h3>
       <div id="modal-body"></div>
       <div class="modal-hint" id="modal-hint"></div>
+    </div>
+  </div>
+
+  <div class="hidden" id="title-screen">
+    <div class="title-embers" id="title-embers"></div>
+    <div class="title-content">
+      <div class="title-frame">
+        <div class="title-logo">Wanderhollow</div>
+        <div class="title-tagline">an infinite fantasy · cyberpunk · eldritch roguelike</div>
+        <div class="title-menu" id="title-menu"></div>
+      </div>
+      <div class="title-footer">click or press the bracketed letter &nbsp;&middot;&nbsp; press <b style="color:var(--amber)">?</b> anytime in-game for the full guide</div>
     </div>
   </div>
 
@@ -218,7 +463,7 @@ const Sound = (function () {
     if (actx) return true;
     try {
       actx = new (window.AudioContext || window.webkitAudioContext)();
-      master = actx.createGain(); master.gain.value = 1; master.connect(actx.destination);
+      master = actx.createGain(); master.gain.value = muted ? 0 : 1; master.connect(actx.destination);
       sfxBus = actx.createGain(); sfxBus.gain.value = sfxVol; sfxBus.connect(master);
       return true;
     } catch (e) { return false; }
@@ -406,14 +651,19 @@ const Sound = (function () {
   }
 
   function setSfxVolume(v) { sfxVol = Math.max(0, Math.min(1, v)); if (sfxBus) sfxBus.gain.value = sfxVol; }
-  function toggleMute() {
-    muted = !muted;
+  function setMuted(v) {
+    muted = !!v;
     if (master) master.gain.value = muted ? 0 : 1;
     const btn = document.getElementById('audio-mute-btn');
     if (btn) btn.textContent = muted ? '🔇' : '🔊';
   }
+  function toggleMute() {
+    setMuted(!muted);
+    // persist without re-running the full applySettings() cycle (setMuted already updated the audio graph and icon)
+    if (typeof settings === 'object' && settings) { settings.muted = muted; saveSettingsToStorage(); }
+  }
 
-  return { play, castSpell, footstep, unlock, setSfxVolume, toggleMute };
+  return { play, castSpell, footstep, unlock, setSfxVolume, setMuted, toggleMute };
 })();
 
 // ===================== DATA TABLES =====================
@@ -3685,6 +3935,7 @@ function tradeTransact(letter) {
 function closeModal() {
   gameState = 'playing'; dialogueNPC = null; invSelected = null;
   document.getElementById('modal').classList.add('hidden');
+  document.getElementById('modal-inner').classList.remove('modal-wide');
   Sound.play('uiClose');
   render();
 }
@@ -3740,6 +3991,8 @@ function openSpellbook() {
 
 // ---------------- modal rendering ----------------
 function renderModal(title, body, hint) {
+  const titleScreenEl = document.getElementById('title-screen');
+  if (titleScreenEl) titleScreenEl.classList.add('hidden');
   document.getElementById('modal').classList.remove('hidden');
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = body;
@@ -3793,6 +4046,206 @@ const MOVE_KEYS = {
   y: [-1,-1], u: [1,-1], b: [-1,1], n: [1,1],
 };
 
+
+// ---------------- settings / QoL system ----------------
+const SETTINGS_KEY = 'wanderhollow_settings_v1';
+const DEFAULT_SETTINGS = {
+  sfxVolume: 0.7,
+  muted: false,
+  uiScale: 100,
+  fontStyle: 'decorative',   // 'decorative' | 'mono' | 'pixel' | 'blocky' | 'serif' | 'sans' | 'fantasy' | 'typewriter'  (heading font)
+  bodyFont: 'blocky',        // 'mono' | 'pixel' | 'blocky' | 'serif' | 'sans'  (general text font, default = 8-bit)
+  customTextColor: '',       // '' = use theme default, else hex color
+  customAccentColor: '',     // '' = use theme default, else hex color
+  theme: 'default',          // 'default' | 'contrast' | 'colorblind'
+  reduceMotion: false,
+  hudOpacity: 100,
+  logLines: 8,
+  compactHud: false,
+  hudUnlocked: false,
+  showTurnCounter: false,
+  defaultZoom: 5,
+  autoPickupGold: true,
+  showDamageNumbers: true,
+  combatTextScale: 100,
+  confirmQuit: true,
+  autosaveEnabled: true,
+  autosaveInterval: 50,
+  layout: {},
+};
+let settings = null;
+let settingsReturnState = 'title';
+let settingsTab = 'audio';
+
+function loadSettings() {
+  let saved = null;
+  try { const raw = localStorage.getItem(SETTINGS_KEY); if (raw) saved = JSON.parse(raw); } catch (e) {}
+  settings = Object.assign({}, DEFAULT_SETTINGS, saved || {});
+  settings.layout = Object.assign({}, DEFAULT_SETTINGS.layout, (saved && saved.layout) || {});
+}
+function saveSettingsToStorage() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
+}
+// path is a dot-separated key, e.g. 'layout.sidebar'. skipRerender avoids re-rendering the settings
+// modal when called from controls outside it (like the header SFX slider).
+function setSetting(path, value, skipRerender) {
+  const parts = path.split('.');
+  let o = settings;
+  for (let i = 0; i < parts.length - 1; i++) o = o[parts[i]];
+  o[parts[parts.length - 1]] = value;
+  saveSettingsToStorage();
+  applySettings();
+  if (!skipRerender && gameState === 'settings') renderSettingsTab(settingsTab);
+}
+function resetSettingsToDefault() {
+  settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+  saveSettingsToStorage();
+  applySettings();
+  if (gameState === 'settings') renderSettingsTab(settingsTab);
+}
+function applySettings() {
+  const root = document.documentElement;
+  root.style.setProperty('--ui-scale', Math.max(0.75, Math.min(1.5, settings.uiScale / 100)));
+  root.style.setProperty('--panel-alpha', Math.max(0.35, Math.min(1, settings.hudOpacity / 100)));
+  document.body.classList.remove('font-heading-mono', 'font-heading-pixel', 'font-heading-blocky', 'font-heading-serif', 'font-heading-sans', 'font-heading-fantasy', 'font-heading-typewriter');
+  if (settings.fontStyle && settings.fontStyle !== 'decorative') {
+    const headingFont = settings.fontStyle === 'clean' ? 'mono' : settings.fontStyle; // 'clean' was the old name for 'mono'
+    document.body.classList.add('font-heading-' + headingFont);
+  }
+  document.body.classList.remove('font-body-pixel', 'font-body-blocky', 'font-body-serif', 'font-body-sans', 'font-body-fantasy', 'font-body-typewriter');
+  if (settings.bodyFont && settings.bodyFont !== 'mono') document.body.classList.add('font-body-' + settings.bodyFont);
+  if (settings.customTextColor) root.style.setProperty('--text', settings.customTextColor); else root.style.removeProperty('--text');
+  if (settings.customAccentColor) {
+    root.style.setProperty('--amber', settings.customAccentColor);
+    root.style.setProperty('--amber-bright', settings.customAccentColor);
+  } else {
+    root.style.removeProperty('--amber');
+    root.style.removeProperty('--amber-bright');
+  }
+  document.body.classList.remove('theme-contrast', 'theme-colorblind');
+  if (settings.theme === 'contrast') document.body.classList.add('theme-contrast');
+  if (settings.theme === 'colorblind') document.body.classList.add('theme-colorblind');
+  document.body.classList.toggle('compact-hud', settings.compactHud);
+  document.body.classList.toggle('reduce-motion', settings.reduceMotion);
+  document.body.classList.toggle('hud-unlocked', settings.hudUnlocked);
+  const logEl = document.getElementById('log');
+  if (logEl && !settings.hudUnlocked) logEl.style.height = Math.max(4, settings.logLines) * 19.5 + 'px';
+  if (typeof Sound !== 'undefined') {
+    Sound.setSfxVolume(settings.sfxVolume);
+    Sound.setMuted(settings.muted);
+    const sfxSlider = document.querySelector('.titlebar input[type=range]');
+    if (sfxSlider) sfxSlider.value = Math.round(settings.sfxVolume * 100);
+  }
+  applyHudLayout();
+}
+
+// ---- floating HUD panels (movable + resizable) ----
+function applyHudLayout() {
+  const sidebar = document.querySelector('.sidebar');
+  const logEl = document.getElementById('log');
+  if (!sidebar || !logEl) return;
+  if (settings.hudUnlocked) {
+    positionFloatingPanel(sidebar, 'sidebar', { top: 50, right: 12, width: 280, height: Math.min(700, window.innerHeight - 70) });
+    positionFloatingPanel(logEl, 'log', { top: 12, left: 12, width: 520, height: 140 });
+  } else {
+    sidebar.classList.remove('hud-floating');
+    logEl.classList.remove('hud-floating');
+    sidebar.removeAttribute('style');
+    logEl.removeAttribute('style');
+    logEl.style.height = Math.max(4, settings.logLines) * 19.5 + 'px';
+  }
+}
+function positionFloatingPanel(el, key, defaults) {
+  el.classList.add('hud-floating');
+  const saved = settings.layout[key];
+  el.style.position = 'fixed';
+  if (saved) {
+    el.style.left = saved.left + 'px'; el.style.top = saved.top + 'px';
+    el.style.width = saved.width + 'px'; el.style.height = saved.height + 'px';
+    el.style.right = 'auto';
+  } else {
+    if (defaults.left != null) { el.style.left = defaults.left + 'px'; el.style.right = 'auto'; }
+    else { el.style.right = defaults.right + 'px'; el.style.left = 'auto'; }
+    el.style.top = defaults.top + 'px';
+    el.style.width = defaults.width + 'px';
+    el.style.height = defaults.height + 'px';
+  }
+}
+function resetHudLayout() {
+  settings.layout = {};
+  saveSettingsToStorage();
+  applyHudLayout();
+  if (gameState === 'settings') renderSettingsTab(settingsTab);
+}
+let hudDrag = null;
+function initHudDragging() {
+  document.addEventListener('mousedown', (e) => {
+    if (!settings.hudUnlocked) return;
+    const el = e.target.closest('.hud-floating');
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    // top ~18px is the drag-handle strip rendered via ::before
+    if (e.clientY - rect.top > 20) return;
+    hudDrag = { el, key: el.id === 'log' ? 'log' : 'sidebar', startX: e.clientX, startY: e.clientY, origLeft: rect.left, origTop: rect.top };
+    el.classList.add('dragging');
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!hudDrag) return;
+    const dx = e.clientX - hudDrag.startX, dy = e.clientY - hudDrag.startY;
+    const left = Math.max(0, hudDrag.origLeft + dx), top = Math.max(0, hudDrag.origTop + dy);
+    hudDrag.el.style.left = left + 'px'; hudDrag.el.style.top = top + 'px'; hudDrag.el.style.right = 'auto';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!hudDrag) return;
+    const el = hudDrag.el, key = hudDrag.key;
+    el.classList.remove('dragging');
+    const rect = el.getBoundingClientRect();
+    settings.layout[key] = { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) };
+    saveSettingsToStorage();
+    hudDrag = null;
+  });
+  // persist size changes made via the native CSS resize handle
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver((entries) => {
+      if (!settings.hudUnlocked) return;
+      for (const entry of entries) {
+        const el = entry.target, key = el.id === 'log' ? 'log' : 'sidebar';
+        if (!el.classList.contains('hud-floating')) continue;
+        const rect = el.getBoundingClientRect();
+        settings.layout[key] = Object.assign({}, settings.layout[key], { width: Math.round(rect.width), height: Math.round(rect.height), left: Math.round(rect.left), top: Math.round(rect.top) });
+      }
+      saveSettingsToStorage();
+    });
+    const sb = document.querySelector('.sidebar'), lg = document.getElementById('log');
+    if (sb) ro.observe(sb);
+    if (lg) ro.observe(lg);
+  }
+}
+
+// ---- floating combat text ----
+let floatingTexts = [];
+let floatingTextAnimRunning = false;
+const FLOAT_TEXT_LIFETIME = 750; // ms
+function spawnFloatingText(x, y, text, color) {
+  floatingTexts.push({ x, y, text, color, start: performance.now() });
+  if (!floatingTextAnimRunning) {
+    floatingTextAnimRunning = true;
+    requestAnimationFrame(floatingTextAnimStep);
+  }
+}
+function floatingTextAnimStep() {
+  const now = performance.now();
+  if (floatingTexts.length) {
+    floatingTexts = floatingTexts.filter(ft => now - ft.start < FLOAT_TEXT_LIFETIME);
+  }
+  try { render(); } catch (e) {}
+  if (floatingTexts.length > 0) {
+    requestAnimationFrame(floatingTextAnimStep);
+  } else {
+    floatingTextAnimRunning = false;
+  }
+}
 
 // ---------------- init ----------------
 
@@ -4370,8 +4823,11 @@ function simulateKey(key) { handleKey({ key, preventDefault(){} }); }
 
 
 // ---- zoom system ----
-const ZOOM_LEVELS = [ { w:31, h:19 }, { w:41, h:25 }, { w:51, h:31 }, { w:65, h:39 }, { w:81, h:49 } ];
-let zoomIndex = 2;
+const ZOOM_LEVELS = [
+  { w:19, h:11 }, { w:23, h:14 }, { w:27, h:16 }, { w:31, h:19 }, { w:41, h:25 },
+  { w:51, h:31 }, { w:65, h:39 }, { w:81, h:49 }, { w:95, h:57 },
+];
+let zoomIndex = 5;
 function curView() {
   const lv = ZOOM_LEVELS[zoomIndex];
   const canvasW = 51 * 16, canvasH = 31 * 16;
@@ -4576,7 +5032,7 @@ function render() {
         ctx.fillText(t.glyph, px, py);
         if (t.fireTurns > 0) {
           ctx.save();
-          ctx.globalAlpha = 0.5 + 0.25 * Math.sin(turnCount * 2 + sx * 3 + sy * 2);
+          ctx.globalAlpha = 0.5 + 0.25 * (settings.reduceMotion ? 0 : Math.sin(turnCount * 2 + sx * 3 + sy * 2));
           ctx.fillStyle = '#e0783a';
           ctx.fillRect(sx*v.ts, sy*v.ts, v.ts, v.ts);
           ctx.fillStyle = '#ffdd88';
@@ -4585,20 +5041,20 @@ function render() {
         } else if (t.gasTurns > 0) {
           const gasColor = t.gasKind === 'confuse' ? '#c9a0e0' : t.gasKind === 'fire' ? '#e0785a' : '#8ac93a';
           ctx.save();
-          ctx.globalAlpha = 0.35 + 0.1 * Math.sin(turnCount * 1.1 + sx + sy);
+          ctx.globalAlpha = 0.35 + 0.1 * (settings.reduceMotion ? 0 : Math.sin(turnCount * 1.1 + sx + sy));
           ctx.fillStyle = gasColor;
           ctx.fillRect(sx*v.ts, sy*v.ts, v.ts, v.ts);
           ctx.restore();
         } else if (t.smokeTurns > 0) {
           ctx.save();
-          ctx.globalAlpha = 0.3 + 0.1 * Math.sin(turnCount * 0.8 + sx + sy);
+          ctx.globalAlpha = 0.3 + 0.1 * (settings.reduceMotion ? 0 : Math.sin(turnCount * 0.8 + sx + sy));
           ctx.fillStyle = '#888888';
           ctx.fillRect(sx*v.ts, sy*v.ts, v.ts, v.ts);
           ctx.restore();
         }
         if (gameState === 'blinktarget' && pendingBlink && Math.max(Math.abs(dx),Math.abs(dy)) <= pendingBlink.range && t.walkable && !entityAt(wx,wy)) {
           ctx.save();
-          ctx.globalAlpha = 0.28 + 0.1 * Math.sin(turnCount * 1.6 + sx + sy);
+          ctx.globalAlpha = 0.28 + 0.1 * (settings.reduceMotion ? 0 : Math.sin(turnCount * 1.6 + sx + sy));
           ctx.fillStyle = '#5ae0ff';
           ctx.fillRect(sx*v.ts, sy*v.ts, v.ts, v.ts);
           ctx.restore();
@@ -4639,13 +5095,39 @@ function render() {
   const playerPx = v.halfW*v.ts+v.ts/2, playerPy = v.halfH*v.ts+v.ts/2;
   if (getBuff('invis') > 0) {
     ctx.save();
-    ctx.globalAlpha = 0.45 + 0.15 * Math.sin(turnCount * 1.3);
+    ctx.globalAlpha = 0.45 + 0.15 * (settings.reduceMotion ? 0 : Math.sin(turnCount * 1.3));
     ctx.fillStyle = '#8fd8ff';
     ctx.fillText('@', playerPx, playerPy);
     ctx.restore();
   } else {
     ctx.fillStyle = '#fff';
     ctx.fillText('@', playerPx, playerPy);
+  }
+
+  if (floatingTexts.length) {
+    ctx.save();
+    const nowT = performance.now();
+    const scale = Math.max(0.5, Math.min(2, (settings.combatTextScale || 100) / 100));
+    for (const ft of floatingTexts) {
+      const age = nowT - ft.start;
+      const t = Math.max(0, Math.min(1, age / FLOAT_TEXT_LIFETIME));
+      const fdx = ft.x - player.x, fdy = ft.y - player.y;
+      const fsx = fdx + v.halfW, fsy = fdy + v.halfH;
+      if (fsx < 0 || fsy < 0 || fsx >= v.w || fsy >= v.h) continue;
+      const eased = 1 - Math.pow(1 - t, 2); // ease-out rise
+      const riseDistance = settings.reduceMotion ? 5 : Math.max(10, v.ts * 0.9);
+      const yShift = -eased * riseDistance;
+      // holds solid for the first 55% of its life, then fades out over the remainder
+      const alpha = t < 0.55 ? 1 : Math.max(0, 1 - (t - 0.55) / 0.45);
+      const px2 = fsx * v.ts + v.ts / 2, py2 = fsy * v.ts - 2 + yShift;
+      ctx.font = `bold ${Math.max(9, Math.round(v.ts * scale))}px 'Consolas','Courier New',monospace`;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.fillText(ft.text, px2 + 1, py2 + 1);
+      ctx.fillStyle = ft.color;
+      ctx.fillText(ft.text, px2, py2);
+    }
+    ctx.restore();
   }
 
   updateSidebar();
@@ -5724,7 +6206,12 @@ function doAttack(att, def) {
   const attName = isPlayer ? 'You' : att.name;
   const defName = def === player ? 'you' : def.name;
   if (def === player && (player.dodgeChance || 0) > 0 && Math.random() < player.dodgeChance) { log(`You nimbly dodge ${attName === 'You' ? 'the' : att.name + "'s"} attack!`); return; }
-  if (!rollHit(att, def)) { Sound.play(isPlayer ? 'miss' : 'enemyMiss'); log(`${attName} miss${isPlayer ? '' : 'es'} ${defName}.`); return; }
+  if (!rollHit(att, def)) {
+    Sound.play(isPlayer ? 'miss' : 'enemyMiss');
+    log(`${attName} miss${isPlayer ? '' : 'es'} ${defName}.`);
+    if (settings.showDamageNumbers) spawnFloatingText(def.x, def.y, 'Miss', '#8a7f6a');
+    return;
+  }
   let dmg = randInt(Math.random, dmgRange[0], dmgRange[1]) + Math.floor(effStr(att) / 4);
   if (isPlayer) {
     dmg += (player.cyberDmgBonus || 0);
@@ -5747,6 +6234,7 @@ function doAttack(att, def) {
   if (Math.random() < critChance) { dmg *= (2 + (isPlayer ? (player.critDmgBonus || 0) : 0)); crit = true; }
   dmg = Math.max(1, Math.round(dmg));
   def.hp -= dmg;
+  if (settings.showDamageNumbers) spawnFloatingText(def.x, def.y, String(dmg), crit ? '#ffdd55' : (def === player ? '#ff6a5a' : '#ffffff'));
   if (def === player) Sound.play('playerHurt'); else if (isPlayer) Sound.play(crit ? 'critHit' : 'hit'); else Sound.play('enemyHit');
   log(`${attName} hit${isPlayer ? '' : 's'} ${defName} for ${dmg}${crit ? ' (critical!)' : ''}.`);
   if (weapon && weapon.lifesteal) att.hp = Math.min(att.maxHp, att.hp + Math.round(dmg * weapon.lifesteal));
@@ -6260,6 +6748,7 @@ function makeMutagen(rng) {
 // ---- movement v6: trap triggers, poison gas contact, confusion-aware (all prior v5 behavior retained) ----
 function movePlayer(dx, dy) {
   if (gameState !== 'playing') return;
+  floatingTexts = [];
   const nx = player.x + dx, ny = player.y + dy;
   const target = entityAt(nx, ny);
   if (target && target !== player) {
@@ -6302,6 +6791,15 @@ function movePlayer(dx, dy) {
   }
   player.x = nx; player.y = ny;
   Sound.footstep(t, curIsDungeon());
+  if (settings.autoPickupGold) {
+    const goldHere = itemsAt(nx, ny).find(i => i.id === 'gold');
+    if (goldHere) {
+      player.gold += (goldHere.amount || 1);
+      Sound.play('gold');
+      log(`You pick up ${goldHere.amount || 1} gold.`);
+      removeItemAt(nx, ny, goldHere.uid);
+    }
+  }
   if (curIsDungeon() && t.hiddenTrap && !t.trapTriggered) {
     t.trapTriggered = true; t.glyph = '^'; t.color = '#c93a3a';
     const dmg = randInt(Math.random, 4, 11);
@@ -6355,6 +6853,7 @@ function endTurn() {
   const regenInterval = player.regenBonus ? 5 : 10;
   if (turnCount % regenInterval === 0) { player.hp = Math.min(player.maxHp, player.hp + 1); player.mp = Math.min(player.maxMp, player.mp + 1); }
   if (turnCount % 300 === 0) decayBounties();
+  if (settings.autosaveEnabled && turnCount % settings.autosaveInterval === 0) saveGame(true);
   checkKingdomDiscovery();
   checkFastTravelDiscovery();
 
@@ -6745,7 +7244,7 @@ function updateSidebar() {
     base = `${place} — ${k.name}`;
   }
   document.getElementById('loc-text').textContent = base;
-  document.getElementById('pos-text').textContent = `(${player.x}, ${player.y}) · zoom ${zoomIndex+1}/${ZOOM_LEVELS.length}`;
+  document.getElementById('pos-text').textContent = `(${player.x}, ${player.y}) · zoom ${zoomIndex+1}/${ZOOM_LEVELS.length}${settings.showTurnCounter ? ` · Turn ${turnCount}` : ''}`;
 
   const questCount = player.quests.filter(q => !q.done).length;
   const bounty = currentRegionBounty();
@@ -6775,13 +7274,13 @@ const SAVE_KEY = 'wanderhollow_save_v1';
 function getSaveData() {
   return { version: 1, seed: SEED, turnCount, zoomIndex, player: JSON.parse(JSON.stringify(player)) };
 }
-function saveGame() {
+function saveGame(isAuto) {
   try {
-    if (typeof localStorage === 'undefined') { log('Saving is not available in this environment.'); return false; }
+    if (typeof localStorage === 'undefined') { if (!isAuto) log('Saving is not available in this environment.'); return false; }
     localStorage.setItem(SAVE_KEY, JSON.stringify(getSaveData()));
-    log('Game saved.');
+    log(isAuto ? 'Autosaved.' : 'Game saved.');
     return true;
-  } catch (e) { log('Could not save: ' + e.message); return false; }
+  } catch (e) { if (!isAuto) log('Could not save: ' + e.message); return false; }
 }
 function hasSaveGame() {
   try { return typeof localStorage !== 'undefined' && !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; }
@@ -6801,7 +7300,7 @@ function applyLoadedSave(data) {
   worldChunks.clear(); dungeonRegistry.clear(); kingdomRegistry.clear();
   SEED = data.seed;
   turnCount = data.turnCount || 0;
-  zoomIndex = (data.zoomIndex !== undefined) ? data.zoomIndex : 2;
+  zoomIndex = (data.zoomIndex !== undefined) ? data.zoomIndex : 5;
   player = Object.assign(newPlayer(), data.player);
   // recover dungeon state if the player was mid-dungeon when saved
   if (player.mode === 'dungeon' && player.dungeonId) {
@@ -6963,21 +7462,151 @@ const ARCHETYPES = [
 ];
 let creationDraft = null;
 
-function showMainMenu() {
-  gameState = 'mainmenu';
-  const save = hasSaveGame();
-  let html = `<div class="modal-opt" onclick="simulateKey('a')">[a] New Game</div>`;
-  html += save ? `<div class="modal-opt" onclick="simulateKey('b')">[b] Continue (Load Save)</div>` : `<div class="npcline dim">[b] Continue — no save found</div>`;
-  html += `<div class="modal-opt" onclick="simulateKey('c')">[c] Guide &amp; Controls</div>`;
-  if (save) html += `<div class="modal-opt" onclick="simulateKey('d')">[d] Delete Save</div>`;
-  renderModal('Wanderhollow', html, 'Letter/click to choose. An infinite fantasy-cyberpunk-eldritch roguelike.');
+function openSettingsFromHeader() {
+  Sound.unlock();
+  if (gameState === 'title') { showSettings('title'); return; }
+  showSettings('playing');
 }
-function mainMenuChoice(letter) {
+function showTitleScreen() {
+  gameState = 'title';
+  document.getElementById('modal').classList.add('hidden');
+  const el = document.getElementById('title-screen');
+  el.classList.remove('hidden');
+  const save = hasSaveGame();
+  let html = `<div class="title-menu-opt" onclick="simulateKey('a')"><b>[a]</b> Start New Game</div>`;
+  html += save
+    ? `<div class="title-menu-opt" onclick="simulateKey('b')"><b>[b]</b> Continue</div>`
+    : `<div class="title-menu-opt disabled"><b>[b]</b> Continue — no save found</div>`;
+  html += `<div class="title-menu-opt" onclick="simulateKey('c')"><b>[c]</b> Settings</div>`;
+  html += `<div class="title-menu-opt" onclick="simulateKey('d')"><b>[d]</b> Guide &amp; Controls</div>`;
+  if (save) html += `<div class="title-menu-opt" onclick="simulateKey('e')"><b>[e]</b> Delete Save</div>`;
+  document.getElementById('title-menu').innerHTML = html;
+  spawnTitleEmbers();
+}
+function spawnTitleEmbers() {
+  const wrap = document.getElementById('title-embers');
+  if (!wrap || wrap.childElementCount) return; // only build once
+  let html = '';
+  for (let i = 0; i < 18; i++) {
+    const left = Math.round(Math.random() * 100);
+    const dur = (8 + Math.random() * 10).toFixed(1);
+    const delay = (Math.random() * 14).toFixed(1);
+    const drift = Math.round((Math.random() - 0.5) * 80);
+    html += `<span style="left:${left}%; animation-duration:${dur}s; animation-delay:${delay}s; --drift:${drift}px;"></span>`;
+  }
+  wrap.innerHTML = html;
+}
+function titleScreenChoice(letter) {
   if (letter === 'a') { showArchetypePicker(); return; }
   if (letter === 'b' && hasSaveGame()) { loadGame(); return; }
-  if (letter === 'c') { openHelp(); return; }
-  if (letter === 'd' && hasSaveGame()) { deleteSaveGame(); showMainMenu(); return; }
+  if (letter === 'c') { showSettings('title'); return; }
+  if (letter === 'd') { openHelp(); return; }
+  if (letter === 'e' && hasSaveGame()) { confirmDeleteSave(); return; }
 }
+function confirmDeleteSave() {
+  gameState = 'confirmdelete';
+  document.getElementById('title-screen').classList.add('hidden');
+  const html = `<div class="npcline">This will permanently erase your saved character. This cannot be undone.</div>
+    <div class="modal-opt" onclick="simulateKey('y')" style="margin-top:10px;color:#e05a5a">[y] Yes, delete it</div>
+    <div class="modal-opt" onclick="simulateKey('n')">[n] No, keep my save</div>`;
+  renderModal('Delete Save?', html, 'y to confirm, n or Esc to cancel.');
+}
+function confirmDeleteSaveChoice(key) {
+  if (key === 'y') { deleteSaveGame(); showTitleScreen(); return; }
+  if (key === 'n' || key === 'Escape') { showTitleScreen(); return; }
+}
+
+// ---------------- settings screen ----------------
+const SETTINGS_TABS = [
+  { id: 'audio', label: 'Audio' },
+  { id: 'display', label: 'Display' },
+  { id: 'hud', label: 'HUD & Layout' },
+  { id: 'gameplay', label: 'Gameplay' },
+  { id: 'accessibility', label: 'Accessibility' },
+];
+function showSettings(returnTo) {
+  Sound.play('uiOpen');
+  settingsReturnState = returnTo || 'title';
+  gameState = 'settings';
+  document.getElementById('title-screen').classList.add('hidden');
+  document.getElementById('modal').classList.remove('hidden');
+  document.getElementById('modal-inner').classList.add('modal-wide');
+  renderSettingsTab(settingsTab);
+}
+function closeSettings() {
+  document.getElementById('modal-inner').classList.remove('modal-wide');
+  if (settingsReturnState === 'title') { showTitleScreen(); return; }
+  if (settingsReturnState === 'playing') { gameState = 'playing'; document.getElementById('modal').classList.add('hidden'); render(); return; }
+  gameState = settingsReturnState || 'playing';
+  document.getElementById('modal').classList.add('hidden');
+}
+function settingsTabClick(id) { settingsTab = id; renderSettingsTab(id); }
+function row(label, desc, controlHtml, stacked) {
+  return `<div class="settings-row${stacked ? ' settings-row--stacked' : ''}"><div class="settings-label"><b>${label}</b>${desc ? `<span>${desc}</span>` : ''}</div><div class="settings-control">${controlHtml}</div></div>`;
+}
+function toggleHtml(path, checked) {
+  return `<label class="toggle-switch"><input type="checkbox" ${checked ? 'checked' : ''} onchange="setSetting('${path}', this.checked)"><span class="toggle-track"></span></label>`;
+}
+function sliderHtml(path, value, min, max, step) {
+  const isFloat = step < 1;
+  const id = 'sv-' + path.replace(/\./g, '-');
+  return `<input type="range" min="${min}" max="${max}" step="${step}" value="${value}" oninput="document.getElementById('${id}').textContent=this.value; setSetting('${path}', ${isFloat ? 'parseFloat(this.value)' : 'parseInt(this.value,10)'})">
+    <span class="settings-value" id="${id}">${value}</span>`;
+}
+function choiceGroupHtml(path, options, current) {
+  return `<div class="settings-choicegroup">${options.map(o => `<span class="settings-choice${o.id===current?' active':''}" onclick="setSetting('${path}', '${o.id}')">${o.label}</span>`).join('')}</div>`;
+}
+function colorPickerHtml(path, value, fallback) {
+  const cur = value || fallback;
+  return `<input type="color" value="${cur}" onchange="setSetting('${path}', this.value)" style="width:44px;height:26px;border:1px solid var(--line);background:none;cursor:pointer;vertical-align:middle;">
+    ${value ? `<span class="settings-btn" style="margin-left:8px;" onclick="setSetting('${path}', '')">Reset</span>` : ''}`;
+}
+function renderSettingsTab(tabId) {
+  settingsTab = tabId;
+  const tabBar = SETTINGS_TABS.map(t => `<span class="settings-tab${t.id===tabId?' active':''}" onclick="settingsTabClick('${t.id}')">${t.label}</span>`).join('');
+  let body = `<div class="settings-tabs">${tabBar}</div>`;
+  const s = settings;
+
+  if (tabId === 'audio') {
+    const sfxPct = Math.round(s.sfxVolume * 100);
+    body += row('Sound Effects Volume', 'Footsteps, combat, UI sounds.',
+      `<input type="range" min="0" max="100" step="5" value="${sfxPct}" oninput="document.getElementById('sv-sfx').textContent=this.value; setSetting('sfxVolume', parseInt(this.value,10)/100)"><span class="settings-value" id="sv-sfx">${sfxPct}</span>`);
+    body += row('Mute All Sound', '', `<label class="toggle-switch"><input type="checkbox" ${s.muted ? 'checked' : ''} onchange="setSetting('muted', this.checked)"><span class="toggle-track"></span></label>`);
+  } else if (tabId === 'display') {
+    body += row('Font Scale', 'Resizes all text in the game (' + s.uiScale + '%). Panel and button sizes stay fixed — only the text grows or shrinks.', sliderHtml('uiScale', s.uiScale, 75, 150, 5));
+    body += row('Header Font', 'Changes the font used for titles, section headers, and modal headings. Decorative is the default fantasy-style font.', choiceGroupHtml('fontStyle', [{id:'decorative',label:'Decorative'},{id:'mono',label:'Mono'},{id:'pixel',label:'Pixel'},{id:'blocky',label:'8-Bit'},{id:'serif',label:'Serif'},{id:'sans',label:'Sans'},{id:'fantasy',label:'Fantasy'},{id:'typewriter',label:'Typewriter'}], s.fontStyle), true);
+    body += row('Body Font', 'Changes the font used for the log, sidebar, and menus throughout the game.', choiceGroupHtml('bodyFont', [{id:'mono',label:'Mono'},{id:'pixel',label:'Pixel'},{id:'blocky',label:'8-Bit'},{id:'serif',label:'Serif'},{id:'sans',label:'Sans'},{id:'fantasy',label:'Fantasy'},{id:'typewriter',label:'Typewriter'}], s.bodyFont), true);
+    body += row('Color Theme', 'High Contrast maximizes readability. Colorblind-Friendly adjusts the HP bar palette.', choiceGroupHtml('theme', [{id:'default',label:'Default'},{id:'contrast',label:'High Contrast'},{id:'colorblind',label:'Colorblind-Friendly'}], s.theme), true);
+    body += row('Text Color', 'Override the main text color used across the HUD, log, and menus.', colorPickerHtml('customTextColor', s.customTextColor, '#d8cdb8'));
+    body += row('Accent Color', 'Override the amber accent color used for highlights, headers, and borders.', colorPickerHtml('customAccentColor', s.customAccentColor, '#c98a3a'));
+  } else if (tabId === 'hud') {
+    body += row('HUD Panel Opacity', 'How see-through the sidebar/log backgrounds are.', sliderHtml('hudOpacity', s.hudOpacity, 40, 100, 5));
+    body += row('Message Log Height', `Visible lines in the log (${s.logLines}).`, sliderHtml('logLines', s.logLines, 4, 20, 1));
+    body += row('Compact HUD', 'Smaller panel text and spacing, hides the control hints list.', toggleHtml('compactHud', s.compactHud));
+    body += row('Show Turn Counter', 'Adds the current turn number next to your coordinates.', toggleHtml('showTurnCounter', s.showTurnCounter));
+    body += row('Combat Text Size', `Size of floating damage/miss numbers (${s.combatTextScale}%).`, sliderHtml('combatTextScale', s.combatTextScale, 60, 180, 10));
+    body += row('Unlock HUD Panels', 'Drag panels by their top strip and resize from the bottom-right corner.', toggleHtml('hudUnlocked', s.hudUnlocked));
+    body += `<div class="settings-row"><div class="settings-label"><b>Reset HUD Layout</b><span>Puts panels back in their default docked position.</span></div><div class="settings-control"><span class="settings-btn" onclick="resetHudLayout()">Reset</span></div></div>`;
+  } else if (tabId === 'gameplay') {
+    const zoomLabels = ['Max Zoom In','Very Close','Close','Small','Medium','Large','X-Large','Wide','Max Zoom Out'];
+    body += row('Default Zoom Level', `Zoom used when starting/loading a game (${zoomLabels[s.defaultZoom]}).`, sliderHtml('defaultZoom', s.defaultZoom, 0, 8, 1));
+    body += row('Auto-Pickup Gold', 'Walk over gold to collect it automatically, no keypress needed.', toggleHtml('autoPickupGold', s.autoPickupGold));
+    body += row('Show Damage Numbers', 'Floating combat text above hits and misses.', toggleHtml('showDamageNumbers', s.showDamageNumbers));
+    body += row('Autosave', 'Automatically saves your game periodically.', toggleHtml('autosaveEnabled', s.autosaveEnabled));
+    if (s.autosaveEnabled) body += row('Autosave Frequency', `Every ${s.autosaveInterval} turns.`, sliderHtml('autosaveInterval', s.autosaveInterval, 10, 200, 10));
+    body += row('Confirm Before Quitting', 'Ask for confirmation when quitting to the title screen mid-game.', toggleHtml('confirmQuit', s.confirmQuit));
+  } else if (tabId === 'accessibility') {
+    body += row('Reduce Motion', 'Disables flicker/pulse effects on fire, gas, and other animated tiles.', toggleHtml('reduceMotion', s.reduceMotion));
+    body += `<div class="npcline dim" style="margin-top:10px;">Font size and contrast live under the Display tab; HUD text density lives under HUD &amp; Layout.</div>`;
+  }
+
+  body += `<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
+    <span class="settings-btn" onclick="resetSettingsToDefault()">Reset All Settings to Default</span>
+    ${settingsReturnState === 'playing' ? `<span class="settings-btn" style="border-color:#8a3a3a;color:#e08a7a" onclick="quitToMenu()">Quit to Title Screen</span>` : ''}
+  </div>`;
+  renderModal('Settings', body, 'Esc to go back. Changes apply and save instantly.');
+}
+
 // Custom and Random sit at the front (before the letter-indexed premade classes) since they're
 // the two most commonly used entry points: Custom for players who want full control, Random for
 // players who just want to jump in. ARCHETYPES itself holds only the premade classes, offset by 2.
@@ -6994,7 +7623,7 @@ function showArchetypePicker() {
   renderModal('Choose Your Path', html, 'Letter/click to choose, &lt; to go back.');
 }
 function archetypeChoice(letter) {
-  if (letter === '<') { showMainMenu(); return; }
+  if (letter === '<') { showTitleScreen(); return; }
   if (letter === 'a') { player = newPlayer(); creationDraft = { points: CREATION_POINTS, statAdds:{str:0,dex:0,int:0,con:0,wis:0}, abilities:[], abilityCat:'spells', gold:0, items:[] }; showCreateStats(); return; }
   if (letter === 'b') { player = newPlayer(); const arch = choice(Math.random, ARCHETYPES); arch.apply(); player.scenario = 'archetype:' + arch.id; log(`*** Random roll: you are a ${arch.name}! ***`); showStartScreen(); return; }
   const idx = letter.charCodeAt(0) - 97 - 2;
@@ -7176,12 +7805,13 @@ function gameOver() {
   renderModal('You Have Died', html, 'Letter/click to choose.');
 }
 function gameOverChoice(letter) {
-  if (letter === 'a') { showMainMenu(); return; }
+  if (letter === 'a') { showTitleScreen(); return; }
   if (letter === 'b') { showArchetypePicker(); return; }
 }
 
 // ---- init v6 / restart v3: routes through the main menu ----
 function initGame() {
+  loadSettings();
   canvas = document.getElementById('canvas');
   const v = curView();
   canvas.width = v.canvasW; canvas.height = v.canvasH;
@@ -7205,7 +7835,10 @@ function initGame() {
       setZoom(evt.deltaY > 0 ? 1 : -1);
     }, { passive: false });
   }
-  showMainMenu();
+  applySettings();
+  initHudDragging();
+  zoomIndex = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, settings.defaultZoom));
+  showTitleScreen();
   render();
 }
 
@@ -7213,6 +7846,11 @@ window.addEventListener('DOMContentLoaded', initGame);
 
 // ---- guide v9: tabbed + searchable, covers every system including the new power sources ----
 function stripHtml(html) { return html.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\s+/g,' ').trim(); }
+// Used anywhere we echo user-typed text back into a template string (e.g. the guide
+// search box) so a stray " or < can't break the surrounding markup.
+function escapeHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
 function generateTechniqueGuideHTML() {
   let html = ''; const bySchool = {};
   TECHNIQUES.forEach(t => (bySchool[t.school]=bySchool[t.school]||[]).push(t));
@@ -7240,6 +7878,11 @@ function generateMutationGuideHTML() {
   });
   return html;
 }
+function guideKeyTable(title, rows) {
+  const body = rows.map(([key, desc]) => `<tr><td style="padding:3px 14px 3px 0;white-space:nowrap;vertical-align:top;"><kbd style="background:#1a1610;border:1px solid var(--line);border-radius:3px;padding:1px 6px;color:var(--amber-bright);font-size:12px;">${key}</kbd></td><td style="padding:3px 0;">${desc}</td></tr>`).join('');
+  return `<div class="modal-opt" style="margin-top:10px"><b>${title}</b></div>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:2px;">${body}</table>`;
+}
 const GUIDE_SECTIONS = [
   { id:'start', label:'Start', html: () => `
     <div class="modal-opt">New games begin with a character creator. <b>Custom</b> lets you build your own from a
@@ -7258,7 +7901,48 @@ const GUIDE_SECTIONS = [
     archetype's attribute and ability spread can be fully recreated in Custom, with points to spare for gold or gear.</div>
     ${generateScenarioGuideHTML()}
     <div class="modal-opt" style="margin-top:6px">From the main menu you can also Continue a saved game, or start fresh.
-    Saving/loading uses your browser's local storage (or an exported file) — see the Meta tab.</div>` },
+    Saving/loading uses your browser's local storage (or an exported file) — see the Saves &amp; Meta tab.</div>` },
+  { id:'controls', label:'Controls', html: () => `
+    <div class="modal-opt">Every key below works while you're out in the world. Menus and screens show their own
+    key hints at the bottom once you're inside them, and every option everywhere is also clickable with the mouse.</div>
+    ${guideKeyTable('Movement', [
+      ['Arrows / WASD / hjkl','Move, or attack a hostile standing in that direction.'],
+      ['y u b n','Diagonal movement (matches the hjkl layout).'],
+      ['. or 5','Wait one turn in place.'],
+      ['r','Rest — recovers HP/MP/Stamina over time if it\'s safe to do so.'],
+      ['+ / − or mouse wheel','Zoom in or out (9 zoom levels).'],
+    ])}
+    ${guideKeyTable('Actions', [
+      ['g','Pick up an item, or open a chest/container underfoot.'],
+      ['f','Fire your equipped ranged weapon at the nearest target in range.'],
+      ['t','Talk to an adjacent friendly NPC.'],
+      ['x','Look/examine mode — inspect any visible tile, item, or creature.'],
+      ['&gt; / &lt;','Descend / ascend stairs.'],
+      ['m','Plant a Waystone Shard as a named fast-travel waypoint.'],
+      ['G / H','Auto-travel to the nearest stairs / back home.'],
+      ['X','Auto-explore the current area.'],
+    ])}
+    ${guideKeyTable('Character & Menus', [
+      ['i','Inventory.'],
+      ['c','Character sheet.'],
+      ['z','Abilities — spells, techniques, active cybernetics, and active mutations together.'],
+      ['T','Talents.'],
+      ['K','Crafting &amp; Cooking.'],
+      ['q','Quest Log.'],
+      ['Y','Cybernetics management.'],
+      ['U','Eldritch/mutation screen.'],
+      ['V','Fast Travel.'],
+    ])}
+    ${guideKeyTable('System', [
+      ['Esc','Open the in-game menu — Save, Load, Export/Import, Settings, or Quit to Title Screen. Also backs out of whatever screen you\'re currently in.'],
+      ['P','Same in-game menu as Esc (Save/Load/Settings/Quit).'],
+      ['?','Open this guide.'],
+      ['⚙ button (top-right)','Opens Settings directly from anywhere, in or out of a game.'],
+    ])}
+    <div class="modal-opt" style="margin-top:8px">Settings are always reachable mid-game — press <b>Esc</b> or <b>P</b>
+    for the in-game menu and choose Settings, or click the <b>⚙</b> button in the top-right corner at any time. The
+    same menu has a <b>Quit to Title Screen</b> option (with a confirmation prompt, unless you've turned that off
+    under Gameplay settings) if you want to back out to the main menu without closing the browser tab.</div>` },
   { id:'movement', label:'Movement', html: () => `
     <div class="modal-opt">Arrows / WASD / hjkl (+ yubn diagonals) — move, or attack if a hostile is adjacent. Bumping a
     friendly ally/companion/NPC swaps places with them instead of blocking you; use <b>t</b> to deliberately talk.</div>
@@ -7406,8 +8090,16 @@ const GUIDE_SECTIONS = [
   { id:'mouse', label:'Mouse', html: () => `
     <div class="modal-opt">Every menu option is clickable. Click any visible map tile to examine it (including loose
     items — full stats shown, not just the ground biome). Scroll the mouse wheel over the map to zoom.</div>` },
-  { id:'meta', label:'Meta', html: () => `
-    <div class="modal-opt"><b>Changelog:</b></div>
+  { id:'changelog', label:'Changelog', html: () => `
+    <div class="modal-opt"><b>Customization &amp; accessibility pass (latest):</b> floating combat text now rises and
+    fades out smoothly instead of popping up as static text that lingered on screen — it also respects Reduce Motion
+    (shorter rise, same fade). Settings are now reachable mid-game from three places: the <b>⚙</b> button in the
+    top-right corner, or the <b>Esc</b>/<b>P</b> in-game menu, which also gained a <b>Quit to Title Screen</b> option
+    with an optional confirmation prompt. Zoom went from 5 levels to 9, adding three levels closer than the old
+    maximum zoom-in. Display settings gained a Body Font picker (Mono/Pixel/8-Bit/Serif/Sans, on top of the existing
+    header font toggle) and custom Text Color / Accent Color pickers; HUD settings gained a Combat Text Size slider.
+    The Guide was reorganized with a dedicated Controls tab (a full key-binding reference) and this Changelog split out
+    from the old catch-all Meta tab into its own section.</div>
     <div class="modal-opt"><b>Spells/cyberware/techniques/eldritch quantity + power-tier overhaul:</b> every ability
     pool expanded past 100 (${SPELLS.length} spells, ${TECHNIQUES.length} techniques, ${CYBERNETICS.length} cybernetics,
     ${MUTATIONS.length} mutations — 430 total). Added new schools/categories throughout: Elemental Mastery and Storm
@@ -7470,36 +8162,48 @@ const GUIDE_SECTIONS = [
     categories alongside Spells and Techniques (press 1-4 on the Abilities step to switch between them). The point
     budget was raised from 20 to ${CREATION_POINTS} to comfortably fit hybrid builds — every premade archetype can
     still be fully recreated in Custom with room to spare.</div>
-    <div class="modal-opt">The compass now correctly points North "up" (screen convention), matching the map.</div>
+    <div class="modal-opt">The compass now correctly points North "up" (screen convention), matching the map.</div>` },
+  { id:'saves', label:'Saves & Meta', html: () => `
     <div class="modal-opt">Saving uses your browser's local storage automatically when you choose Save (accessible via
-    the pause/save menu, key <b>P</b>). If local storage isn't available, or you want a portable backup, Export writes
-    a save file you can download, and Import reads one back in. Your character, inventory, abilities, gold, quests, and
-    relationships are fully preserved; the wider world regenerates identically from the same seed around you.</div>` },
+    the in-game menu, key <b>Esc</b> or <b>P</b>). If local storage isn't available, or you want a portable backup, Export
+    writes a save file you can download, and Import reads one back in. Your character, inventory, abilities, gold,
+    quests, and relationships are fully preserved; the wider world regenerates identically from the same seed around
+    you.</div>
+    <div class="modal-opt">Autosave runs periodically while you play (interval configurable under Gameplay settings,
+    or turn it off entirely). Settings themselves — display, HUD, gameplay, and accessibility — save instantly to local
+    storage the moment you change them, independent of your character save.</div>
+    <div class="modal-opt">Full changelog and version history live in the Changelog tab.</div>` },
 ];
 let guideCurrentTab = 'start';
+function guideSearchBarHtml(query) {
+  const valueAttr = query ? ` value="${escapeHtml(query)}"` : '';
+  return `<div style="margin:8px 0"><input id="guide-search-input" type="text"${valueAttr} placeholder="Search the guide..." style="width:65%;background:#1a1610;border:1px solid var(--line);color:var(--text);padding:4px;font-family:inherit"> <span onclick="runGuideSearch()" style="cursor:pointer;background:var(--amber-dim);color:#000;padding:4px 10px;">Search</span></div>`;
+}
 function renderGuideTab(tabId) {
   guideCurrentTab = tabId;
-  const tabBar = GUIDE_SECTIONS.map(s => `<span onclick="renderGuideTab('${s.id}')" style="cursor:pointer;margin-right:8px;font-size:11px;${s.id===tabId?'color:var(--amber-bright);text-decoration:underline;':'color:var(--text-dim);'}">${s.label}</span>`).join('');
-  const searchBar = `<div style="margin:8px 0"><input id="guide-search-input" type="text" placeholder="Search the guide..." style="width:65%;background:#1a1610;border:1px solid var(--line);color:var(--text);padding:4px;font-family:inherit"> <span onclick="runGuideSearch()" style="cursor:pointer;background:var(--amber-dim);color:#000;padding:4px 10px;">Search</span></div>`;
+  document.getElementById('modal-inner').classList.add('modal-wide');
+  const tabBar = GUIDE_SECTIONS.map(s => `<span class="guide-tab${s.id===tabId?' active':''}" onclick="renderGuideTab('${s.id}')">${s.label}</span>`).join('');
+  const searchBar = guideSearchBarHtml('');
   const section = GUIDE_SECTIONS.find(s => s.id === tabId) || GUIDE_SECTIONS[0];
-  const html = `<div style="margin-bottom:8px">${tabBar}</div>${searchBar}<hr>${section.html()}`;
+  const html = `<div class="guide-tabs">${tabBar}</div>${searchBar}<hr>${section.html()}`;
   renderModal('Guide & Controls', html, 'Esc to close. Click a tab above to switch sections.');
 }
 function runGuideSearch() {
+  document.getElementById('modal-inner').classList.add('modal-wide');
   const input = document.getElementById('guide-search-input');
   const query = input ? (input.value || '').trim().toLowerCase() : '';
-  const tabBar = GUIDE_SECTIONS.map(s => `<span onclick="renderGuideTab('${s.id}')" style="cursor:pointer;margin-right:8px;font-size:11px;color:var(--text-dim)">${s.label}</span>`).join('');
-  const searchBar = `<div style="margin:8px 0"><input id="guide-search-input" type="text" value="${query}" placeholder="Search the guide..." style="width:65%;background:#1a1610;border:1px solid var(--line);color:var(--text);padding:4px;font-family:inherit"> <span onclick="runGuideSearch()" style="cursor:pointer;background:var(--amber-dim);color:#000;padding:4px 10px;">Search</span></div>`;
-  if (!query) { renderModal('Guide Search', `<div style="margin-bottom:8px">${tabBar}</div>${searchBar}<hr><div class="npcline dim">Type something to search for.</div>`, 'Esc to close.'); return; }
+  const tabBar = GUIDE_SECTIONS.map(s => `<span class="guide-tab${s.id===guideCurrentTab?' active':''}" onclick="renderGuideTab('${s.id}')">${s.label}</span>`).join('');
+  const searchBar = guideSearchBarHtml(query);
+  if (!query) { renderModal('Guide Search', `<div class="guide-tabs">${tabBar}</div>${searchBar}<hr><div class="npcline dim">Type something to search for.</div>`, 'Esc to close.'); return; }
   const results = [];
   GUIDE_SECTIONS.forEach(s => {
     const text = stripHtml(s.html());
     const sentences = text.split(/(?<=[.!?])\s+/).map(x => x.trim()).filter(Boolean);
     sentences.forEach(sent => { if (sent.toLowerCase().includes(query)) results.push({ section: s.label, sent }); });
   });
-  let body = `<div class="npcline">Results for "${query}": ${results.length} match(es)</div>`;
+  let body = `<div class="npcline">Results for "${escapeHtml(query)}": ${results.length} match(es)</div>`;
   results.slice(0, 40).forEach(r => { body += `<div class="modal-opt"><span class="dim">[${r.section}]</span> ${r.sent}</div>`; });
-  renderModal('Guide Search Results', `<div style="margin-bottom:8px">${tabBar}</div>${searchBar}<hr>${body}`, 'Esc to close.');
+  renderModal('Guide Search Results', `<div class="guide-tabs">${tabBar}</div>${searchBar}<hr>${body}`, 'Esc to close.');
 }
 function openHelp() { Sound.play('uiOpen'); gameState = 'help'; renderGuideTab(guideCurrentTab || 'start'); }
 
@@ -7511,13 +8215,24 @@ function openSaveLoadMenu() {
   html += `<div class="modal-opt" onclick="simulateKey('b')">[b] Load Game${hasSaveGame() ? '' : ' (no save found)'}</div>`;
   html += `<div class="modal-opt" onclick="simulateKey('c')">[c] Export Save to File</div>`;
   html += `<div class="modal-opt" onclick="simulateKey('d')">[d] Import Save from File</div>`;
-  renderModal('Save / Load', html, 'Letter/click to choose. Esc to close.');
+  html += `<div class="modal-opt" onclick="simulateKey('e')" style="margin-top:6px">[e] Settings</div>`;
+  html += `<div class="modal-opt" onclick="simulateKey('f')">[f] Quit to Title Screen</div>`;
+  renderModal('Game Menu', html, 'Letter/click to choose. Esc to close.');
 }
 function saveLoadChoice(letter) {
   if (letter === 'a') { saveGame(); closeModal(); }
   else if (letter === 'b') { if (hasSaveGame()) loadGame(); else log('No save found.'); }
   else if (letter === 'c') { exportSave(); }
   else if (letter === 'd') { importSave(); }
+  else if (letter === 'e') { showSettings('playing'); }
+  else if (letter === 'f') { quitToMenu(); }
+}
+function quitToMenu() {
+  if (!settings.confirmQuit) { showTitleScreen(); return; }
+  const msg = settings.autosaveEnabled
+    ? 'Quit to the title screen? Your last autosave will still be there — anything since then is lost.'
+    : 'Quit to the title screen? Autosave is off, so anything since your last manual save will be lost.';
+  if (confirm(msg)) showTitleScreen();
 }
 
 // ---- input v11 (final): main menu, character creation, cybernetics/eldritch, save/load ----
@@ -7525,7 +8240,9 @@ function handleKey(e) {
   Sound.unlock();
   const key = e.key;
 
-  if (gameState === 'mainmenu') { if (/^[a-z]$/.test(key)) mainMenuChoice(key); return; }
+  if (gameState === 'title') { if (/^[a-z]$/.test(key)) titleScreenChoice(key); return; }
+  if (gameState === 'settings') { if (key === 'Escape') { closeSettings(); return; } return; }
+  if (gameState === 'confirmdelete') { if (key === 'y' || key === 'n' || key === 'Escape') { confirmDeleteSaveChoice(key); return; } return; }
   if (gameState === 'create_archetype') { if (key === '<' || /^[a-z]$/.test(key)) archetypeChoice(key); return; }
   if (gameState === 'create_stats') { if (key === 'Enter' || key === '<' || /^[1-5]$/.test(key)) createStatsKey(key); return; }
   if (gameState === 'create_abilities') { if (key === 'Enter' || key === '<' || key === '[' || key === ']' || /^[1-4]$/.test(key) || /^[a-z]$/.test(key)) createAbilitiesKey(key); return; }
@@ -7536,6 +8253,7 @@ function handleKey(e) {
   if (gameState === 'gameover') { if (/^[a-z]$/.test(key)) gameOverChoice(key); return; }
 
   if (gameState === 'playing') {
+    if (key === 'Escape') { openSaveLoadMenu(); return; }
     if (MOVE_KEYS[key]) { e.preventDefault(); const [dx,dy] = MOVE_KEYS[key]; movePlayer(dx,dy); return; }
     if (key === '.' || key === '5') { e.preventDefault(); waitTurn(); return; }
     if (key === '+' || key === '=') { setZoom(-1); return; }
