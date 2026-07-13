@@ -4290,7 +4290,7 @@ const MOVE_KEYS = {
 
 
 // ---------------- settings / QoL system ----------------
-const SETTINGS_KEY = 'wanderhollow_settings_v1';
+const SETTINGS_KEY = 'lucid_dreams_of_roguelike_settings_v1';
 const DEFAULT_SETTINGS = {
   sfxVolume: 0.7,
   muted: false,
@@ -8217,7 +8217,7 @@ function updateSidebar() {
 // count, and regenerate the world around them on load. This means your character and everything
 // they carry/know persists perfectly; wildlife, loot, and NPC affection in the wider world reset
 // to that seed's fresh state (a full world-mutation save was out of scope for this pass).
-const SAVE_KEY = 'wanderhollow_save_v1';
+const SAVE_KEY = 'lucid_dreams_of_roguelike_save_v1';
 function getSaveData() {
   return { version: 1, seed: SEED, turnCount, zoomIndex, player: JSON.parse(JSON.stringify(player)) };
 }
@@ -8280,7 +8280,7 @@ function exportSave() {
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'wanderhollow_save.json';
+    a.href = url; a.download = 'lucid_dreams_of_roguelike_save.json';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
     log('Save exported as a downloadable file.');
