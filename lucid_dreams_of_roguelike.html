@@ -2791,6 +2791,9 @@ Object.assign(DUNGEON_THEMES, {
   sunken_ruins:     { name:'Sunken Ruins', tier:'rare', genre:'cave', depthRange:[6,9], dtierMax:3, hazard:'water' },
   dragons_lair:     { name:"Dragon's Lair", tier:'rare', genre:'cave', depthRange:[7,11], dtierMax:4 },
   demon_gate:       { name:'Demon Gate', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
+  sky_bastion:      { name:'Sky Bastion', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
+  derelict_hulk:    { name:'Derelict Hulk', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
+  folded_vault:     { name:'Folded Vault', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
   gods_threshold:   { name:"The Threshold", tier:'rare', genre:'rooms', depthRange:[10,12], dtierMax:5 },
   forgotten_library:{ name:'Forgotten Library', tier:'rare', genre:'rooms', depthRange:[6,9], dtierMax:3 },
   cyber_vault:      { name:'Cyber Vault', tier:'rare', genre:'rooms', depthRange:[6,10], dtierMax:3, lootBias:'cyber' },
@@ -2877,6 +2880,15 @@ const OVERWORLD_BOSSES = [
     behavior:'ranged', biomes:['mountain','plains'], desc:'A vast bird of prey, feathers crackling with pent lightning.' },
   { id:'corrupted_colossus', name:'The Corrupted Colossus', glyph:'&', color:'#8a2a8a', hp:260, str:26, dex:5, atk:[11,22], armor:10, xp:420, boss:true, bossTier:'rare', faction:'construct',
     behavior:'aggressive', biomes:['mountain','desert','tundra'], desc:'A towering construct, its metal frame warped by some eldritch influence.' },
+  // Drops the Recursive Key -- the second of two components needed to work the Folding Stone
+  // (the other, the Bent Lens, comes from The Uncounted Angle at the bottom of the Folded Vault).
+  // See useFoldingStone(). Deliberately roams the surface world rather than guarding a dungeon,
+  // for real variety among "optional bosses."
+  { id:'the_recursion', name:'The Recursion', glyph:'a', color:'#b090ff', hp:210, str:22, dex:18, atk:[9,19], armor:6, xp:380, boss:true, bossTier:'rare', faction:'nonEuclid',
+    behavior:'aggressive', biomes:['forest','denseforest','mountain'], causesConfuse:true, multiattack:2,
+    desc:'A shape that keeps happening again, a half-step out of sync with itself, like a bad copy of a bad copy.',
+    guaranteedDropTemplate: { id:'recursive_key', type:'key', name:'Recursive Key', glyph:'*', color:'#b090ff', value:0,
+      desc:'It should not fit in your hand the way it does. You decide not to think about that too hard.' } },
 ];
 // pre-register every overworld boss into MONSTER_BASES so dungeon boss-pool selection (which can
 // legitimately pick these too — a Dragon's Lair dungeon spawning the Ancient Wyrm makes sense) always
@@ -3276,6 +3288,27 @@ const STORY_BOSS_AI = {
   },
 };
 
+// ---- Celestial faction: the Gilded Choir dimension #3 and its Sky Bastion gate dungeon ----
+MONSTER_BASES.choir_acolyte = { name:'Choir Acolyte', glyph:'a', color:'#f0e0a0', hp:38, str:12, dex:14, atk:[4,9], armor:3, xp:26, behavior:'aggressive', dtier:2, faction:'celestial' };
+MONSTER_BASES.hymnal_construct = { name:'Hymnal Construct', glyph:'H', color:'#d4b45a', hp:70, str:18, dex:8, atk:[7,14], armor:8, xp:45, behavior:'aggressive', dtier:3, faction:'celestial' };
+MONSTER_BASES.sundered_cherub = { name:'Sundered Cherub', glyph:'c', color:'#e8c9d0', hp:30, str:9, dex:19, atk:[3,8], armor:1, xp:24, behavior:'ranged', dtier:2, faction:'celestial' };
+MONSTER_BASES.choir_wraith = { name:'Choir Wraith', glyph:'w', color:'#fff6d8', hp:58, str:15, dex:16, atk:[6,12], armor:2, xp:40, behavior:'ambush', ambushRange:2, dtier:3, faction:'celestial', causesFear:true };
+MONSTER_BASES.reliquary_warden = { name:'Reliquary Warden', glyph:'W', color:'#e0c060', hp:95, str:22, dex:11, atk:[9,17], armor:10, xp:62, behavior:'aggressive', dtier:4, faction:'celestial', miniboss:true };
+
+// ---- Cosmic faction: The Drift dimension #4 and its Derelict Hulk gate dungeon ----
+MONSTER_BASES.void_drifter = { name:'Void Drifter', glyph:'v', color:'#4ae0d0', hp:34, str:11, dex:15, atk:[3,8], armor:1, xp:24, behavior:'aggressive', dtier:2, faction:'cosmic' };
+MONSTER_BASES.static_wraith = { name:'Static Wraith', glyph:'w', color:'#9ad8ff', hp:46, str:13, dex:17, atk:[4,10], armor:0, xp:34, behavior:'ambush', ambushRange:2, dtier:3, faction:'cosmic' };
+MONSTER_BASES.husk_drone = { name:'Husk Drone', glyph:'H', color:'#7a8a9a', hp:64, str:16, dex:9, atk:[6,12], armor:7, xp:44, behavior:'ranged', dtier:3, faction:'cosmic' };
+MONSTER_BASES.star_leech = { name:'Star Leech', glyph:'e', color:'#d0a0ff', hp:28, str:9, dex:13, atk:[3,7], armor:0, xp:22, behavior:'aggressive', dtier:2, faction:'cosmic' };
+MONSTER_BASES.null_sentinel = { name:'Null Sentinel', glyph:'N', color:'#2ae0c0', hp:100, str:24, dex:10, atk:[9,18], armor:11, xp:65, behavior:'aggressive', dtier:4, faction:'cosmic', miniboss:true };
+
+// ---- nonEuclid faction: the Fourth Corridor dimension #5 and its Folded Vault gate dungeon ----
+MONSTER_BASES.fold_wraith = { name:'Fold Wraith', glyph:'w', color:'#b090ff', hp:40, str:12, dex:16, atk:[4,9], armor:2, xp:28, behavior:'ambush', ambushRange:2, dtier:2, faction:'nonEuclid' };
+MONSTER_BASES.angle_eater = { name:'Angle-Eater', glyph:'a', color:'#7a5ac0', hp:52, str:14, dex:12, atk:[5,11], armor:4, xp:36, behavior:'aggressive', dtier:3, faction:'nonEuclid' };
+MONSTER_BASES.recursive_husk = { name:'Recursive Husk', glyph:'H', color:'#8a70d0', hp:66, str:17, dex:9, atk:[6,13], armor:6, xp:44, behavior:'aggressive', dtier:3, faction:'nonEuclid', splitInto:'recursive_husk', splitCount:1 };
+MONSTER_BASES.still_walker = { name:'Still Walker', glyph:'s', color:'#c0b0ff', hp:30, str:10, dex:19, atk:[3,7], armor:1, xp:24, behavior:'ranged', dtier:2, faction:'nonEuclid', causesConfuse:true };
+MONSTER_BASES.folded_sentinel = { name:'Folded Sentinel', glyph:'S', color:'#a080e0', hp:98, str:23, dex:11, atk:[9,17], armor:10, xp:64, behavior:'aggressive', dtier:4, faction:'nonEuclid', miniboss:true };
+
 // ---- Malphegor, the Rift-Warden — Arch Demon gatekeeper of the Abyssal Wastes ----
 // A sixth, fully bespoke story boss, distinct from the Batch 1 five: fire/summoning-themed,
 // and the one guaranteed, non-procedural encounter guarding entry to Phase 3's dimension.
@@ -3338,6 +3371,209 @@ STORY_BOSS_AI.archdemon_malphegor = function (m, dist, seesPlayer) {
     const dmg = bossScaledDirectDamage(m, 1.55);
     player.hp -= dmg;
     if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#ff1a1a');
+    return true;
+  }
+  if (dist > 1) { stepToward(m, player.x, player.y); return true; }
+  bossMeleeHit(m, 1);
+  return true;
+};
+
+// ---- Seraphiel, the Unwritten Choir — celestial gatekeeper of the Gilded Choir ----
+// A seventh bespoke gate boss, matching Malphegor's role but for the opposite dimension: not a
+// jailer keeping something in, but an auditor deciding who is fit to be let further up. Guards
+// the Sky Bastion's summit exclusively; killing them opens the rift the same way Malphegor's
+// death opens the Abyssal Wastes. See unlockGildedChoir() / the sky_bastion special-case below.
+MONSTER_BASES.seraphiel = {
+  name: 'Seraphiel, the Unwritten Choir', desc: 'A many-winged figure of hammered light, its face a blank oval where a face should be, voice arriving half a second before its mouth moves.',
+  glyph: 'S', color: '#fff6d8', hp: 300, str: 24, dex: 18, atk: [11, 20], armor: 9, xp: 480,
+  behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'celestial',
+  scriptedAI: 'seraphiel',
+  engageLine: "You climbed a long way to be judged. Very well. Let us see what you actually are.",
+  deathLine: "Ah. Not what the record said of you at all. ...Go on, then. Someone should see the rest of the choir.",
+  lore: "Seraphiel does not remember choosing this post, only that it has always held it: the last voice between the lower world and whatever finished thing lies above it. It keeps no grudge and shows no mercy, judging every climber by the same unreadable measure, and has never once been wrong before today.",
+};
+BOSS_POWER.seraphiel = 6;
+MONSTER_BASES.seraphiel.bossPower = 6;
+STORY_BOSS_AI.seraphiel = function (m, dist, seesPlayer) {
+  bossTickCds(m);
+  const p = announceBossPhase(m, {
+    2: "You bleed like the others. That was never the question I was asking.",
+    3: "Then let the choir itself weigh in.",
+  });
+  if (!seesPlayer && !m.engaged) { wander(m); return true; }
+  if (dist <= 3 && bossReady(m, 'lance')) {
+    bossCool(m, 'lance', 4);
+    log(`${m.name} hurls a Lance of Judgment!`);
+    const dmg = bossScaledDirectDamage(m, 0.9);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#fff6d8');
+    return true;
+  }
+  if (bossReady(m, 'wingveil') && Math.random() < 0.25) {
+    bossCool(m, 'wingveil', 6);
+    player.statusConfuse = (player.statusConfuse || 0) + 3;
+    log(`${m.name} unfurls a blinding Wingveil of light!`);
+    return true;
+  }
+  if (p >= 2 && !m.usedChoir && bossReady(m, 'summon')) {
+    m.usedChoir = true;
+    bossCool(m, 'summon', 10);
+    log(`${m.name}: "Rise, and sing."`);
+    bossSummon(m, 'choir_acolyte', 3);
+    return true;
+  }
+  if (dist >= 2 && dist <= 6 && bossReady(m, 'volley')) {
+    bossCool(m, 'volley', 3);
+    bossRangedHit(m, 0.75); bossRangedHit(m, 0.75);
+    return true;
+  }
+  if (p === 3 && !m.usedVerdict && bossReady(m, 'verdict')) {
+    m.usedVerdict = true;
+    bossCool(m, 'verdict', 99);
+    log(`${m.name}: "Final Verdict."`);
+    const dmg = bossScaledDirectDamage(m, 1.5);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#fffde0');
+    return true;
+  }
+  if (dist > 1) { stepToward(m, player.x, player.y); return true; }
+  bossMeleeHit(m, 1);
+  return true;
+};
+
+// ---- The Hollow Signal — cosmic gatekeeper of the Derelict Hulk ----
+// An eighth bespoke gate boss, and a deliberately different unlock mechanic from Malphegor and
+// Seraphiel: killing it does not open a rift by itself. It guarantees a drop -- the Ignition Core
+// -- which has to be carried out and used at a Launch Cradle found elsewhere in the world. See
+// useLaunchCradle() / the derelict_hulk special-case below. Matches the original brief's call for
+// varied ways into each dimension, this time "finding or building a rocket ship."
+MONSTER_BASES.hollow_signal = {
+  name: 'The Hollow Signal', desc: 'A drifting lattice of dead light where a face would be, patched together from wreckage that predates every kingdom you have ever heard of.',
+  glyph: 'Y', color: '#4ae0d0', hp: 300, str: 23, dex: 16, atk: [10, 19], armor: 9, xp: 480,
+  behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'cosmic',
+  scriptedAI: 'hollow_signal',
+  engageLine: "SIGNAL ACQUIRED. ...No. Not a signal. Something that walks. Interesting. Painful, but interesting.",
+  deathLine: "Transmission... incomplete. Take the core. It was always meant to leave this wreck, one way or another.",
+  lore: "Nobody built the Hollow Signal so much as it assembled itself, over a very long time, out of whatever the wreck had left lying around. It doesn't remember what ship this was, or where it was going, only that something in it still wants very badly to finish the trip.",
+};
+BOSS_POWER.hollow_signal = 6;
+MONSTER_BASES.hollow_signal.bossPower = 6;
+STORY_BOSS_AI.hollow_signal = function (m, dist, seesPlayer) {
+  bossTickCds(m);
+  const p = announceBossPhase(m, {
+    2: "RECALIBRATING. You are more resilient than the last several thousand data points.",
+    3: "CORE INTEGRITY CRITICAL. Redirecting everything that's left.",
+  });
+  if (!seesPlayer && !m.engaged) { wander(m); return true; }
+  if (dist <= 3 && bossReady(m, 'lance')) {
+    bossCool(m, 'lance', 4);
+    log(`${m.name} fires a Fractured Beam!`);
+    const dmg = bossScaledDirectDamage(m, 0.9);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#4ae0d0');
+    return true;
+  }
+  if (bossReady(m, 'emp') && Math.random() < 0.25) {
+    bossCool(m, 'emp', 6);
+    player.statusConfuse = (player.statusConfuse || 0) + 3;
+    log(`${m.name} pulses an EMP Burst -- your senses scramble!`);
+    return true;
+  }
+  if (p >= 2 && !m.usedDrones && bossReady(m, 'summon')) {
+    m.usedDrones = true;
+    bossCool(m, 'summon', 10);
+    log(`${m.name}: "REINFORCEMENTS DEPLOYED."`);
+    bossSummon(m, 'husk_drone', 3);
+    return true;
+  }
+  if (dist >= 2 && dist <= 6 && bossReady(m, 'volley')) {
+    bossCool(m, 'volley', 3);
+    bossRangedHit(m, 0.75); bossRangedHit(m, 0.75);
+    return true;
+  }
+  if (bossReady(m, 'tether') && Math.random() < 0.3) {
+    bossCool(m, 'tether', 6);
+    player.statusSlow = Math.max(player.statusSlow || 0, 3);
+    log(`${m.name} lashes out with a Gravity Tether, dragging at your feet!`);
+    return true;
+  }
+  if (p === 3 && !m.usedOverload && bossReady(m, 'overload')) {
+    m.usedOverload = true;
+    bossCool(m, 'overload', 99);
+    log(`${m.name}: "CORE OVERLOAD."`);
+    const dmg = bossScaledDirectDamage(m, 1.5);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#8af0e0');
+    return true;
+  }
+  if (dist > 1) { stepToward(m, player.x, player.y); return true; }
+  bossMeleeHit(m, 1);
+  return true;
+};
+
+// ---- The Uncounted Angle — nonEuclid gatekeeper of the Folded Vault ----
+// A ninth bespoke gate boss. Like the Hollow Signal, its death doesn't open a rift directly -- it
+// guarantees the Bent Lens, one of two components (the other is the Recursive Key, dropped by the
+// wandering overworld boss The Recursion) needed to work the Folding Stone. See
+// useFoldingStone() / the folded_vault special-case below. Deliberately the first dimension gate
+// in the game that needs more than one earned component before it opens.
+MONSTER_BASES.uncounted_angle = {
+  name: 'The Uncounted Angle', desc: 'A shape that keeps almost resolving into something familiar and then declining to. Counting its limbs gives a different number each time.',
+  glyph: 'A', color: '#b090ff', hp: 300, str: 24, dex: 17, atk: [10, 20], armor: 8, xp: 480,
+  behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'nonEuclid',
+  scriptedAI: 'uncounted_angle',
+  engageLine: "You arrived from a direction that shouldn't exist. I'll have to correct that.",
+  deathLine: "...Oh. That's the number. It was that number the whole time. Take the lens, then -- you've more than earned the right to see clearly.",
+  lore: "Nothing about the Folded Vault agrees with itself for more than a few seconds at a time, least of all its warden. The Uncounted Angle isn't hostile so much as compulsive: it corrects anything that enters its geometry until the geometry is satisfied, and has never yet been interrupted before finishing.",
+};
+BOSS_POWER.uncounted_angle = 6;
+MONSTER_BASES.uncounted_angle.bossPower = 6;
+STORY_BOSS_AI.uncounted_angle = function (m, dist, seesPlayer) {
+  bossTickCds(m);
+  const p = announceBossPhase(m, {
+    2: "That's not the correct number of times to have hit me. Recounting.",
+    3: "The count is failing. Everything is failing. Good.",
+  });
+  if (!seesPlayer && !m.engaged) { wander(m); return true; }
+  if (dist <= 3 && bossReady(m, 'lance')) {
+    bossCool(m, 'lance', 4);
+    log(`${m.name} folds space and strikes from an Uncounted Angle!`);
+    const dmg = bossScaledDirectDamage(m, 0.9);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#b090ff');
+    return true;
+  }
+  if (bossReady(m, 'recount') && Math.random() < 0.25) {
+    bossCool(m, 'recount', 6);
+    player.statusConfuse = (player.statusConfuse || 0) + 3;
+    log(`${m.name} Recounts the room -- your sense of direction scrambles!`);
+    return true;
+  }
+  if (p >= 2 && !m.usedFold && bossReady(m, 'summon')) {
+    m.usedFold = true;
+    bossCool(m, 'summon', 10);
+    log(`${m.name} folds the corridor back on itself.`);
+    bossSummon(m, 'fold_wraith', 3);
+    return true;
+  }
+  if (dist >= 2 && dist <= 6 && bossReady(m, 'volley')) {
+    bossCool(m, 'volley', 3);
+    bossRangedHit(m, 0.75); bossRangedHit(m, 0.75);
+    return true;
+  }
+  if (bossReady(m, 'stillframe') && Math.random() < 0.3) {
+    bossCool(m, 'stillframe', 6);
+    player.statusSlow = Math.max(player.statusSlow || 0, 3);
+    log(`${m.name} freezes a Still Frame around your feet!`);
+    return true;
+  }
+  if (p === 3 && !m.usedZero && bossReady(m, 'zero')) {
+    m.usedZero = true;
+    bossCool(m, 'zero', 99);
+    log(`${m.name}: "Zero. The count is zero."`);
+    const dmg = bossScaledDirectDamage(m, 1.5);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#d8c0ff');
     return true;
   }
   if (dist > 1) { stepToward(m, player.x, player.y); return true; }
@@ -3767,6 +4003,9 @@ const DUNGEON_THEME_FACTIONS = {
   sunken_ruins: ['aquatic','undead'],
   dragons_lair: ['dragon','beast'],
   demon_gate: ['demonic', 'archdemon'],
+  sky_bastion: ['celestial'],
+  derelict_hulk: ['cosmic'],
+  folded_vault: ['nonEuclid'],
   gods_threshold: ['antagonist'],
   forgotten_library: ['construct','undead','human'],
   cyber_vault: ['cyber','construct'],
@@ -3793,6 +4032,13 @@ Object.assign(DUNGEON_THEMES, {
   // the dream_sanctum special-case in generateDungeonLevel): no boss, a slumbering altar instead.
   dream_sanctum: { name:'Dream Sanctum', tier:'rare', genre:'cave', depthRange:[5,8], dtierMax:2, factions:['dream'] },
   recurring_palace: { name:'The Recurring Palace', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['dream','eldritch'] },
+  // tier:'dimension' for the same reason as brass_citadel/recurring_palace -- only ever placed by
+  // placeDimensionSubDungeon() inside the Gilded Choir, never rolled by the overworld.
+  reliquary_spire: { name:'The Reliquary Spire', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['celestial'] },
+  // same tier:'dimension' reasoning as above -- only ever placed inside The Drift.
+  silent_bridge: { name:'The Silent Bridge', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['cosmic'] },
+  // same tier:'dimension' reasoning as above -- only ever placed inside the Fourth Corridor.
+  echo_gallery: { name:'The Echo Gallery', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['nonEuclid'] },
 });
 
 // ===================== MONSTER EXPANSION PACK: ~76 new enemies, every faction/theme, varied AI =====================
@@ -3939,6 +4185,8 @@ const POI_TYPES = [
   { id:'scrap_heap', name:'Scrap Heap', weight:4, lootItems:3, lootBias:'material', lookExtra:'A heap of twisted metal and salvageable parts.', glyph:'*', color:'#7a8a8a' },
   { id:'signal_tower', name:'Derelict Signal Tower', weight:2, npcRole:'cybersmith', lookExtra:'A skeletal tower, still faintly humming with residual power.', glyph:'I', color:'#4ae0d0' },
   { id:'abandoned_watchtower', name:'Abandoned Watchtower', weight:4, chestTier:1, monsters:[{id:'bandit',count:[0,1]}], lookExtra:'A crumbling watchtower, long since abandoned by whoever built it.', glyph:'I', color:'#8a7a5a' },
+  { id:'launch_cradle', name:'Launch Cradle', weight:2, launchCradle:true, lookExtra:'A dead husk of scaffolding, curved like it once cradled something built to leave the ground entirely.', glyph:'^', color:'#4ae0d0' },
+  { id:'folding_stone', name:'Folding Stone', weight:2, foldingStone:true, lookExtra:'A frame of standing stones, arranged in an order that hurts slightly to look directly at.', glyph:'#', color:'#b090ff' },
 ];
 
 // ===================== WORLD GENERATION =====================
@@ -3995,6 +4243,16 @@ function overworldDangerScale(cx, cy) {
 }
 // MONSTER_SCALE_BASE^13 = 40 -- see REBALANCE PASS 1 comment in makeMonster below.
 const MONSTER_SCALE_BASE = Math.pow(40, 1 / 13);
+// Player level (1-99) -> the same ~1-14 depthScale range the monster power curve is calibrated
+// for (see MONSTER_SCALE_BASE/makeMonster: depthScale=14 is "the deepest realistic dungeon boss
+// spawn", reaching the same ~40x ceiling player HP growth reaches by level 99). Anything that
+// wants a player-level-appropriate monster (ally summons, etc.) should go through this rather
+// than passing player.level straight into makeMonster's depthScale -- level 99 fed directly in
+// would mean depthScale=99, i.e. 40^(98/13), an astronomically larger number than the curve was
+// ever meant to produce.
+function depthScaleForPlayerLevel(level) {
+  return 1 + (Math.max(1, level || 1) - 1) / 98 * 13;
+}
 function makeMonster(monsterId, x, y, depthScale, rng) {
   rng = rng || Math.random;
   const base = MONSTER_BASES[monsterId];
@@ -4009,7 +4267,7 @@ function makeMonster(monsterId, x, y, depthScale, rng) {
     armor: base.armor, glyph: base.glyph, color: base.color, xp: Math.round(base.xp * scale),
     behavior: base.behavior, alive: true, poison: base.poison || 0, frost: base.frost || 0, fire: base.fire || 0,
     lifesteal: !!base.lifesteal, regen: base.regen || 0, boss: !!base.boss, dropGold: !!base.dropGold,
-    state: 'idle', target: null, statusPoison: 0, statusSlow: 0, statusFear: 0, powerScale: scale,
+    state: 'idle', target: null, statusPoison: 0, statusSlow: 0, statusFear: 0, powerScale: scale, depthScale,
   };
   for (const f of MONSTER_EXTRA_FIELDS) if (base[f] !== undefined) m[f] = base[f];
   return m;
@@ -4554,6 +4812,8 @@ function placePOI(chunk, cx, cy, rng) {
   }
   if (poiType.buff) { t.feature = 'shrine'; t.glyph = poiType.glyph || '&'; t.color = poiType.color || '#e0c34a'; t.shrineUsed = false; }
   else if (poiType.ritual) { t.feature = 'ritual_altar'; t.glyph = poiType.glyph; t.color = poiType.color; }
+  else if (poiType.launchCradle) { t.feature = 'launch_cradle'; t.glyph = poiType.glyph; t.color = poiType.color; }
+  else if (poiType.foldingStone) { t.feature = 'folding_stone'; t.glyph = poiType.glyph; t.color = poiType.color; }
   else if (poiType.hazardTile) { t.feature = 'hazard'; t.glyph = poiType.glyph; t.color = poiType.color; }
   else if (!poiType.monsters && !poiType.npcRole) { t.feature = 'poi_marker'; t.glyph = poiType.glyph || '*'; t.color = poiType.color || '#c9a06a'; }
 }
@@ -4577,14 +4837,21 @@ function maybeSpawnOverworldBoss(chunk, cx, cy, centerBiome, rng) {
     behavior: bossDef.behavior, boss: true, breathWeapon: bossDef.breathWeapon || null,
     wanderRadius: 14, scriptedAI: bossDef.scriptedAI || null, engageLine: bossDef.engageLine || null,
     deathLine: bossDef.deathLine || null, lore: bossDef.lore || null, berserkHpPct: bossDef.berserkHpPct || null,
+    causesConfuse: bossDef.causesConfuse || false, multiattack: bossDef.multiattack || null,
   });
+  // A fresh copy with its own uid each spawn -- guaranteedDropTemplate must never be shared by
+  // reference across multiple wandering spawns of the same boss, or picking it up in one place
+  // could dupe/desync the item in another.
+  if (bossDef.guaranteedDropTemplate) {
+    m.guaranteedDrops = [Object.assign({ uid: 'i' + (uidCounter++) }, bossDef.guaranteedDropTemplate)];
+  }
   chunk.monsters.push(m);
   return true;
 }
 
 // ===================== GAME ENGINE =====================
 let canvas, ctx;
-let player, gameState, dialogueNPC, dialogueOptions, tradeMode, invSelected;
+let player, gameState, dialogueNPC, dialogueOptions, tradeMode, tradePage, invSelected;
 let turnCount = 0;
 let logMessages = [];
 // ---- v3: death log/death screen support -- tracks what most recently hurt the player so a
@@ -5380,6 +5647,8 @@ function useStairs() {
   } else {
     const t = curTileAt(player.x, player.y);
     if (t && t.feature === 'dungeon_entrance') { Sound.play('gate'); enterDungeon(t.dungeonId); }
+    else if (t && t.feature === 'launch_cradle') { useLaunchCradle(); }
+    else if (t && t.feature === 'folding_stone') { useFoldingStone(); }
     else log('Nothing to enter here.');
   }
 }
@@ -5394,7 +5663,7 @@ function useStairsUp() {
 // ---------------- dialogue / trade ----------------
 
 function openTrade(npc) {
-  gameState = 'trade'; dialogueNPC = npc; tradeMode = 'buy';
+  gameState = 'trade'; dialogueNPC = npc; tradeMode = 'buy'; tradePage = 0;
   Sound.play('uiOpen');
   renderTrade();
 }
@@ -5416,21 +5685,30 @@ function repairAtBlacksmith(npc) {
 }
 function renderTrade() {
   const npc = dialogueNPC;
+  const repMult = repPriceMult(getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).key);
   const list = tradeMode === 'buy' ? npc.shop : player.inventory.filter(i => i.type !== 'misc');
   let html = `<div class="npcline">Your gold: ${player.gold} | [Tab] switch ${tradeMode === 'buy' ? 'to sell' : 'to buy'}</div>`;
   if (npc.roleId === 'blacksmith' || npc.roleId === 'cybersmith') html += `<div class="npcline dim">[R] Repair all equipped gear</div>`;
   html += `<div class="trade-col-title">${tradeMode === 'buy' ? npc.name + "'s wares (buy):" : 'Your items (sell):'}</div>`;
-  list.forEach((it, i) => {
+  const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  tradePage = tradePage || 0;
+  if (tradePage >= totalPages) tradePage = totalPages - 1;
+  const pageStart = tradePage * PAGE_SIZE;
+  const pageItems = list.slice(pageStart, pageStart + PAGE_SIZE);
+  pageItems.forEach((it, i) => {
     const letter = String.fromCharCode(97 + i);
-    const price = tradeMode === 'buy' ? Math.round(it.value * 1.2) : Math.round(it.value * 0.45);
-    html += `<div class="modal-opt">[${letter}] ${it.name} - ${price}g</div>`;
+    // Match tradeTransact()'s actual charged price exactly -- this used to ignore kingdom
+    // reputation and show a different number than what you were actually charged/paid.
+    const price = tradeMode === 'buy' ? Math.round(it.value * 1.2 * repMult) : Math.round(it.value * 0.45 * (2 - repMult));
+    html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${it.name} - ${price}g</div>`;
   });
   if (!list.length) html += `<div class="npcline">(nothing)</div>`;
-  renderModal(`Trading with ${npc.name}`, html, 'Letter to transact, Tab to switch, Esc to leave.');
+  if (totalPages > 1) html += `<div style="margin-top:6px" class="dim">Page ${tradePage+1}/${totalPages} &nbsp; <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey('[')">[prev]</span> <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey(']')">[next]</span></div>`;
+  renderModal(`Trading with ${npc.name}`, html, 'Letter/click to transact, Tab to switch, [ ] page, Esc to leave.');
 }
 function tradeTransact(letter) {
   const npc = dialogueNPC;
-  const idx = letter.charCodeAt(0) - 97;
+  const idx = (tradePage || 0) * PAGE_SIZE + (letter.charCodeAt(0) - 97);
   const repMult = repPriceMult(getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).key);
   if (tradeMode === 'buy') {
     const it = npc.shop[idx];
@@ -6549,14 +6827,20 @@ function openCraft() {
 function renderCraft() {
   let html = '';
   if (!player.knownRecipes.length) html += `<div class="npcline dim">You know no recipes yet. Learn them from chefs, blacksmiths, alchemists, and tailors — or find recipe scrolls.</div>`;
-  player.knownRecipes.forEach((rid, i) => {
+  const totalPages = Math.max(1, Math.ceil(player.knownRecipes.length / PAGE_SIZE));
+  player.craftPage = player.craftPage || 0;
+  if (player.craftPage >= totalPages) player.craftPage = totalPages - 1;
+  const pageStart = player.craftPage * PAGE_SIZE;
+  const pageRecipes = player.knownRecipes.slice(pageStart, pageStart + PAGE_SIZE);
+  pageRecipes.forEach((rid, i) => {
     const r = RECIPES.find(x => x.id === rid);
     const letter = String.fromCharCode(97 + i);
     const have = hasIngredients(r);
     const ingStr = r.inputs.map(inp => `${inp.qty}x ${ITEM_BASES.find(b=>b.id===inp.id).name} (${countMaterial(inp.id)} owned)`).join(', ');
     html += `<div class="modal-opt" onclick="simulateKey('${letter}')" style="color:${have?'#7fd07f':'#8a7f6a'}">[${letter}] ${r.name} <span class="dim">→ ${ITEM_BASES.find(b=>b.id===r.output.id).name}</span><br><span class="dim">Needs: ${ingStr}</span></div>`;
   });
-  renderModal('Crafting & Cooking', html, 'Letter/click to craft (needs ingredients highlighted green). Esc to close.');
+  if (totalPages > 1) html += `<div style="margin-top:6px" class="dim">Page ${player.craftPage+1}/${totalPages} &nbsp; <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey('[')">[prev]</span> <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey(']')">[next]</span></div>`;
+  renderModal('Crafting & Cooking', html, 'Letter/click to craft (needs ingredients highlighted green). [ ] page. Esc to close.');
 }
 
 // ---- relationships / marriage ----
@@ -6825,7 +7109,7 @@ function spawnAlly(monsterId, duration, nameOverride) {
     if (curWalkable(nx,ny) && !entityAt(nx,ny)) { spot = {x:nx,y:ny}; break; }
   }
   if (!spot) { log('There is no room for a summon nearby.'); return null; }
-  const a = makeMonster(monsterId, spot.x, spot.y, Math.max(1, player.level), Math.random);
+  const a = makeMonster(monsterId, spot.x, spot.y, depthScaleForPlayerLevel(player.level), Math.random);
   a.kind = 'ally'; a.owner = true; a.duration = player.allyPermanent ? 0 : (duration || 0); a.alive = true;
   if (player.allyHpBonus) { a.maxHp = Math.round(a.maxHp * (1 + player.allyHpBonus)); a.hp = a.maxHp; }
   if (player.allyArmorBonus) a.armor = (a.armor || 0) + player.allyArmorBonus;
@@ -7246,6 +7530,7 @@ function onDeath(def, killer) {
   log(`${def.name} dies!`);
   if (def.deathLine) log(`${def.name}: "${def.deathLine}"`);
   if (def.monsterId === 'archdemon_malphegor') unlockAbyssalWastes(def);
+  if (def.monsterId === 'seraphiel') unlockGildedChoir(def);
   if (def.monsterId === 'the_antagonist') triggerGodReveal(def);
   if (def.monsterId === 'god') triggerSimulationReveal(def);
   if (isPlayerOwnedKiller(killer) || def.harmedByPlayer) {
@@ -8677,7 +8962,7 @@ function monsterAI(m) {
     if (m.summonCooldown <= 0) {
       const spot = findOpenAdjacent(m.x, m.y);
       if (spot) {
-        const minion = makeMonster(m.summonId, spot.x, spot.y, Math.max(1, Math.round((m.maxHp || 10) / 25)), Math.random);
+        const minion = makeMonster(m.summonId, spot.x, spot.y, Math.max(1, (m.depthScale || 1) - 1), Math.random);
         addMonsterToWorld(minion);
         m.summonCount = (m.summonCount || 0) + 1;
         m.summonCooldown = 6;
@@ -8902,6 +9187,62 @@ MONSTER_BASES.echo_child = { name:'Echo of a Child', glyph:'e', color:'#e0e0f0',
 MONSTER_BASES.night_terror = { name:'Night Terror', glyph:'n', color:'#5a1a7a', hp:40, str:15, dex:13, atk:[4,10], armor:2, xp:34, behavior:'ambush', ambushRange:2, dtier:3, faction:'dream' };
 MONSTER_BASES.unraveled_thing = { name:'Unraveled Thing', glyph:'u', color:'#d060e0', hp:52, str:16, dex:10, atk:[5,11], armor:1, xp:42, behavior:'aggressive', dtier:3, faction:'dream' };
 
+// ---- The Gilded Choir: dimension #3. Entered by force like the Abyssal Wastes -- climb the Sky
+// Bastion, defeat its gatekeeper Seraphiel -- but the tone is inverted: bright, orderly, and
+// unsettling in how little it seems to need you there. ----
+const GILDED_BIOMES = {
+  sunlit_fields:    { name:'Sunlit Fields',    walkable:true,  glyph:'.', color:'#f0e0a0', bg:'#2a2814', encounter:[['choir_acolyte',5],['sundered_cherub',4]] },
+  reliquary_grounds:{ name:'Reliquary Grounds',walkable:true,  glyph:'"', color:'#e0c060', bg:'#241e0a', encounter:[['hymnal_construct',5],['reliquary_warden',2],['choir_acolyte',3]] },
+  the_hush:         { name:'The Hush',         walkable:true,  glyph:'%', color:'#fff6d8', bg:'#1e1c28', encounter:[['choir_wraith',5],['sundered_cherub',3]] },
+  cloud_banks:      { name:'Cloud Banks',      walkable:false, glyph:'~', color:'#f8f4e0', bg:'#302e24', encounter:[] },
+  choir_spires:     { name:'Choir Spires',     walkable:false, glyph:'^', color:'#d4b45a', bg:'#1a1608', encounter:[] },
+};
+function classifyGildedBiome(elev, heat) {
+  if (elev > 0.70) return 'choir_spires';
+  if (heat > 0.66) return 'cloud_banks';
+  if (elev < 0.30) return 'the_hush';
+  if (heat > 0.50) return 'reliquary_grounds';
+  return 'sunlit_fields';
+}
+
+// ---- The Drift: dimension #4. Reached the way the original brief's own example described --
+// "finding or building a rocket ship" -- via an item-gated interaction rather than a boss kill
+// or a peaceful discovery, the third distinct unlock mechanic among the four dimensions so far.
+// See MONSTER_BASES.hollow_signal (drops the Ignition Core) and useLaunchCradle(). ----
+const DRIFT_BIOMES = {
+  lunar_regolith:   { name:'Lunar Regolith',    walkable:true,  glyph:'.', color:'#9aa0b0', bg:'#141620', encounter:[['void_drifter',5],['star_leech',4]] },
+  crystal_field:    { name:'Crystal Field',     walkable:true,  glyph:'"', color:'#d0a0ff', bg:'#1a1028', encounter:[['star_leech',5],['static_wraith',3]] },
+  wreckage_plain:   { name:'Wreckage Plain',    walkable:true,  glyph:'%', color:'#7a8a9a', bg:'#101418', encounter:[['husk_drone',5],['null_sentinel',2],['void_drifter',3]] },
+  fractured_ice:    { name:'Fractured Ice',     walkable:false, glyph:'^', color:'#c0e0ff', bg:'#0a1420', encounter:[] },
+  the_null:         { name:'The Null',          walkable:false, glyph:' ', color:'#05050a', bg:'#000002', encounter:[] },
+};
+function classifyDriftBiome(elev, heat) {
+  if (elev > 0.72) return 'the_null';
+  if (heat > 0.66) return 'fractured_ice';
+  if (elev < 0.30) return 'wreckage_plain';
+  if (heat > 0.50) return 'crystal_field';
+  return 'lunar_regolith';
+}
+
+// ---- The Fourth Corridor: dimension #5. Reached by a "build something" mechanic per the user's
+// own reminder -- not one item, but two, gathered from genuinely different sources (a dungeon
+// boss and a wandering overworld boss) and brought together at a landmark. See
+// useFoldingStone(). ----
+const FOURTH_BIOMES = {
+  impossible_stair: { name:'Impossible Stair',  walkable:true,  glyph:'.', color:'#b090ff', bg:'#140f24', encounter:[['fold_wraith',5],['still_walker',4]] },
+  folded_atrium:    { name:'Folded Atrium',      walkable:true,  glyph:'"', color:'#a080e0', bg:'#100a1e', encounter:[['angle_eater',5],['folded_sentinel',2],['fold_wraith',3]] },
+  recursive_hall:   { name:'Recursive Hall',     walkable:true,  glyph:'%', color:'#c0b0ff', bg:'#180f2a', encounter:[['recursive_husk',5],['angle_eater',3]] },
+  the_seam:         { name:'The Seam',           walkable:false, glyph:'~', color:'#3a2a5a', bg:'#0a0614', encounter:[] },
+  still_frame:      { name:'Still Frame',        walkable:false, glyph:'^', color:'#8a70d0', bg:'#0e0a1c', encounter:[] },
+};
+function classifyFourthBiome(elev, heat) {
+  if (elev > 0.72) return 'still_frame';
+  if (heat > 0.66) return 'the_seam';
+  if (elev < 0.30) return 'recursive_hall';
+  if (heat > 0.50) return 'folded_atrium';
+  return 'impossible_stair';
+}
+
 const DIMENSIONS = {
   abyssal_wastes: {
     id: 'abyssal_wastes', name: 'the Abyssal Wastes', tint: '#ff3a1a',
@@ -8919,6 +9260,30 @@ const DIMENSIONS = {
       entranceName:'a door that was not there a moment ago', entranceGlyph:'+', entranceColor:'#b090ff', decorateStyle:'ruins' }],
     entryFlavor: 'The ground does not quite hold still. Colors run a half-second behind where they should be. You are dreaming, and you know it, and that changes nothing about how real it feels.',
   },
+  gilded_choir: {
+    id: 'gilded_choir', name: 'the Gilded Choir', tint: '#f0e0a0',
+    biomes: GILDED_BIOMES, classify: classifyGildedBiome, noiseSalt: 265533, fillBiome: 'sunlit_fields',
+    arrival: { cx: 0, cy: 0, lx: 12, ly: 12 },
+    subDungeons: [{ key:'spire', cx: 2, cy: 3, lx: 12, ly: 12, id:'dim_reliquary_spire', theme:'reliquary_spire',
+      entranceName:'the Reliquary Spire stair', entranceGlyph:'=', entranceColor:'#e0c060', decorateStyle:'fortress' }],
+    entryFlavor: 'The light here has no source and casts no shadows. Somewhere very far off, and also somehow right beside your ear, something is being sung in a language built before words needed meaning.',
+  },
+  the_drift: {
+    id: 'the_drift', name: 'the Drift', tint: '#4ae0d0',
+    biomes: DRIFT_BIOMES, classify: classifyDriftBiome, noiseSalt: 837119, fillBiome: 'lunar_regolith',
+    arrival: { cx: 0, cy: 0, lx: 12, ly: 12 },
+    subDungeons: [{ key:'bridge', cx: -3, cy: -2, lx: 12, ly: 12, id:'dim_silent_bridge', theme:'silent_bridge',
+      entranceName:'the Silent Bridge airlock', entranceGlyph:'=', entranceColor:'#4ae0d0', decorateStyle:'fortress' }],
+    entryFlavor: 'There is no ground, exactly, just something firm enough to stand on. The stars here do not twinkle -- they hold perfectly still, like they are waiting for you to notice something about them.',
+  },
+  fourth_corridor: {
+    id: 'fourth_corridor', name: 'the Fourth Corridor', tint: '#b090ff',
+    biomes: FOURTH_BIOMES, classify: classifyFourthBiome, noiseSalt: 601927, fillBiome: 'impossible_stair',
+    arrival: { cx: 0, cy: 0, lx: 12, ly: 12 },
+    subDungeons: [{ key:'gallery', cx: 1, cy: -3, lx: 12, ly: 12, id:'dim_echo_gallery', theme:'echo_gallery',
+      entranceName:'the Echo Gallery threshold', entranceGlyph:'=', entranceColor:'#b090ff', decorateStyle:'fortress' }],
+    entryFlavor: 'You are certain you have been in this exact spot before, several times, in slightly different orders. None of your memories of it quite agree on what happens next.',
+  },
 };
 
 // Static lookup (works even immediately after a fresh page load, before anything has actually
@@ -8933,6 +9298,42 @@ function findDimensionSubDungeonConfig(dungeonId) {
   return null;
 }
 
+// Guarantees the arrival point can actually reach open ground beyond the immediate area, not
+// just the small local patch forceFillArea clears. That local patch alone was never enough: if
+// the biome noise happened to ring it with an impassable biome (several dimensions have real
+// impassable biomes -- brimstone chasms, cloud banks, the Null, etc.), the player could step
+// through a rift and find themselves sealed in a small box with no way out at all. This does a
+// flood-fill from the arrival tile; if the reachable area is small or never reaches a chunk edge,
+// it carves straight corridors out to all four edges, guaranteeing a real way out regardless of
+// how the surrounding terrain rolled.
+function ensureArrivalConnectivity(tiles, lx, ly, fillBiomeDef) {
+  const visited = new Set([lx + ',' + ly]);
+  const queue = [[lx, ly]];
+  let touchesEdge = false;
+  while (queue.length) {
+    const [x0, y0] = queue.shift();
+    if (x0 === 0 || x0 === CH - 1 || y0 === 0 || y0 === CH - 1) touchesEdge = true;
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx = x0 + dx, ny = y0 + dy;
+      if (nx < 0 || nx >= CH || ny < 0 || ny >= CH) continue;
+      const key = nx + ',' + ny;
+      if (visited.has(key)) continue;
+      if (!tiles[ny][nx].walkable) continue;
+      visited.add(key);
+      queue.push([nx, ny]);
+    }
+  }
+  if (touchesEdge && visited.size >= 40) return; // plenty of open, connected ground already
+  const carveGlyph = fillBiomeDef.glyph === '\u25C9' ? '.' : fillBiomeDef.glyph;
+  for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+    let x = lx, y = ly;
+    while (x >= 0 && x < CH && y >= 0 && y < CH) {
+      const t = tiles[y][x];
+      if (!t.walkable) { t.walkable = true; t.glyph = carveGlyph; t.color = fillBiomeDef.color; t.bg = fillBiomeDef.bg; }
+      x += dx; y += dy;
+    }
+  }
+}
 function generateDimensionChunk(dimId, cx, cy) {
   const dim = DIMENSIONS[dimId];
   const fill = dim.biomes[dim.fillBiome];
@@ -8957,6 +9358,7 @@ function generateDimensionChunk(dimId, cx, cy) {
     const t = tiles[dim.arrival.ly][dim.arrival.lx];
     t.walkable = true; t.biome = dim.fillBiome; t.glyph = '\u25C9'; t.color = dim.tint; t.bg = '#0a0a12'; t.feature = 'rift_portal'; t.dimensionId = dimId;
     forceFillArea(tiles, dim.arrival.lx, dim.arrival.ly, fill, 'rift_portal');
+    ensureArrivalConnectivity(tiles, dim.arrival.lx, dim.arrival.ly, fill);
   }
   // interior sub-dungeons: real dungeon entrances placed at fixed dimension coordinates, using
   // the game's normal dungeon pipeline -- optional, deeper content once you're already through.
@@ -9036,8 +9438,11 @@ function placeDimensionSubDungeon(chunk, cx, cy, sub, dim, fill) {
 }
 
 // Generic dimension-unlock core: registers discovery, places a permanent portal tile (tagged with
-// which dimension it leads to), grants a reward, and pokes the Main Quest bridge stage. Both
-// unlock paths (a boss kill, or a peaceful discovery) funnel through this.
+// which dimension it leads to), grants a reward, and pokes the Main Quest bridge stage. All three
+// unlock paths (a boss kill, a peaceful discovery, or an item-gated interaction) funnel through
+// this. Two ways to place the portal tile: atGrid+x+y (dungeon levels, addressable by local
+// coords) or opts.tile (a direct tile object reference, mutated in place -- needed for overworld
+// POIs, which aren't backed by a single indexable grid the way a dungeon level is).
 function unlockDimension(dimId, atGrid, x, y, opts) {
   opts = opts || {};
   player.discoveredDimensions = player.discoveredDimensions || [];
@@ -9045,6 +9450,9 @@ function unlockDimension(dimId, atGrid, x, y, opts) {
   if (!already) player.discoveredDimensions.push(dimId);
   if (atGrid && atGrid[y] && atGrid[y][x]) {
     atGrid[y][x] = { glyph: '\u25C9', walkable: true, color: DIMENSIONS[dimId].tint, bg: '#0a0a12', feature: 'rift_portal', dimensionId: dimId, items: [] };
+  } else if (opts.tile) {
+    Object.assign(opts.tile, { glyph: '\u25C9', walkable: true, color: DIMENSIONS[dimId].tint, bg: '#0a0a12', feature: 'rift_portal', dimensionId: dimId });
+    if (!opts.tile.items) opts.tile.items = [];
   }
   if (!already) {
     gainXP(opts.xp || 400); player.gold += opts.gold || 250;
@@ -9058,6 +9466,12 @@ function unlockAbyssalWastes(def) {
   const lvl = curDungeonLevel();
   unlockDimension('abyssal_wastes', lvl ? lvl.grid : null, def.x, def.y,
     { xp: 500, gold: 300, message: '*** The gate Malphegor guarded tears open. A rift now leads into the Abyssal Wastes -- step onto it and use the enter command to cross over. ***' });
+}
+// Called from onDeath() the moment Seraphiel falls.
+function unlockGildedChoir(def) {
+  const lvl = curDungeonLevel();
+  unlockDimension('gilded_choir', lvl ? lvl.grid : null, def.x, def.y,
+    { xp: 500, gold: 300, message: '*** The last note of Seraphiel\'s judgment fades. A rift now leads into the Gilded Choir -- step onto it and use the enter command to cross over. ***' });
 }
 // The Antagonist's death doesn't end the story -- it reveals what was actually behind them.
 // GOD spawns at the same spot, continuing the encounter directly, no separate area required.
@@ -9098,6 +9512,44 @@ function recordHallOfLegends() {
 }
 function getHallOfLegends() {
   try { return JSON.parse(localStorage.getItem('lucid_dreams_of_roguelike_hall_of_legends_v1')) || []; } catch (e) { return []; }
+}
+// Called when the player interacts with the Folding Stone while carrying both components -- the
+// first dimension gate in the game that needs more than one earned item, gathered from two
+// genuinely different sources (a dungeon boss and a wandering overworld boss). Both are consumed
+// on use; missing either one gives a specific, honest refusal message rather than a generic one.
+function useFoldingStone() {
+  const hasLens = player.inventory.some(i => i.id === 'bent_lens');
+  const hasKey = player.inventory.some(i => i.id === 'recursive_key');
+  if (!hasLens && !hasKey) {
+    log("The stones sit inert. They would need a Bent Lens and a Recursive Key both, and you're carrying neither.");
+    return;
+  }
+  if (!hasLens) { log("The stones almost respond to the Recursive Key alone -- almost. They still want a Bent Lens too."); return; }
+  if (!hasKey) { log("The stones almost respond to the Bent Lens alone -- almost. They still want a Recursive Key too."); return; }
+  player.inventory.splice(player.inventory.findIndex(i => i.id === 'bent_lens'), 1);
+  player.inventory.splice(player.inventory.findIndex(i => i.id === 'recursive_key'), 1);
+  const t = curTileAt(player.x, player.y);
+  const alreadyKnown = (player.discoveredDimensions || []).includes('fourth_corridor');
+  unlockDimension('fourth_corridor', null, null, null, { tile: t, xp: 550, gold: 350,
+    message: "*** Lens and key agree on an angle that shouldn't exist. The standing stones fold outward into a rift, patient and exact. ***" });
+  if (!alreadyKnown) travelThroughRift();
+}
+// Called when the player interacts with a Launch Cradle while carrying an Ignition Core -- an
+// item-gated unlock, distinct from both a boss-kill (Malphegor/Seraphiel) and a pure-discovery
+// interaction (the Dream Sanctum altar). The core has to be earned first (see the derelict_hulk
+// boss special-case in generateDungeonLevel) and is consumed on use.
+function useLaunchCradle() {
+  const idx = player.inventory.findIndex(i => i.id === 'ignition_core');
+  if (idx === -1) {
+    log("The cradle is dark and dead. Whatever built it needs something to feed it before it will wake -- an Ignition Core, or something like one.");
+    return;
+  }
+  player.inventory.splice(idx, 1);
+  const t = curTileAt(player.x, player.y);
+  const alreadyKnown = (player.discoveredDimensions || []).includes('the_drift');
+  unlockDimension('the_drift', null, null, null, { tile: t, xp: 500, gold: 300,
+    message: "*** The core catches. The cradle shudders, floods with light, and tears the air above it into a rift. A way into the Drift, waiting where the launch pad used to be. ***" });
+  if (!alreadyKnown) travelThroughRift();
 }
 // Called when the player interacts with a Dream Sanctum's slumbering altar -- a pure discovery
 // unlock, no combat required, deliberately different from the Abyssal Wastes' gated entry.
@@ -9198,6 +9650,33 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
       // Abyssal Wastes dimension afterward. See DIMENSIONS.abyssal_wastes / unlockAbyssalWastes(). ----
       if (theme === 'demon_gate' && MONSTER_BASES.archdemon_malphegor) {
         boss = makeMonster('archdemon_malphegor', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+      }
+      // ---- Seraphiel: the Sky Bastion's fixed gatekeeper, opening the way into the Gilded Choir.
+      // Same pattern as Malphegor/demon_gate above -- see unlockGildedChoir(). ----
+      if (theme === 'sky_bastion' && MONSTER_BASES.seraphiel) {
+        boss = makeMonster('seraphiel', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+      }
+      // ---- The Hollow Signal: the Derelict Hulk's fixed gatekeeper. Unlike Malphegor/Seraphiel,
+      // its death doesn't open the rift directly -- it guarantees the Ignition Core, which has to
+      // be carried out and used at a Launch Cradle. See useLaunchCradle(). ----
+      if (theme === 'derelict_hulk' && MONSTER_BASES.hollow_signal) {
+        boss = makeMonster('hollow_signal', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss.guaranteedDrops = (boss.guaranteedDrops || []).concat([
+          { uid: 'i' + Math.random().toString(36).slice(2, 9), id: 'ignition_core', type: 'key', name: 'Ignition Core',
+            glyph: '*', color: '#4ae0d0', value: 0,
+            desc: 'Still warm. Still, somehow, faintly humming, like it is waiting to be asked to do the one thing it was built for.' }
+        ]);
+      }
+      // ---- The Uncounted Angle: the Folded Vault's fixed gatekeeper. Drops the Bent Lens -- one
+      // of two components (with the Recursive Key) needed at the Folding Stone. See
+      // useFoldingStone(). ----
+      if (theme === 'folded_vault' && MONSTER_BASES.uncounted_angle) {
+        boss = makeMonster('uncounted_angle', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss.guaranteedDrops = (boss.guaranteedDrops || []).concat([
+          { uid: 'i' + Math.random().toString(36).slice(2, 9), id: 'bent_lens', type: 'key', name: 'Bent Lens',
+            glyph: '*', color: '#b090ff', value: 0,
+            desc: 'Looking through it, the room behind you is very slightly the wrong shape.' }
+        ]);
       }
       // ---- The Antagonist: whoever the procedural story named as its villain (see
       // generateMainQuest's `antagonist` name) is not just a name attached to reused bosses --
@@ -9867,41 +10346,51 @@ function openCybernetics() { Sound.play('uiOpen'); gameState = 'cyber'; renderCy
 function renderCybernetics() {
   const slots = player.cyberSlots || 3;
   let html = `<div class="npcline">Cyber Slots: ${player.installedCyber.length}/${slots} &nbsp; Charge: ${Math.round(player.charge)}/${player.maxCharge}</div>`;
-  html += `<div class="trade-col-title">Installed</div>`;
-  if (!player.installedCyber.length) html += `<div class="npcline dim">(none installed)</div>`;
-  player.installedCyber.forEach((id, i) => {
-    const c = CYBERNETICS.find(x => x.id === id);
-    const letter = String.fromCharCode(97 + i);
-    html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${c.name} <span class="dim">(${c.category}, ${c.activation}) — click to uninstall</span><br><span class="dim">${c.desc}</span></div>`;
-  });
   const known = player.knownCyberIds.filter(id => !player.installedCyber.includes(id));
-  html += `<div class="trade-col-title">Known, Not Installed</div>`;
-  if (!known.length) html += `<div class="npcline dim">(none — find Cyberware Chips or buy from a Cybersmith)</div>`;
-  known.forEach((id, i) => {
-    const c = CYBERNETICS.find(x => x.id === id);
-    const letter = String.fromCharCode(97 + player.installedCyber.length + i);
-    const full = player.installedCyber.length >= slots;
-    html += `<div class="modal-opt" ${full?'':`onclick="simulateKey('${letter}')"`} style="${full?'color:#8a7f6a':''}">[${letter}] ${c.name} <span class="dim">(${c.category}, ${c.activation})${full?' — no free slots':' — click to install'}</span><br><span class="dim">${c.desc}</span></div>`;
+  // Flat, page-aware list so a maxed-out character (up to 10 slots + every known-but-uninstalled
+  // cybernetic) can't produce more than 26 combined entries and silently strand some of them
+  // past 'z' with no selectable letter -- see the same pagination pattern used by Inventory/Trade/
+  // Crafting/Abilities.
+  const entries = player.installedCyber.map(id => ({ kind: 'installed', id })).concat(known.map(id => ({ kind: 'known', id })));
+  const totalPages = Math.max(1, Math.ceil(entries.length / PAGE_SIZE));
+  player.cyberPage = player.cyberPage || 0;
+  if (player.cyberPage >= totalPages) player.cyberPage = totalPages - 1;
+  const pageStart = player.cyberPage * PAGE_SIZE;
+  const pageEntries = entries.slice(pageStart, pageStart + PAGE_SIZE);
+  let printedInstalledHeader = false, printedKnownHeader = false;
+  pageEntries.forEach((entry, i) => {
+    const letter = String.fromCharCode(97 + i);
+    const c = CYBERNETICS.find(x => x.id === entry.id);
+    if (entry.kind === 'installed') {
+      if (!printedInstalledHeader) { html += `<div class="trade-col-title">Installed</div>`; printedInstalledHeader = true; }
+      html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${c.name} <span class="dim">(${c.category}, ${c.activation}) — click to uninstall</span><br><span class="dim">${c.desc}</span></div>`;
+    } else {
+      if (!printedKnownHeader) { html += `<div class="trade-col-title">Known, Not Installed</div>`; printedKnownHeader = true; }
+      const full = player.installedCyber.length >= slots;
+      html += `<div class="modal-opt" ${full?'':`onclick="simulateKey('${letter}')"`} style="${full?'color:#8a7f6a':''}">[${letter}] ${c.name} <span class="dim">(${c.category}, ${c.activation})${full?' — no free slots':' — click to install'}</span><br><span class="dim">${c.desc}</span></div>`;
+    }
   });
-  cyberListCache = { installed: player.installedCyber.slice(), known };
-  renderModal('Cybernetics', html, 'Letter/click an installed item to remove it, or a known item to install it. Esc to close.');
+  if (!printedInstalledHeader && pageStart === 0) html += `<div class="trade-col-title">Installed</div><div class="npcline dim">(none installed)</div>`;
+  if (!known.length && pageStart + pageEntries.length >= entries.length) html += `<div class="trade-col-title">Known, Not Installed</div><div class="npcline dim">(none — find Cyberware Chips or buy from a Cybersmith)</div>`;
+  if (totalPages > 1) html += `<div style="margin-top:6px" class="dim">Page ${player.cyberPage+1}/${totalPages} &nbsp; <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey('[')">[prev]</span> <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey(']')">[next]</span></div>`;
+  cyberListCache = { entries };
+  renderModal('Cybernetics', html, 'Letter/click an installed item to remove it, or a known item to install it. [ ] page. Esc to close.');
 }
-let cyberListCache = { installed: [], known: [] };
+let cyberListCache = { entries: [] };
 function toggleCyber(letter) {
-  const idx = letter.charCodeAt(0) - 97;
-  if (idx < cyberListCache.installed.length) {
-    const id = cyberListCache.installed[idx];
-    const c = CYBERNETICS.find(x => x.id === id);
+  const idx = (player.cyberPage || 0) * PAGE_SIZE + (letter.charCodeAt(0) - 97);
+  const entry = cyberListCache.entries[idx];
+  if (!entry) return;
+  if (entry.kind === 'installed') {
+    const c = CYBERNETICS.find(x => x.id === entry.id);
     if (c.activation === 'passive' && c.remove) c.remove();
-    player.installedCyber = player.installedCyber.filter(x => x !== id);
+    player.installedCyber = player.installedCyber.filter(x => x !== entry.id);
     log(`You uninstall ${c.name}.`);
   } else {
-    const id = cyberListCache.known[idx - cyberListCache.installed.length];
-    if (!id) return;
     if (player.installedCyber.length >= (player.cyberSlots || 3)) { log('No free cybernetic slots.'); return; }
-    const c = CYBERNETICS.find(x => x.id === id);
+    const c = CYBERNETICS.find(x => x.id === entry.id);
     if (c.activation === 'passive' && c.apply) c.apply();
-    player.installedCyber.push(id);
+    player.installedCyber.push(entry.id);
     log(`You install ${c.name}.`);
   }
   updateSidebar();
@@ -10228,27 +10717,44 @@ function renderSpellbook() {
     { label: 'Mutations (active)', ids: player.mutations.filter(id => { const m = MUTATIONS.find(x=>x.id===id); return m && m.activation==='active'; }), pool: MUTATIONS },
     { label: 'Granted (temporary, from food)', ids: grantedIds, pool: [...SPELLS, ...TECHNIQUES, ...CYBERNETICS, ...MUTATIONS] },
   ];
-  let idx = 0; const order = [];
-  let any = false;
+  // Flatten into (groupLabel, school, spell) entries first, *then* paginate the flat list --
+  // same pattern as Inventory/Trade/Crafting/Cybernetics. A character with a large spell list
+  // plus techniques plus several active cybernetics/mutations could easily clear 26 total, and
+  // previously every entry past #26 got a non-letter "key" (charCode 123+, i.e. '{' and beyond)
+  // that the key handler's /^[a-z]$/ check -- and every onclick, since clicks route through the
+  // same handler -- could never match. Those abilities were silently both unpressable and
+  // unclickable. This was the actual bug reported.
+  const flat = [];
   groups.forEach(g => {
     if (!g.ids.length) return;
-    any = true;
-    html += `<div class="trade-col-title">${g.label}</div>`;
     const bySchool = {};
     g.ids.forEach(id => { const s = g.pool.find(x => x.id === id); if (s) (bySchool[s.school || s.category || 'General'] = bySchool[s.school || s.category || 'General'] || []).push(s); });
     Object.keys(bySchool).sort().forEach(school => {
-      html += `<div class="dim" style="margin:4px 0 2px 8px">${school}</div>`;
-      bySchool[school].forEach(s => {
-        const letter = String.fromCharCode(97 + idx); idx++; order.push(s.id);
-        const resource = s.resource || 'mp';
-        const costLabel = s.type === 'lifetap' || s.type === 'bloodarmor' ? `${s.selfCost} HP` : (s.selfCostPct ? `${Math.round(s.selfCostPct*100)}% HP` : (s.mp ? `${effectiveCost(s)} ${resource}` : 'free'));
-        html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${s.name} <span class="dim">(${costLabel})</span> - ${s.desc}</div>`;
-      });
+      bySchool[school].forEach(s => flat.push({ groupLabel: g.label, school, spell: s }));
     });
   });
-  if (!any) html += `<div class="npcline dim">You know no active abilities yet. Learn spells/techniques from trainers or tomes, install cybernetics, or acquire mutations.</div>`;
-  spellOrder = order;
-  renderModal('Abilities', html, 'Letter/click to use, Esc to close.');
+  spellOrder = flat.map(e => e.spell.id);
+  if (!flat.length) {
+    html += `<div class="npcline dim">You know no active abilities yet. Learn spells/techniques from trainers or tomes, install cybernetics, or acquire mutations.</div>`;
+  } else {
+    const totalPages = Math.max(1, Math.ceil(flat.length / PAGE_SIZE));
+    player.abilityPage = player.abilityPage || 0;
+    if (player.abilityPage >= totalPages) player.abilityPage = totalPages - 1;
+    const pageStart = player.abilityPage * PAGE_SIZE;
+    const pageEntries = flat.slice(pageStart, pageStart + PAGE_SIZE);
+    let lastGroup = null, lastSchool = null;
+    pageEntries.forEach((entry, i) => {
+      const letter = String.fromCharCode(97 + i);
+      if (entry.groupLabel !== lastGroup) { html += `<div class="trade-col-title">${entry.groupLabel}</div>`; lastGroup = entry.groupLabel; lastSchool = null; }
+      if (entry.school !== lastSchool) { html += `<div class="dim" style="margin:4px 0 2px 8px">${entry.school}</div>`; lastSchool = entry.school; }
+      const s = entry.spell;
+      const resource = s.resource || 'mp';
+      const costLabel = s.type === 'lifetap' || s.type === 'bloodarmor' ? `${s.selfCost} HP` : (s.selfCostPct ? `${Math.round(s.selfCostPct*100)}% HP` : (s.mp ? `${effectiveCost(s)} ${resource}` : 'free'));
+      html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${s.name} <span class="dim">(${costLabel})</span> - ${s.desc}</div>`;
+    });
+    if (totalPages > 1) html += `<div style="margin-top:6px" class="dim">Page ${player.abilityPage+1}/${totalPages} &nbsp; <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey('[')">[prev]</span> <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey(']')">[next]</span></div>`;
+  }
+  renderModal('Abilities', html, 'Letter/click to use, [ ] page, Esc to close.');
 }
 
 // ---- item descriptions v2: adds tome/cyberchip/mutagen ----
@@ -11395,17 +11901,33 @@ const GUIDE_SECTIONS = [
     (fallen knight), <b>Ashgrave, the Hollow King</b> (necromancer), <b>Vex-9, the Discarded Iron</b> and <b>The
     Choir of Rust</b> (two very different war-machines), <b>Skarn Windrender</b> (ranger), <b>Kaelen Frost, the
     Snowbound Warden</b> (ice warden), and <b>Yog'tha, the Unblinking Eye</b> (eldritch horror). Each has real lore,
-    unique dialogue, and a hand-scripted moveset — they don't use the generic monster AI at all. Expect multiple
-    phases as their HP drops. More join this roster in future updates.</div>` },
+    unique dialogue, and a hand-scripted moveset — they don't use the generic monster AI at all. Four more guard
+    the way into other dimensions: <b>Malphegor, the Rift-Warden</b> (demon gatekeeper), <b>Seraphiel, the
+    Unwritten Choir</b> (celestial gatekeeper), <b>the Hollow Signal</b> (cosmic gatekeeper), and <b>the Uncounted
+    Angle</b> (non-Euclidean gatekeeper). A wandering optional boss, <b>the Recursion</b>, roams the surface world
+    itself rather than guarding a dungeon. Expect multiple phases as HP drops on the scripted ones. More join this
+    roster in future updates.</div>` },
   { id:'dimensions', label:'Dimensions', html: () => `
     <div class="modal-opt">The world isn't the only world, and there's more than one way in. A rare "Demon Gate"
     dungeon holds <b>Malphegor, the Rift-Warden</b> at the bottom -- defeat him and the gate tears open into
     <b>the Abyssal Wastes</b> (ashfields, brimstone chasms, bone forests, obsidian spires, demonic monsters, and its
     own optional dungeon, the Brass Citadel). A rare, peaceful "Dream Sanctum" works differently: no boss guards it
     -- rest at the slumbering altar inside and you'll wake into <b>the Lucid Expanse</b> (floating gardens, mirror
-    lakes, unraveling zones, dream-touched monsters, and its own optional dungeon, the Recurring Palace). Step onto
-    a glowing rift tile and use the enter command (&gt;) to cross over, and again to come back -- you'll always
-    return to exactly where you left. This is the first two of many dimensions to come.</div>` },
+    lakes, unraveling zones, dream-touched monsters, and its own optional dungeon, the Recurring Palace). A rare
+    "Sky Bastion" dungeon works like the Demon Gate but in the other direction -- climb to the top and defeat
+    <b>Seraphiel, the Unwritten Choir</b>, and the rift that opens leads into <b>the Gilded Choir</b> (sunlit
+    fields, reliquary grounds, hushed zones, choir spires, celestial monsters, and its own optional dungeon, the
+    Reliquary Spire). A fourth path works differently again: a rare "Derelict Hulk" dungeon holds <b>the Hollow
+    Signal</b> at the bottom, and defeating it doesn't open anything by itself -- it drops an Ignition Core.
+    Carry that out to a rare "Launch Cradle" landmark found out in the world, use it there, and the cradle tears
+    open a rift into <b>the Drift</b> (lunar regolith, crystal fields, wreckage plains, fractured ice, cosmic
+    monsters, and its own optional dungeon, the Silent Bridge). A fifth path is the first that needs more than one
+    earned piece: a rare "Folded Vault" dungeon holds <b>the Uncounted Angle</b>, which drops a Bent Lens, while a
+    rare wandering overworld boss, <b>the Recursion</b>, drops a Recursive Key. Bring both to a rare "Folding
+    Stone" landmark and use it there to open a rift into <b>the Fourth Corridor</b> (impossible stairs, folded
+    atria, recursive halls, impassable seams, non-Euclidean monsters, and its own optional dungeon, the Echo
+    Gallery). Step onto a glowing rift tile and use the enter command (&gt;) to cross over, and again to come back
+    -- you'll always return to exactly where you left. This is the first five of many dimensions to come.</div>` },
   { id:'leveling', label:'Leveling', html: () => `
     <div class="modal-opt">Level 99 is the real cap, and now an achievable one -- roughly 450,000 total XP across
     the run, paced so early levels come quickly and the last stretch is a genuine long-game grind. Every level
@@ -11731,6 +12253,8 @@ function handleKey(e) {
   }
   if (gameState === 'cyber') {
     if (key === 'Escape') { closeModal(); return; }
+    if (key === '[') { player.cyberPage = Math.max(0, (player.cyberPage||0) - 1); renderCybernetics(); return; }
+    if (key === ']') { player.cyberPage = (player.cyberPage||0) + 1; renderCybernetics(); return; }
     if (/^[a-z]$/.test(key)) { toggleCyber(key); return; }
     return;
   }
@@ -11757,7 +12281,9 @@ function handleKey(e) {
   }
   if (gameState === 'trade') {
     if (key === 'Escape') { closeModal(); return; }
-    if (key === 'Tab') { e.preventDefault(); tradeMode = tradeMode === 'buy' ? 'sell' : 'buy'; renderTrade(); return; }
+    if (key === 'Tab') { e.preventDefault(); tradeMode = tradeMode === 'buy' ? 'sell' : 'buy'; tradePage = 0; renderTrade(); return; }
+    if (key === '[') { tradePage = Math.max(0, (tradePage||0) - 1); renderTrade(); return; }
+    if (key === ']') { tradePage = (tradePage||0) + 1; renderTrade(); return; }
     if (key === 'R' && (dialogueNPC.roleId === 'blacksmith' || dialogueNPC.roleId === 'cybersmith')) { repairAtBlacksmith(dialogueNPC); return; }
     if (/^[a-z]$/.test(key)) { tradeTransact(key); return; }
     return;
@@ -11790,12 +12316,24 @@ function handleKey(e) {
   }
   if (gameState === 'itemaction') {
     if (key === 'Escape' || key === 'x') { gameState = 'inventory'; invSelectedSlot = null; renderInventory(); return; }
-    if (key === 'u' && invSelectedSlot) { unequipSlot(invSelectedSlot); invSelectedSlot = null; gameState='playing'; closeModal(); return; }
+    if (key === 'u' && invSelectedSlot) { unequipSlot(invSelectedSlot); invSelectedSlot = null; gameState='inventory'; renderInventory(); return; }
     if (key === 'i' && invSelectedSlot === 'hand') { dipWeaponInFire(); gameState='playing'; closeModal(); return; }
-    if (key === 'e') { equipItem(invSelected); gameState='playing'; closeModal(); return; }
+    if (key === 'e') { equipItem(invSelected); invSelectedSlot = null; gameState='inventory'; renderInventory(); return; }
     if (key === 't' && THROWABLE_EFFECTS.has(invSelected.effect)) { const it = invSelected; closeModal(); beginThrowTargeting(it); return; }
     if (key === 'q' && !invSelectedSlot) { promptQuickslotAssign(invSelected); return; }
-    if (key === 'u') { useItem(invSelected); gameState='playing'; closeModal(); return; }
+    if (key === 'u') {
+      // useItem() can open its own follow-up screen (e.g. a Recall Stone opens the fast-travel
+      // menu via beginBypassTravel -> gameState='travel'). Only fall back to closing the whole
+      // menu if useItem() left gameState exactly where it found it (the common case: potions,
+      // scrolls, tomes, etc. that just consume and log a message). Previously this always forced
+      // gameState back to 'playing' and closed the modal unconditionally, which silently undid
+      // whatever screen useItem() had just opened -- that was the actual cause of "using a Recall
+      // Stone does nothing".
+      const prevState = gameState;
+      useItem(invSelected);
+      if (gameState === prevState) { gameState='playing'; closeModal(); }
+      return;
+    }
     if (key === 'd') { dropItem(invSelected); gameState='playing'; closeModal(); return; }
     return;
   }
@@ -11811,8 +12349,10 @@ function handleKey(e) {
   }
   if (gameState === 'spellbook') {
     if (key === 'Escape') { closeModal(); return; }
+    if (key === '[') { player.abilityPage = Math.max(0, (player.abilityPage||0) - 1); renderSpellbook(); return; }
+    if (key === ']') { player.abilityPage = (player.abilityPage||0) + 1; renderSpellbook(); return; }
     if (/^[a-z]$/.test(key)) {
-      const idx = key.charCodeAt(0) - 97;
+      const idx = (player.abilityPage||0) * PAGE_SIZE + (key.charCodeAt(0) - 97);
       const id = spellOrder[idx];
       if (id) { closeModal(); castSpell(id); }
       return;
@@ -11821,7 +12361,9 @@ function handleKey(e) {
   }
   if (gameState === 'craft') {
     if (key === 'Escape') { closeModal(); return; }
-    if (/^[a-z]$/.test(key)) { const idx = key.charCodeAt(0)-97; const rid = player.knownRecipes[idx]; if (rid) { craftRecipe(rid); renderCraft(); } return; }
+    if (key === '[') { player.craftPage = Math.max(0, (player.craftPage||0) - 1); renderCraft(); return; }
+    if (key === ']') { player.craftPage = (player.craftPage||0) + 1; renderCraft(); return; }
+    if (/^[a-z]$/.test(key)) { const idx = (player.craftPage||0)*PAGE_SIZE + (key.charCodeAt(0)-97); const rid = player.knownRecipes[idx]; if (rid) { craftRecipe(rid); renderCraft(); } return; }
     return;
   }
   if (gameState === 'talents') {
