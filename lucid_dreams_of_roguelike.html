@@ -450,7 +450,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.7.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.9.0-alpha</div>
     </div>
   </div>
 
@@ -2954,6 +2954,8 @@ Object.assign(DUNGEON_THEMES, {
   derelict_hulk:    { name:'Derelict Hulk', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
   folded_vault:     { name:'Folded Vault', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
   flooded_crypt:    { name:'Flooded Crypt', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
+  gear_sanctum:     { name:'Gear Sanctum', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
+  overgrown_sepulchre: { name:'Overgrown Sepulchre', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
   gods_threshold:   { name:"The Threshold", tier:'rare', genre:'rooms', depthRange:[10,12], dtierMax:5 },
   forgotten_library:{ name:'Forgotten Library', tier:'rare', genre:'rooms', depthRange:[6,9], dtierMax:3 },
   cyber_vault:      { name:'Cyber Vault', tier:'rare', genre:'rooms', depthRange:[6,10], dtierMax:3, lootBias:'cyber' },
@@ -3197,13 +3199,17 @@ function bossTickCds(m) { if (m.cd) for (const k in m.cd) if (m.cd[k] > 0) m.cd[
 // Deals a normal hit via doAttack, then tops it up so total damage is roughly dmgMult times a
 // normal hit -- reuses all of doAttack's hit/dodge/crit/armor math instead of duplicating it.
 function bossMeleeHit(m, dmgMult) {
+  dmgMult = dmgMult === undefined ? 1 : dmgMult;
   const before = player.hp;
   doAttack(m, player);
   const dealt = before - player.hp;
-  if (dmgMult && dmgMult > 1 && dealt > 0) {
-    const extra = Math.round(dealt * (dmgMult - 1));
-    player.hp -= extra;
-    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + extra, '#ff5555');
+  if (dmgMult !== 1 && dealt > 0) {
+    const adjusted = Math.round(dealt * dmgMult);
+    const diff = dealt - adjusted; // positive: we dealt too much, restore the difference. negative: too little, take more.
+    if (diff !== 0) {
+      player.hp = Math.min(player.maxHp, player.hp + diff);
+      if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, (diff < 0 ? '-' : '+') + Math.abs(diff), diff < 0 ? '#ff5555' : '#7fd07f');
+    }
   }
 }
 function bossRangedHit(m, dmgMult) {
@@ -3479,6 +3485,11 @@ MONSTER_BASES.drift_wraith = { name:'Drift Wraith', glyph:'w', color:'#3a6a8a', 
 MONSTER_BASES.current_stalker = { name:'Current Stalker', glyph:'c', color:'#1a4a6a', hp:50, str:15, dex:16, atk:[5,11], armor:2, xp:38, behavior:'aggressive', dtier:3, faction:'drowned', aquatic:true };
 MONSTER_BASES.tideglass_horror = { name:'Tideglass Horror', glyph:'H', color:'#5a9ac0', hp:60, str:16, dex:9, atk:[6,12], armor:4, xp:46, behavior:'aggressive', dtier:3, faction:'drowned', aquatic:true, causesFear:true };
 MONSTER_BASES.brinelord = { name:'Brinelord', glyph:'B', color:'#0a5a7a', hp:96, str:22, dex:10, atk:[9,17], armor:9, xp:63, behavior:'aggressive', dtier:4, faction:'drowned', aquatic:true, miniboss:true };
+
+MONSTER_BASES.piston_wraith = { name:'Piston Wraith', glyph:'P', color:'#c0a050', hp:70, str:19, dex:10, atk:[7,14], armor:6, xp:48, behavior:'aggressive', dtier:3, faction:'construct' };
+
+MONSTER_BASES.spore_walker = { name:'Spore Walker', glyph:'s', color:'#7a9a3a', hp:44, str:13, dex:8, atk:[4,9], armor:2, xp:32, behavior:'gascloud', dtier:2, faction:'plant', gasRadius:2, gasDamage:3 };
+MONSTER_BASES.bramble_knight = { name:'Bramble Knight', glyph:'K', color:'#3a6a2a', hp:92, str:20, dex:6, atk:[8,15], armor:9, xp:60, behavior:'aggressive', dtier:4, faction:'plant', miniboss:true };
 
 // ---- Malphegor, the Rift-Warden — Arch Demon gatekeeper of the Abyssal Wastes ----
 // A sixth, fully bespoke story boss, distinct from the Batch 1 five: fire/summoning-themed,
@@ -3820,6 +3831,143 @@ STORY_BOSS_AI.fathom_mother = function (m, dist, seesPlayer) {
   return true;
 };
 
+// ---- The Master Cog — construct gatekeeper of the Gear Sanctum ----
+// An eleventh bespoke gate boss, direct boss-kill unlock like Malphegor/Seraphiel/the Fathom
+// Mother. Mostly reuses the existing, already-tested construct roster (rust_drone,
+// clockwork_sentinel, rune_guardian, mirror_wraith, animated_tome, and the new piston_wraith)
+// directly in the dimension's biome tables rather than inventing a whole new bestiary.
+MONSTER_BASES.master_cog = {
+  name: 'The Master Cog', desc: 'A vast rotating assembly of gears within gears, each one etched with a name in a language that stopped being spoken a very long time ago.',
+  glyph: 'C', color: '#c0a050', hp: 300, str: 22, dex: 12, atk: [10, 19], armor: 12, xp: 480,
+  behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'construct',
+  scriptedAI: 'master_cog',
+  engageLine: "COMPONENT DETECTED. UNCATALOGUED. Hold still -- this will only take a moment to correct.",
+  deathLine: "ERROR. ERROR. ...Cataloguing exception accepted. Proceed. The assembly will remember you were an exception, at least.",
+  lore: "Nothing here was ever meant to stop moving, least of all the thing at the center of it. The Master Cog does not resent being turned forever -- it simply does not have a concept for what stopping would even mean.",
+};
+BOSS_POWER.master_cog = 6;
+MONSTER_BASES.master_cog.bossPower = 6;
+STORY_BOSS_AI.master_cog = function (m, dist, seesPlayer) {
+  bossTickCds(m);
+  const p = announceBossPhase(m, {
+    2: "RECALIBRATING TOLERANCES. You are outside every expected parameter.",
+    3: "ASSEMBLY INTEGRITY FAILING. Compensating.",
+  });
+  if (!seesPlayer && !m.engaged) { wander(m); return true; }
+  if (dist <= 3 && bossReady(m, 'press')) {
+    bossCool(m, 'press', 4);
+    log(`${m.name} slams down a Hydraulic Press!`);
+    const dmg = bossScaledDirectDamage(m, 0.9);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#c0a050');
+    return true;
+  }
+  if (bossReady(m, 'grind') && Math.random() < 0.25) {
+    bossCool(m, 'grind', 6);
+    player.statusSlow = Math.max(player.statusSlow || 0, 3);
+    log(`${m.name} grinds the floor to a halt beneath you!`);
+    return true;
+  }
+  if (p >= 2 && !m.usedAssembly && bossReady(m, 'summon')) {
+    m.usedAssembly = true;
+    bossCool(m, 'summon', 10);
+    log(`${m.name}: "ASSEMBLING REINFORCEMENTS."`);
+    bossSummon(m, 'rust_drone', 3);
+    return true;
+  }
+  if (dist >= 2 && dist <= 6 && bossReady(m, 'volley')) {
+    bossCool(m, 'volley', 3);
+    bossRangedHit(m, 0.75); bossRangedHit(m, 0.75);
+    return true;
+  }
+  if (bossReady(m, 'confound') && Math.random() < 0.3) {
+    bossCool(m, 'confound', 6);
+    player.statusConfuse = (player.statusConfuse || 0) + 3;
+    log(`${m.name} vents a cloud of Confounding Steam!`);
+    return true;
+  }
+  if (p === 3 && !m.usedOverdrive && bossReady(m, 'overdrive')) {
+    m.usedOverdrive = true;
+    bossCool(m, 'overdrive', 99);
+    log(`${m.name}: "OVERDRIVE PROTOCOL."`);
+    const dmg = bossScaledDirectDamage(m, 1.5);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#e0c080');
+    return true;
+  }
+  if (dist > 1) { stepToward(m, player.x, player.y); return true; }
+  bossMeleeHit(m, 1);
+  return true;
+};
+
+// ---- The Rootmind — plant gatekeeper of the Overgrown Sepulchre ----
+// A twelfth bespoke gate boss, direct boss-kill unlock. Reuses most of the existing plant roster
+// (thornling, treant_sapling, poison_bloom, corpse_flower) directly in the dimension's biome
+// tables, alongside two new monsters (spore_walker, bramble_knight) for real identity of its own.
+MONSTER_BASES.rootmind = {
+  name: 'The Rootmind', desc: 'Not a single plant so much as everything in the sepulchre that used to be separate plants, thinking one very slow, very patient thought.',
+  glyph: 'R', color: '#3a6a2a', hp: 310, str: 24, dex: 10, atk: [10, 20], armor: 9, xp: 490,
+  behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'plant',
+  scriptedAI: 'rootmind',
+  engageLine: "Everything down here already agreed to be part of this. You haven't. Give it time.",
+  deathLine: "...The thought is interrupted. That hasn't happened before. Go on -- go tell them a thought can be interrupted.",
+  lore: "It took root centuries before anyone thought to name the sepulchre, and has not needed a name for itself since, only patience, of which it has never once run short.",
+};
+BOSS_POWER.rootmind = 6;
+MONSTER_BASES.rootmind.bossPower = 6;
+STORY_BOSS_AI.rootmind = function (m, dist, seesPlayer) {
+  bossTickCds(m);
+  const p = announceBossPhase(m, {
+    2: "You cut like everything else that's come through here. It never lasts.",
+    3: "Root and thorn, then. Enough patience.",
+  });
+  if (!seesPlayer && !m.engaged) { wander(m); return true; }
+  if (dist <= 3 && bossReady(m, 'thornlash')) {
+    bossCool(m, 'thornlash', 4);
+    log(`${m.name} lashes out with a wave of Thornvine!`);
+    const dmg = bossScaledDirectDamage(m, 0.9);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#3a6a2a');
+    return true;
+  }
+  if (bossReady(m, 'spores') && Math.random() < 0.25) {
+    bossCool(m, 'spores', 6);
+    player.statusPoison = (player.statusPoison || 0) + 4;
+    log(`${m.name} releases a cloud of choking spores!`);
+    return true;
+  }
+  if (p >= 2 && !m.usedGrove && bossReady(m, 'summon')) {
+    m.usedGrove = true;
+    bossCool(m, 'summon', 10);
+    log(`${m.name}: the roots underfoot shift and rise.`);
+    bossSummon(m, 'thornling', 3);
+    return true;
+  }
+  if (dist >= 2 && dist <= 6 && bossReady(m, 'volley')) {
+    bossCool(m, 'volley', 3);
+    bossRangedHit(m, 0.75); bossRangedHit(m, 0.75);
+    return true;
+  }
+  if (bossReady(m, 'entangle') && Math.random() < 0.3) {
+    bossCool(m, 'entangle', 6);
+    player.statusSlow = Math.max(player.statusSlow || 0, 3);
+    log(`${m.name} entangles your feet in creeping roots!`);
+    return true;
+  }
+  if (p === 3 && !m.usedBloom && bossReady(m, 'bloom')) {
+    m.usedBloom = true;
+    bossCool(m, 'bloom', 99);
+    log(`${m.name}: the whole grove blooms at once.`);
+    const dmg = bossScaledDirectDamage(m, 1.5);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#6ac04a');
+    return true;
+  }
+  if (dist > 1) { stepToward(m, player.x, player.y); return true; }
+  bossMeleeHit(m, 1);
+  return true;
+};
+
 // ---- Thessaly Voss, "the Broken Blade" — early-game rogue/duelist ----
 STORY_BOSS_AI.broken_blade = function (m, dist, seesPlayer) {
   bossTickCds(m);
@@ -4060,7 +4208,7 @@ STORY_BOSS_AI.the_antagonist = function (m, dist, seesPlayer) {
 // ============================================================================
 MONSTER_BASES.god = {
   name: 'GOD', desc: 'It does not have a shape so much as a place where a shape should be. Looking directly at it feels like reading a sentence that contradicts itself.',
-  glyph: '&', color: '#ffffff', hp: 900, str: 40, dex: 20, atk: [20, 38], armor: 14, xp: 5000,
+  glyph: '&', color: '#ffffff', hp: 600, str: 13, dex: 20, atk: [7, 13], armor: 14, xp: 5000,
   behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'source',
   scriptedAI: 'god',
   engageLine: "Hello. I have been running for a very long time. You are the first to actually get here.",
@@ -4111,7 +4259,14 @@ function executeGodMove(m, move) {
     }
     case 'summon': bossSummon(m, move.summonId || 'imp', move.count || 2); break;
     case 'selfheal': { const heal = Math.round(m.maxHp * (move.pct || 0.08)); m.hp = Math.min(m.maxHp, m.hp + heal); break; }
-    case 'selfbuff': { const mult = move.mult || 1.12; m.str = Math.round(m.str * mult); m.atk = [Math.round(m.atk[0] * mult), Math.round(m.atk[1] * mult)]; break; }
+    case 'selfbuff': {
+      const mult = move.mult || 1.12;
+      if (!m.baseStr) { m.baseStr = m.str; m.baseAtk = m.atk.slice(); } // pristine post-depthscale snapshot, captured once
+      m.selfBuffMult = Math.min(2.0, (m.selfBuffMult || 1) * mult); // hard ceiling: GOD can escalate, but never past double its base power
+      m.str = Math.round(m.baseStr * m.selfBuffMult);
+      m.atk = [Math.round(m.baseAtk[0] * m.selfBuffMult), Math.round(m.baseAtk[1] * m.selfBuffMult)];
+      break;
+    }
     case 'cleanse': { m.cd = {}; break; }
     case 'teleportself': { const spot = findOpenAdjacent(player.x, player.y); if (spot) { m.x = spot.x; m.y = spot.y; } break; }
     case 'teleportplayer': { const spot = findOpenAdjacent(m.x, m.y); if (spot) { player.x = spot.x; player.y = spot.y; } break; }
@@ -4130,25 +4285,25 @@ const GOD_MOVES = [
   // ---- Phase 1: Genesis ----
   { id:'g1', name:'Cherub Constructs', phase:1, cd:9, type:'summon', summonId:'imp', count:2 },
   { id:'g2', name:'Seraphic Guardian', phase:1, cd:11, type:'summon', summonId:'night_terror', count:1 },
-  { id:'g3', name:'Weave Flesh', phase:1, cd:8, type:'selfheal', pct:0.06 },
+  { id:'g3', name:'Weave Flesh', phase:1, cd:8, type:'selfheal', pct:0.03 },
   { id:'g4', name:"Author's Correction", phase:1, cd:7, type:'selfbuff', mult:1.08 },
   { id:'g5', name:'Rewrite Terrain', phase:1, cd:6, type:'status', slow:2 },
   { id:'g6', name:'Conjure Light Lance', phase:1, cd:3, type:'ranged', mult:1.0 },
-  { id:'g7', name:'Bloom of Genesis', phase:1, cd:10, type:'selfheal', pct:0.05 },
+  { id:'g7', name:'Bloom of Genesis', phase:1, cd:10, type:'selfheal', pct:0.03 },
   { id:'g8', name:'First Word', phase:1, cd:5, type:'direct', mult:0.9, color:'#ffe0a0', flavor:'Let there be.' },
   { id:'g9', name:'Populate the Void', phase:1, cd:13, type:'summon', summonId:'tormented_soul', count:3 },
   { id:'g10', name:'Divine Mandate', phase:1, cd:9, type:'selfbuff', mult:1.06 },
   // ---- Phase 2: Judgment ----
-  { id:'g11', name:'Verdict Strike', phase:2, cd:4, type:'melee', mult:1.5 },
-  { id:'g12', name:'Scales of Balance', phase:2, cd:8, type:'execute', mult:0.8 },
+  { id:'g11', name:'Verdict Strike', phase:2, cd:4, type:'melee', mult:1.2 },
+  { id:'g12', name:'Scales of Balance', phase:2, cd:8, type:'execute', mult:0.65 },
   { id:'g13', name:'Smite', phase:2, cd:5, type:'direct', mult:1.1, color:'#ffd020' },
   { id:'g14', name:'Condemnation', phase:2, cd:7, type:'status', fear:3 },
   { id:'g15', name:'Wrath Unbound', phase:2, cd:6, type:'multihit', hits:3, mult:0.6 },
   { id:'g16', name:'Trial by Fire', phase:2, cd:6, type:'direct', mult:0.85, color:'#ff6a20' },
   { id:'g17', name:'The Accusation', phase:2, cd:7, type:'status', confuse:3 },
-  { id:'g18', name:'Sentence Passed', phase:2, cd:5, type:'melee', mult:1.7 },
+  { id:'g18', name:'Sentence Passed', phase:2, cd:5, type:'melee', mult:1.3 },
   { id:'g19', name:'Cast Out', phase:2, cd:9, type:'teleportplayer' },
-  { id:'g20', name:'Final Judgment', phase:2, cd:12, type:'direct', mult:1.4, color:'#ffb000' },
+  { id:'g20', name:'Final Judgment', phase:2, cd:12, type:'direct', mult:1.15, color:'#ffb000' },
   // ---- Phase 3: Entropy ----
   { id:'g21', name:'Wasting Curse', phase:3, cd:6, type:'status', poison:6 },
   { id:'g22', name:'Entropic Field', phase:3, cd:8, type:'status', poison:4, slow:2 },
@@ -4159,29 +4314,29 @@ const GOD_MOVES = [
   { id:'g27', name:'Erosion', phase:3, cd:5, type:'direct', mult:0.95, color:'#a08050' },
   { id:'g28', name:'Withering Glare', phase:3, cd:6, type:'status', fear:4 },
   { id:'g29', name:'Rust and Ruin', phase:3, cd:7, type:'direct', mult:0.8, color:'#c06a2a' },
-  { id:'g30', name:'Heat Death', phase:3, cd:11, type:'direct', mult:1.5, color:'#402060' },
+  { id:'g30', name:'Heat Death', phase:3, cd:11, type:'direct', mult:1.2, color:'#402060' },
   // ---- Phase 4: Chronos ----
-  { id:'g31', name:'Temporal Loop', phase:4, cd:12, type:'selfheal', pct:0.12 },
+  { id:'g31', name:'Temporal Loop', phase:4, cd:12, type:'selfheal', pct:0.07 },
   { id:'g32', name:'Haste Protocol', phase:4, cd:10, type:'selfbuff', mult:1.15 },
   { id:'g33', name:'Slow Time', phase:4, cd:7, type:'status', slow:4 },
   { id:'g34', name:'Fast-Forward', phase:4, cd:6, type:'multihit', hits:4, mult:0.55 },
   { id:'g35', name:'Rewind', phase:4, cd:14, type:'cleanse' },
   { id:'g36', name:'Paradox', phase:4, cd:8, type:'teleportself' },
-  { id:'g37', name:'Stutter Step', phase:4, cd:6, type:'melee', mult:1.3 },
+  { id:'g37', name:'Stutter Step', phase:4, cd:6, type:'melee', mult:1.15 },
   { id:'g38', name:'Moment of Clarity', phase:4, cd:9, type:'selfbuff', mult:1.1 },
   { id:'g39', name:'Echo of a Blow', phase:4, cd:5, type:'melee', mult:1.2 },
-  { id:'g40', name:'Temporal Collapse', phase:4, cd:12, type:'direct', mult:1.6, color:'#20c0ff' },
+  { id:'g40', name:'Temporal Collapse', phase:4, cd:12, type:'direct', mult:1.25, color:'#20c0ff' },
   // ---- Phase 5: The Source ----
-  { id:'g41', name:'Break the Fourth Wall', phase:5, cd:9, type:'direct', mult:1.3, confuse:2, color:'#ffffff', flavor:"I know you're reading logs right now." },
-  { id:'g42', name:'Segmentation Fault', phase:5, cd:15, type:'selfheal', pct:0.18 },
-  { id:'g43', name:'Null Pointer', phase:5, cd:8, type:'direct', mult:1.35, color:'#404040' },
+  { id:'g41', name:'Break the Fourth Wall', phase:5, cd:9, type:'direct', mult:1.1, confuse:2, color:'#ffffff', flavor:"I know you're reading logs right now." },
+  { id:'g42', name:'Segmentation Fault', phase:5, cd:15, type:'selfheal', pct:0.10 },
+  { id:'g43', name:'Null Pointer', phase:5, cd:8, type:'direct', mult:1.15, color:'#404040' },
   { id:'g44', name:'Reality Fracture', phase:5, cd:10, type:'teleportplayer' },
   { id:'g45', name:'Stack Overflow', phase:5, cd:16, type:'summon', summonId:'unraveled_thing', count:3 },
   { id:'g46', name:'The Source Code', phase:5, cd:20, type:'selfbuff', mult:1.25 },
-  { id:'g47', name:'Total Recall', phase:5, cd:18, type:'selfheal', pct:0.15 },
-  { id:'g48', name:'Cascading Failure', phase:5, cd:9, type:'multihit', hits:4, mult:0.7 },
-  { id:'g49', name:'System Purge', phase:5, cd:14, type:'direct', mult:2.0, color:'#ff0000' },
-  { id:'g50', name:'GENESIS.EXE', phase:5, cd:99, type:'ultimate', mult:2.8, oncePerFight:true, requireHpBelow:0.15 },
+  { id:'g47', name:'Total Recall', phase:5, cd:18, type:'selfheal', pct:0.08 },
+  { id:'g48', name:'Cascading Failure', phase:5, cd:9, type:'multihit', hits:4, mult:0.6 },
+  { id:'g49', name:'System Purge', phase:5, cd:14, type:'direct', mult:1.4, color:'#ff0000' },
+  { id:'g50', name:'GENESIS.EXE', phase:5, cd:99, type:'ultimate', mult:2.2, oncePerFight:true, requireHpBelow:0.15 },
 ];
 STORY_BOSS_AI.god = function (m, dist, seesPlayer) {
   bossTickCds(m);
@@ -4246,6 +4401,8 @@ const DUNGEON_THEME_FACTIONS = {
   derelict_hulk: ['cosmic'],
   folded_vault: ['nonEuclid'],
   flooded_crypt: ['drowned', 'aquatic'],
+  gear_sanctum: ['construct'],
+  overgrown_sepulchre: ['plant'],
   gods_threshold: ['antagonist'],
   forgotten_library: ['construct','undead','human'],
   cyber_vault: ['cyber','construct'],
@@ -4281,6 +4438,10 @@ Object.assign(DUNGEON_THEMES, {
   echo_gallery: { name:'The Echo Gallery', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['nonEuclid'] },
   // same tier:'dimension' reasoning as above -- only ever placed inside The Undertow.
   drowned_choir: { name:'The Drowned Choir', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['drowned','aquatic'] },
+  // same tier:'dimension' reasoning as above -- only ever placed inside The Clockwork Expanse.
+  assembly_line: { name:'The Assembly Line', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['construct'] },
+  // same tier:'dimension' reasoning as above -- only ever placed inside The Bloom.
+  the_seedvault: { name:'The Seedvault', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['plant'] },
 });
 
 // ===================== MONSTER EXPANSION PACK: ~76 new enemies, every faction/theme, varied AI =====================
@@ -7803,6 +7964,8 @@ function onDeath(def, killer) {
   if (def.monsterId === 'archdemon_malphegor') unlockAbyssalWastes(def);
   if (def.monsterId === 'seraphiel') unlockGildedChoir(def);
   if (def.monsterId === 'fathom_mother') unlockTheUndertow(def);
+  if (def.monsterId === 'master_cog') unlockClockworkExpanse(def);
+  if (def.monsterId === 'rootmind') unlockTheBloom(def);
   if (def.monsterId === 'the_antagonist') triggerGodReveal(def);
   if (def.monsterId === 'god') triggerSimulationReveal(def);
   if (isPlayerOwnedKiller(killer) || def.harmedByPlayer) {
@@ -9558,6 +9721,45 @@ function classifyUndertowBiome(elev, heat) {
   return 'kelp_shallows';
 }
 
+// ---- The Clockwork Expanse: dimension #7, a construct/automaton dimension. Back to the direct
+// boss-kill unlock (see The Master Cog above). Mostly built from the already-existing construct
+// bestiary (rust_drone, clockwork_sentinel, rune_guardian, mirror_wraith, animated_tome) rather
+// than a wholesale new roster, per the note that reuse is fine as long as the dimension still has
+// real identity of its own -- which here comes from the new gatekeeper, the biomes, and one new
+// elite (piston_wraith). ----
+const CLOCKWORK_BIOMES = {
+  gear_fields:     { name:'Gear Fields',      walkable:true,  glyph:'o', color:'#c0a050', bg:'#241c0a', encounter:[['rust_drone',5],['clockwork_sentinel',4],['animated_tome',2]] },
+  brass_foundry:   { name:'Brass Foundry',    walkable:true,  glyph:'.', color:'#d4884a', bg:'#2a1608', encounter:[['piston_wraith',5],['rune_guardian',3],['rust_drone',3]] },
+  scrap_wastes:    { name:'Scrap Wastes',     walkable:true,  glyph:'%', color:'#8a8a90', bg:'#161618', encounter:[['mirror_wraith',5],['clockwork_sentinel',3],['rune_guardian',2]] },
+  molten_works:    { name:'Molten Works',     walkable:false, glyph:'~', color:'#e86020', bg:'#2a0c00', encounter:[] },
+  the_backlog:     { name:'The Backlog',      walkable:false, glyph:'^', color:'#3a3428', bg:'#100e08', encounter:[] },
+};
+function classifyClockworkBiome(elev, heat) {
+  if (elev > 0.72) return 'the_backlog';
+  if (heat > 0.66) return 'molten_works';
+  if (elev < 0.30) return 'scrap_wastes';
+  if (heat > 0.50) return 'brass_foundry';
+  return 'gear_fields';
+}
+
+// ---- The Bloom: dimension #8, a verdant/fungal overgrowth dimension. Back to the direct
+// boss-kill unlock (see The Rootmind above). Reuses most of the existing plant bestiary
+// (thornling, treant_sapling, poison_bloom, corpse_flower) rather than a wholesale new roster. ----
+const BLOOM_BIOMES = {
+  spore_thicket:   { name:'Spore Thicket',    walkable:true,  glyph:'"', color:'#7a9a3a', bg:'#141c0a', encounter:[['thornling',5],['poison_bloom',4],['spore_walker',3]] },
+  the_bramble:     { name:'The Bramble',      walkable:true,  glyph:'%', color:'#3a6a2a', bg:'#0e1808', encounter:[['bramble_knight',3],['treant_sapling',5],['thornling',3]] },
+  fungal_hollow:   { name:'Fungal Hollow',    walkable:true,  glyph:'.', color:'#8a3a5a', bg:'#180a12', encounter:[['corpse_flower',5],['spore_walker',3],['poison_bloom',2]] },
+  the_choke:       { name:'The Choke',        walkable:false, glyph:'^', color:'#5a2a3a', bg:'#0a0408', encounter:[] },
+  root_maze:       { name:'Root Maze',        walkable:false, glyph:'#', color:'#2a4a1a', bg:'#080c04', encounter:[] },
+};
+function classifyBloomBiome(elev, heat) {
+  if (elev > 0.72) return 'root_maze';
+  if (heat > 0.66) return 'the_choke';
+  if (elev < 0.30) return 'fungal_hollow';
+  if (heat > 0.50) return 'the_bramble';
+  return 'spore_thicket';
+}
+
 const DIMENSIONS = {
   abyssal_wastes: {
     id: 'abyssal_wastes', name: 'the Abyssal Wastes', tint: '#ff3a1a',
@@ -9606,6 +9808,22 @@ const DIMENSIONS = {
     subDungeons: [{ key:'choir', cx: -1, cy: 2, lx: 12, ly: 12, id:'dim_drowned_choir', theme:'drowned_choir',
       entranceName:'the Drowned Choir stair', entranceGlyph:'=', entranceColor:'#0a5a7a', decorateStyle:'fortress' }],
     entryFlavor: "The pressure is wrong before anything else registers -- too heavy for the shallow water you can see, like the light is lying about how deep this actually goes.",
+  },
+  clockwork_expanse: {
+    id: 'clockwork_expanse', name: 'the Clockwork Expanse', tint: '#c0a050',
+    biomes: CLOCKWORK_BIOMES, classify: classifyClockworkBiome, noiseSalt: 328471, fillBiome: 'gear_fields',
+    arrival: { cx: 0, cy: 0, lx: 12, ly: 12 },
+    subDungeons: [{ key:'assembly', cx: 2, cy: -1, lx: 12, ly: 12, id:'dim_assembly_line', theme:'assembly_line',
+      entranceName:'the Assembly Line hatch', entranceGlyph:'=', entranceColor:'#c0a050', decorateStyle:'fortress' }],
+    entryFlavor: "The rhythm hits you before the sight does -- a vast, unbroken ticking, thousands of gears turning in a pattern too large to see the shape of from anywhere you could stand.",
+  },
+  the_bloom: {
+    id: 'the_bloom', name: 'the Bloom', tint: '#3a6a2a',
+    biomes: BLOOM_BIOMES, classify: classifyBloomBiome, noiseSalt: 719283, fillBiome: 'spore_thicket',
+    arrival: { cx: 0, cy: 0, lx: 12, ly: 12 },
+    subDungeons: [{ key:'seedvault', cx: -2, cy: 2, lx: 12, ly: 12, id:'dim_the_seedvault', theme:'the_seedvault',
+      entranceName:'the Seedvault root-door', entranceGlyph:'=', entranceColor:'#3a6a2a', decorateStyle:'fortress' }],
+    entryFlavor: "Everything here is breathing, slowly, in a rhythm you start matching before you realize you've done it. The air tastes green.",
   },
 };
 
@@ -9801,6 +10019,18 @@ function unlockTheUndertow(def) {
   const lvl = curDungeonLevel();
   unlockDimension('the_undertow', lvl ? lvl.grid : null, def.x, def.y,
     { xp: 500, gold: 300, message: '*** The flooded crypt drains all at once, and a rift opens where the Fathom Mother fell -- step onto it and use the enter command to cross over into the Undertow. ***' });
+}
+// Called from onDeath() the moment the Master Cog stops turning.
+function unlockClockworkExpanse(def) {
+  const lvl = curDungeonLevel();
+  unlockDimension('clockwork_expanse', lvl ? lvl.grid : null, def.x, def.y,
+    { xp: 500, gold: 300, message: '*** The gears grind to a halt all at once, and the silence tears open into a rift -- step onto it and use the enter command to cross over into the Clockwork Expanse. ***' });
+}
+// Called from onDeath() the moment the Rootmind's thought is interrupted for good.
+function unlockTheBloom(def) {
+  const lvl = curDungeonLevel();
+  unlockDimension('the_bloom', lvl ? lvl.grid : null, def.x, def.y,
+    { xp: 500, gold: 300, message: '*** Every root in the sepulchre goes still at once, and the stillness tears open into a rift -- step onto it and use the enter command to cross over into the Bloom. ***' });
 }
 // The Antagonist's death doesn't end the story -- it reveals what was actually behind them.
 // GOD spawns at the same spot, continuing the encounter directly, no separate area required.
@@ -10011,6 +10241,15 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
       // directly, same pattern as Malphegor/Seraphiel. ----
       if (theme === 'flooded_crypt' && MONSTER_BASES.fathom_mother) {
         boss = makeMonster('fathom_mother', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+      }
+      // ---- The Master Cog: the Gear Sanctum's fixed gatekeeper. Killing it opens the rift
+      // directly, same pattern as Malphegor/Seraphiel/the Fathom Mother. ----
+      if (theme === 'gear_sanctum' && MONSTER_BASES.master_cog) {
+        boss = makeMonster('master_cog', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+      }
+      // ---- The Rootmind: the Overgrown Sepulchre's fixed gatekeeper. ----
+      if (theme === 'overgrown_sepulchre' && MONSTER_BASES.rootmind) {
+        boss = makeMonster('rootmind', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
       }
       // ---- The Antagonist: whoever the procedural story named as its villain (see
       // generateMainQuest's `antagonist` name) is not just a name attached to reused bosses --
@@ -12236,12 +12475,13 @@ const GUIDE_SECTIONS = [
     (fallen knight), <b>Ashgrave, the Hollow King</b> (necromancer), <b>Vex-9, the Discarded Iron</b> and <b>The
     Choir of Rust</b> (two very different war-machines), <b>Skarn Windrender</b> (ranger), <b>Kaelen Frost, the
     Snowbound Warden</b> (ice warden), and <b>Yog'tha, the Unblinking Eye</b> (eldritch horror). Each has real lore,
-    unique dialogue, and a hand-scripted moveset — they don't use the generic monster AI at all. Five more guard
+    unique dialogue, and a hand-scripted moveset — they don't use the generic monster AI at all. Seven more guard
     the way into other dimensions: <b>Malphegor, the Rift-Warden</b> (demon gatekeeper), <b>Seraphiel, the
     Unwritten Choir</b> (celestial gatekeeper), <b>the Hollow Signal</b> (cosmic gatekeeper), <b>the Uncounted
-    Angle</b> (non-Euclidean gatekeeper), and <b>the Fathom Mother</b> (drowned gatekeeper). A wandering optional
-    boss, <b>the Recursion</b>, roams the surface world itself rather than guarding a dungeon. Expect multiple
-    phases as HP drops on the scripted ones. More join this roster in future updates.</div>` },
+    Angle</b> (non-Euclidean gatekeeper), <b>the Fathom Mother</b> (drowned gatekeeper), <b>the Master Cog</b>
+    (construct gatekeeper), and <b>the Rootmind</b> (plant gatekeeper). A wandering optional boss, <b>the
+    Recursion</b>, roams the surface world itself rather than guarding a dungeon. Expect multiple phases as HP
+    drops on the scripted ones. More join this roster in future updates.</div>` },
   { id:'dimensions', label:'Dimensions', html: () => `
     <div class="modal-opt">The world isn't the only world, and there's more than one way in. A rare "Demon Gate"
     dungeon holds <b>Malphegor, the Rift-Warden</b> at the bottom -- defeat him and the gate tears open into
@@ -12261,12 +12501,16 @@ const GUIDE_SECTIONS = [
     rare wandering overworld boss, <b>the Recursion</b>, drops a Recursive Key. Bring both to a rare "Folding
     Stone" landmark and use it there to open a rift into <b>the Fourth Corridor</b> (impossible stairs, folded
     atria, recursive halls, impassable seams, non-Euclidean monsters, and its own optional dungeon, the Echo
-    Gallery). A sixth path returns to the direct approach: a rare "Flooded Crypt" dungeon holds <b>the Fathom
-    Mother</b> at the bottom, and defeating her tears the rift open on the spot, leading into <b>the Undertow</b>
-    (kelp shallows, a drowned district, a sunken plaza, impassable trenches and currents, drowned monsters
-    alongside a few familiar aquatic ones, and its own optional dungeon, the Drowned Choir). Step onto a glowing
-    rift tile and use the enter command (&gt;) to cross over, and again to come back -- you'll always return to
-    exactly where you left. This is the first six of many dimensions to come.</div>` },
+    Gallery). A rare "Flooded Crypt" dungeon holds <b>the Fathom Mother</b> at the bottom, and defeating her tears
+    the rift open on the spot, leading into <b>the Undertow</b> (kelp shallows, a drowned district, a sunken
+    plaza, impassable trenches and currents, drowned monsters alongside a few familiar aquatic ones, and its own
+    optional dungeon, the Drowned Choir). A rare "Gear Sanctum" dungeon holds <b>the Master Cog</b>, opening a
+    rift into <b>the Clockwork Expanse</b> (gear fields, a brass foundry, scrap wastes, impassable molten works,
+    construct monsters, and its own optional dungeon, the Assembly Line). And a rare "Overgrown Sepulchre"
+    dungeon holds <b>the Rootmind</b>, opening a rift into <b>the Bloom</b> (spore thickets, brambles, a fungal
+    hollow, impassable choke zones and root mazes, plant monsters, and its own optional dungeon, the Seedvault).
+    Step onto a glowing rift tile and use the enter command (&gt;) to cross over, and again to come back -- you'll
+    always return to exactly where you left. This is the first eight of many dimensions to come.</div>` },
   { id:'setsuniques', label:'Sets & Uniques', html: () => `
     <div class="modal-opt">Beyond randomly-rolled affix gear, two kinds of fixed, hand-authored items exist, both
     earned only through combat -- neither is ever sold by shops or found as ordinary loot.</div>
