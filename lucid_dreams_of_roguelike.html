@@ -450,7 +450,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.12.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.14.0-alpha</div>
     </div>
   </div>
 
@@ -1486,17 +1486,78 @@ const KINGDOM_RELATION_STATES = [
   { id:'trade_pact', label:'bound by a trade pact', weight:20, priceRipple:-0.04 },
   { id:'alliance', label:'formal allies', weight:10, priceRipple:-0.08 },
 ];
-const kingdomRelations = new Map();
+// ============================================================================
+// ---- DYNAMIC KINGDOM RELATIONS — later pass --------------------------------
+// Previously a relation was rolled once from the weighted distribution above
+// and then frozen for the rest of the run -- lore and rep hooked into it, but
+// the relation itself never moved no matter what the player did. Per explicit
+// feedback that this should have a real, lasting impact on the world, each
+// pair of neighboring kingdoms now has a numeric relation SCORE (-100..100)
+// that the player's own sabotage/caravan_guard quests nudge; the label above
+// (war/tension/peace/trade_pact/alliance) is derived live from that score
+// instead of being cached as fixed text, and crossing into a new band appends
+// a real, permanent line to both kingdoms' history text (visible via Look
+// Around, the region panel, and settlement-entry lines) plus a log message
+// and a persistent event-log entry the player can review. See
+// nudgeKingdomRelation(), and its two call sites in completeQuest().
+// ============================================================================
+const kingdomRelationScores = new Map();
+const RELATION_BASELINE_SCORE = { war:-80, tension:-40, peace:0, trade_pact:40, alliance:80 };
 function relationPairKey(a, b) { return [a, b].sort().join('|'); }
+function relationStateIdFromScore(score) {
+  if (score < -60) return 'war';
+  if (score < -20) return 'tension';
+  if (score < 20) return 'peace';
+  if (score < 60) return 'trade_pact';
+  return 'alliance';
+}
 function getKingdomRelation(keyA, keyB) {
   if (keyA === keyB) return null;
   const rk = relationPairKey(keyA, keyB);
-  let r = kingdomRelations.get(rk);
-  if (r) return r;
-  const rng = mulberry32((hashString(rk) ^ SEED ^ 0x4b494e47) >>> 0);
-  r = weightedChoice(rng, KINGDOM_RELATION_STATES.map(s => [s.id, s.weight]));
-  kingdomRelations.set(rk, r);
-  return r;
+  let score = kingdomRelationScores.get(rk);
+  if (score === undefined) {
+    const rng = mulberry32((hashString(rk) ^ SEED ^ 0x4b494e47) >>> 0);
+    const initialState = weightedChoice(rng, KINGDOM_RELATION_STATES.map(s => [s.id, s.weight]));
+    score = RELATION_BASELINE_SCORE[initialState] + randInt(rng, -10, 10);
+    kingdomRelationScores.set(rk, score);
+  }
+  return relationStateIdFromScore(score);
+}
+// Shifts a kingdom pair's relation score, and -- only when that actually pushes the pair into a
+// new band -- writes a permanent line into both kingdoms' cached history text, logs it to the
+// player, and records it in player.kingdomEventLog so it's reviewable later. Small nudges that
+// don't cross a band boundary are silent by design (a single skirmish shouldn't spawn a headline
+// every time; only real turning points do).
+function nudgeKingdomRelation(keyA, keyB, delta) {
+  if (keyA === keyB) return;
+  const rk = relationPairKey(keyA, keyB);
+  const before = getKingdomRelation(keyA, keyB); // ensures the score is initialized first
+  let score = kingdomRelationScores.get(rk);
+  score = Math.max(-100, Math.min(100, score + delta));
+  kingdomRelationScores.set(rk, score);
+  const after = relationStateIdFromScore(score);
+  if (after === before) return;
+  const kA = getKingdomByKey(keyA), kB = getKingdomByKey(keyB);
+  const stateAfter = KINGDOM_RELATION_STATES.find(s => s.id === after);
+  const line = ` In more recent memory, ${kA.name} and ${kB.name} have shifted to being ${stateAfter.label}.`;
+  kA.history += line; kB.history += line;
+  player.kingdomEventLog = player.kingdomEventLog || [];
+  player.kingdomEventLog.push({ turn: typeof turnCount !== 'undefined' ? turnCount : 0, keyA, keyB, historyLine: line,
+    text: `${kA.name} and ${kB.name} are now ${stateAfter.label}.` });
+  Sound.play('discovery');
+  log(`*** World shifts: ${kA.name} and ${kB.name} are now ${stateAfter.label}. ***`);
+}
+// Called once after a save is loaded (kingdomRegistry itself is never persisted -- kingdoms
+// regenerate deterministically from SEED on demand -- so any history-text mutations
+// nudgeKingdomRelation() made during the previous session need to be replayed back onto the
+// freshly-regenerated kingdom objects, or they'd silently vanish on reload).
+function replayKingdomEventLog() {
+  for (const e of player.kingdomEventLog || []) {
+    if (!e.historyLine || !e.keyA || !e.keyB) continue;
+    const kA = getKingdomByKey(e.keyA), kB = getKingdomByKey(e.keyB);
+    if (!kA.history.includes(e.historyLine)) kA.history += e.historyLine;
+    if (!kB.history.includes(e.historyLine)) kB.history += e.historyLine;
+  }
 }
 function hashString(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; } return h; }
 function kingdomNeighborKeys(key) {
@@ -7141,8 +7202,16 @@ function removeDeadEntity(def) {
 // "gather allies" and "betrayal" beats now reference a real, deterministic
 // rival kingdom pulled from the Phase 5 politics system instead of vague
 // hand-waving, and a new "the_rift" stage bridges Act 3 into Act 4 by
-// pointing the player at content that actually exists (the Abyssal Wastes)
-// instead of the story simply stopping cold at Act 4's locked gate.
+// pointing the player at content that actually exists instead of the story
+// simply stopping cold at Act 4's locked gate.
+// ============================================================================
+// ---- MANDATORY DIMENSION TRAIL — later pass ---------------------------------
+// Originally "the_rift" only required discovering *any one* dimension. Per
+// explicit user feedback, Act 4 now generates a random trail of 3-5 dimensions
+// (out of however many exist) that the player must physically travel through,
+// in a fixed order rolled per seed, before "confrontation" unlocks -- not all
+// dimensions, and which ones (and in what order) varies every playthrough.
+// See generateMainQuest's mandatoryDimensions block and checkMainQuestDimensionVisit.
 // ============================================================================
 const MAIN_QUEST_PREMISES = [
   { id:'darkness', title:'The Long Dark',
@@ -7221,6 +7290,31 @@ function generateMainQuest(rng) {
   // the flavor text never lies about a relationship that doesn't exist in this particular seed.
   const hostileNeighbor = kingdomNeighborKeys(k1.key).map(nk => ({ nk, rel: getKingdomRelation(k1.key, nk) })).find(r => r.rel === 'war' || r.rel === 'tension');
   const rivalName = hostileNeighbor ? getKingdomByKey(hostileNeighbor.nk).name : null;
+  // ---- mandatory dimension trail: the player must physically travel through a random subset of
+  // the alternate dimensions (3-5 of however many exist, not all of them) before the confrontation
+  // stage unlocks -- which specific ones, and in what order, is rolled fresh per seed. The other
+  // dimensions stay fully optional (extra loot/lore/bosses, no quest requirement attached). This is
+  // checked against player.visitedDimensions (set the moment the player actually steps through a
+  // rift in travelThroughRift()) rather than discoveredDimensions (set the moment a portal is
+  // merely unlocked) -- the distinction matters because a boss-kill unlock and physically crossing
+  // over are two different moments, and the quest should require the latter.
+  const allDimIds = Object.keys(DIMENSIONS);
+  const trailCount = Math.min(allDimIds.length, randInt(rng, 3, 5));
+  const mandatoryDimensions = shuffleArray(rng, allDimIds.slice()).slice(0, trailCount);
+  const dimTrailNames = mandatoryDimensions.map(id => DIMENSIONS[id].name);
+  const dimTrailStages = mandatoryDimensions.map((dimId, i) => {
+    if (i === 0) {
+      return { id:'the_rift', act:4, type:'visit_dimension', title:'A Door Where There Shouldn\'t Be One', done:false,
+        targetDimensionId: dimId,
+        desc: dimTrailNames.length > 1
+          ? `Everything you've learned about ${antagonist} points somewhere that shouldn't exist on any map -- and not just one somewhere. The trail crosses through ${dimTrailNames.length} realms beyond this one, in this order: ${dimTrailNames.join(' -> ')}. Find a way into the first: ${DIMENSIONS[dimId].name}.`
+          : `Everything you've learned about ${antagonist} points somewhere that shouldn't exist on any map. The trail leads into ${DIMENSIONS[dimId].name} -- find a way through.` };
+    }
+    const remaining = dimTrailNames.length - i;
+    return { id:`dim_trail_${i}`, act:4, type:'visit_dimension', title: DIMENSIONS[dimId].name, done:false,
+      targetDimensionId: dimId,
+      desc: `The trail leads onward into ${DIMENSIONS[dimId].name}. ${remaining} realm${remaining === 1 ? '' : 's'} left after this one before ${antagonist} runs out of places to hide.` };
+  });
   const stages = [
     { id:'inciting', act:1, type:'auto', title:'The Call', done:false, desc: premise.hook(antagonist, k1.name) },
     { id:'first_trial', act:1, type:'kill_boss', title:'First Trial', done:false, targetBossId:b1.id,
@@ -7241,15 +7335,14 @@ function generateMainQuest(rng) {
       desc:`${b4.name} guards the path to ${antagonist} directly. This will not be an easy fight.` },
     { id:'gathering_storm', act:3, type:'kill_boss', title:'The Gathering Storm', done:false, targetBossId:b5.id,
       desc:`${b5.name}, the last and strongest of ${antagonist}'s lieutenants, stands between you and the truth.` },
-    { id:'the_rift', act:4, type:'discover_dimension', title:'A Door Where There Shouldn\'t Be One', done:false,
-      desc:`Everything you've learned about ${antagonist} points somewhere that shouldn't exist on any map. Find a way through -- a sealed gate, guarded by something old, is the rumor that keeps coming up.` },
+    ...dimTrailStages,
     { id:'confrontation', act:4, type:'kill_boss', title:premise.title, done:false, targetBossId:'the_antagonist',
-      desc:`${antagonist} is real, and waiting -- rumor places them behind a threshold that shouldn't be reachable by any road. Find it. This is the confrontation everything has been leading to.` },
+      desc:`${antagonist} is real, and waiting, having run out of realms left to hide in. This is the confrontation everything has been leading to.` },
     { id:'final_boss', act:4, type:'kill_boss', title:'???', done:false, targetBossId:'god',
       desc:`Locked. Unlike everything above, this fight is fixed, not procedurally generated. What ${antagonist} was hiding behind is not what you think it is.` },
   ];
   return { premiseId: premise.id, title: premise.title, antagonist, homeKingdom: k1.name,
-    stageIndex: 0, stages, kingdomRep: {} };
+    stageIndex: 0, stages, kingdomRep: {}, mandatoryDimensions };
 }
 function ensureStory() {
   if (player.story) return;
@@ -7289,6 +7382,13 @@ function checkMainQuestKingdoms() {
 function checkMainQuestDimensions() {
   const stage = curStoryStage();
   if (stage && stage.type === 'discover_dimension' && (player.discoveredDimensions || []).length > 0) advanceStory();
+}
+// New trail-stage check (see generateMainQuest's mandatoryDimensions): only advances if the
+// current stage is waiting specifically on the dimension the player just physically entered --
+// stepping into an optional, non-required dimension along the way does nothing here, by design.
+function checkMainQuestDimensionVisit(dimId) {
+  const stage = curStoryStage();
+  if (stage && stage.type === 'visit_dimension' && stage.targetDimensionId === dimId) advanceStory();
 }
 
 // ---- Kingdom Reputation: quests now actually change how a kingdom treats you ----
@@ -8194,6 +8294,12 @@ function completeQuest(q) {
   if (q.kingdomKey && q.rewardRep) addKingdomRep(q.kingdomKey, q.rewardRep);
   if (q.type === 'caravan_guard' && q.partnerKingdomKey && q.rewardPartnerRep) addKingdomRep(q.partnerKingdomKey, q.rewardPartnerRep);
   if (q.type === 'sabotage' && q.rivalKingdomKey) addKingdomRep(q.rivalKingdomKey, -Math.round((q.rewardRep || 4) / 2));
+  // dynamic kingdom-kingdom relations (see nudgeKingdomRelation): sabotage quests actively push a
+  // rival relation toward war; caravan_guard quests actively push a partner relation toward
+  // alliance. Distinct from the addKingdomRep calls above, which only affect the player's personal
+  // standing with a kingdom -- this affects how the two kingdoms treat *each other*.
+  if (q.type === 'sabotage' && q.kingdomKey && q.rivalKingdomKey) nudgeKingdomRelation(q.kingdomKey, q.rivalKingdomKey, -14);
+  if (q.type === 'caravan_guard' && q.kingdomKey && q.partnerKingdomKey) nudgeKingdomRelation(q.kingdomKey, q.partnerKingdomKey, 14);
   let itemMsg = '';
   if (q.rewardItem) {
     const rarity = randInt(Math.random, 1, 3);
@@ -9038,6 +9144,10 @@ function openLook() {
         return `${neighborName} (${state.label})`;
       }).join(', ') + `</div>`;
     }
+    const recentEvents = (player.kingdomEventLog || []).filter(e => e.text.includes(k.name)).slice(-3);
+    if (recentEvents.length) {
+      html += `<div class="npcline dim">Recent history: ` + recentEvents.map(e => e.text).join(' ') + `</div>`;
+    }
   }
   renderModal('Look Around', html, 'Esc to close. (Click any visible tile on the map to examine it directly.)');
 }
@@ -9744,8 +9854,8 @@ function newPlayer() {
     mutations: [],
     buffs: {}, statusPoison: 0, statusFear: 0, statusConfuse: 0, alive: true, kind: 'player', name: 'You',
     allies: [], companions: [], quests: [], killCounts: {}, spouse: null, kids: 0, children: [], lastChildTurn: -9999,
-    story: null,
-    dimensionId: null, dimensionReturn: null, discoveredDimensions: [],
+    story: null, kingdomEventLog: [],
+    dimensionId: null, dimensionReturn: null, discoveredDimensions: [], visitedDimensions: [],
     gameCompleted: false, completionTurn: null,
     invFilter: 'all', invPage: 0, bounties: {}, scenario: null, waypoints: [], discoveredKingdoms: [],
     quickslots: [null, null, null, null],
@@ -10867,6 +10977,12 @@ function travelThroughRift() {
     player.x = a.cx * CH + a.lx; player.y = a.cy * CH + a.ly;
     Sound.play('gate');
     log(`*** You step through the rift into ${DIMENSIONS[dimId].name}. ${DIMENSIONS[dimId].entryFlavor} ***`);
+    // ---- main quest dimension-trail: distinct from discoveredDimensions (which marks that a
+    // portal has been unlocked) -- this marks that the player has actually set foot inside,
+    // which is what the multi-dimension trail stages (see generateMainQuest) require. ----
+    player.visitedDimensions = player.visitedDimensions || [];
+    if (!player.visitedDimensions.includes(dimId)) player.visitedDimensions.push(dimId);
+    checkMainQuestDimensionVisit(dimId);
   } else {
     const r = player.dimensionReturn || { mode: 'overworld', x: player.x, y: player.y };
     player.mode = r.mode; player.dungeonId = r.dungeonId || null; player.dungeonDepth = r.dungeonDepth || 0;
@@ -12224,7 +12340,8 @@ function updateSidebar() {
 // to that seed's fresh state (a full world-mutation save was out of scope for this pass).
 const SAVE_KEY = 'lucid_dreams_of_roguelike_save_v1';
 function getSaveData() {
-  return { version: 1, seed: SEED, turnCount, zoomIndex, player: JSON.parse(JSON.stringify(player)) };
+  return { version: 1, seed: SEED, turnCount, zoomIndex, player: JSON.parse(JSON.stringify(player)),
+    kingdomRelationScores: Object.fromEntries(kingdomRelationScores) };
 }
 function saveGame(isAuto) {
   try {
@@ -12258,6 +12375,13 @@ function applyLoadedSave(data) {
   turnCount = data.turnCount || 0;
   zoomIndex = (data.zoomIndex !== undefined) ? data.zoomIndex : 5;
   player = Object.assign(newPlayer(), data.player);  // recover dungeon state if the player was mid-dungeon when saved
+  // restore kingdom-relation drift from the previous session (clearWorldRegistries() above already
+  // cleared it fresh) -- old saves made before this feature simply won't have the field, and that's
+  // fine, relations just start from their deterministic seed baseline as before.
+  if (data.kingdomRelationScores) {
+    for (const k in data.kingdomRelationScores) kingdomRelationScores.set(k, data.kingdomRelationScores[k]);
+  }
+  replayKingdomEventLog();
   if (player.mode === 'dungeon' && player.dungeonId) {
     const subMatch = findDimensionSubDungeonConfig(player.dungeonId);
     if (subMatch) {
@@ -12633,7 +12757,7 @@ function showArchetypePicker() {
 // and any dungeon they'd already cleared would still be cleared. Shared with the load-game
 // path, which needs the same clearing but keeps its own saved SEED/turnCount afterward.
 function clearWorldRegistries() {
-  worldChunks.clear(); dungeonRegistry.clear(); kingdomRegistry.clear(); dimensionChunks.clear(); kingdomRelations.clear();
+  worldChunks.clear(); dungeonRegistry.clear(); kingdomRegistry.clear(); dimensionChunks.clear(); kingdomRelationScores.clear();
   DIMENSION_SUBDUNGEONS.length = 0;
   activeFxTiles = []; activeDecoys = [];
 }
