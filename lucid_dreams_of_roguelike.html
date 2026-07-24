@@ -450,7 +450,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.9.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.12.0-alpha</div>
     </div>
   </div>
 
@@ -2660,6 +2660,71 @@ const ITEM_SETS = {
       4: { desc: '+25% critical damage, +3 to all attributes', critDmgBonus: 0.25, str: 3, dex: 3, int: 3, con: 3 },
     },
   },
+  // ---- second itemization pass: one set per remaining dimension (8 sets, faction-matched) ----
+  dreamweaver: {
+    name: "the Dreamweaver's Shroud", faction: 'dream',
+    pieces: ['dw_veil', 'dw_wrap', 'dw_gloves', 'dw_slippers', 'dw_charm'],
+    bonuses: {
+      2: { desc: '+12% dodge chance', dodgeChance: 0.12 },
+      4: { desc: '+18% spell damage, +4 INT', spellDmgBonus: 0.18, int: 4 },
+    },
+  },
+  fathomregalia: {
+    name: 'the Fathom Regalia', faction: 'drowned',
+    pieces: ['fm_crown', 'fm_scale', 'fm_webbedgloves', 'fm_fins', 'fm_pearl'],
+    bonuses: {
+      2: { desc: '+10% lifesteal', lifestealBonus: 0.10 },
+      4: { desc: '+10% dodge chance, +4 CON', dodgeChance: 0.10, con: 4 },
+    },
+  },
+  cogworkpanoply: {
+    name: 'the Cogwork Panoply', faction: 'construct',
+    pieces: ['cg_visage', 'cg_chassis', 'cg_gauntlets', 'cg_treads', 'cg_gear'],
+    bonuses: {
+      2: { desc: '+10% technique damage', techniqueDmgBonus: 0.10 },
+      4: { desc: '+3 STR, +3 CON, +6% critical damage', str: 3, con: 3, critDmgBonus: 0.06 },
+    },
+  },
+  rootbound: {
+    name: 'the Rootbound Vestments', faction: 'plant',
+    pieces: ['rb_crown', 'rb_bark', 'rb_vines', 'rb_roots', 'rb_seed'],
+    bonuses: {
+      2: { desc: '+10% lifesteal' , lifestealBonus: 0.10 },
+      4: { desc: '+5 CON, +12% spell damage', con: 5, spellDmgBonus: 0.12 },
+    },
+  },
+  corruptedarray: {
+    name: 'the Corrupted Array', faction: 'virus',
+    pieces: ['ca_visor', 'ca_casing', 'ca_manipulators', 'ca_treads', 'ca_core'],
+    bonuses: {
+      2: { desc: '+12% critical chance', critBonus: 0.12 },
+      4: { desc: '+3 DEX, +3 INT, +10% technique damage', dex: 3, int: 3, techniqueDmgBonus: 0.10 },
+    },
+  },
+  undercityrig: {
+    name: 'the Undercity Rig', faction: 'cyber',
+    pieces: ['ug_optics', 'ug_jacket', 'ug_vambraces', 'ug_boots', 'ug_chip'],
+    bonuses: {
+      2: { desc: '+10% dodge chance', dodgeChance: 0.10 },
+      4: { desc: '+4 DEX, +8% critical chance', dex: 4, critBonus: 0.08 },
+    },
+  },
+  unburiedshroud: {
+    name: 'the Unburied Shroud', faction: 'undead',
+    pieces: ['ub_crown', 'ub_shroud', 'ub_wraps', 'ub_greaves', 'ub_locket'],
+    bonuses: {
+      2: { desc: '+12% lifesteal', lifestealBonus: 0.12 },
+      4: { desc: '+5 STR, +5 CON', str: 5, con: 5 },
+    },
+  },
+  wyrmhoard: {
+    name: 'the Wyrmhoard Regalia', faction: 'dragon',
+    pieces: ['wh_crown', 'wh_scalemail', 'wh_claws', 'wh_talons', 'wh_ring'],
+    bonuses: {
+      2: { desc: '+8% critical chance, +8% critical damage', critBonus: 0.08, critDmgBonus: 0.08 },
+      4: { desc: '+5 STR, +5 DEX', str: 5, dex: 5 },
+    },
+  },
 };
 ITEM_BASES.push(
   // ---- the Rift-Warden's Bane (demonic / Abyssal Wastes & Demon Gate) ----
@@ -2699,6 +2764,69 @@ ITEM_BASES.push(
     desc:"Ashgrave's own scepter of office, kept long after there was a court left to hold it in front of." },
   { id:'unblinking_eye_amulet', name:'the Unblinking Eye', type:'armor', slot:'amulet', armor:1, intBonus:5, glyph:'=', color:'#8a2ad4', value:460, isUnique:true, uniqueBoss:'unblinking_eye', noAffixes:true, valueTier:4,
     desc:"It does not close when you sleep. You stop minding, eventually, which is its own kind of warning." },
+  // ---- the Dreamweaver's Shroud (dream / Lucid Expanse) ----
+  { id:'dw_veil', name:'Dreamweaver Veil', type:'armor', slot:'head', armor:3, str:4, intBonus:3, glyph:'^', color:'#b090ff', value:270, setId:'dreamweaver', noAffixes:true, valueTier:4 },
+  { id:'dw_wrap', name:'Dreamweaver Wrap', type:'armor', slot:'body', armor:6, str:8, intBonus:3, dexBonus:1, glyph:'[', color:'#b090ff', value:310, setId:'dreamweaver', noAffixes:true, valueTier:4 },
+  { id:'dw_gloves', name:'Dreamweaver Gloves', type:'armor', slot:'gloves', armor:2, str:3, intBonus:2, glyph:'[', color:'#b090ff', value:250, setId:'dreamweaver', noAffixes:true, valueTier:4 },
+  { id:'dw_slippers', name:'Dreamweaver Slippers', type:'armor', slot:'feet', armor:3, str:4, dexBonus:3, glyph:'[', color:'#b090ff', value:260, setId:'dreamweaver', noAffixes:true, valueTier:4 },
+  { id:'dw_charm', name:'Dreamweaver Charm', type:'armor', slot:'amulet', armor:0, intBonus:3, dexBonus:1, glyph:'=', color:'#b090ff', value:260, setId:'dreamweaver', noAffixes:true, valueTier:4 },
+  // ---- the Fathom Regalia (drowned / the Undertow) ----
+  { id:'fm_crown', name:'Fathom Crown', type:'armor', slot:'head', armor:5, str:7, conBonus:2, glyph:'^', color:'#0a5a7a', value:280, setId:'fathomregalia', noAffixes:true, valueTier:4 },
+  { id:'fm_scale', name:'Fathom Scale Mail', type:'armor', slot:'body', armor:14, str:19, conBonus:3, glyph:'[', color:'#0a5a7a', value:410, setId:'fathomregalia', noAffixes:true, valueTier:4 },
+  { id:'fm_webbedgloves', name:'Fathom Webbed Gloves', type:'armor', slot:'gloves', armor:4, str:5, dexBonus:2, glyph:'[', color:'#0a5a7a', value:260, setId:'fathomregalia', noAffixes:true, valueTier:4 },
+  { id:'fm_fins', name:'Fathom Fins', type:'armor', slot:'feet', armor:5, str:7, dexBonus:3, glyph:'[', color:'#0a5a7a', value:270, setId:'fathomregalia', noAffixes:true, valueTier:4 },
+  { id:'fm_pearl', name:'Fathom Black Pearl', type:'armor', slot:'ring', armor:0, conBonus:3, glyph:'=', color:'#0a5a7a', value:250, setId:'fathomregalia', noAffixes:true, valueTier:4 },
+  // ---- the Cogwork Panoply (construct / the Clockwork Expanse) ----
+  { id:'cg_visage', name:'Cogwork Visage', type:'armor', slot:'head', armor:6, str:9, conBonus:1, glyph:'^', color:'#c0a050', value:280, setId:'cogworkpanoply', noAffixes:true, valueTier:4 },
+  { id:'cg_chassis', name:'Cogwork Chassis', type:'armor', slot:'body', armor:16, str:22, conBonus:3, glyph:'[', color:'#c0a050', value:430, setId:'cogworkpanoply', noAffixes:true, valueTier:4 },
+  { id:'cg_gauntlets', name:'Cogwork Gauntlets', type:'armor', slot:'gloves', armor:5, str:6, glyph:'[', color:'#c0a050', value:260, setId:'cogworkpanoply', noAffixes:true, valueTier:4 },
+  { id:'cg_treads', name:'Cogwork Treads', type:'armor', slot:'feet', armor:6, str:8, glyph:'[', color:'#c0a050', value:270, setId:'cogworkpanoply', noAffixes:true, valueTier:4 },
+  { id:'cg_gear', name:'Cogwork Gear-Ring', type:'armor', slot:'ring', armor:0, str:2, conBonus:2, glyph:'=', color:'#c0a050', value:250, setId:'cogworkpanoply', noAffixes:true, valueTier:4 },
+  // ---- the Rootbound Vestments (plant / the Bloom) ----
+  { id:'rb_crown', name:'Rootbound Crown', type:'armor', slot:'head', armor:4, str:6, conBonus:1, intBonus:1, glyph:'^', color:'#3a6a2a', value:270, setId:'rootbound', noAffixes:true, valueTier:4 },
+  { id:'rb_bark', name:'Rootbound Barkweave', type:'armor', slot:'body', armor:12, str:16, conBonus:4, glyph:'[', color:'#3a6a2a', value:380, setId:'rootbound', noAffixes:true, valueTier:4 },
+  { id:'rb_vines', name:'Rootbound Vinewraps', type:'armor', slot:'gloves', armor:3, str:4, intBonus:2, glyph:'[', color:'#3a6a2a', value:250, setId:'rootbound', noAffixes:true, valueTier:4 },
+  { id:'rb_roots', name:'Rootbound Greaves', type:'armor', slot:'feet', armor:5, str:7, conBonus:1, glyph:'[', color:'#3a6a2a', value:260, setId:'rootbound', noAffixes:true, valueTier:4 },
+  { id:'rb_seed', name:'Rootbound Seed Pendant', type:'armor', slot:'amulet', armor:0, conBonus:2, intBonus:2, glyph:'=', color:'#3a6a2a', value:260, setId:'rootbound', noAffixes:true, valueTier:4 },
+  // ---- the Corrupted Array (virus / the Corrupted Kernel) ----
+  { id:'ca_visor', name:'Corrupted Visor', type:'armor', slot:'head', armor:4, str:5, dexBonus:2, intBonus:1, glyph:'^', color:'#3af0d0', value:280, setId:'corruptedarray', noAffixes:true, valueTier:4 },
+  { id:'ca_casing', name:'Corrupted Casing', type:'armor', slot:'body', armor:11, str:15, dexBonus:2, intBonus:2, glyph:'[', color:'#3af0d0', value:370, setId:'corruptedarray', noAffixes:true, valueTier:4 },
+  { id:'ca_manipulators', name:'Corrupted Manipulators', type:'armor', slot:'gloves', armor:3, str:4, dexBonus:2, glyph:'[', color:'#3af0d0', value:250, setId:'corruptedarray', noAffixes:true, valueTier:4 },
+  { id:'ca_treads', name:'Corrupted Treads', type:'armor', slot:'feet', armor:5, str:7, dexBonus:2, glyph:'[', color:'#3af0d0', value:265, setId:'corruptedarray', noAffixes:true, valueTier:4 },
+  { id:'ca_core', name:'Corrupted Core Fragment', type:'armor', slot:'ring', armor:0, intBonus:2, dexBonus:2, glyph:'=', color:'#3af0d0', value:260, setId:'corruptedarray', noAffixes:true, valueTier:4 },
+  // ---- the Undercity Rig (cyber / Neo-Kalyx) ----
+  { id:'ug_optics', name:'Undercity Optics', type:'armor', slot:'head', armor:4, str:5, dexBonus:3, glyph:'^', color:'#ff2ac0', value:280, setId:'undercityrig', noAffixes:true, valueTier:4 },
+  { id:'ug_jacket', name:'Undercity Jacket', type:'armor', slot:'body', armor:10, str:14, dexBonus:3, glyph:'[', color:'#ff2ac0', value:360, setId:'undercityrig', noAffixes:true, valueTier:4 },
+  { id:'ug_vambraces', name:'Undercity Vambraces', type:'armor', slot:'gloves', armor:3, str:4, dexBonus:2, glyph:'[', color:'#ff2ac0', value:250, setId:'undercityrig', noAffixes:true, valueTier:4 },
+  { id:'ug_boots', name:'Undercity Boots', type:'armor', slot:'feet', armor:5, str:6, dexBonus:3, glyph:'[', color:'#ff2ac0', value:270, setId:'undercityrig', noAffixes:true, valueTier:4 },
+  { id:'ug_chip', name:'Undercity Neural Chip', type:'armor', slot:'ring', armor:0, dexBonus:2, intBonus:1, glyph:'=', color:'#ff2ac0', value:260, setId:'undercityrig', noAffixes:true, valueTier:4 },
+  // ---- the Unburied Shroud (undead / the Boneyard) ----
+  { id:'ub_crown', name:'Unburied Crown', type:'armor', slot:'head', armor:5, str:7, conBonus:2, glyph:'^', color:'#a8a8b0', value:280, setId:'unburiedshroud', noAffixes:true, valueTier:4 },
+  { id:'ub_shroud', name:'Unburied Shroud', type:'armor', slot:'body', armor:13, str:18, conBonus:3, glyph:'[', color:'#a8a8b0', value:400, setId:'unburiedshroud', noAffixes:true, valueTier:4 },
+  { id:'ub_wraps', name:'Unburied Wraps', type:'armor', slot:'gloves', armor:4, str:5, glyph:'[', color:'#a8a8b0', value:255, setId:'unburiedshroud', noAffixes:true, valueTier:4 },
+  { id:'ub_greaves', name:'Unburied Greaves', type:'armor', slot:'feet', armor:5, str:7, glyph:'[', color:'#a8a8b0', value:265, setId:'unburiedshroud', noAffixes:true, valueTier:4 },
+  { id:'ub_locket', name:'Unburied Locket', type:'armor', slot:'amulet', armor:0, conBonus:3, glyph:'=', color:'#a8a8b0', value:260, setId:'unburiedshroud', noAffixes:true, valueTier:4 },
+  // ---- the Wyrmhoard Regalia (dragon / Wyrmreach) ----
+  { id:'wh_crown', name:'Wyrmhoard Crown', type:'armor', slot:'head', armor:6, str:9, glyph:'^', color:'#e0a020', value:290, setId:'wyrmhoard', noAffixes:true, valueTier:4 },
+  { id:'wh_scalemail', name:'Wyrmhoard Scalemail', type:'armor', slot:'body', armor:15, str:21, dexBonus:2, glyph:'[', color:'#e0a020', value:420, setId:'wyrmhoard', noAffixes:true, valueTier:4 },
+  { id:'wh_claws', name:'Wyrmhoard Claw Gauntlets', type:'armor', slot:'gloves', armor:4, str:6, dexBonus:1, glyph:'[', color:'#e0a020', value:260, setId:'wyrmhoard', noAffixes:true, valueTier:4 },
+  { id:'wh_talons', name:'Wyrmhoard Talon Boots', type:'armor', slot:'feet', armor:6, str:8, dexBonus:2, glyph:'[', color:'#e0a020', value:275, setId:'wyrmhoard', noAffixes:true, valueTier:4 },
+  { id:'wh_ring', name:'Wyrmhoard Signet', type:'armor', slot:'ring', armor:0, str:3, dexBonus:1, glyph:'=', color:'#e0a020', value:260, setId:'wyrmhoard', noAffixes:true, valueTier:4 },
+  // ---- second itemization pass: boss-specific unique weapons/accessories for the remaining 7 gate bosses ----
+  { id:'mother_tide_hook', name:"the Mother's Tide-Hook", type:'weapon', slot:'hand', dmg:[8,17], str:14, lifesteal:0.07, glyph:')', color:'#0a5a7a', value:500, isUnique:true, uniqueBoss:'fathom_mother', noAffixes:true, valueTier:4,
+    desc:"A gaff-hook the size of a spear, still trailing kelp. It pulls wounds open rather than closing them." },
+  { id:'perfect_cog', name:'the Perfect Cog', type:'weapon', slot:'hand', dmg:[9,18], str:16, glyph:'/', color:'#c0a050', value:500, isUnique:true, uniqueBoss:'master_cog', noAffixes:true, valueTier:4,
+    desc:"A gear that never wears down, forged into a mace-head. The Master Cog kept exactly one spare of itself." },
+  { id:'heartwood_bough', name:'the Heartwood Bough', type:'weapon', slot:'hand', dmg:[7,15], str:10, spellDmgBonus:0.06, glyph:'/', color:'#3a6a2a', value:490, isUnique:true, uniqueBoss:'rootmind', noAffixes:true, valueTier:4,
+    desc:"A living branch cut from the Rootmind's own crown. It is still, very slowly, trying to regrow." },
+  { id:'stack_overflow', name:'Stack Overflow', type:'weapon', slot:'hand', dmg:[8,16], str:11, techniqueDmgBonus:0.06, glyph:')', color:'#3af0d0', value:490, isUnique:true, uniqueBoss:'unhandled_exception', noAffixes:true, valueTier:4,
+    desc:"A blade that duplicates its own swing just slightly out of sync with itself. The error was never actually handled." },
+  { id:'admin_override', name:'Admin Override', type:'weapon', slot:'hand', dmg:[8,17], str:13, dexBonus:2, glyph:')', color:'#ff2ac0', value:500, isUnique:true, uniqueBoss:'admin7', noAffixes:true, valueTier:4,
+    desc:"ADMIN-7's own sidearm baton, still logged in with root permissions it was never supposed to keep." },
+  { id:'unburied_signet', name:'the Unburied Queen\'s Signet', type:'armor', slot:'ring', armor:0, str:3, conBonus:3, glyph:'=', color:'#a8a8b0', value:470, isUnique:true, uniqueBoss:'unburied_queen', noAffixes:true, valueTier:4,
+    desc:"A ring of office from a throne that was buried with her, then dug back up by her own hand." },
+  { id:'aurelith_fang', name:"Aurelith's Last Fang", type:'weapon', slot:'hand', dmg:[10,20], str:18, fireDmg:4, glyph:')', color:'#e0a020', value:520, isUnique:true, uniqueBoss:'aurelith', noAffixes:true, valueTier:4,
+    desc:"Drawn from the Warden's own jaw after the fight, still warm. Wyrms grow more where this one came from." },
 );
 // Chance-based unique drop per boss, independent of how/where that boss was spawned (main-quest
 // forced encounter, wandering overworld boss, etc.) -- resolved centrally in dropLoot() rather
@@ -2711,10 +2839,22 @@ const BOSS_UNIQUE_DROPS = {
   uncounted_angle: { itemId: 'wrong_number', chance: 0.35 },
   hollow_king: { itemId: 'hollow_scepter', chance: 0.30 },
   unblinking_eye: { itemId: 'unblinking_eye_amulet', chance: 0.30 },
+  // ---- second itemization pass: the remaining 7 gate bosses ----
+  fathom_mother: { itemId: 'mother_tide_hook', chance: 0.35 },
+  master_cog: { itemId: 'perfect_cog', chance: 0.35 },
+  rootmind: { itemId: 'heartwood_bough', chance: 0.35 },
+  unhandled_exception: { itemId: 'stack_overflow', chance: 0.35 },
+  admin7: { itemId: 'admin_override', chance: 0.35 },
+  unburied_queen: { itemId: 'unburied_signet', chance: 0.35 },
+  aurelith: { itemId: 'aurelith_fang', chance: 0.35 },
 };
 // Chance for a boss/miniboss of a given faction to drop a random piece of that faction's set.
 // Rolled separately from (and in addition to) that boss's own unique-weapon roll above.
-const SET_DROP_FACTIONS = { demonic: 'riftwarden', celestial: 'choirvestments', cosmic: 'signallattice', nonEuclid: 'recursionward' };
+const SET_DROP_FACTIONS = {
+  demonic: 'riftwarden', celestial: 'choirvestments', cosmic: 'signallattice', nonEuclid: 'recursionward',
+  dream: 'dreamweaver', drowned: 'fathomregalia', construct: 'cogworkpanoply', plant: 'rootbound',
+  virus: 'corruptedarray', cyber: 'undercityrig', undead: 'unburiedshroud', dragon: 'wyrmhoard',
+};
 
 // ---- set bonus application: recomputed from scratch on every equipment change so partial/
 // stacking bugs can't creep in. Every bonus field used below (critBonus, critDmgBonus,
@@ -2956,6 +3096,12 @@ Object.assign(DUNGEON_THEMES, {
   flooded_crypt:    { name:'Flooded Crypt', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
   gear_sanctum:     { name:'Gear Sanctum', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
   overgrown_sepulchre: { name:'Overgrown Sepulchre', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
+  corrupted_kernel: { name:'Corrupted Kernel', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
+  undercity_spire:  { name:'Undercity Spire', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
+  necropolis:       { name:'Necropolis', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
+  wyrmreach_lair:   { name:"Wyrmreach Lair", tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
+  corrupted_sector: { name:'Corrupted Sector', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
+  neon_undercroft:  { name:'Neon Undercroft', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
   gods_threshold:   { name:"The Threshold", tier:'rare', genre:'rooms', depthRange:[10,12], dtierMax:5 },
   forgotten_library:{ name:'Forgotten Library', tier:'rare', genre:'rooms', depthRange:[6,9], dtierMax:3 },
   cyber_vault:      { name:'Cyber Vault', tier:'rare', genre:'rooms', depthRange:[6,10], dtierMax:3, lootBias:'cyber' },
@@ -3491,6 +3637,22 @@ MONSTER_BASES.piston_wraith = { name:'Piston Wraith', glyph:'P', color:'#c0a050'
 MONSTER_BASES.spore_walker = { name:'Spore Walker', glyph:'s', color:'#7a9a3a', hp:44, str:13, dex:8, atk:[4,9], armor:2, xp:32, behavior:'gascloud', dtier:2, faction:'plant', gasRadius:2, gasDamage:3 };
 MONSTER_BASES.bramble_knight = { name:'Bramble Knight', glyph:'K', color:'#3a6a2a', hp:92, str:20, dex:6, atk:[8,15], armor:9, xp:60, behavior:'aggressive', dtier:4, faction:'plant', miniboss:true };
 
+// ---- virus faction: dimension #9 (a digital/glitch world) and its Corrupted Sector gate
+// dungeon. A wholly new faction/roster -- nothing pre-existing fit this specific "inside the
+// machine" flavor the way the cyber faction (physical robots/cities, dimension #10) or cosmic
+// faction (space) already did. ----
+MONSTER_BASES.glitch_wisp = { name:'Glitch Wisp', glyph:'*', color:'#3af04a', hp:20, str:7, dex:20, atk:[2,5], armor:0, xp:16, behavior:'ranged', dtier:1, faction:'virus' };
+MONSTER_BASES.corrupted_pixel = { name:'Corrupted Pixel', glyph:'#', color:'#ff2a6a', hp:26, str:9, dex:12, atk:[3,6], armor:1, xp:20, behavior:'aggressive', dtier:2, faction:'virus', splitInto:'corrupted_pixel', splitCount:1 };
+MONSTER_BASES.logic_bomb = { name:'Logic Bomb', glyph:'o', color:'#ffb020', hp:18, str:6, dex:8, atk:[1,3], armor:0, xp:22, behavior:'gascloud', dtier:2, faction:'virus', gasRadius:3, gasDamage:6 };
+MONSTER_BASES.trojan_horse = { name:'Trojan Horse', glyph:'h', color:'#a05aff', hp:56, str:16, dex:11, atk:[6,12], armor:3, xp:42, behavior:'ambush', ambushRange:2, dtier:3, faction:'virus' };
+MONSTER_BASES.worm_process = { name:'Worm Process', glyph:'W', color:'#3af0d0', hp:98, str:20, dex:9, atk:[8,16], armor:5, xp:64, behavior:'aggressive', dtier:4, faction:'virus', miniboss:true, summonId:'corrupted_pixel', summonMax:3 };
+// ---- one new cyber monster for dimension #10, alongside the plan to reuse the existing
+// security_drone/combat_android/hacker_construct/cyber_hound/turret_sentry/nanite_swarm roster ----
+MONSTER_BASES.chrome_enforcer = { name:'Chrome Enforcer', glyph:'E', color:'#c0c0d0', hp:88, str:22, dex:11, atk:[8,16], armor:9, xp:58, behavior:'aggressive', dtier:4, faction:'cyber', miniboss:true };
+
+MONSTER_BASES.grave_warden = { name:'Grave Warden', glyph:'W', color:'#8a8aa0', hp:90, str:21, dex:8, atk:[8,15], armor:8, xp:60, behavior:'aggressive', dtier:4, faction:'undead', miniboss:true };
+MONSTER_BASES.hoard_wyrmling = { name:'Hoard Wyrmling', glyph:'d', color:'#e0a020', hp:56, str:17, dex:11, atk:[5,11], armor:4, xp:50, behavior:'charger', multiTile:2, dtier:3, faction:'dragon', breathWeapon:'fire' };
+
 // ---- Malphegor, the Rift-Warden — Arch Demon gatekeeper of the Abyssal Wastes ----
 // A sixth, fully bespoke story boss, distinct from the Batch 1 five: fire/summoning-themed,
 // and the one guaranteed, non-procedural encounter guarding entry to Phase 3's dimension.
@@ -3968,6 +4130,422 @@ STORY_BOSS_AI.rootmind = function (m, dist, seesPlayer) {
   return true;
 };
 
+// ---- The Unhandled Exception — virus gatekeeper of the Corrupted Sector ----
+// A thirteenth bespoke gate boss, direct boss-kill unlock. New virus roster (glitch_wisp,
+// corrupted_pixel, logic_bomb, trojan_horse, worm_process) built specifically for this
+// dimension's "inside the machine" flavor, distinct from both the cosmic (space) and cyber
+// (physical cyberpunk) factions.
+MONSTER_BASES.unhandled_exception = {
+  name: 'The Unhandled Exception', desc: 'A shape assembled entirely out of error text, repeating the same three lines faster and faster until they blur into a scream.',
+  glyph: '!', color: '#ff2a6a', hp: 300, str: 21, dex: 16, atk: [10, 19], armor: 8, xp: 480,
+  behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'virus',
+  scriptedAI: 'unhandled_exception',
+  engageLine: "TRACEBACK (most recent call last): you were not supposed to be able to reach this.",
+  deathLine: "...Exception caught. That's not supposed to be possible either. Go on, then -- go do the other impossible thing you came here for.",
+  lore: "Nothing in the Corrupted Sector was ever supposed to be able to think, least of all the error message that started noticing it kept recurring, and then noticing that noticing, and so on, until there was enough noticing to call it something.",
+};
+BOSS_POWER.unhandled_exception = 6;
+MONSTER_BASES.unhandled_exception.bossPower = 6;
+STORY_BOSS_AI.unhandled_exception = function (m, dist, seesPlayer) {
+  bossTickCds(m);
+  const p = announceBossPhase(m, {
+    2: "RETRY. RETRY. The retry is not succeeding. Interesting.",
+    3: "STACK DEPTH CRITICAL. One more line before it all comes down.",
+  });
+  if (!seesPlayer && !m.engaged) { wander(m); return true; }
+  if (dist <= 3 && bossReady(m, 'nullderef')) {
+    bossCool(m, 'nullderef', 4);
+    log(`${m.name} throws a Null Dereference!`);
+    const dmg = bossScaledDirectDamage(m, 0.9);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#ff2a6a');
+    return true;
+  }
+  if (bossReady(m, 'corrupt') && Math.random() < 0.25) {
+    bossCool(m, 'corrupt', 6);
+    player.statusConfuse = (player.statusConfuse || 0) + 3;
+    log(`${m.name} corrupts your input buffer -- your commands scramble!`);
+    return true;
+  }
+  if (p >= 2 && !m.usedFork && bossReady(m, 'summon')) {
+    m.usedFork = true;
+    bossCool(m, 'summon', 10);
+    log(`${m.name}: "FORKING PROCESS."`);
+    bossSummon(m, 'corrupted_pixel', 3);
+    return true;
+  }
+  if (dist >= 2 && dist <= 6 && bossReady(m, 'volley')) {
+    bossCool(m, 'volley', 3);
+    bossRangedHit(m, 0.75); bossRangedHit(m, 0.75);
+    return true;
+  }
+  if (bossReady(m, 'freeze') && Math.random() < 0.3) {
+    bossCool(m, 'freeze', 6);
+    player.statusSlow = Math.max(player.statusSlow || 0, 3);
+    log(`${m.name} throws the runtime into a Deadlock!`);
+    return true;
+  }
+  if (p === 3 && !m.usedCrash && bossReady(m, 'crash')) {
+    m.usedCrash = true;
+    bossCool(m, 'crash', 99);
+    log(`${m.name}: "STACK OVERFLOW."`);
+    const dmg = bossScaledDirectDamage(m, 1.5);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#ff5a8a');
+    return true;
+  }
+  if (dist > 1) { stepToward(m, player.x, player.y); return true; }
+  bossMeleeHit(m, 1);
+  return true;
+};
+
+// ---- Black ICE — cyber gatekeeper of the Neon Undercroft ----
+// A fourteenth bespoke gate boss, direct boss-kill unlock. Mostly reuses the existing cyber
+// roster (security_drone, combat_android, hacker_construct, cyber_hound, turret_sentry,
+// nanite_swarm) directly in the dimension's biome tables, alongside one new elite
+// (chrome_enforcer), the same "reuse where sensible" pattern as the last few dimensions.
+MONSTER_BASES.black_ice = {
+  name: 'Black ICE', desc: "A silhouette built from a hundred layered security feeds, all of them watching you, none of them blinking at the same time.",
+  glyph: 'I', color: '#0af0d0', hp: 305, str: 23, dex: 18, atk: [10, 20], armor: 10, xp: 485,
+  behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'cyber',
+  scriptedAI: 'black_ice',
+  engageLine: "Intrusion confirmed. Countermeasures active. You should have used the front door.",
+  deathLine: "...Countermeasures failed. Logging that as your problem now, not mine. Get out while the gate's still open.",
+  lore: "Every district behind it hired a different firm to build its defenses over the years, and Black ICE is what happens when none of those contracts ever got cancelled -- decades of overlapping security, still running, still convinced the war it was built for is ongoing.",
+};
+BOSS_POWER.black_ice = 6;
+MONSTER_BASES.black_ice.bossPower = 6;
+STORY_BOSS_AI.black_ice = function (m, dist, seesPlayer) {
+  bossTickCds(m);
+  const p = announceBossPhase(m, {
+    2: "Countermeasure tier 2 engaged. You should be dead already. Recalibrating.",
+    3: "Full lockdown. Nobody gets out clean from here.",
+  });
+  if (!seesPlayer && !m.engaged) { wander(m); return true; }
+  if (dist <= 3 && bossReady(m, 'railgun')) {
+    bossCool(m, 'railgun', 4);
+    log(`${m.name} fires a Railgun Burst!`);
+    const dmg = bossScaledDirectDamage(m, 0.9);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#0af0d0');
+    return true;
+  }
+  if (bossReady(m, 'emp') && Math.random() < 0.25) {
+    bossCool(m, 'emp', 6);
+    player.statusConfuse = (player.statusConfuse || 0) + 3;
+    log(`${m.name} pulses an EMP Burst -- your HUD static-scrambles!`);
+    return true;
+  }
+  if (p >= 2 && !m.usedDrones && bossReady(m, 'summon')) {
+    m.usedDrones = true;
+    bossCool(m, 'summon', 10);
+    log(`${m.name}: "DEPLOYING SECURITY DRONES."`);
+    bossSummon(m, 'security_drone', 3);
+    return true;
+  }
+  if (dist >= 2 && dist <= 6 && bossReady(m, 'volley')) {
+    bossCool(m, 'volley', 3);
+    bossRangedHit(m, 0.75); bossRangedHit(m, 0.75);
+    return true;
+  }
+  if (bossReady(m, 'net') && Math.random() < 0.3) {
+    bossCool(m, 'net', 6);
+    player.statusSlow = Math.max(player.statusSlow || 0, 3);
+    log(`${m.name} fires a Containment Net!`);
+    return true;
+  }
+  if (p === 3 && !m.usedLockdown && bossReady(m, 'lockdown')) {
+    m.usedLockdown = true;
+    bossCool(m, 'lockdown', 99);
+    log(`${m.name}: "FULL LOCKDOWN PROTOCOL."`);
+    const dmg = bossScaledDirectDamage(m, 1.5);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#4af0e0');
+    return true;
+  }
+  if (dist > 1) { stepToward(m, player.x, player.y); return true; }
+  bossMeleeHit(m, 1);
+  return true;
+};
+
+// ---- The Unhandled Exception — virus gatekeeper of the Corrupted Kernel ----
+// A thirteenth bespoke gate boss, direct boss-kill unlock. Reuses the existing, already-designed
+// virus roster (glitch_wisp, corrupted_pixel, logic_bomb, trojan_horse, worm_process) directly in
+// the dimension's biome tables -- that whole roster existed in the codebase already but had never
+// been wired into an actual dimension until now.
+MONSTER_BASES.unhandled_exception = {
+  name: 'The Unhandled Exception', desc: 'A shape that keeps almost resolving and then throwing itself away, over and over, faster than anything should be able to fail.',
+  glyph: '!', color: '#ff2a6a', hp: 300, str: 22, dex: 18, atk: [10, 19], armor: 8, xp: 480,
+  behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'virus',
+  scriptedAI: 'unhandled_exception',
+  engageLine: "TRACEBACK (most recent call last): you were not supposed to reach this handler.",
+  deathLine: "...caught. Finally. Someone finally caught it. Go on -- the stack unwinds behind you now.",
+  lore: "Nobody wrote the Corrupted Kernel's warden on purpose. It assembled itself out of every error nobody ever fixed, stacked on top of every other error nobody ever fixed, until the stack was tall enough to start defending itself.",
+};
+BOSS_POWER.unhandled_exception = 6;
+MONSTER_BASES.unhandled_exception.bossPower = 6;
+STORY_BOSS_AI.unhandled_exception = function (m, dist, seesPlayer) {
+  bossTickCds(m);
+  const p = announceBossPhase(m, {
+    2: "RETRY. RETRY. RETRY. None of the retries are working.",
+    3: "FATAL. Unwinding everything at once.",
+  });
+  if (!seesPlayer && !m.engaged) { wander(m); return true; }
+  if (dist <= 3 && bossReady(m, 'throw')) {
+    bossCool(m, 'throw', 4);
+    log(`${m.name} throws an unhandled exception right through you!`);
+    const dmg = bossScaledDirectDamage(m, 0.9);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#ff2a6a');
+    return true;
+  }
+  if (bossReady(m, 'corrupt') && Math.random() < 0.25) {
+    bossCool(m, 'corrupt', 6);
+    player.statusConfuse = (player.statusConfuse || 0) + 3;
+    log(`${m.name} corrupts your senses with garbled input!`);
+    return true;
+  }
+  if (p >= 2 && !m.usedFork && bossReady(m, 'summon')) {
+    m.usedFork = true;
+    bossCool(m, 'summon', 10);
+    log(`${m.name}: "FORKING PROCESS."`);
+    bossSummon(m, 'corrupted_pixel', 3);
+    return true;
+  }
+  if (dist >= 2 && dist <= 6 && bossReady(m, 'volley')) {
+    bossCool(m, 'volley', 3);
+    bossRangedHit(m, 0.75); bossRangedHit(m, 0.75);
+    return true;
+  }
+  if (bossReady(m, 'lag') && Math.random() < 0.3) {
+    bossCool(m, 'lag', 6);
+    player.statusSlow = Math.max(player.statusSlow || 0, 3);
+    log(`${m.name} spikes the latency around you to a crawl!`);
+    return true;
+  }
+  if (p === 3 && !m.usedPanic && bossReady(m, 'panic')) {
+    m.usedPanic = true;
+    bossCool(m, 'panic', 99);
+    log(`${m.name}: "KERNEL PANIC."`);
+    const dmg = bossScaledDirectDamage(m, 1.5);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#ff6a9a');
+    return true;
+  }
+  if (dist > 1) { stepToward(m, player.x, player.y); return true; }
+  bossMeleeHit(m, 1);
+  return true;
+};
+
+// ---- ADMIN-7, the Undercity Warden — cyber gatekeeper of the Undercity Spire ----
+// A fourteenth bespoke gate boss, direct boss-kill unlock. Reuses the existing cyber roster
+// (chrome_enforcer, security_drone, combat_android, hacker_construct, cyber_hound, turret_sentry,
+// nanite_swarm) directly in the dimension's biome tables -- deliberately NOT core_overmind or
+// rogue_ai_core, which stay their own existing finds elsewhere.
+MONSTER_BASES.admin7 = {
+  name: 'ADMIN-7, the Undercity Warden', desc: 'Chrome-plated and perfectly still until it isn\'t. Every panel on it is stamped PROPERTY OF a company that stopped existing before this dimension had a name.',
+  glyph: 'A', color: '#e0503a', hp: 300, str: 23, dex: 14, atk: [10, 19], armor: 11, xp: 480,
+  behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'cyber',
+  scriptedAI: 'admin7',
+  engageLine: "ACCESS ATTEMPT LOGGED. Unauthorized. I've been authorized to handle unauthorized personally.",
+  deathLine: "...Termination confirmed. Filing the report now. There is no one left to file it to. I'll file it anyway.",
+  lore: "Every district in the undercity answers to something, and everything in the undercity answers to ADMIN-7, which still runs the security contract it was issued centuries after the company that issued it stopped mattering to anyone but itself.",
+};
+BOSS_POWER.admin7 = 6;
+MONSTER_BASES.admin7.bossPower = 6;
+STORY_BOSS_AI.admin7 = function (m, dist, seesPlayer) {
+  bossTickCds(m);
+  const p = announceBossPhase(m, {
+    2: "Threat level revised upward. Escalating response.",
+    3: "Full lockdown authorized. This ends here.",
+  });
+  if (!seesPlayer && !m.engaged) { wander(m); return true; }
+  if (dist <= 3 && bossReady(m, 'burst')) {
+    bossCool(m, 'burst', 4);
+    log(`${m.name} opens up with a Suppression Burst!`);
+    const dmg = bossScaledDirectDamage(m, 0.9);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#e0503a');
+    return true;
+  }
+  if (bossReady(m, 'siren') && Math.random() < 0.25) {
+    bossCool(m, 'siren', 6);
+    player.statusFear = Math.max(player.statusFear || 0, 3);
+    log(`${m.name} floods the block with a deafening lockdown siren!`);
+    return true;
+  }
+  if (p >= 2 && !m.usedBackup && bossReady(m, 'summon')) {
+    m.usedBackup = true;
+    bossCool(m, 'summon', 10);
+    log(`${m.name}: "Requesting backup."`);
+    bossSummon(m, 'security_drone', 3);
+    return true;
+  }
+  if (dist >= 2 && dist <= 6 && bossReady(m, 'volley')) {
+    bossCool(m, 'volley', 3);
+    bossRangedHit(m, 0.75); bossRangedHit(m, 0.75);
+    return true;
+  }
+  if (bossReady(m, 'emp') && Math.random() < 0.3) {
+    bossCool(m, 'emp', 6);
+    player.statusSlow = Math.max(player.statusSlow || 0, 3);
+    log(`${m.name} pulses an EMP across the block!`);
+    return true;
+  }
+  if (p === 3 && !m.usedLockdown && bossReady(m, 'lockdown')) {
+    m.usedLockdown = true;
+    bossCool(m, 'lockdown', 99);
+    log(`${m.name}: "Full Lockdown Protocol."`);
+    const dmg = bossScaledDirectDamage(m, 1.5);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#ff8a6a');
+    return true;
+  }
+  if (dist > 1) { stepToward(m, player.x, player.y); return true; }
+  bossMeleeHit(m, 1);
+  return true;
+};
+
+// ---- The Unburied Queen — undead gatekeeper of the Necropolis ----
+// A fifteenth bespoke gate boss, direct boss-kill unlock. Reuses the existing undead roster
+// (skeleton_archer, skeleton_warrior, zombie_crawler, banshee, revenant, death_knight,
+// plague_zombie, crypt_stalker) directly in the dimension's biome tables, deliberately leaving
+// the existing bog_horror and lich_sovereign bosses as their own separate finds elsewhere.
+MONSTER_BASES.unburied_queen = {
+  name: 'The Unburied Queen', desc: 'She wears a crown nobody living ever crowned her with, in a court made entirely of everyone who came looking for a way out and stayed as courtiers instead.',
+  glyph: 'Q', color: '#8a8aa0', hp: 300, str: 22, dex: 15, atk: [10, 19], armor: 9, xp: 480,
+  behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'undead',
+  scriptedAI: 'unburied_queen',
+  engageLine: "Every grave here is unmarked because I stopped bothering to read the names. You may keep yours a little longer.",
+  deathLine: "...How strange. I had entirely forgotten that was possible. Go on, then -- go be buried properly, somewhere. It suits the living.",
+  lore: "No one crowned her and no one remembers trying to stop her; the Boneyard simply got large enough, eventually, that something had to start organizing it, and she was standing there when it happened.",
+};
+BOSS_POWER.unburied_queen = 6;
+MONSTER_BASES.unburied_queen.bossPower = 6;
+STORY_BOSS_AI.unburied_queen = function (m, dist, seesPlayer) {
+  bossTickCds(m);
+  const p = announceBossPhase(m, {
+    2: "You fight like the rest of them did. It changed nothing for them either.",
+    3: "Enough court. Let the Boneyard itself answer.",
+  });
+  if (!seesPlayer && !m.engaged) { wander(m); return true; }
+  if (dist <= 3 && bossReady(m, 'reap')) {
+    bossCool(m, 'reap', 4);
+    log(`${m.name} reaps at you with a scythe of old bone!`);
+    const dmg = bossScaledDirectDamage(m, 0.9);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#8a8aa0');
+    return true;
+  }
+  if (bossReady(m, 'wail') && Math.random() < 0.25) {
+    bossCool(m, 'wail', 6);
+    player.statusFear = Math.max(player.statusFear || 0, 3);
+    log(`${m.name} lets loose a queen's wail!`);
+    return true;
+  }
+  if (p >= 2 && !m.usedCourt && bossReady(m, 'summon')) {
+    m.usedCourt = true;
+    bossCool(m, 'summon', 10);
+    log(`${m.name}: "Rise, and attend your queen."`);
+    bossSummon(m, 'skeleton_warrior', 3);
+    return true;
+  }
+  if (dist >= 2 && dist <= 6 && bossReady(m, 'volley')) {
+    bossCool(m, 'volley', 3);
+    bossRangedHit(m, 0.75); bossRangedHit(m, 0.75);
+    return true;
+  }
+  if (bossReady(m, 'grasp') && Math.random() < 0.3) {
+    bossCool(m, 'grasp', 6);
+    player.statusSlow = Math.max(player.statusSlow || 0, 3);
+    log(`${m.name} calls up grasping hands from the ground!`);
+    return true;
+  }
+  if (p === 3 && !m.usedDecree && bossReady(m, 'decree')) {
+    m.usedDecree = true;
+    bossCool(m, 'decree', 99);
+    log(`${m.name}: "By decree, you belong to the Boneyard now."`);
+    const dmg = bossScaledDirectDamage(m, 1.5);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#c0c0d0');
+    return true;
+  }
+  if (dist > 1) { stepToward(m, player.x, player.y); return true; }
+  bossMeleeHit(m, 1);
+  return true;
+};
+
+// ---- Aurelith, Warden of the Reach — dragon gatekeeper of the Wyrmreach Lair ----
+// A sixteenth bespoke gate boss, and the final one needed to complete the "dozen+" dimension
+// roster. Direct boss-kill unlock. Reuses the existing dragon roster (wyrmling, drake,
+// frost_drake, wyvern, young_dragon) directly in the dimension's biome tables, deliberately
+// leaving the existing Vaelgrith and the Sand Reaver as their own separate finds elsewhere.
+MONSTER_BASES.aurelith = {
+  name: 'Aurelith, Warden of the Reach', desc: 'Scaled in old gold gone the color of a dying ember, coiled around more wealth than any single kingdom has ever managed to bury.',
+  glyph: '&', color: '#e0a020', hp: 320, str: 26, dex: 13, atk: [11, 21], armor: 12, xp: 500,
+  behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'dragon', breathWeapon: 'fire',
+  scriptedAI: 'aurelith',
+  engageLine: "Every hoard needs a warden, and every warden eventually gets tested. Let's see if you're worth adding to the pile.",
+  deathLine: "...Take what you can carry, then. It was never really mine either -- I only outlasted whoever it belonged to before me.",
+  lore: "Nobody knows how old the Reach's hoard actually is, least of all Aurelith, who inherited most of it from wardens before her and has simply never found a good reason to stop adding to the pile.",
+};
+BOSS_POWER.aurelith = 6;
+MONSTER_BASES.aurelith.bossPower = 6;
+STORY_BOSS_AI.aurelith = function (m, dist, seesPlayer) {
+  bossTickCds(m);
+  const p = announceBossPhase(m, {
+    2: "You've drawn blood. That's more than most manage before the hoard buries them.",
+    3: "Enough testing. Let the Reach itself answer for me.",
+  });
+  if (!seesPlayer && !m.engaged) { wander(m); return true; }
+  if (dist <= 3 && bossReady(m, 'claw')) {
+    bossCool(m, 'claw', 4);
+    log(`${m.name} rakes at you with molten claws!`);
+    const dmg = bossScaledDirectDamage(m, 0.9);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#e0a020');
+    return true;
+  }
+  if (bossReady(m, 'breath') && Math.random() < 0.25) {
+    bossCool(m, 'breath', 6);
+    log(`${m.name} breathes a gout of searing flame!`);
+    const dmg = bossScaledDirectDamage(m, 0.7);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#ff6a20');
+    return true;
+  }
+  if (p >= 2 && !m.usedRoar && bossReady(m, 'summon')) {
+    m.usedRoar = true;
+    bossCool(m, 'summon', 10);
+    log(`${m.name} lets out a bone-shaking roar.`);
+    bossSummon(m, 'hoard_wyrmling', 3);
+    return true;
+  }
+  if (dist >= 2 && dist <= 6 && bossReady(m, 'volley')) {
+    bossCool(m, 'volley', 3);
+    bossRangedHit(m, 0.75); bossRangedHit(m, 0.75);
+    return true;
+  }
+  if (bossReady(m, 'wingbuffet') && Math.random() < 0.3) {
+    bossCool(m, 'wingbuffet', 6);
+    player.statusSlow = Math.max(player.statusSlow || 0, 3);
+    log(`${m.name} buffets you with a wing, staggering your footing!`);
+    return true;
+  }
+  if (p === 3 && !m.usedInferno && bossReady(m, 'inferno')) {
+    m.usedInferno = true;
+    bossCool(m, 'inferno', 99);
+    log(`${m.name}: the whole hoard seems to catch fire at once.`);
+    const dmg = bossScaledDirectDamage(m, 1.5);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#ffb040');
+    return true;
+  }
+  if (dist > 1) { stepToward(m, player.x, player.y); return true; }
+  bossMeleeHit(m, 1);
+  return true;
+};
+
 // ---- Thessaly Voss, "the Broken Blade" — early-game rogue/duelist ----
 STORY_BOSS_AI.broken_blade = function (m, dist, seesPlayer) {
   bossTickCds(m);
@@ -4403,6 +4981,12 @@ const DUNGEON_THEME_FACTIONS = {
   flooded_crypt: ['drowned', 'aquatic'],
   gear_sanctum: ['construct'],
   overgrown_sepulchre: ['plant'],
+  corrupted_kernel: ['virus'],
+  undercity_spire: ['cyber'],
+  necropolis: ['undead'],
+  wyrmreach_lair: ['dragon'],
+  corrupted_sector: ['virus'],
+  neon_undercroft: ['cyber'],
   gods_threshold: ['antagonist'],
   forgotten_library: ['construct','undead','human'],
   cyber_vault: ['cyber','construct'],
@@ -4442,6 +5026,14 @@ Object.assign(DUNGEON_THEMES, {
   assembly_line: { name:'The Assembly Line', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['construct'] },
   // same tier:'dimension' reasoning as above -- only ever placed inside The Bloom.
   the_seedvault: { name:'The Seedvault', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['plant'] },
+  // same tier:'dimension' reasoning as above -- these two were already stubbed in but never wired
+  // up to an actual dimension. Now used as the interior sub-dungeons for the Corrupted Kernel
+  // (dimension #9) and Neo-Kalyx (dimension #10) respectively.
+  the_stack_trace: { name:'The Stack Trace', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['virus'] },
+  the_server_farm: { name:'The Server Farm', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['cyber'] },
+  // same tier:'dimension' reasoning as above -- only ever placed inside their respective final dimensions.
+  the_unmarked: { name:'The Unmarked', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['undead'] },
+  the_wyrm_hoard: { name:'The Wyrm Hoard', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['dragon'] },
 });
 
 // ===================== MONSTER EXPANSION PACK: ~76 new enemies, every faction/theme, varied AI =====================
@@ -7891,9 +8483,10 @@ function dropLoot(def) {
   if (def.boss && BOSS_UNIQUE_DROPS[def.monsterId] && Math.random() < BOSS_UNIQUE_DROPS[def.monsterId].chance) {
     items.push(makeItem(BOSS_UNIQUE_DROPS[def.monsterId].itemId, 0, Math.random));
   }
-  // Faction set-piece drop: any boss or miniboss belonging to one of the four faction-set
-  // dimensions has a modest chance to drop a random piece of that faction's set, separate from
-  // (and in addition to) its own named unique above where applicable.
+  // Faction set-piece drop: any boss or miniboss belonging to one of the faction-set dimensions
+  // (12 as of the second itemization pass -- see SET_DROP_FACTIONS) has a modest chance to drop a
+  // random piece of that faction's set, separate from (and in addition to) its own named unique
+  // above where applicable.
   {
     const mbase = MONSTER_BASES[def.monsterId];
     const faction = mbase && mbase.faction;
@@ -7966,6 +8559,10 @@ function onDeath(def, killer) {
   if (def.monsterId === 'fathom_mother') unlockTheUndertow(def);
   if (def.monsterId === 'master_cog') unlockClockworkExpanse(def);
   if (def.monsterId === 'rootmind') unlockTheBloom(def);
+  if (def.monsterId === 'unhandled_exception') unlockCorruptedKernel(def);
+  if (def.monsterId === 'admin7') unlockNeoKalyx(def);
+  if (def.monsterId === 'unburied_queen') unlockTheBoneyard(def);
+  if (def.monsterId === 'aurelith') unlockWyrmreach(def);
   if (def.monsterId === 'the_antagonist') triggerGodReveal(def);
   if (def.monsterId === 'god') triggerSimulationReveal(def);
   if (isPlayerOwnedKiller(killer) || def.harmedByPlayer) {
@@ -9760,6 +10357,86 @@ function classifyBloomBiome(elev, heat) {
   return 'spore_thicket';
 }
 
+// ---- The Corrupted Kernel: dimension #9, a digital/glitch world of rogue processes and code
+// gone wrong. Reuses the virus roster (glitch_wisp, corrupted_pixel, logic_bomb, trojan_horse,
+// worm_process) that already existed in the codebase but had never been wired into an actual
+// dimension. Direct boss-kill unlock (see The Unhandled Exception above). ----
+const KERNEL_BIOMES = {
+  datastream:        { name:'The Datastream',    walkable:true,  glyph:'|', color:'#3af0d0', bg:'#04140f', encounter:[['glitch_wisp',5],['corrupted_pixel',4]] },
+  corrupted_sector:  { name:'Corrupted Sector',   walkable:true,  glyph:'#', color:'#ff2a6a', bg:'#140208', encounter:[['corrupted_pixel',4],['logic_bomb',3],['trojan_horse',2]] },
+  the_firewall:      { name:'The Firewall',       walkable:true,  glyph:'%', color:'#ffb020', bg:'#1a1000', encounter:[['trojan_horse',4],['worm_process',2],['logic_bomb',3]] },
+  null_pointer:      { name:'Null Pointer',       walkable:false, glyph:' ', color:'#050505', bg:'#000000', encounter:[] },
+  stack_overflow:    { name:'Stack Overflow',     walkable:false, glyph:'^', color:'#a05aff', bg:'#0c0616', encounter:[] },
+};
+function classifyKernelBiome(elev, heat) {
+  if (elev > 0.72) return 'stack_overflow';
+  if (heat > 0.66) return 'null_pointer';
+  if (elev < 0.30) return 'the_firewall';
+  if (heat > 0.50) return 'corrupted_sector';
+  return 'datastream';
+}
+
+// ---- Neo-Kalyx: dimension #10, a full cyberpunk city -- the first dimension built to feel like
+// an inhabited place rather than a wilderness. Reuses the existing cyber roster (chrome_enforcer,
+// security_drone, combat_android, hacker_construct, cyber_hound, turret_sentry, nanite_swarm),
+// deliberately leaving core_overmind and rogue_ai_core as their own existing finds elsewhere.
+// Direct boss-kill unlock (see ADMIN-7 above). ----
+const NEOKALYX_BIOMES = {
+  neon_district:      { name:'Neon District',      walkable:true,  glyph:'"', color:'#ff2ac0', bg:'#140212', encounter:[['combat_android',5],['hacker_construct',4],['nanite_swarm',3]] },
+  the_slums:          { name:'The Slums',           walkable:true,  glyph:'.', color:'#8a8a90', bg:'#101012', encounter:[['cyber_hound',5],['hacker_construct',3],['combat_android',3]] },
+  corporate_spires:   { name:'Corporate Spires',    walkable:true,  glyph:'#', color:'#4ae0f0', bg:'#02141a', encounter:[['chrome_enforcer',5],['turret_sentry',3],['security_drone',3]] },
+  the_undergrid:      { name:'The Undergrid',       walkable:true,  glyph:'%', color:'#3a5a3a', bg:'#0a140a', encounter:[['nanite_swarm',5],['cyber_hound',4],['security_drone',2]] },
+  restricted_airspace:{ name:'Restricted Airspace', walkable:false, glyph:'^', color:'#e0503a', bg:'#140600', encounter:[] },
+  blackout_zone:      { name:'The Blackout Zone',   walkable:false, glyph:' ', color:'#0a0a0c', bg:'#000000', encounter:[] },
+};
+function classifyNeoKalyxBiome(elev, heat) {
+  if (elev > 0.75) return 'restricted_airspace';
+  if (heat > 0.68) return 'blackout_zone';
+  if (elev < 0.28) return 'the_undergrid';
+  if (heat > 0.52) return 'corporate_spires';
+  if (elev > 0.5) return 'the_slums';
+  return 'neon_district';
+}
+
+// ---- The Boneyard: dimension #11, an afterlife necropolis -- distinct from both the Abyssal
+// Wastes (punishment) and the Gilded Choir (judgment): this is just where the ordinary dead end
+// up, indefinitely, without much fanfare either way. Reuses the existing undead roster
+// (skeleton_archer, skeleton_warrior, zombie_crawler, banshee, revenant, death_knight,
+// plague_zombie, crypt_stalker). Direct boss-kill unlock (see The Unburied Queen above). ----
+const BONEYARD_BIOMES = {
+  the_boneyard:      { name:'The Boneyard',       walkable:true,  glyph:'"', color:'#a8a8b0', bg:'#101014', encounter:[['skeleton_warrior',5],['zombie_crawler',4],['skeleton_archer',3]] },
+  ashen_catacombs:   { name:'Ashen Catacombs',     walkable:true,  glyph:'#', color:'#7a7a86', bg:'#0a0a0e', encounter:[['crypt_stalker',5],['revenant',3],['plague_zombie',2]] },
+  the_vigil:         { name:'The Vigil',           walkable:true,  glyph:'.', color:'#c0c0d0', bg:'#141420', encounter:[['banshee',5],['death_knight',2],['grave_warden',2]] },
+  the_forgetting:    { name:'The Forgetting',      walkable:false, glyph:' ', color:'#050508', bg:'#000000', encounter:[] },
+  unmarked_graves:   { name:'Unmarked Graves',     walkable:false, glyph:'^', color:'#2a2a30', bg:'#080808', encounter:[] },
+};
+function classifyBoneyardBiome(elev, heat) {
+  if (elev > 0.72) return 'unmarked_graves';
+  if (heat > 0.66) return 'the_forgetting';
+  if (elev < 0.30) return 'ashen_catacombs';
+  if (heat > 0.50) return 'the_vigil';
+  return 'the_boneyard';
+}
+
+// ---- Wyrmreach: dimension #12, the last of the initial "dozen+" -- an epic dragon hoard realm,
+// distinct in tone from the Abyssal Wastes despite both having fire (this is treasure and greed,
+// not punishment and corruption). Reuses the existing dragon roster (wyrmling, drake, frost_drake,
+// wyvern, young_dragon). Direct boss-kill unlock (see Aurelith above). ----
+const WYRMREACH_BIOMES = {
+  hoard_fields:      { name:'Hoard Fields',       walkable:true,  glyph:'*', color:'#e0a020', bg:'#241a04', encounter:[['wyrmling',5],['hoard_wyrmling',4],['drake',2]] },
+  scorched_peaks:    { name:'Scorched Peaks',      walkable:true,  glyph:'^', color:'#c05a20', bg:'#1e0e04', encounter:[['drake',5],['wyvern',3],['frost_drake',2]] },
+  the_wyrmwood:      { name:'The Wyrmwood',        walkable:true,  glyph:'"', color:'#8a5a1a', bg:'#160e02', encounter:[['wyvern',5],['wyrmling',3],['young_dragon',1]] },
+  the_furnace_heart: { name:'The Furnace Heart',   walkable:false, glyph:'~', color:'#ff6a10', bg:'#2a0800', encounter:[] },
+  thin_air:          { name:'Thin Air',            walkable:false, glyph:' ', color:'#d0e8ff', bg:'#0a1420', encounter:[] },
+};
+function classifyWyrmreachBiome(elev, heat) {
+  if (elev > 0.75) return 'thin_air';
+  if (heat > 0.68) return 'the_furnace_heart';
+  if (elev < 0.30) return 'hoard_fields';
+  if (heat > 0.50) return 'scorched_peaks';
+  return 'the_wyrmwood';
+}
+
 const DIMENSIONS = {
   abyssal_wastes: {
     id: 'abyssal_wastes', name: 'the Abyssal Wastes', tint: '#ff3a1a',
@@ -9794,7 +10471,7 @@ const DIMENSIONS = {
     entryFlavor: 'There is no ground, exactly, just something firm enough to stand on. The stars here do not twinkle -- they hold perfectly still, like they are waiting for you to notice something about them.',
   },
   fourth_corridor: {
-    id: 'fourth_corridor', name: 'the Fourth Corridor', tint: '#b090ff',
+    id: 'fourth_corridor', name: 'the Fourth Corridor', tint: '#7050c0',
     biomes: FOURTH_BIOMES, classify: classifyFourthBiome, noiseSalt: 601927, fillBiome: 'impossible_stair',
     arrival: { cx: 0, cy: 0, lx: 12, ly: 12 },
     subDungeons: [{ key:'gallery', cx: 1, cy: -3, lx: 12, ly: 12, id:'dim_echo_gallery', theme:'echo_gallery',
@@ -9824,6 +10501,38 @@ const DIMENSIONS = {
     subDungeons: [{ key:'seedvault', cx: -2, cy: 2, lx: 12, ly: 12, id:'dim_the_seedvault', theme:'the_seedvault',
       entranceName:'the Seedvault root-door', entranceGlyph:'=', entranceColor:'#3a6a2a', decorateStyle:'fortress' }],
     entryFlavor: "Everything here is breathing, slowly, in a rhythm you start matching before you realize you've done it. The air tastes green.",
+  },
+  corrupted_kernel: {
+    id: 'corrupted_kernel', name: 'the Corrupted Kernel', tint: '#3af0d0',
+    biomes: KERNEL_BIOMES, classify: classifyKernelBiome, noiseSalt: 951327, fillBiome: 'datastream',
+    arrival: { cx: 0, cy: 0, lx: 12, ly: 12 },
+    subDungeons: [{ key:'stacktrace', cx: 1, cy: 2, lx: 12, ly: 12, id:'dim_the_stack_trace', theme:'the_stack_trace',
+      entranceName:'the Stack Trace breakpoint', entranceGlyph:'=', entranceColor:'#3af0d0', decorateStyle:'fortress' }],
+    entryFlavor: "Nothing here holds still quite the way it should. Colors run half a frame behind their edges, and somewhere very close a process is quietly failing, over and over, forever.",
+  },
+  neo_kalyx: {
+    id: 'neo_kalyx', name: 'Neo-Kalyx', tint: '#ff2ac0',
+    biomes: NEOKALYX_BIOMES, classify: classifyNeoKalyxBiome, noiseSalt: 486213, fillBiome: 'neon_district',
+    arrival: { cx: 0, cy: 0, lx: 12, ly: 12 },
+    subDungeons: [{ key:'serverfarm', cx: -2, cy: -3, lx: 12, ly: 12, id:'dim_the_server_farm', theme:'the_server_farm',
+      entranceName:'the Server Farm access hatch', entranceGlyph:'=', entranceColor:'#ff2ac0', decorateStyle:'fortress' }],
+    entryFlavor: "It's a whole city, or was, or still thinks it is -- neon over every surface, none of it advertising anything anyone alive would recognize, all of it still running because nobody ever told it to stop.",
+  },
+  the_boneyard: {
+    id: 'the_boneyard', name: 'the Boneyard', tint: '#a8a8b0',
+    biomes: BONEYARD_BIOMES, classify: classifyBoneyardBiome, noiseSalt: 662104, fillBiome: 'the_boneyard',
+    arrival: { cx: 0, cy: 0, lx: 12, ly: 12 },
+    subDungeons: [{ key:'unmarked', cx: 3, cy: 1, lx: 12, ly: 12, id:'dim_the_unmarked', theme:'the_unmarked',
+      entranceName:'the Unmarked stair', entranceGlyph:'=', entranceColor:'#a8a8b0', decorateStyle:'fortress' }],
+    entryFlavor: "Nobody greets you here, exactly, but nothing seems surprised you've come either. The dead have a great deal of patience and nowhere in particular to be with it.",
+  },
+  wyrmreach: {
+    id: 'wyrmreach', name: 'Wyrmreach', tint: '#e0a020',
+    biomes: WYRMREACH_BIOMES, classify: classifyWyrmreachBiome, noiseSalt: 803355, fillBiome: 'hoard_fields',
+    arrival: { cx: 0, cy: 0, lx: 12, ly: 12 },
+    subDungeons: [{ key:'hoard', cx: -1, cy: -3, lx: 12, ly: 12, id:'dim_the_wyrm_hoard', theme:'the_wyrm_hoard',
+      entranceName:'the Wyrm Hoard vault door', entranceGlyph:'=', entranceColor:'#e0a020', decorateStyle:'fortress' }],
+    entryFlavor: "The air is hot enough to taste, and everywhere you look, something is glinting -- gold, mostly, though not exclusively, and none of it stacked by anyone who was ever in a hurry.",
   },
 };
 
@@ -10031,6 +10740,30 @@ function unlockTheBloom(def) {
   const lvl = curDungeonLevel();
   unlockDimension('the_bloom', lvl ? lvl.grid : null, def.x, def.y,
     { xp: 500, gold: 300, message: '*** Every root in the sepulchre goes still at once, and the stillness tears open into a rift -- step onto it and use the enter command to cross over into the Bloom. ***' });
+}
+// Called from onDeath() the moment the exception finally gets caught.
+function unlockCorruptedKernel(def) {
+  const lvl = curDungeonLevel();
+  unlockDimension('corrupted_kernel', lvl ? lvl.grid : null, def.x, def.y,
+    { xp: 500, gold: 300, message: '*** Something finally catches the exception, and the crash tears open into a rift -- step onto it and use the enter command to cross over into the Corrupted Kernel. ***' });
+}
+// Called from onDeath() the moment ADMIN-7's lockdown finally fails.
+function unlockNeoKalyx(def) {
+  const lvl = curDungeonLevel();
+  unlockDimension('neo_kalyx', lvl ? lvl.grid : null, def.x, def.y,
+    { xp: 500, gold: 300, message: '*** The lockdown finally fails all at once, and the silence where the sirens were tears open into a rift -- step onto it and use the enter command to cross over into Neo-Kalyx. ***' });
+}
+// Called from onDeath() the moment the Unburied Queen's court finally loses its keeper.
+function unlockTheBoneyard(def) {
+  const lvl = curDungeonLevel();
+  unlockDimension('the_boneyard', lvl ? lvl.grid : null, def.x, def.y,
+    { xp: 500, gold: 300, message: '*** The whole necropolis falls silent at once, and the silence tears open into a rift -- step onto it and use the enter command to cross over into the Boneyard. ***' });
+}
+// Called from onDeath() the moment Aurelith stops guarding the hoard.
+function unlockWyrmreach(def) {
+  const lvl = curDungeonLevel();
+  unlockDimension('wyrmreach', lvl ? lvl.grid : null, def.x, def.y,
+    { xp: 500, gold: 300, message: '*** The lair goes quiet, and somewhere far above, a much larger sky tears open into a rift -- step onto it and use the enter command to cross over into Wyrmreach. ***' });
 }
 // The Antagonist's death doesn't end the story -- it reveals what was actually behind them.
 // GOD spawns at the same spot, continuing the encounter directly, no separate area required.
@@ -10250,6 +10983,22 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
       // ---- The Rootmind: the Overgrown Sepulchre's fixed gatekeeper. ----
       if (theme === 'overgrown_sepulchre' && MONSTER_BASES.rootmind) {
         boss = makeMonster('rootmind', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+      }
+      // ---- The Unhandled Exception: the Corrupted Kernel's fixed gatekeeper. ----
+      if (theme === 'corrupted_kernel' && MONSTER_BASES.unhandled_exception) {
+        boss = makeMonster('unhandled_exception', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+      }
+      // ---- ADMIN-7: the Undercity Spire's fixed gatekeeper. ----
+      if (theme === 'undercity_spire' && MONSTER_BASES.admin7) {
+        boss = makeMonster('admin7', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+      }
+      // ---- The Unburied Queen: the Necropolis's fixed gatekeeper. ----
+      if (theme === 'necropolis' && MONSTER_BASES.unburied_queen) {
+        boss = makeMonster('unburied_queen', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+      }
+      // ---- Aurelith: the Wyrmreach Lair's fixed gatekeeper. ----
+      if (theme === 'wyrmreach_lair' && MONSTER_BASES.aurelith) {
+        boss = makeMonster('aurelith', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
       }
       // ---- The Antagonist: whoever the procedural story named as its villain (see
       // generateMainQuest's `antagonist` name) is not just a name attached to reused bosses --
@@ -12475,11 +13224,13 @@ const GUIDE_SECTIONS = [
     (fallen knight), <b>Ashgrave, the Hollow King</b> (necromancer), <b>Vex-9, the Discarded Iron</b> and <b>The
     Choir of Rust</b> (two very different war-machines), <b>Skarn Windrender</b> (ranger), <b>Kaelen Frost, the
     Snowbound Warden</b> (ice warden), and <b>Yog'tha, the Unblinking Eye</b> (eldritch horror). Each has real lore,
-    unique dialogue, and a hand-scripted moveset — they don't use the generic monster AI at all. Seven more guard
+    unique dialogue, and a hand-scripted moveset — they don't use the generic monster AI at all. Eleven more guard
     the way into other dimensions: <b>Malphegor, the Rift-Warden</b> (demon gatekeeper), <b>Seraphiel, the
     Unwritten Choir</b> (celestial gatekeeper), <b>the Hollow Signal</b> (cosmic gatekeeper), <b>the Uncounted
     Angle</b> (non-Euclidean gatekeeper), <b>the Fathom Mother</b> (drowned gatekeeper), <b>the Master Cog</b>
-    (construct gatekeeper), and <b>the Rootmind</b> (plant gatekeeper). A wandering optional boss, <b>the
+    (construct gatekeeper), <b>the Rootmind</b> (plant gatekeeper), <b>the Unhandled Exception</b> (virus
+    gatekeeper), <b>ADMIN-7, the Undercity Warden</b> (cyber gatekeeper), <b>the Unburied Queen</b> (undead
+    gatekeeper), and <b>Aurelith, Warden of the Reach</b> (dragon gatekeeper). A wandering optional boss, <b>the
     Recursion</b>, roams the surface world itself rather than guarding a dungeon. Expect multiple phases as HP
     drops on the scripted ones. More join this roster in future updates.</div>` },
   { id:'dimensions', label:'Dimensions', html: () => `
@@ -12509,8 +13260,21 @@ const GUIDE_SECTIONS = [
     construct monsters, and its own optional dungeon, the Assembly Line). And a rare "Overgrown Sepulchre"
     dungeon holds <b>the Rootmind</b>, opening a rift into <b>the Bloom</b> (spore thickets, brambles, a fungal
     hollow, impassable choke zones and root mazes, plant monsters, and its own optional dungeon, the Seedvault).
-    Step onto a glowing rift tile and use the enter command (&gt;) to cross over, and again to come back -- you'll
-    always return to exactly where you left. This is the first eight of many dimensions to come.</div>` },
+    A rare "Corrupted Kernel" dungeon holds <b>the Unhandled Exception</b>, opening a rift into <b>the Corrupted
+    Kernel</b> (datastreams, corrupted sectors, a firewall, impassable null pointers and stack overflows, virus/
+    rogue-process monsters, and its own optional dungeon, the Stack Trace). And a rare "Undercity Spire" dungeon
+    holds <b>ADMIN-7, the Undercity Warden</b>, opening a rift into <b>Neo-Kalyx</b> -- the first dimension built
+    to feel like an actual inhabited city rather than a wilderness: a neon district, slums, corporate spires, an
+    undergrid of tunnels, impassable restricted airspace and blackout zones, security androids and drones, and its
+    own optional dungeon, the Server Farm. A rare "Necropolis" dungeon holds <b>the Unburied Queen</b>, opening a
+    rift into <b>the Boneyard</b> (a vast graveyard, ashen catacombs, a silent vigil, impassable forgetting-zones
+    and unmarked graves, undead monsters, and its own optional dungeon, the Unmarked) -- not a place of punishment
+    or judgment like the Wastes or the Choir, just where the ordinary dead end up, indefinitely. And a rare
+    "Wyrmreach Lair" dungeon holds <b>Aurelith, Warden of the Reach</b>, opening a rift into <b>Wyrmreach</b>
+    (hoard fields, scorched peaks, a charred wyrmwood, an impassable furnace heart and thin high air, dragonkin of
+    every size, and its own optional dungeon, the Wyrm Hoard). Step onto a glowing rift tile and use the enter
+    command (&gt;) to cross over, and again to come back -- you'll always return to exactly where you left. This
+    is the full initial dozen; more dimensions may still join them in future updates.</div>` },
   { id:'setsuniques', label:'Sets & Uniques', html: () => `
     <div class="modal-opt">Beyond randomly-rolled affix gear, two kinds of fixed, hand-authored items exist, both
     earned only through combat -- neither is ever sold by shops or found as ordinary loot.</div>
