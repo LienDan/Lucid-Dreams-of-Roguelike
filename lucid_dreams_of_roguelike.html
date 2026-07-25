@@ -450,7 +450,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.16.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.17.1-alpha</div>
     </div>
   </div>
 
@@ -1278,15 +1278,17 @@ const BUILDS = ['lean','stocky','tall and lanky','short and sturdy','broad-shoul
 const FEATURES = ['a jagged scar across one cheek','a warm, easy smile','calloused, working hands','a weathered face','bright freckles',
   'a neatly trimmed beard','keen, watchful eyes','tired eyes that have seen much','a proud bearing','soot-stained fingers',
   'sun-browned skin','an old burn mark on one hand','ink-stained fingers','a chipped front tooth','a quiet, guarded expression'];
-function generateAppearance(rng, roleId) {
+function generateAppearance(rng, roleId, speciesId) {
+  const species = getSpecies(speciesId || 'human');
   const gender = rng() < 0.5 ? 'male' : 'female';
   const hair = choice(rng, HAIR_COLORS), eyes = choice(rng, EYE_COLORS), build = choice(rng, BUILDS), feature = choice(rng, FEATURES);
   let noun = gender === 'male' ? 'man' : 'woman';
   let prefix = 'A';
   if (roleId === 'child') { noun = gender === 'male' ? 'boy' : 'girl'; }
   else if (roleId === 'elder') { prefix = 'An elderly'; noun = gender === 'male' ? 'man' : 'woman'; }
-  const sentence = `${prefix} ${build} ${noun} with ${hair} hair and ${eyes} eyes, with ${feature}.`;
-  return { gender, hair, eyes, build, feature, sentence };
+  const speciesTag = species.id === 'human' ? '' : species.adjective + ' ';
+  const sentence = `${prefix} ${build} ${speciesTag}${noun} with ${hair} hair and ${eyes} eyes, with ${feature}.`;
+  return { gender, hair, eyes, build, feature, sentence, species: species.id };
 }
 
 // ---- monster physical descriptions ----
@@ -1568,6 +1570,195 @@ function getKingdomByKey(key) {
   const [rx, ry] = key.split(',').map(Number);
   return getKingdom(rx * KINGDOM_REGION, ry * KINGDOM_REGION);
 }
+// ============================================================================
+// ---- SPECIES / SENTIENT RACES FRAMEWORK ------------------------------------
+// A deliberately data-driven, extensible roster of playable/settlement-dwelling
+// peoples. Adding a new species later is just pushing a new entry onto SPECIES
+// below -- everything that consumes it (character creation, kingdom dominant-
+// species rolls, settlement population, NPC appearance/dialogue, trade prices,
+// affection gain, and racial mechanics) reads the array generically rather than
+// switching on hardcoded ids, so new content drops in without touching the
+// systems around it. Racial "abilities" are intentionally implemented as real
+// world-state flags (freeSwim, fallDamageReduction, poisonDmgReduction, etc.)
+// that hook into systems that already exist (swimming, chasm falls, poison,
+// traps, vision, regen, corruption) rather than as menu-only stat blocks --
+// so a Naiad's "can't drown" is a genuine change to how the overworld water
+// tile behaves for you, not a description in a tooltip.
+// ============================================================================
+const SPECIES = [
+  { id:'human', name:'Human', peopleLabel:'Humans', adjective:'', pluralAdj:'',
+    desc:'Versatile and unremarkable in any one thing, adaptable in everything.',
+    statMods:{ str:0, dex:0, int:0, con:0, wil:0, cha:0 },
+    traits:[
+      { name:'Adaptable', desc:'Starts with one extra unspent stat point to place anywhere.', apply:(p)=>{ p.statPoints = (p.statPoints||0) + 1; } },
+      { name:'Common Tongue', desc:'Easy to get along with -- NPCs warm up to you a little faster regardless of their species.', apply:(p)=>{ p.affectionBonus=(p.affectionBonus||0)+0.1; } },
+    ],
+    kingdomTraitWeights:{ militaristic:2, mercantile:4, scholarly:2, isolationist:0, pious:2, lawless:2 },
+    biomeWeights:{}, flavorAffinity:['standard','farming','trading','military','monastery'],
+    affinity:{} },
+
+  { id:'elf', name:'Elf', peopleLabel:'Elves', adjective:'elven', pluralAdj:'elven',
+    desc:'Long-lived forest-dwellers, quick of mind and light of foot, but frail in a straight fight.',
+    statMods:{ str:0, dex:2, int:2, con:-2, wil:1, cha:0 },
+    traits:[
+      { name:'Keen Sight', desc:'See noticeably further across the overworld.', apply:(p)=>{ p.visionBonus=(p.visionBonus||0)+2; } },
+      { name:'Old Magic', desc:'HP and MP trickle back faster between fights.', apply:(p)=>{ p.regenBonus=true; } },
+    ],
+    kingdomTraitWeights:{ scholarly:6, isolationist:4, pious:2, militaristic:-2, lawless:-3 },
+    biomeWeights:{ forest:6, denseforest:8, plains:1 }, flavorAffinity:['elven'],
+    affinity:{ orc:-1, nyxari:-0.5 } },
+
+  { id:'dwarf', name:'Dwarf', peopleLabel:'Dwarves', adjective:'dwarven', pluralAdj:'dwarven',
+    desc:'Mountain- and mine-bred, thick-boned and stubborn, slower on their feet than most.',
+    statMods:{ str:2, dex:-2, int:0, con:3, wil:1, cha:0 },
+    traits:[
+      { name:'Stonehide', desc:'Naturally tougher skin grants a small passive armor bonus.', apply:(p)=>{ p.talentArmor=(p.talentArmor||0)+1; } },
+      { name:'Iron Stomach', desc:'Resists a large portion of poison damage.', apply:(p)=>{ p.poisonDmgReduction=Math.min(0.9,(p.poisonDmgReduction||0)+0.3); } },
+    ],
+    kingdomTraitWeights:{ militaristic:4, mercantile:2, isolationist:3, lawless:-2 },
+    biomeWeights:{ mountain:8, tundra:2 }, flavorAffinity:['dwarven','mining'],
+    affinity:{ orc:-1 } },
+
+  { id:'orc', name:'Orc', peopleLabel:'Orcs', adjective:'orcish', pluralAdj:'orcish',
+    desc:'Broad, powerful raiders and warband-folk. Ferocious in a fight but ill-suited to book-learning.',
+    statMods:{ str:4, dex:0, int:-2, con:2, wil:0, cha:-1 },
+    traits:[
+      { name:'Bloodfury', desc:'Hits noticeably harder once badly wounded (below ~35% HP).', apply:(p)=>{ p.lowHpDmgBonus=(p.lowHpDmgBonus||0)+0.3; } },
+      { name:'Thick Hide', desc:'Naturally tougher skin grants a small passive armor bonus.', apply:(p)=>{ p.talentArmor=(p.talentArmor||0)+1; } },
+    ],
+    kingdomTraitWeights:{ militaristic:6, lawless:5, mercantile:-2, scholarly:-3, pious:-2 },
+    biomeWeights:{ mountain:3, plains:2, desert:2, swamp:2 }, flavorAffinity:['nomad','military'],
+    affinity:{ elf:-1, dwarf:-1, nyxari:0.5 } },
+
+  { id:'skarath', name:'Skarath', peopleLabel:'Skarath', adjective:'skarath', pluralAdj:'skarath',
+    desc:'Scaled, reptilian swamp- and desert-dwellers, tough and hard to poison, but standoffish and hard to warm up to.',
+    statMods:{ str:1, dex:0, int:0, con:2, wil:2, cha:-2 },
+    traits:[
+      { name:'Scaled Hide', desc:'Thick natural scales resist a large portion of poison damage and add armor.', apply:(p)=>{ p.poisonDmgReduction=Math.min(0.95,(p.poisonDmgReduction||0)+0.6); p.talentArmor=(p.talentArmor||0)+1; } },
+      { name:'Cold Blood', desc:'Steady nerves -- much less likely to be gripped by fear.', apply:(p)=>{ p.fearResistBonus=(p.fearResistBonus||0)+0.5; } },
+    ],
+    kingdomTraitWeights:{ isolationist:4, lawless:3, scholarly:-2 },
+    biomeWeights:{ swamp:8, desert:3 }, flavorAffinity:[],
+    affinity:{ vulkari:-0.5 } },
+
+  { id:'vulkari', name:'Vulkari', peopleLabel:'Vulkari', adjective:'vulkari', pluralAdj:'vulkari',
+    desc:'Half-animal, half-person hunters and wanderers -- fast and sharp-sensed, at home in the wild but impatient with study.',
+    statMods:{ str:0, dex:3, int:-2, con:0, wil:1, cha:0 },
+    traits:[
+      { name:"Predator's Instinct", desc:'Much less likely to trigger hidden traps.', apply:(p)=>{ p.trapAvoidBonus=(p.trapAvoidBonus||0)+0.25; } },
+      { name:'Fleet-Footed', desc:'Swimming and running drain stamina more slowly.', apply:(p)=>{ p.staminaDrainReduction=Math.min(0.9,(p.staminaDrainReduction||0)+0.25); } },
+    ],
+    kingdomTraitWeights:{ lawless:3, militaristic:2, scholarly:-2 },
+    biomeWeights:{ forest:5, plains:4, tundra:2 }, flavorAffinity:['nomad'],
+    affinity:{ skarath:-0.5 } },
+
+  { id:'thalassi', name:'Thalassi', peopleLabel:'Thalassi', adjective:'thalassi', pluralAdj:'thalassi',
+    desc:'Amphibious coastal folk, equally at home on land or underwater. Never drown, never tire of swimming.',
+    statMods:{ str:-1, dex:1, int:0, con:0, wil:2, cha:0 },
+    traits:[
+      { name:'Tidewalker', desc:'Immune to drowning and swims freely with no stamina cost -- water is just another kind of ground.', apply:(p)=>{ p.freeSwim=true; p.permaWaterbreathing=true; } },
+      { name:"Water's Grace", desc:'A little harder to hit in a fight.', apply:(p)=>{ p.dodgeChance=(p.dodgeChance||0)+0.05; } },
+      { name:'Landsick', desc:'Ill-suited to dry ground -- stamina regenerates slower while out of water.', apply:(p)=>{ p.staminaRegenPenalty=(p.staminaRegenPenalty||0)+1; } },
+    ],
+    kingdomTraitWeights:{ mercantile:3, isolationist:2, militaristic:-2 },
+    biomeWeights:{ beach:8, swamp:3, ocean:5 }, flavorAffinity:['fishing','pirate'],
+    affinity:{ ashkari:-1 } },
+
+  { id:'corvashi', name:'Corvashi', peopleLabel:'Corvashi', adjective:'corvashi', pluralAdj:'corvashi',
+    desc:'Bird-boned, half-avian highland folk, light and sharp-eyed, light enough that falls rarely trouble them.',
+    statMods:{ str:-2, dex:3, int:0, con:0, wil:0, cha:1 },
+    traits:[
+      { name:'Windborne', desc:'Falls (chasms and the like) do much less damage.', apply:(p)=>{ p.fallDamageReduction=Math.max(p.fallDamageReduction||0,0.6); } },
+      { name:'Sharp Eyes', desc:'See noticeably further across the overworld.', apply:(p)=>{ p.visionBonus=(p.visionBonus||0)+3; } },
+    ],
+    kingdomTraitWeights:{ scholarly:2, mercantile:2, isolationist:1 },
+    biomeWeights:{ mountain:6, plains:2, tundra:3 }, flavorAffinity:[],
+    affinity:{} },
+
+  { id:'nyxari', name:'Nyxari', peopleLabel:'Nyxari', adjective:'nyxari', pluralAdj:'nyxari',
+    desc:'Eldritch-touched, secretive folk, already a little unmade by whatever they brushed against out there. Comfortable with things that would unsettle most people.',
+    statMods:{ str:0, dex:1, int:2, con:0, wil:1, cha:-2 },
+    traits:[
+      { name:'Nightborn', desc:'Eldritch mutations become accessible at lower corruption.', apply:(p)=>{ p.corruptionReqReduction=(p.corruptionReqReduction||0)+10; } },
+      { name:'Shadowstep', desc:'Slightly higher critical hit chance.', apply:(p)=>{ p.critBonus=(p.critBonus||0)+0.05; } },
+    ],
+    kingdomTraitWeights:{ lawless:4, isolationist:2, scholarly:1, pious:-3 },
+    biomeWeights:{ denseforest:5, swamp:3, mountain:2 }, flavorAffinity:['cult'],
+    affinity:{ elf:-0.5, orc:0.5 } },
+
+  { id:'ashkari', name:'Ashkari', peopleLabel:'Ashkari', adjective:'ashkari', pluralAdj:'ashkari',
+    desc:'Descended from something that once burned very hot indeed. Warm to the touch, hard to burn, clumsy underwater.',
+    statMods:{ str:1, dex:-2, int:1, con:1, wil:0, cha:0 },
+    traits:[
+      { name:'Cinderborn', desc:'Resists a large portion of fire damage.', apply:(p)=>{ p.fireDmgReduction=Math.min(0.9,(p.fireDmgReduction||0)+0.75); } },
+      { name:'Warm Blood', desc:'Recovers stamina faster.', apply:(p)=>{ p.staminaRegenBonus=true; } },
+      { name:'Steam-Shy', desc:'Swimming is exhausting and briefly hisses/steams -- costs much more stamina and chips a fair bit of HP each time you enter water.', apply:(p)=>{ p.waterStaminaPenalty=(p.waterStaminaPenalty||0)+1; p.waterEntryDmg=Math.max(p.waterEntryDmg||0,3); } },
+    ],
+    kingdomTraitWeights:{ militaristic:2, pious:2, scholarly:1 },
+    biomeWeights:{ desert:6, mountain:3 }, flavorAffinity:[],
+    affinity:{ thalassi:-1 } },
+
+  { id:'construct', name:'Construct', peopleLabel:'Constructs', adjective:'mechanical', pluralAdj:'mechanical',
+    desc:'Animate machines built rather than born -- a mind of gears, circuitry, or arcane clockwork housed in a chassis. Ill-suited to organic medicine, but wired from birth for cybernetics and unbothered by poison or fear.',
+    statMods:{ str:2, dex:0, int:1, con:1, wil:2, cha:-2 },
+    traits:[
+      { name:'Factory-Wired', desc:'Starts with an extra cybernetic slot and cheaper charge costs for active cybernetics.', apply:(p)=>{ p.cyberSlots=(p.cyberSlots||3)+1; p.cyberCostReduction=Math.max(0.15,(p.cyberCostReduction||0)); } },
+      { name:'No Nervous System', desc:'Immune to poison damage; healing magic and potions restore noticeably less HP.', apply:(p)=>{ p.poisonDmgReduction=1; p.healingReceivedMult=Math.min((p.healingReceivedMult!==undefined?p.healingReceivedMult:1), 0.6); } },
+      { name:'Water-Sensitive Chassis', desc:'Water plays havoc with your internals -- swimming costs noticeably more stamina and sparks/corrodes you a little each time you enter water.', apply:(p)=>{ p.waterStaminaPenalty=(p.waterStaminaPenalty||0)+0.6; p.waterEntryDmg=Math.max(p.waterEntryDmg||0,2); } },
+    ],
+    kingdomTraitWeights:{ scholarly:3, militaristic:1, mercantile:1, pious:-4, isolationist:-1 },
+    biomeWeights:{}, flavorAffinity:['tech'],
+    affinity:{} },
+];
+function getSpecies(id) { return SPECIES.find(s => s.id === id) || SPECIES[0]; }
+// Constructs (No Nervous System) receive less benefit from healing magic/potions/food; everyone
+// else is unaffected. Centralized so the main healing sources apply it consistently.
+function healMult() { return player.healingReceivedMult !== undefined ? player.healingReceivedMult : 1; }
+// generic fallback pool for NPCs generated outside a settlement's own weighting (lone road
+// travelers, children, etc) -- humans stay the most common people everywhere, other species
+// still turn up but less often unless something more specific rolled them in.
+const DEFAULT_SPECIES_WEIGHTS = SPECIES.map(sp => [sp.id, sp.id === 'human' ? 16 : 6]);
+function randomSpeciesWeighted(rng) { return weightedChoice(rng, DEFAULT_SPECIES_WEIGHTS); }
+// Wires a species' full trait set (poison/fire/fear resistance, dodge, crit, low-HP damage bonus,
+// free swimming, trap avoidance, armor, etc.) onto ANY entity, not just the player. Every trait's
+// apply() fn was already written generically against a "p" parameter -- it just never got called
+// for anyone but the player before. This is the single shared hook that both applySpeciesToPlayer
+// and makeNPC use, so a species behaves identically regardless of who's wearing it. A few of the
+// flags a trait sets (statPoints, cyberSlots, affectionBonus, corruptionReqReduction) only ever get
+// read off the player elsewhere in the code -- harmless no-ops when set on an NPC, kept generic
+// anyway so nothing needs special-casing here or breaks if those systems ever become NPC-aware too.
+function applyRacialTraits(entity, sp) {
+  sp.traits.forEach(t => { if (t.apply) t.apply(entity); });
+}
+// Applies a chosen species' stat mods and racial traits onto a fresh player. Called once at
+// character creation, before archetype/custom stat allocation, so a Stonekin custom-build still
+// starts from Stonekin's own baseline instead of the flat human default.
+function applySpeciesToPlayer(player, speciesId) {
+  const sp = getSpecies(speciesId);
+  player.species = sp.id;
+  for (const k in sp.statMods) { if (sp.statMods[k]) player[k] = (player[k] || 0) + sp.statMods[k]; }
+  applyRacialTraits(player, sp);
+}
+// Rolls the two dominant peoples of a kingdom, weighted by that kingdom's existing political
+// trait (a scholarly realm skews Sylvan/Umbrakin, a militaristic one skews Grael/Stonekin, etc),
+// deterministically from the kingdom's own rng so it's stable across saves/reloads.
+function rollKingdomSpecies(rng, traitId) {
+  const primaryPairs = SPECIES.map(sp => [sp.id, Math.max(1, 10 + (sp.kingdomTraitWeights[traitId] || 0))]);
+  const primary = weightedChoice(rng, primaryPairs);
+  const secondaryPairs = SPECIES.filter(sp => sp.id !== primary).map(sp => [sp.id, Math.max(1, 7 + (sp.kingdomTraitWeights[traitId] || 0))]);
+  const secondary = weightedChoice(rng, secondaryPairs);
+  return { primary, secondary };
+}
+// pairwise "how do these two peoples get along" score, averaged across both species' own
+// stated affinities (so it stays symmetric even if only one side bothered to record a grudge).
+// Same species always reads as a mild kinship bonus. Feeds affection gain and trade prices.
+function speciesAffinityScore(aId, bId) {
+  if (aId === bId) return 0.5;
+  const a = getSpecies(aId), b = getSpecies(bId);
+  const av = (a.affinity && a.affinity[bId]) || 0;
+  const bv = (b.affinity && b.affinity[aId]) || 0;
+  return (av + bv) / 2;
+}
 const kingdomRegistry = new Map();
 const KINGDOM_REGION = 40;
 function getKingdom(cx, cy) {
@@ -1584,25 +1775,17 @@ function getKingdom(cx, cy) {
   const rulerTitle = (rulerIsFemale ? RULER_TITLES_F : RULER_TITLES)[trait.id];
   const figureRole = choice(rng, HISTORICAL_FIGURE_ROLES);
   const figureName = choice(rng, RULER_FIRST_NAMES);
+  const speciesRoll = rollKingdomSpecies(rng, trait.id);
+  const primarySpecies = speciesRoll.primary, secondarySpecies = speciesRoll.secondary;
+  const speciesLine = primarySpecies === 'human'
+    ? ` ${getSpecies(primarySpecies).peopleLabel} make up most of its people, with a good number of ${getSpecies(secondarySpecies).peopleLabel} living alongside them.`
+    : ` ${getSpecies(primarySpecies).peopleLabel} make up most of its people here, with humans and ${getSpecies(secondarySpecies).peopleLabel} living alongside them.`;
   const history = `${name}, ${choice(rng, KINGDOM_EVENTS)} some ${founded} years ago. ${choice(rng, KINGDOM_ERAS)} `
     + `It is a ${trait.label} realm: ${trait.desc} ${rulerTitle} ${rulerName} rules from its capital today. `
-    + figureRole.line(figureName, name);
-  k = { name, founded, history, key, trait: trait.id, rulerName, rulerTitle, figureName, figureRole: figureRole.role };
+    + figureRole.line(figureName, name) + speciesLine;
+  k = { name, founded, history, key, trait: trait.id, rulerName, rulerTitle, figureName, figureRole: figureRole.role, primarySpecies, secondarySpecies };
   kingdomRegistry.set(key, k);
   return k;
-}
-// Human-readable relation summary for a kingdom's immediate neighbors -- used by the Look
-// Around panel and the guide; kept separate from getKingdom() itself so it stays cheap to call
-// often (relations are memoized, but we don't want to force-generate every neighbor kingdom's
-// full lore just to render one line of political context).
-function kingdomRelationsSummary(key) {
-  const lines = [];
-  for (const nk of kingdomNeighborKeys(key)) {
-    const rel = getKingdomRelation(key, nk);
-    const state = KINGDOM_RELATION_STATES.find(s => s.id === rel);
-    if (state) lines.push(state);
-  }
-  return lines;
 }
 
 // ===================== DATA EXPANSION PACK 6 — NEW POWER SYSTEMS =====================
@@ -3147,7 +3330,7 @@ Object.assign(DUNGEON_THEMES, {
   witch_hut:        { name:"Witch's Hut", tier:'uncommon', genre:'rooms', depthRange:[2,4], dtierMax:2 },
   sunken_temple:     { name:'Sunken Temple', tier:'uncommon', genre:'rooms', depthRange:[3,6], dtierMax:2, hazard:'water' },
   goblin_stronghold:{ name:'Goblin Stronghold', tier:'uncommon', genre:'rooms', depthRange:[4,6], dtierMax:2 },
-  necropolis:       { name:'Necropolis', tier:'uncommon', genre:'rooms', depthRange:[4,7], dtierMax:2 },
+  ossuary_ruins:    { name:'Ossuary Ruins', tier:'uncommon', genre:'rooms', depthRange:[4,7], dtierMax:2 },
   spider_nest:      { name:'Spider Nest', tier:'uncommon', genre:'cave', depthRange:[3,6], dtierMax:2, hazard:'poison' },
   frozen_tomb:      { name:'Frozen Tomb', tier:'uncommon', genre:'rooms', depthRange:[4,6], dtierMax:2 },
   obsidian_spire:   { name:'Obsidian Spire', tier:'rare', genre:'rooms', depthRange:[6,10], dtierMax:3 },
@@ -5075,7 +5258,7 @@ const DUNGEON_THEME_FACTIONS = {
   witch_hut: ['human','beast','eldritch','plant'],
   sunken_temple: ['aquatic','undead','eldritch','plant'],
   goblin_stronghold: ['goblinoid','orc'],
-  necropolis: ['undead'],
+  ossuary_ruins: ['undead'],
   spider_nest: ['beast'],
   frozen_tomb: ['undead','beast','elemental','giantkin'],
   obsidian_spire: ['demonic','construct','eldritch'],
@@ -5471,19 +5654,32 @@ const DW2 = 50, DH2 = 30;
 
 
 // ===================== WORLD GENERATION v3 (appearance + shop fixes) =====================
-function makeNPC(roleId, x, y, rng, settlementName) {
+function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
   const role = ROLES.find(r => r.id === roleId) || ROLES[0];
+  const species = getSpecies(speciesId || randomSpeciesWeighted(rng));
   const name = choice(rng, FIRST_NAMES) + ' ' + choice(rng, SURNAMES);
   const trait = choice(rng, TRAITS);
-  const appearance = generateAppearance(rng, roleId);
+  const appearance = generateAppearance(rng, roleId, species.id);
+  // NPCs get their species' physical stat mods (str/dex/hp -- NPCs don't track int/wil/cha as
+  // combat stats) so a Grael guard hits harder and a Stonekin blacksmith is tougher than a human
+  // one, WITHOUT needing a whole second combat model for them.
+  const sm = species.statMods;
   const npc = {
-    uid: 'n' + (uidCounter++), kind: 'npc', roleId, roleName: role.name, name, trait,
-    x, y, hp: role.hp, maxHp: role.hp, str: role.str, dex: role.dex, atk: role.atk.slice(), armor: role.armor,
+    uid: 'n' + (uidCounter++), kind: 'npc', roleId, roleName: role.name, name, trait, species: species.id,
+    x, y, hp: Math.max(1, role.hp + Math.round((sm.con||0) * 1.5)), maxHp: Math.max(1, role.hp + Math.round((sm.con||0) * 1.5)),
+    str: Math.max(1, role.str + (sm.str||0)), dex: Math.max(1, role.dex + (sm.dex||0)), atk: role.atk.slice(),
+    armor: role.armor,
     color: role.color, glyph: '@', affection: 0, alive: true, home: settlementName,
     rumor: choice(rng, RUMORS), wanderCenter: { x, y }, hostile: false, healer: !!role.healer,
     spouse: null, canGiveQuest: QUEST_GIVER_ROLES.has(roleId) && rng() < 0.6,
     gender: appearance.gender, appearance: appearance.sentence, giftCount: 0, lastTalkTurn: -9999,
   };
+  // Now the real racial abilities too -- same trait hooks the player gets (poison/fire/fear
+  // resistance, dodge, crit, low-HP damage bonus, free swimming, trap avoidance, etc.), so a
+  // Thalassi guard genuinely swims freely and a Construct courier genuinely shrugs off poison,
+  // not just a stat block that happens to say "Construct" on it.
+  applyRacialTraits(npc, species);
+  npc.armor += (npc.talentArmor || 0);
   if (SHOP_ROLES.has(roleId) || roleId === 'fisherman') { npc.shop = generateShopInventory(roleId, rng); npc.gold = randInt(rng, 80, 300); }
   if (TRAINER_ROLES.has(roleId)) {
     npc.teachSpells = [];
@@ -5753,8 +5949,21 @@ function buildSettlement(chunk, cx, cy, seedVal) {
   const kingdom = getKingdom(cx, cy);
   const baseName = choice(rng, SURNAMES) + choice(rng, tier === 'city' ? [' City',' Capital',' Citadel',' Metropolis'] : [' Hollow',' Crossing',' Vale',' Reach',' Landing',' Hamlet',' Watch']);
   const name = (flavor.name || '') + baseName;
-  const settlement = { name, buildings: [], type: tier.charAt(0).toUpperCase() + tier.slice(1), kingdom: kingdom.name, kingdomHistory: kingdom.history, flavor: flavorId };
+  const settlement = { name, buildings: [], type: tier.charAt(0).toUpperCase() + tier.slice(1), kingdom: kingdom.name, kingdomHistory: kingdom.history, flavor: flavorId,
+    primarySpecies: kingdom.primarySpecies, secondarySpecies: kingdom.secondarySpecies };
   chunk.settlement = settlement;
+  // Per-settlement species roster: kingdom's dominant peoples get the strongest pull, then the
+  // local biome (a mountain hold skews Stonekin regardless of kingdom) and the settlement's own
+  // flavor (an Elven Enclave is Sylvan-heavy even in an orc kingdom) layer on top. Humans keep a
+  // flat baseline everywhere so no settlement ever feels totally monocultural by accident.
+  const settlementSpeciesWeights = SPECIES.map(sp => {
+    let w = sp.id === 'human' ? 8 : 3;
+    if (sp.id === kingdom.primarySpecies) w += 16;
+    if (sp.id === kingdom.secondarySpecies) w += 7;
+    w += (sp.biomeWeights[centerBiome] || 0);
+    if (flavorId && sp.flavorAffinity.includes(flavorId)) w += 18;
+    return [sp.id, Math.max(1, w)];
+  });
 
   const margin = 2;
   for (let ly = margin; ly < CH - margin; ly++) for (let lx = margin; lx < CH - margin; lx++) {
@@ -5806,7 +6015,7 @@ function buildSettlement(chunk, cx, cy, seedVal) {
       }
       lastRoleAssigned = roleId;
     }
-    const npc = makeNPC(roleId, chunk.cx * CH + p.x + 1, chunk.cy * CH + p.y + 1, rng, settlement.name);
+    const npc = makeNPC(roleId, chunk.cx * CH + p.x + 1, chunk.cy * CH + p.y + 1, rng, settlement.name, weightedChoice(rng, settlementSpeciesWeights));
     npc.homeBuilding = idx;
     npc.homeArea = { x0: chunk.cx*CH+p.x, y0: chunk.cy*CH+p.y, x1: chunk.cx*CH+p.x+p.w-1, y1: chunk.cy*CH+p.y+p.h-1 };
     chunk.npcs.push(npc);
@@ -5819,7 +6028,7 @@ function buildSettlement(chunk, cx, cy, seedVal) {
   for (let i = 0; i < guardCount; i++) {
     let gx, gy, t; let tries = 0;
     do { gx = randInt(rng, margin, CH-margin-1); gy = randInt(rng, margin, CH-margin-1); t = chunk.tiles[gy][gx]; tries++; } while ((!t.walkable || t.building !== null) && tries < 30);
-    const npc = makeNPC(tier === 'city' && i === 0 ? 'captain' : 'guard', chunk.cx * CH + gx, chunk.cy * CH + gy, rng, settlement.name);
+    const npc = makeNPC(tier === 'city' && i === 0 ? 'captain' : 'guard', chunk.cx * CH + gx, chunk.cy * CH + gy, rng, settlement.name, weightedChoice(rng, settlementSpeciesWeights));
     chunk.npcs.push(npc);
   }
   if (flavor.hostileMix) {
@@ -5898,7 +6107,9 @@ function placePOI(chunk, cx, cy, rng) {
     }
   }
   if (poiType.npcRole) {
-    const npc = makeNPC(poiType.npcRole, cx*CH+lx, cy*CH+ly, rng, 'the Road');
+    const localKingdom = getKingdom(cx*CH, cy*CH);
+    const roadSpeciesWeights = SPECIES.map(sp => [sp.id, Math.max(1, (sp.id === 'human' ? 10 : 4) + (sp.id === localKingdom.primarySpecies ? 10 : sp.id === localKingdom.secondarySpecies ? 4 : 0) + (sp.biomeWeights[centerBiome] || 0))]);
+    const npc = makeNPC(poiType.npcRole, cx*CH+lx, cy*CH+ly, rng, 'the Road', weightedChoice(rng, roadSpeciesWeights));
     npc.wanderCenter = { x: npc.x, y: npc.y };
     chunk.npcs.push(npc);
   }
@@ -6089,7 +6300,8 @@ function steamBurst(x, y) {
   if (!t) return;
   const e = entityAt(x, y);
   if (e && e.alive !== false) {
-    const dmg = randInt(Math.random, 2, 5);
+    let dmg = randInt(Math.random, 2, 5);
+    if (e.fireDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - e.fireDmgReduction)));
     e.hp -= dmg;
     log(`${e === player ? 'You are' : e.name + ' is'} scalded by a burst of steam (${dmg}).`);
     if (e.hp <= 0) onDeath(e, null);
@@ -6143,47 +6355,64 @@ function gasArea(cx, cy, radius, turns, power, kind) {
 }
 function affectEntityWithGas(e, kind, power) {
   if (kind === 'confuse') { e.statusConfuse = (e.statusConfuse||0) + 2; return `${e===player?'You are':e.name+' is'} disoriented by the fumes.`; }
-  if (kind === 'fire') { e.hp -= power; return `${e===player?'You are':e.name+' is'} seared by the flames.`; }
-  const resisted = e === player && getBuff('resistpoison') > 0;
-  if (!resisted) e.statusPoison = (e.statusPoison||0) + Math.max(1, Math.round(power/2));
+  if (kind === 'fire') {
+    const dmg = e.fireDmgReduction ? Math.max(0, Math.round(power * (1 - e.fireDmgReduction))) : power;
+    e.hp -= dmg;
+    return `${e===player?'You are':e.name+' is'} seared by the flames.`;
+  }
+  // racial poison resistance now applies here too (Dwarf/Skarath/Construct etc.), on top of the
+  // player-only resistpoison buff, and fully-immune entities (reduction >= 1) skip the tick entirely.
+  const resisted = (e === player && getBuff('resistpoison') > 0) || (e.poisonDmgReduction || 0) >= 1;
+  if (!resisted) {
+    const amt = Math.max(1, Math.round(power/2) * (e.poisonDmgReduction ? (1 - e.poisonDmgReduction) : 1));
+    e.statusPoison = (e.statusPoison||0) + Math.max(0, Math.round(amt));
+  }
   return resisted ? null : `${e===player?'You breathe':e.name+' breathes'} in the toxic fumes.`;
 }
 // ---- typed traps: dart/spike are single-tile, fire/gas/alarm affect an area or the whole
 // level, same as the equivalent spells and grenades. Nothing here is a special case bolted onto
 // the trap system alone -- it's the same igniteArea/gasArea/engaged-monster machinery. ----
-function triggerTrapAt(t, x, y) {
+// Kind-specific trap effects, now applied to whichever entity actually triggered it (defaults to
+// the player for old call sites that don't pass one) instead of being hardcoded to the player --
+// see enterTileAsEntity, which is what lets NPCs/monsters trigger traps at all now.
+function triggerTrapAt(t, x, y, entity) {
+  const e = entity || player;
+  const isP = e === player;
+  const you = isP ? 'You' : e.name;
+  const s = isP ? '' : 's'; // 3rd-person verb suffix
   const kind = t.trapType || 'dart';
   Sound.play('trap');
   if (kind === 'dart') {
     const dmg = randInt(Math.random, 3, 8);
-    player.hp -= dmg;
-    lastDamageSource = 'a dart trap';
-    log(`A dart trap fires from the wall! You take ${dmg} damage.`);
+    e.hp -= dmg;
+    if (isP) lastDamageSource = 'a dart trap';
+    log(`A dart trap fires from the wall! ${you} take${s} ${dmg} damage.`);
   } else if (kind === 'spike') {
     const dmg = randInt(Math.random, 8, 16);
-    player.hp -= dmg;
-    lastDamageSource = 'a spike trap';
-    if (!(getBuff('resistpoison') > 0)) player.statusPoison = (player.statusPoison||0) + 2;
-    log(`Rusty spikes punch up through the floor! You take ${dmg} damage and feel a festering sting.`);
+    e.hp -= dmg;
+    if (isP) lastDamageSource = 'a spike trap';
+    const fullyResisted = (e.poisonDmgReduction || 0) >= 1 || (isP && getBuff('resistpoison') > 0);
+    if (!fullyResisted) e.statusPoison = (e.statusPoison || 0) + (e.poisonDmgReduction ? Math.max(0, Math.round(2 * (1 - e.poisonDmgReduction))) : 2);
+    log(`Rusty spikes punch up through the floor! ${you} take${s} ${dmg} damage${fullyResisted ? '' : ' and feel a festering sting'}.`);
   } else if (kind === 'fire') {
-    log('A fire trap ignites around you!');
-    lastDamageSource = 'a fire trap';
+    log(isP ? 'A fire trap ignites around you!' : `A fire trap ignites around ${e.name}!`);
+    if (isP) lastDamageSource = 'a fire trap';
     igniteArea(x, y, 2);
   } else if (kind === 'gas') {
-    log('A gas trap hisses open, filling the area with fumes!');
-    lastDamageSource = 'a gas trap';
+    log(isP ? 'A gas trap hisses open, filling the area with fumes!' : `A gas trap hisses open beneath ${e.name}, filling the area with fumes!`);
+    if (isP) lastDamageSource = 'a gas trap';
     gasArea(x, y, 2, 7, 4, 'poison');
   } else if (kind === 'alarm') {
     log('An alarm rune flares — you hear things stirring in the dark!');
     for (const m of curMonsters()) { if (m.alive && chebyshev(m.x,m.y,x,y) <= 22 && Math.random() < 0.6) m.engaged = true; }
   } else if (kind === 'floorbreak') {
     const dmg = randInt(Math.random, 6, 14);
-    player.hp -= dmg;
-    lastDamageSource = 'a collapsing floor';
-    log(`The floor gives way beneath you! You fall and take ${dmg} damage.`);
+    e.hp -= dmg;
+    if (isP) lastDamageSource = 'a collapsing floor';
+    log(`The floor gives way beneath ${isP ? 'you' : e.name}! ${you} fall${s} and take${s} ${dmg} damage.`);
     t.feature = 'brokenfloor'; t.glyph = ':'; t.color = '#4a3a2a';
   }
-  if (player.hp <= 0) onDeath(player, null);
+  if (e.hp <= 0) onDeath(e, null);
 }
 function processTerrainEffects() {
   if (!activeFxTiles.length) return;
@@ -6195,7 +6424,8 @@ function processTerrainEffects() {
     if (t.fireTurns > 0) {
       const occupant = entityAt(x, y);
       if (occupant && occupant.alive !== false) {
-        const dmg = randInt(Math.random, 3, 7);
+        let dmg = randInt(Math.random, 3, 7);
+        if (occupant.fireDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - occupant.fireDmgReduction)));
         occupant.hp -= dmg;
         log(`${occupant === player ? 'You are' : occupant.name + ' is'} burned by the flames (${dmg}).`);
         if (occupant === player) { wearRandomArmorPiece(1); lastDamageSource = 'fire'; }
@@ -6484,12 +6714,50 @@ function gainXP(amount) {
 function waitTurn() { endTurn(); }
 
 
+// ---- terrain traversal helpers: shared between the player's own detailed movement handler
+// (movePlayer, with its raft/stamina/chasm-jump-prompt flavor) and the generic NPC/monster/ally
+// movement below (stepToward/stepAway/wander/stepTowardMulti), so "can this entity fly, swim, or
+// avoid a trap" is answered consistently no matter who's asking.
+function canFly(e) { return !!e.flying || (e === player && getBuff('flight') > 0); }
+function canSwim(e) { return !!e.freeSwim || !!e.permaWaterbreathing || !!e.aquatic || canFly(e) ||
+  (e === player && (getBuff('waterbreathing') > 0 || player.inventory.some(i => i.id === 'raft'))); }
+function isChasmFeatureTile(t) { return !!t && t.feature === 'chasm'; }
+// General walkability check for NPC/monster/ally movement: a tile is passable if it's ordinarily
+// walkable, OR it's water and the entity can swim/fly, OR it's a chasm and the entity can fly.
+// Before this, curWalkable flatly rejected both water and chasm tiles for everyone, so a Thalassi
+// guard or a flying wyvern were blocked by a river exactly like a landlocked Human -- this is what
+// actually lets a swimmer swim and a flyer fly instead of that just being an unused data flag.
+function isPassableFor(e, x, y) {
+  const t = curTileAt(x, y);
+  if (!t) return false;
+  if (t.walkable) return true;
+  if (isWaterTile(t)) return canSwim(e);
+  if (isChasmFeatureTile(t)) return canFly(e);
+  return false;
+}
+// Moves a non-player entity onto (nx,ny) and applies the same "stepped on a trap" consequence the
+// player gets in movePlayer, unless the entity's own trapImmune/trapAvoidBonus saves it. Kept
+// separate from movePlayer's much richer version (locked doors, raft/stamina prompts, chasm-jump
+// modal, etc. don't apply to NPCs/monsters) so that already-battle-tested player path is untouched.
+// Only ever called for e !== player -- the player's own trap check lives in movePlayer itself.
+function enterTileAsEntity(e, nx, ny) {
+  const t = curTileAt(nx, ny);
+  e.x = nx; e.y = ny;
+  if (curIsDungeon() && t && t.hiddenTrap && !t.trapTriggered) {
+    t.trapTriggered = true; t.glyph = '^'; t.color = '#c93a3a';
+    if (e.trapImmune || Math.random() < (e.trapAvoidBonus || 0)) {
+      log(`${e.name} spots a hidden trap just in time and steps around it!`);
+    } else {
+      triggerTrapAt(t, nx, ny, e);
+    }
+  }
+}
 function stepToward(e, tx, ty) {
   let dx = Math.sign(tx - e.x), dy = Math.sign(ty - e.y);
   const opts = [[dx, dy], [dx, 0], [0, dy]].filter(o => o[0] !== 0 || o[1] !== 0);
   for (const [ox, oy] of opts) {
     const nx = e.x + ox, ny = e.y + oy;
-    if (curWalkable(nx, ny) && !entityAt(nx, ny)) { e.x = nx; e.y = ny; return true; }
+    if (isPassableFor(e, nx, ny) && !entityAt(nx, ny)) { enterTileAsEntity(e, nx, ny); return true; }
   }
   return false;
 }
@@ -6498,7 +6766,7 @@ function stepAway(e, tx, ty) {
   const opts = [[dx, dy], [dx, 0], [0, dy]].filter(o => o[0] !== 0 || o[1] !== 0);
   for (const [ox, oy] of opts) {
     const nx = e.x + ox, ny = e.y + oy;
-    if (curWalkable(nx, ny) && !entityAt(nx, ny)) { e.x = nx; e.y = ny; return true; }
+    if (isPassableFor(e, nx, ny) && !entityAt(nx, ny)) { enterTileAsEntity(e, nx, ny); return true; }
   }
   return false;
 }
@@ -6510,7 +6778,7 @@ function wander(e) {
   if (e.wanderCenter) {
     if (Math.abs(nx - e.wanderCenter.x) > 5 || Math.abs(ny - e.wanderCenter.y) > 5) return;
   }
-  if (curWalkable(nx, ny) && !entityAt(nx, ny)) { e.x = nx; e.y = ny; }
+  if (isPassableFor(e, nx, ny) && !entityAt(nx, ny)) { enterTileAsEntity(e, nx, ny); }
 }
 function chebyshev(x1, y1, x2, y2) { return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2)); }
 
@@ -6802,11 +7070,18 @@ function openTrade(npc) {
 // ---- v3: blacksmiths (and cybersmiths, for wired-in armor) fully repair your equipped gear for
 // a gold fee scaled to how much damage there is to undo. This is the reliable, always-available
 // repair path; repair kits and Mending-type spells/talents are the field-expedient alternative.
+// racial affinity nudges prices a little in either direction -- kin (or well-liked peoples)
+// haggle a bit softer with you, disliked peoples charge a little more. Kept subtle (+/-15% max)
+// so kingdom reputation stays the dominant price lever; this just adds real texture on top.
+function tradeSpeciesPriceMult(npc) {
+  const score = speciesAffinityScore(player.species, npc.species);
+  return Math.max(0.85, Math.min(1.2, 1 - score * 0.08));
+}
 function repairAtBlacksmith(npc) {
   const equipped = Object.values(player.equipment).filter(eq => eq && eq.maxDurability !== undefined && eq.maxDurability !== Infinity && eq.durability < eq.maxDurability);
   if (!equipped.length) { log('Everything you have equipped is already in good repair.'); return; }
   const totalMissing = equipped.reduce((s, eq) => s + (eq.maxDurability - eq.durability), 0);
-  const cost = Math.max(5, Math.round(totalMissing * 1.5));
+  const cost = Math.max(5, Math.round(totalMissing * 1.5 * tradeSpeciesPriceMult(npc)));
   if (player.gold < cost) { Sound.play('uiError'); log(`Repairs would cost ${cost}g — you can't afford that right now.`); return; }
   player.gold -= cost;
   equipped.forEach(eq => repairItem(eq, eq.maxDurability));
@@ -6817,7 +7092,7 @@ function repairAtBlacksmith(npc) {
 }
 function renderTrade() {
   const npc = dialogueNPC;
-  const repMult = repPriceMult(getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).key);
+  const repMult = repPriceMult(getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).key) * tradeSpeciesPriceMult(npc);
   const list = tradeMode === 'buy' ? npc.shop : player.inventory.filter(i => i.type !== 'misc');
   let html = `<div class="npcline">Your gold: ${player.gold} | [Tab] switch ${tradeMode === 'buy' ? 'to sell' : 'to buy'}</div>`;
   if (npc.roleId === 'blacksmith' || npc.roleId === 'cybersmith') html += `<div class="npcline dim">[R] Repair all equipped gear</div>`;
@@ -6841,7 +7116,7 @@ function renderTrade() {
 function tradeTransact(letter) {
   const npc = dialogueNPC;
   const idx = (tradePage || 0) * PAGE_SIZE + (letter.charCodeAt(0) - 97);
-  const repMult = repPriceMult(getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).key);
+  const repMult = repPriceMult(getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).key) * tradeSpeciesPriceMult(npc);
   if (tradeMode === 'buy') {
     const it = npc.shop[idx];
     if (!it) return;
@@ -6883,9 +7158,11 @@ function openCharacterSheet() {
 }
 function renderCharacterSheet() {
   const eq = player.equipment;
+  const sp = getSpecies(player.species || 'human');
   let html = `<div class="charstats">`;
-  html += `<div>Level ${player.level} Adventurer &nbsp; XP ${player.xp}/${player.xpNext}${player.gameCompleted ? ' &nbsp; <span style="color:#ffd700">&#9733; Completed</span>' : ''}</div>`;
-  html += `<div>HP ${player.hp}/${player.maxHp} &nbsp; MP ${player.mp}/${player.maxMp} &nbsp; Gold ${player.gold}</div><hr>`;
+  html += `<div>Level ${player.level} ${sp.name} Adventurer &nbsp; XP ${player.xp}/${player.xpNext}${player.gameCompleted ? ' &nbsp; <span style="color:#ffd700">&#9733; Completed</span>' : ''}</div>`;
+  html += `<div>HP ${player.hp}/${player.maxHp} &nbsp; MP ${player.mp}/${player.maxMp} &nbsp; Gold ${player.gold}</div>`;
+  html += `<div class="dim">Species: ${sp.name} — ${sp.traits.map(t => t.name).join(', ')}</div><hr>`;
   const stats = [
     ['str','STR','melee damage, weapon/armor STR requirements'],
     ['dex','DEX','to-hit chance and evasion'],
@@ -6898,7 +7175,9 @@ function renderCharacterSheet() {
     html += `<div class="modal-opt">${label}: ${player[k]}${player.statPoints>0?` <span class="dim">[press ${i+1} to +1]</span>`:''} <span class="dim" style="font-style:italic">— ${tip}</span></div>`;
   });
   html += `<div style="margin-top:6px">Unspent points: ${player.statPoints}</div><hr>`;
-  html += `<div>Equipped:</div>`;
+  html += `<div>Racial traits (${sp.name}):</div>`;
+  sp.traits.forEach(t => { html += `<div class="modal-opt dim">${t.name} — ${t.desc}</div>`; });
+  html += `<hr><div>Equipped:</div>`;
   for (const slot in eq) {
     html += `<div class="modal-opt dim">${slot}: ${eq[slot] ? eq[slot].name : '(empty)'}</div>`;
   }
@@ -8408,7 +8687,10 @@ function completeQuest(q) {
 function giveGift(npc, item) {
   const base = Math.max(1, Math.round(item.value / 3));
   const dim = Math.floor((npc.giftCount || 0) / 3);
-  const inc = Math.max(1, Math.round((base - dim) * (1 + (player.affectionBonus || 0))));
+  // racial affinity: peoples that get on well with yours warm up faster to gifts; ones with an
+  // old grudge warm up slower (never below a small floor -- a gift always counts for *something*).
+  const speciesMult = Math.max(0.4, Math.min(1.6, 1 + speciesAffinityScore(player.species, npc.species) * 0.5));
+  const inc = Math.max(1, Math.round((base - dim) * (1 + (player.affectionBonus || 0)) * speciesMult));
   npc.affection = (npc.affection || 0) + inc;
   npc.giftCount = (npc.giftCount || 0) + 1;
   player.inventory = player.inventory.filter(i => i.uid !== item.uid);
@@ -8910,7 +9192,7 @@ function tryForChild(npc) {
   player.kids++;
   player.lastChildTurn = turnCount;
   const c = getChunk(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
-  const child = makeNPC('child', npc.x, npc.y, Math.random, npc.home);
+  const child = makeNPC('child', npc.x, npc.y, Math.random, npc.home, npc.species);
   child.name = choice(Math.random, FIRST_NAMES) + ' ' + (npc.name.split(' ').slice(-1)[0]);
   c.npcs.push(child);
   player.children.push({ uid: child.uid, name: child.name });
@@ -8936,7 +9218,7 @@ function openDialogue(npc) {
     if (isSpouse) line = choice(Math.random, MARRIED_LINES);
     else { line = npc.rumor; if (Math.random() < 0.3) { const dirs = directionsRumor(npc); if (dirs) line = dirs; } else if (Math.random() < 0.15) { const k = getKingdom(Math.floor(npc.x/CH), Math.floor(npc.y/CH)); line = k.history; } }
     log(`${npc.name}: "${line}"`);
-    if (canGain) { npc.affection = (npc.affection || 0) + 1; npc.lastTalkTurn = turnCount; }
+    if (canGain) { const talkGain = Math.max(0, Math.round(1 + speciesAffinityScore(player.species, npc.species))); npc.affection = (npc.affection || 0) + talkGain; npc.lastTalkTurn = turnCount; }
     checkDeliveryQuests(npc);
     closeModal();
   }});
@@ -8963,7 +9245,7 @@ function openDialogue(npc) {
   const aff = npc.affection || 0;
   const affWord = aff >= 80 ? 'They adore you.' : aff >= 40 ? 'They like you.' : aff < 0 ? 'They are wary of you.' : '';
   renderModal(`${npc.name}, ${npc.roleName} of ${npc.home || 'the wilds'}`,
-    `<div class="npcline">${npc.appearance || ''}</div><div class="npcline">A ${npc.trait} ${npc.roleName.toLowerCase()}. ${affWord}</div>` +
+    `<div class="npcline">${npc.appearance || ''}</div><div class="npcline">A ${npc.trait} ${getSpecies(npc.species).name} ${npc.roleName.toLowerCase()}. ${affWord}</div>` +
     opts.map(o => `<div class="modal-opt" onclick="simulateKey('${o.key}')">[${o.key}] ${o.label}</div>`).join(''),
     'Letter/click to choose, Esc to leave.');
 }
@@ -9695,7 +9977,7 @@ function castSpell(spellId) {
   if (spell.type === 'purify') {
     if (!paySpellCost(spell)) { log('Not enough mana.'); return; }
     player.statusPoison = 0; player.statusFear = 0; player.statusConfuse = 0;
-    player.hp = Math.min(player.maxHp, player.hp + 10);
+    player.hp = Math.min(player.maxHp, player.hp + Math.round(10 * healMult()));
     log('A wave of holy light purifies and mends you.');
     endTurn(); return;
   }
@@ -9717,7 +9999,7 @@ function castSpell(spellId) {
   if (spell.id === 'massheal') {
     if (!paySpellCost(spell)) { log('Not enough resource.'); return; }
     const amt = randInt(Math.random, spell.power[0], spell.power[1]);
-    player.hp = Math.min(player.maxHp, player.hp + amt);
+    player.hp = Math.min(player.maxHp, player.hp + Math.round(amt * healMult()));
     let healedAllies = 0;
     for (const a of curAllies()) { if (a.hp < a.maxHp) { a.hp = Math.min(a.maxHp, a.hp + amt); healedAllies++; } }
     log(`A wave of light heals you for ${amt}${healedAllies ? `, and ${healedAllies} nearby ally/allies` : ''}.`);
@@ -9735,7 +10017,7 @@ function castSpell(spellId) {
   if (spell.id === 'sanctuaryfield') {
     if (!paySpellCost(spell)) { log('Not enough resource.'); return; }
     const amt = randInt(Math.random, spell.power[0], spell.power[1]);
-    player.hp = Math.min(player.maxHp, player.hp + amt);
+    player.hp = Math.min(player.maxHp, player.hp + Math.round(amt * healMult()));
     const wasAfraid = player.statusFear > 0;
     player.statusFear = 0;
     log(`A field of protective light mends ${amt} damage${wasAfraid ? ' and steadies your nerves' : ''}.`);
@@ -9744,7 +10026,7 @@ function castSpell(spellId) {
   if (spell.type === 'heal') {
     if (!paySpellCost(spell)) { log('Not enough resource.'); return; }
     const amt = Math.round(randInt(Math.random, spell.power[0], spell.power[1]) * playerLevelPowerMult(player.level));
-    player.hp = Math.min(player.maxHp, player.hp + amt);
+    player.hp = Math.min(player.maxHp, player.hp + Math.round(amt * healMult()));
     log(`You are healed for ${amt}.`);
     endTurn(); return;
   }
@@ -9995,8 +10277,10 @@ function doAttack(att, def) {
   const dmgRange = weapon ? weapon.dmg : (att.atk || [1, 3]);
   const attName = isPlayer ? 'You' : att.name;
   const defName = def === player ? 'you' : def.name;
-  const dodgeChance = (player.dodgeChance || 0) + getBuff('evasion') - (def === player ? armorStrDeficit() * 0.01 : 0);
-  if (def === player && dodgeChance > 0 && Math.random() < dodgeChance) { log(`You nimbly dodge ${attName === 'You' ? 'the' : att.name + "'s"} attack!`); return; }
+  // racial dodge (e.g. Thalassi Water's Grace) now applies to whoever's actually defending, not
+  // just the player -- plus the player's own buff/encumbrance modifiers layered on top when it's them.
+  const dodgeChance = (def.dodgeChance || 0) + (def === player ? getBuff('evasion') - armorStrDeficit() * 0.01 : 0);
+  if (dodgeChance > 0 && Math.random() < dodgeChance) { log(`${defName === 'you' ? 'You' : def.name} nimbly dodge${defName === 'you' ? '' : 's'} ${attName === 'You' ? 'the' : att.name + "'s"} attack!`); return; }
   if (!rollHit(att, def)) {
     Sound.play(isPlayer ? 'miss' : 'enemyMiss');
     log(`${attName} miss${isPlayer ? '' : 'es'} ${defName}.`);
@@ -10014,11 +10298,18 @@ function doAttack(att, def) {
     if (player.executeBonus && def.hp / (def.maxHp || def.hp || 1) < 0.25) dmg *= (1 + player.executeBonus);
     if (player.bossDmgBonus && (def.boss || def.miniboss)) dmg *= (1 + player.bossDmgBonus);
   }
+  // racial: Orc Bloodfury -- hit harder once badly wounded ourselves. Generalized off the attacker
+  // (att) rather than hardcoded to the player, so an Orc guard or Orc companion gets the same
+  // desperate-swing bonus a player Orc does.
+  if (att.lowHpDmgBonus && att.hp / (att.maxHp || att.hp || 1) < 0.35) dmg *= (1 + att.lowHpDmgBonus);
   if (weapon) {
     const elemMult = 1 + (isPlayer ? (player.elementalDmgBonus || 0) : 0);
     if (weapon.fireDmg) dmg += randInt(Math.random, 0, weapon.fireDmg) * elemMult;
     if (weapon.frostDmg) dmg += randInt(Math.random, 0, weapon.frostDmg) * elemMult;
-    if (weapon.poisonDmg) def.statusPoison = (def.statusPoison || 0) + weapon.poisonDmg;
+    if (weapon.poisonDmg) {
+      const poisonAmt = def.poisonDmgReduction ? Math.max(0, Math.round(weapon.poisonDmg * (1 - def.poisonDmgReduction))) : weapon.poisonDmg;
+      if (poisonAmt > 0) def.statusPoison = (def.statusPoison || 0) + poisonAmt;
+    }
   }
   if (isPlayer && weapon && getBuff('weaponfire') > 0) {
     const burnDmg = randInt(Math.random, 1, getBuff('weaponfire'));
@@ -10029,7 +10320,7 @@ function doAttack(att, def) {
   if (weapon && weapon.armorPierce) defArmor = Math.max(0, defArmor - weapon.armorPierce);
   dmg -= defArmor;
   let crit = false;
-  const critChance = 0.08 + (isPlayer ? (player.critBonus || 0) + getBuff('crit') : 0);
+  const critChance = 0.08 + (att.critBonus || 0) + (isPlayer ? getBuff('crit') : 0);
   if (Math.random() < critChance) { dmg *= (2 + (isPlayer ? (player.critDmgBonus || 0) : 0)); crit = true; }
   dmg = Math.max(1, Math.round(dmg));
   def.hp -= dmg;
@@ -10053,11 +10344,16 @@ function doAttack(att, def) {
     att.hp -= reflect; log(`Thorns lash back at ${att.name} for ${reflect}.`);
     if (att.hp <= 0) onDeath(att, player);
   }
-  if (!isPlayer && att.fire && def === player && Math.random() < 0.25) { igniteTile(player.x, player.y, 3); log(`${att.name}'s attack leaves the ground burning beneath you!`); }
-  if (!isPlayer && att.frost && def === player && Math.random() < 0.25) { player.statusSlow = (player.statusSlow||0) + 2; log(`The frost of ${att.name}'s attack chills you to the bone.`); }
-  if (!isPlayer && att.poison && def === player && getBuff('resistpoison') <= 0 && Math.random() < 0.4) { player.statusPoison = (player.statusPoison || 0) + (player.poisonDmgReduction ? Math.round(att.poison * (1-player.poisonDmgReduction)) : att.poison); log('You are poisoned!'); }
-  if (!isPlayer && att.causesFear && def === player && Math.random() < 0.35) { player.statusFear = (player.statusFear || 0) + 3; log('Terror grips you!'); }
-  if (!isPlayer && att.causesConfuse && def === player && Math.random() < 0.35) { player.statusConfuse = (player.statusConfuse || 0) + 3; log('Your mind reels in confusion!'); }
+  // Monster-inflicted status effects, generalized off whoever's actually defending (def) instead of
+  // hardcoded to the player -- so a hostile NPC or ally caught in a monster's fire/poison/fear also
+  // gets hit AND gets the benefit of their own species' resistances (Skarath cold-blood fear
+  // resistance, Dwarf/Skarath/Construct poison resistance, etc), not just the player's.
+  const defIsPlayer = def === player, defYouIs = defIsPlayer ? 'you' : def.name, defYouAre = defIsPlayer ? 'You are' : def.name + ' is';
+  if (!isPlayer && att.fire && Math.random() < 0.25) { igniteTile(def.x, def.y, 3); log(`${att.name}'s attack leaves the ground burning beneath ${defYouIs}!`); }
+  if (!isPlayer && att.frost && Math.random() < 0.25) { def.statusSlow = (def.statusSlow||0) + 2; log(`The frost of ${att.name}'s attack chills ${defIsPlayer ? 'you' : def.name} to the bone.`); }
+  if (!isPlayer && att.poison && (!defIsPlayer || getBuff('resistpoison') <= 0) && (def.poisonDmgReduction || 0) < 1 && Math.random() < 0.4) { def.statusPoison = (def.statusPoison || 0) + (def.poisonDmgReduction ? Math.round(att.poison * (1-def.poisonDmgReduction)) : att.poison); log(`${defYouAre} poisoned!`); }
+  if (!isPlayer && att.causesFear && Math.random() < 0.35 * (1 - (def.fearResistBonus || 0))) { def.statusFear = (def.statusFear || 0) + 3; log(defIsPlayer ? 'Terror grips you!' : `Terror grips ${def.name}!`); }
+  if (!isPlayer && att.causesConfuse && Math.random() < 0.35) { def.statusConfuse = (def.statusConfuse || 0) + 3; log(defIsPlayer ? 'Your mind reels in confusion!' : `${def.name}'s mind reels in confusion!`); }
   if (isPlayer && def !== player && (player.eldritchConfuseChance || 0) > 0 && Math.random() < player.eldritchConfuseChance) { def.statusConfuse = (def.statusConfuse || 0) + 3; log(`${def.name} reels in confusion at your unnatural touch!`); }
   if (isPlayer && def !== player && (player.eldritchFearChance || 0) > 0 && Math.random() < player.eldritchFearChance) { def.statusFear = (def.statusFear || 0) + 3; log(`${def.name} recoils in primal terror!`); }
   if (def.hp <= 0) onDeath(def, att);
@@ -10066,9 +10362,13 @@ function doAttack(att, def) {
 // ---- status processing v3: confusion + mutation regen ----
 function processEntityStatus(e) {
   if (e.statusPoison > 0) {
-    if (e === player && (player.poisonImmune || getBuff('resistpoison') > 0)) { e.statusPoison = 0; }
+    // racial poison resistance (Dwarf/Skarath partial, Construct/others full via poisonDmgReduction
+    // reaching 1) now reduces or fully blocks the DoT tick for any entity, not just the player.
+    const immune = (e === player && (player.poisonImmune || getBuff('resistpoison') > 0)) || (e.poisonDmgReduction || 0) >= 1;
+    if (immune) { e.statusPoison = 0; }
     else {
-      const d = Math.min(e.statusPoison, 4);
+      let d = Math.min(e.statusPoison, 4);
+      if (e.poisonDmgReduction) d = Math.max(0, Math.round(d * (1 - e.poisonDmgReduction)));
       e.hp -= d;
       e.statusPoison = Math.max(0, e.statusPoison - 1);
       // Willpower (WIL): a chance to shake off an additional turn of poison on top of the normal tick.
@@ -10089,6 +10389,7 @@ function processEntityStatus(e) {
 function performBreathWeapon(m) {
   let dmg = randInt(Math.random, Math.round(m.atk[0]*1.3), Math.round(m.atk[1]*1.6));
   if (m.breathWeapon === 'fire' && getBuff('resistfire') > 0) dmg = Math.round(dmg * 0.4);
+  if (m.breathWeapon === 'fire' && player.fireDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - player.fireDmgReduction)));
   if (m.breathWeapon === 'frost' && getBuff('resistfrost') > 0) dmg = Math.round(dmg * 0.4);
   player.hp -= dmg;
   lastDamageSource = `${m.name}'s ${m.breathWeapon} breath`;
@@ -10099,7 +10400,7 @@ function performBreathWeapon(m) {
     if (destroyed > 0) log(`The flames roar outward, destroying ${destroyed} trees!`);
     igniteArea(player.x, player.y, 2);
   } else if (m.breathWeapon === 'frost') {
-    player.statusPoison = player.statusPoison; // no-op, frost just hits harder (handled in dmg roll)
+    // frost breath deals no extra status effect -- it just hits harder, handled in the dmg roll above
     player.stamina = Math.max(0, (player.stamina||0) - 15);
     log('The frost saps your stamina.');
   } else if (m.breathWeapon === 'poison') {
@@ -11742,6 +12043,11 @@ function movePlayer(dx, dy) {
       return;
     }
     if (t && t.feature === 'chasm') {
+      if (canFly(player)) {
+        player.x = nx; player.y = ny;
+        log('You soar over the chasm.');
+        endTurn(); return;
+      }
       if (curIsDungeon()) { promptChasmJump(nx, ny); return; }
       Sound.play('bump');
       log('A dark chasm drops away beneath you. You need another way across.');
@@ -11754,8 +12060,8 @@ function movePlayer(dx, dy) {
     }
     if (isWaterTile && !curIsDungeon()) {
       const hasRaft = player.inventory.some(i => i.id === 'raft');
-      const flying = getBuff('flight') > 0;
-      if (hasRaft || flying || player.freeSwim || player.permaWaterbreathing || getBuff('waterbreathing') > 0) {
+      const flying = canFly(player);
+      if (canSwim(player)) {
         player.x = nx; player.y = ny;
         Sound.play('splash');
         log(hasRaft ? 'You paddle your raft across the water.' : flying ? 'You soar over the water.' : 'You swim easily across.');
@@ -11763,9 +12069,15 @@ function movePlayer(dx, dy) {
       }
       if ((player.stamina || 0) > 0) {
         player.x = nx; player.y = ny;
-        const swimCost = Math.round(8 * (1 - (player.staminaDrainReduction || 0)));
+        const swimCost = Math.round(8 * (1 - (player.staminaDrainReduction || 0)) * (1 + (player.waterStaminaPenalty || 0)));
         player.stamina = Math.max(0, player.stamina - swimCost);
         Sound.play('splash');
+        if (player.waterEntryDmg) {
+          player.hp -= player.waterEntryDmg;
+          lastDamageSource = 'water';
+          log(`The water reacts badly with you (-${player.waterEntryDmg} HP).`);
+          if (player.hp <= 0) { onDeath(player, null); return; }
+        }
         log(player.stamina > 20 ? 'You swim through the cold water.' : 'You are getting exhausted swimming!');
         endTurn(); return;
       }
@@ -11865,7 +12177,7 @@ function endTurn() {
   const curT = curTileAt(player.x, player.y);
   const playerInWater = curT && (curT.feature === 'water' || curT.biome === 'ocean') && !curIsDungeon();
   if (!playerInWater) {
-    const staminaRegen = player.staminaRegenBonus ? 6 : 3;
+    const staminaRegen = Math.max(1, (player.staminaRegenBonus ? 6 : 3) - (player.staminaRegenPenalty || 0));
     // wearing armor heavier than your STR supports means you're spending some of every turn's
     // recovery just fighting the weight of your own gear instead of actually resting.
     const encumbranceDrag = Math.min(staminaRegen, Math.ceil(armorStrDeficit() * 0.4));
@@ -12128,7 +12440,7 @@ function useItem(it) {
   Sound.play(it.glyph === '%' ? 'eat' : 'drink');
   let consumed = true;
   switch (it.effect) {
-    case 'heal': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You consume ${it.name} and recover ${amt} HP.`); break; }
+    case 'heal': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult * healMult()); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You consume ${it.name} and recover ${amt} HP.`); break; }
     case 'mana': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult); player.mp = Math.min(player.maxMp, player.mp + amt); log(`You consume ${it.name} and recover ${amt} MP.`); break; }
     case 'buffstr': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('str', it.power, Math.round(40*durMult)); break; }
     case 'buffdex': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('dex', it.power, Math.round((it.dur||40)*durMult)); break; }
@@ -12147,7 +12459,7 @@ function useItem(it) {
     case 'aoeconfuse': { const radius = (it.radius||3) + (player.throwRadiusBonus||0); const hit = hostilesWithinRadius(player.x, player.y, radius); hit.forEach(t => { t.statusConfuse = (t.statusConfuse||0) + (it.power||3); log(`${t.name} is disoriented by the flash!`); }); break; }
     case 'cureposion': { player.statusPoison = 0; log('The poison is cleansed from your body.'); break; }
     case 'poison': { player.statusPoison = (player.statusPoison||0) + it.power; log('That was a terrible idea.'); break; }
-    case 'food': { const amt = Math.round((it.power || 2) * (1 + (player.cookingHealBonus || 0))); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You eat ${it.name} and recover ${amt} HP.`); maybeGrantCookingBonusEffect(it); break; }
+    case 'food': { const amt = Math.round((it.power || 2) * (1 + (player.cookingHealBonus || 0)) * healMult()); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You eat ${it.name} and recover ${amt} HP.`); maybeGrantCookingBonusEffect(it); break; }
     case 'identify': { log('You feel more knowledgeable, though nothing seems to change.'); break; }
     case 'teleport': { blinkPlayer(30); break; }
     case 'escape': { blinkPlayer(6); applyBuff('invis', 1, 8); log('You vanish in a puff of smoke!'); break; }
@@ -12702,6 +13014,31 @@ const ARCHETYPES = [
       const m=MUTATIONS.find(x=>x.id==='chitinoushide'); if (m.apply) m.apply(); } },
 ];
 let creationDraft = null;
+let pendingSpeciesId = 'human';
+
+// ---- character creation: species picker (step 1, before class/archetype) ----
+function showSpeciesPicker() {
+  gameState = 'create_species';
+  let html = `<div class="npcline">Choose your people. Each has different strengths, weaknesses, and a racial gift that works in the world, not just on a stat sheet.</div>`;
+  html += `<div class="modal-opt" onclick="simulateKey('9')">[9] <b>Random</b> — let fate pick your species.</div>`;
+  SPECIES.forEach((sp, i) => {
+    const letter = String.fromCharCode(97 + i);
+    const mods = Object.entries(sp.statMods).filter(([k,v]) => v).map(([k,v]) => `${k.toUpperCase()} ${v>0?'+':''}${v}`).join(', ') || 'no stat changes';
+    const traitNames = sp.traits.map(t => t.name).join(' &amp; ');
+    html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] <b>${sp.name}</b> — ${sp.desc}<br><span class="dim">${mods} — racial gift: ${traitNames}</span></div>`;
+  });
+  html += `<div class="modal-opt" style="margin-top:6px" onclick="simulateKey('<')">[&lt;] Back to Main Menu</div>`;
+  renderModal('Choose Your Species', html, 'Letter/click to choose, &lt; to go back.');
+}
+function speciesChoice(letter) {
+  if (letter === '<') { showTitleScreen(); return; }
+  if (letter === '9') { pendingSpeciesId = choice(Math.random, SPECIES).id; showArchetypePicker(); return; }
+  const idx = letter.charCodeAt(0) - 97;
+  const sp = SPECIES[idx];
+  if (!sp) return;
+  pendingSpeciesId = sp.id;
+  showArchetypePicker();
+}
 
 function openSettingsFromHeader() {
   Sound.unlock();
@@ -12739,7 +13076,7 @@ function spawnTitleEmbers() {
   wrap.innerHTML = html;
 }
 function titleScreenChoice(letter) {
-  if (letter === 'a') { showArchetypePicker(); return; }
+  if (letter === 'a') { showSpeciesPicker(); return; }
   if (letter === 'b' && hasSaveGame()) { loadGame(); return; }
   if (letter === 'c') { showSettings('title'); return; }
   if (letter === 'd') { openHelp(); return; }
@@ -12866,14 +13203,14 @@ function renderSettingsTab(tabId) {
 // stay free for premade archetypes (room for up to 26 before this scheme needs revisiting again).
 function showArchetypePicker() {
   gameState = 'create_archetype';
-  let html = '';
+  let html = `<div class="npcline">Species: <b>${getSpecies(pendingSpeciesId).name}</b> <span class="dim">(click Back to change)</span></div>`;
   html += `<div class="modal-opt" onclick="simulateKey('0')">[0] <b>Custom</b> — build your own from scratch with a point-buy system.</div>`;
   html += `<div class="modal-opt" onclick="simulateKey('9')">[9] <b>Random</b> — roll a random premade class and just go.</div>`;
   ARCHETYPES.forEach((a, i) => {
     const letter = String.fromCharCode(97 + i);
     html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] <b>${a.name}</b> — ${a.desc}</div>`;
   });
-  html += `<div class="modal-opt" onclick="simulateKey('<')" style="margin-top:6px">[&lt;] Back to Main Menu</div>`;
+  html += `<div class="modal-opt" onclick="simulateKey('<')" style="margin-top:6px">[&lt;] Back: choose a different species</div>`;
   renderModal('Choose Your Path', html, 'Letter/click to choose, &lt; to go back.');
 }
 // A genuinely new game needs a genuinely fresh world -- otherwise every chunk the previous
@@ -12892,14 +13229,15 @@ function resetWorldState() {
   turnCount = 0;
 }
 function archetypeChoice(letter) {
-  if (letter === '<') { showTitleScreen(); return; }
+  if (letter === '<') { showSpeciesPicker(); return; }
   resetWorldState();
-  if (letter === '0') { player = newPlayer(); creationDraft = { points: CREATION_POINTS, statAdds:{str:0,dex:0,int:0,con:0,wil:0,cha:0}, abilities:[], abilityCat:'spells', gold:0, items:[] }; showCreateStats(); return; }
-  if (letter === '9') { player = newPlayer(); const arch = choice(Math.random, ARCHETYPES); arch.apply(); recalcVitalsFromStats(); player.scenario = 'archetype:' + arch.id; log(`*** Random roll: you are a ${arch.name}! ***`); showStartScreen(); return; }
+  if (letter === '0') { player = newPlayer(); applySpeciesToPlayer(player, pendingSpeciesId); creationDraft = { points: CREATION_POINTS, statAdds:{str:0,dex:0,int:0,con:0,wil:0,cha:0}, abilities:[], abilityCat:'spells', gold:0, items:[] }; showCreateStats(); return; }
+  if (letter === '9') { player = newPlayer(); applySpeciesToPlayer(player, pendingSpeciesId); const arch = choice(Math.random, ARCHETYPES); arch.apply(); recalcVitalsFromStats(); player.scenario = 'archetype:' + arch.id; log(`*** Random roll: you are a ${getSpecies(pendingSpeciesId).name} ${arch.name}! ***`); showStartScreen(); return; }
   const idx = letter.charCodeAt(0) - 97;
   const arch = ARCHETYPES[idx];
   if (!arch) return;
   player = newPlayer();
+  applySpeciesToPlayer(player, pendingSpeciesId);
   arch.apply();
   recalcVitalsFromStats();
   player.scenario = 'archetype:' + arch.id;
@@ -13721,6 +14059,7 @@ function handleKey(e) {
   if (gameState === 'settings') { if (key === 'Escape') { closeSettings(); return; } return; }
   if (gameState === 'confirmdelete') { if (key === 'y' || key === 'n' || key === 'Escape') { confirmDeleteSaveChoice(key); return; } return; }
   if (gameState === 'halloflegends') { if (key === 'Escape') { showTitleScreen(); return; } return; }
+  if (gameState === 'create_species') { if (key === '<' || key === '9' || /^[a-z]$/.test(key)) speciesChoice(key); return; }
   if (gameState === 'create_archetype') { if (key === '<' || key === '0' || key === '9' || /^[a-z]$/.test(key)) archetypeChoice(key); return; }
   if (gameState === 'create_stats') { if (key === 'Enter' || key === '<' || /^[1-6]$/.test(key)) createStatsKey(key); return; }
   if (gameState === 'create_abilities') { if (key === 'Enter' || key === '<' || key === '[' || key === ']' || /^[1-4]$/.test(key) || /^[a-z]$/.test(key)) createAbilitiesKey(key); return; }
