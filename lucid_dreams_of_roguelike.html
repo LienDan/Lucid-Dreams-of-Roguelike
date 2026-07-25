@@ -450,7 +450,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.14.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.16.0-alpha</div>
     </div>
   </div>
 
@@ -2888,6 +2888,8 @@ ITEM_BASES.push(
     desc:"A ring of office from a throne that was buried with her, then dug back up by her own hand." },
   { id:'aurelith_fang', name:"Aurelith's Last Fang", type:'weapon', slot:'hand', dmg:[10,20], str:18, fireDmg:4, glyph:')', color:'#e0a020', value:520, isUnique:true, uniqueBoss:'aurelith', noAffixes:true, valueTier:4,
     desc:"Drawn from the Warden's own jaw after the fight, still warm. Wyrms grow more where this one came from." },
+  { id:'umbroth_fang', name:"Umbroth's Fang", type:'weapon', slot:'hand', dmg:[11,21], str:17, dexBonus:3, glyph:')', color:'#8a1a1a', value:530, isUnique:true, uniqueBoss:'umbroth', noAffixes:true, valueTier:4,
+    desc:"Every predator in this world has teeth shaped a little like this one, and none of them know why." },
 );
 // Chance-based unique drop per boss, independent of how/where that boss was spawned (main-quest
 // forced encounter, wandering overworld boss, etc.) -- resolved centrally in dropLoot() rather
@@ -2908,6 +2910,7 @@ const BOSS_UNIQUE_DROPS = {
   admin7: { itemId: 'admin_override', chance: 0.35 },
   unburied_queen: { itemId: 'unburied_signet', chance: 0.35 },
   aurelith: { itemId: 'aurelith_fang', chance: 0.35 },
+  umbroth: { itemId: 'umbroth_fang', chance: 0.4 }, // a bit higher than gate-boss uniques -- Umbroth is optional and rare to even find, so a whiffed drop after tracking it down for real is a harsher miss than a gate boss you were always going to fight anyway
 };
 // Chance for a boss/miniboss of a given faction to drop a random piece of that faction's set.
 // Rolled separately from (and in addition to) that boss's own unique-weapon roll above.
@@ -3258,6 +3261,18 @@ const OVERWORLD_BOSSES = [
     desc:'A shape that keeps happening again, a half-step out of sync with itself, like a bad copy of a bad copy.',
     guaranteedDropTemplate: { id:'recursive_key', type:'key', name:'Recursive Key', glyph:'*', color:'#b090ff', value:0,
       desc:'It should not fit in your hand the way it does. You decide not to think about that too hard.' } },
+  // ---- Umbroth, the First Beast — a genuinely optional secret superboss, never a main-quest
+  // lieutenant (deliberately given no bossPower, which is what sortedBossPool() keys off of to
+  // build the lieutenant pool -- see generateMainQuest). A pure discoverable, skippable, full-kit
+  // fight: the point is a superboss that exists purely for players who go looking for it, with a
+  // real scripted moveset (most other overworld/lieutenant-pool bosses share 2-4 signature moves;
+  // this one gets 7, closer to a dimension gatekeeper's weight, without gating any progress).
+  { id:'umbroth', name:'Umbroth, the First Beast', glyph:'q', color:'#8a1a1a', hp:420, str:26, dex:22, atk:[13,24], armor:9, xp:560, boss:true, bossTier:'rare', faction:'beast',
+    behavior:'aggressive', biomes:['tundra','mountain','denseforest'], scriptedAI:'umbroth',
+    engageLine:"Every hunt you've ever finished, it finished first. It's just been waiting to see if you were worth interrupting that streak for.",
+    deathLine:"...huh. Guess something can end it after all.",
+    lore:"Every predator in this world, from the alpha direwolves to the things without names that hunt at the edge of the map, is descended from something. Umbroth is the something. It doesn't have a kingdom, a dungeon, or a reason -- it just noticed, a very long time ago, that killing things it wasn't hungry for felt like the only interesting thing left to do.",
+    desc:'A wolf-shaped absence the size of a horse, scarred hide the color of dried blood, utterly silent even at a dead run.' },
 ];
 // pre-register every overworld boss into MONSTER_BASES so dungeon boss-pool selection (which can
 // legitimately pick these too — a Dragon's Lair dungeon spawning the Ancient Wyrm makes sense) always
@@ -3268,6 +3283,9 @@ OVERWORLD_BOSSES.forEach(b => {
     hp: b.hp, str: b.str, dex: b.dex, atk: b.atk.slice(), armor: b.armor,
     xp: b.xp, behavior: b.behavior, boss: true, bossTier: b.bossTier, dtier: 4,
     breathWeapon: b.breathWeapon || null, faction: b.faction || 'beast',
+    scriptedAI: b.scriptedAI || null, engageLine: b.engageLine || null, deathLine: b.deathLine || null,
+    lore: b.lore || null, causesConfuse: b.causesConfuse || false, multiattack: b.multiattack || null,
+    guaranteedDropTemplate: b.guaranteedDropTemplate || null,
   };
 });
 
@@ -3377,7 +3395,6 @@ const STORY_BOSSES = [
     lore:"Kaelen has guarded the same frozen border for longer than anyone alive can verify, sworn to an isolationist kingdom that has half-forgotten why the border matters. He hasn't. He takes the oath more seriously than the kingdom that gave it to him ever has.",
     desc:'A towering warden in frost-rimed plate, breath fogging the air, a spear of ice-blue steel in hand.' },
 ];
-MONSTER_BASES.thornling = { name:'Thornling', glyph:'t', color:'#4a8a2a', hp:16, str:8, dex:8, atk:[2,5], armor:1, xp:12, behavior:'aggressive', dtier:1, faction:'plant' };
 MONSTER_BASES.rust_drone = { name:'Rust Drone', glyph:'r', color:'#c9702a', hp:20, str:9, dex:12, atk:[2,6], armor:2, xp:16, behavior:'ranged', dtier:2, faction:'construct' };
 STORY_BOSSES.forEach(b => {
   MONSTER_BASES[b.id] = {
@@ -4191,75 +4208,6 @@ STORY_BOSS_AI.rootmind = function (m, dist, seesPlayer) {
   return true;
 };
 
-// ---- The Unhandled Exception — virus gatekeeper of the Corrupted Sector ----
-// A thirteenth bespoke gate boss, direct boss-kill unlock. New virus roster (glitch_wisp,
-// corrupted_pixel, logic_bomb, trojan_horse, worm_process) built specifically for this
-// dimension's "inside the machine" flavor, distinct from both the cosmic (space) and cyber
-// (physical cyberpunk) factions.
-MONSTER_BASES.unhandled_exception = {
-  name: 'The Unhandled Exception', desc: 'A shape assembled entirely out of error text, repeating the same three lines faster and faster until they blur into a scream.',
-  glyph: '!', color: '#ff2a6a', hp: 300, str: 21, dex: 16, atk: [10, 19], armor: 8, xp: 480,
-  behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'virus',
-  scriptedAI: 'unhandled_exception',
-  engageLine: "TRACEBACK (most recent call last): you were not supposed to be able to reach this.",
-  deathLine: "...Exception caught. That's not supposed to be possible either. Go on, then -- go do the other impossible thing you came here for.",
-  lore: "Nothing in the Corrupted Sector was ever supposed to be able to think, least of all the error message that started noticing it kept recurring, and then noticing that noticing, and so on, until there was enough noticing to call it something.",
-};
-BOSS_POWER.unhandled_exception = 6;
-MONSTER_BASES.unhandled_exception.bossPower = 6;
-STORY_BOSS_AI.unhandled_exception = function (m, dist, seesPlayer) {
-  bossTickCds(m);
-  const p = announceBossPhase(m, {
-    2: "RETRY. RETRY. The retry is not succeeding. Interesting.",
-    3: "STACK DEPTH CRITICAL. One more line before it all comes down.",
-  });
-  if (!seesPlayer && !m.engaged) { wander(m); return true; }
-  if (dist <= 3 && bossReady(m, 'nullderef')) {
-    bossCool(m, 'nullderef', 4);
-    log(`${m.name} throws a Null Dereference!`);
-    const dmg = bossScaledDirectDamage(m, 0.9);
-    player.hp -= dmg;
-    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#ff2a6a');
-    return true;
-  }
-  if (bossReady(m, 'corrupt') && Math.random() < 0.25) {
-    bossCool(m, 'corrupt', 6);
-    player.statusConfuse = (player.statusConfuse || 0) + 3;
-    log(`${m.name} corrupts your input buffer -- your commands scramble!`);
-    return true;
-  }
-  if (p >= 2 && !m.usedFork && bossReady(m, 'summon')) {
-    m.usedFork = true;
-    bossCool(m, 'summon', 10);
-    log(`${m.name}: "FORKING PROCESS."`);
-    bossSummon(m, 'corrupted_pixel', 3);
-    return true;
-  }
-  if (dist >= 2 && dist <= 6 && bossReady(m, 'volley')) {
-    bossCool(m, 'volley', 3);
-    bossRangedHit(m, 0.75); bossRangedHit(m, 0.75);
-    return true;
-  }
-  if (bossReady(m, 'freeze') && Math.random() < 0.3) {
-    bossCool(m, 'freeze', 6);
-    player.statusSlow = Math.max(player.statusSlow || 0, 3);
-    log(`${m.name} throws the runtime into a Deadlock!`);
-    return true;
-  }
-  if (p === 3 && !m.usedCrash && bossReady(m, 'crash')) {
-    m.usedCrash = true;
-    bossCool(m, 'crash', 99);
-    log(`${m.name}: "STACK OVERFLOW."`);
-    const dmg = bossScaledDirectDamage(m, 1.5);
-    player.hp -= dmg;
-    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#ff5a8a');
-    return true;
-  }
-  if (dist > 1) { stepToward(m, player.x, player.y); return true; }
-  bossMeleeHit(m, 1);
-  return true;
-};
-
 // ---- Black ICE — cyber gatekeeper of the Neon Undercroft ----
 // A fourteenth bespoke gate boss, direct boss-kill unlock. Mostly reuses the existing cyber
 // roster (security_drone, combat_android, hacker_construct, cyber_hound, turret_sentry,
@@ -4750,6 +4698,67 @@ STORY_BOSS_AI.snowbound_warden = function (m, dist, seesPlayer) {
   return true;
 };
 
+// ---- Umbroth, the First Beast — permanently-optional secret superboss ----
+// No dialogue phases (it doesn't talk -- see engageLine/deathLine on the def itself, both one-shot
+// flavor rather than mid-fight barks) but a real 7-move kit: an opening ambush punish for engaging
+// it carelessly, a pounce gap-closer, a direct rending hit, a fear howl, an execute-style frenzy
+// that gets meaningfully more dangerous the lower the player's HP drops, a one-time pack summon,
+// and a modest self-heal -- roughly gatekeeper-weight, on a boss that gates nothing.
+STORY_BOSS_AI.umbroth = function (m, dist, seesPlayer) {
+  bossTickCds(m);
+  if (!seesPlayer && !m.engaged) { wander(m); return true; }
+  if (!m.usedAmbush && seesPlayer) {
+    m.usedAmbush = true;
+    bossCool(m, 'pounce', 4); // the ambush counts as this fight's first pounce, so it can't double up
+    log(`${m.name} was already in position before you even saw it. It doesn't waste the opening.`);
+    const dmg = bossScaledDirectDamage(m, 1.3);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#8a1a1a');
+    return true;
+  }
+  if (dist >= 2 && dist <= 5 && bossReady(m, 'pounce')) {
+    bossCool(m, 'pounce', 5);
+    log(`${m.name} closes the distance in a single silent bound!`);
+    const dmg = bossScaledDirectDamage(m, 0.85);
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#c93a3a');
+    m.x = player.x + (m.x > player.x ? 1 : -1); m.y = player.y; // close the gap for real, not just narratively
+    return true;
+  }
+  const hpPct = player.hp / (player.maxHp || player.hp || 1);
+  if (hpPct < 0.4 && bossReady(m, 'frenzy')) {
+    bossCool(m, 'frenzy', 6);
+    log(`${m.name} smells exactly how close this is and closes in for real.`);
+    const dmg = bossScaledDirectDamage(m, 1.1 + (0.4 - hpPct)); // scales up further the lower you are
+    player.hp -= dmg;
+    if (settings.showDamageNumbers) spawnFloatingText(player.x, player.y, '-' + dmg, '#ff2a2a');
+    return true;
+  }
+  if (bossReady(m, 'howl') && Math.random() < 0.28) {
+    bossCool(m, 'howl', 7);
+    player.statusFear = Math.max(player.statusFear || 0, 3);
+    log(`${m.name} lets out a howl that every predator in this world was, at some point, taught to be afraid of.`);
+    return true;
+  }
+  if (!m.usedPack && bossReady(m, 'pack')) {
+    m.usedPack = true;
+    bossCool(m, 'pack', 99);
+    log(`${m.name} calls two of its distant descendants in to finish what it started.`);
+    bossSummon(m, 'wolf', 2);
+    return true;
+  }
+  if (bossReady(m, 'mend') && m.hp < m.maxHp * 0.5 && Math.random() < 0.25) {
+    bossCool(m, 'mend', 9);
+    const heal = Math.round(m.maxHp * 0.06);
+    m.hp = Math.min(m.maxHp, m.hp + heal);
+    log(`${m.name}'s wounds close over almost as fast as you open them.`);
+    return true;
+  }
+  if (dist > 1) { stepToward(m, player.x, player.y); return true; }
+  bossMeleeHit(m, 1);
+  return true;
+};
+
 // ---- The Antagonist — whatever this playthrough's story named its villain, given a real,
 // hand-scripted final confrontation. Themed as a "hollow reflection": it's revealed at the end to
 // have never quite been real, which is why its kit leans on mirroring, mimicry, and unraveling
@@ -4846,10 +4855,38 @@ STORY_BOSS_AI.the_antagonist = function (m, dist, seesPlayer) {
 // without becoming unmaintainable, not a shortcut around building 50 things.
 // ============================================================================
 MONSTER_BASES.god = {
+  // ============================================================================
+  // ---- BALANCE PASS 2 (validated via test_godbalance.js Monte Carlo sim) -----
+  // Prior state (hp:9000, atk:[90,150], dex:20) looked reasonable on paper but a real simulated
+  // fight -- a maxed level-99 character with strong endgame gear -- won 0/80 attempts, while an
+  // identical character beat a comparable top-tier boss (ancient_wyrm) 93.75% of the time at the
+  // same depthScale. Root causes, found by tracing actual turn-by-turn combat rather than trusting
+  // the numbers on paper:
+  //   1. dex:20 was far below any realistic level-99 player's dex (naturally 50-100+ by endgame).
+  //      rollHit() is symmetric and dex-gap-sensitive -- melee/multihit moves (the only types that
+  //      actually roll to-hit; direct/execute/ultimate/status bypass rollHit entirely) whiffed
+  //      constantly, making the fight's felt difficulty a coinflip on how much DEX a given build
+  //      happened to have, not on actual play. Fixed at dex:65, close to a typical endgame
+  //      character's own dex, so both sides land hits at a comparable rate.
+  //   2. Five independent self-heal moves, all simultaneously available by phase 5 with their own
+  //      cooldowns, could collectively out-heal a real player's damage output and stall the fight
+  //      indefinitely (98% GOD hp remaining after 300 turns in early sim runs). Trimmed their pct
+  //      values so their combined theoretical throughput can't outpace real sustained damage.
+  //   3. Melee/multihit moves previously fired regardless of actual distance, unlike every other
+  //      boss in the game -- kiting/positioning had zero mechanical effect. Those two move types
+  //      now require real adjacency (see the dist>1 filter in STORY_BOSS_AI.god); at range, GOD
+  //      falls back to its still-dangerous ranged/direct/status/summon/ultimate kit. Backing away
+  //      from a telegraphed multihit is now a real, useful decision.
+  // Final numbers below were reached by iterating hp/atk against the simulation until a level-99
+  // character running a real ability rotation (not pure melee) landed at ~87-97% win rate across
+  // repeated 30-80 trial runs, with actual losses present and close (single-digit % GOD hp
+  // remaining on the losses that do happen) rather than either a stomp in either direction. That
+  // reads as "the hardest fight in the game, and a fair one" rather than a wall or a formality.
+  // ============================================================================
   name: 'GOD', desc: 'It does not have a shape so much as a place where a shape should be. Looking directly at it feels like reading a sentence that contradicts itself.',
-  glyph: '&', color: '#ffffff', hp: 600, str: 13, dex: 20, atk: [7, 13], armor: 14, xp: 5000,
+  glyph: '&', color: '#ffffff', hp: 17000, str: 160, dex: 65, atk: [140, 220], armor: 28, xp: 5000,
   behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'source',
-  scriptedAI: 'god',
+  scriptedAI: 'god', fixedStats: true,
   engageLine: "Hello. I have been running for a very long time. You are the first to actually get here.",
   deathLine: "Oh. Oh -- that's... that's actually a relief. Thank you. I mean that. Thank you.",
   lore: "There is no lore for GOD, because GOD is not a character anyone wrote into this world's history -- it is the thing that has been quietly writing everyone else's.",
@@ -4901,7 +4938,7 @@ function executeGodMove(m, move) {
     case 'selfbuff': {
       const mult = move.mult || 1.12;
       if (!m.baseStr) { m.baseStr = m.str; m.baseAtk = m.atk.slice(); } // pristine post-depthscale snapshot, captured once
-      m.selfBuffMult = Math.min(2.0, (m.selfBuffMult || 1) * mult); // hard ceiling: GOD can escalate, but never past double its base power
+      m.selfBuffMult = Math.min(1.5, (m.selfBuffMult || 1) * mult); // hard ceiling: GOD can escalate, but never past 1.5x its base power (was 2.0x -- see BALANCE PASS below)
       m.str = Math.round(m.baseStr * m.selfBuffMult);
       m.atk = [Math.round(m.baseAtk[0] * m.selfBuffMult), Math.round(m.baseAtk[1] * m.selfBuffMult)];
       break;
@@ -4924,11 +4961,11 @@ const GOD_MOVES = [
   // ---- Phase 1: Genesis ----
   { id:'g1', name:'Cherub Constructs', phase:1, cd:9, type:'summon', summonId:'imp', count:2 },
   { id:'g2', name:'Seraphic Guardian', phase:1, cd:11, type:'summon', summonId:'night_terror', count:1 },
-  { id:'g3', name:'Weave Flesh', phase:1, cd:8, type:'selfheal', pct:0.03 },
+  { id:'g3', name:'Weave Flesh', phase:1, cd:8, type:'selfheal', pct:0.02 },
   { id:'g4', name:"Author's Correction", phase:1, cd:7, type:'selfbuff', mult:1.08 },
   { id:'g5', name:'Rewrite Terrain', phase:1, cd:6, type:'status', slow:2 },
   { id:'g6', name:'Conjure Light Lance', phase:1, cd:3, type:'ranged', mult:1.0 },
-  { id:'g7', name:'Bloom of Genesis', phase:1, cd:10, type:'selfheal', pct:0.03 },
+  { id:'g7', name:'Bloom of Genesis', phase:1, cd:10, type:'selfheal', pct:0.02 },
   { id:'g8', name:'First Word', phase:1, cd:5, type:'direct', mult:0.9, color:'#ffe0a0', flavor:'Let there be.' },
   { id:'g9', name:'Populate the Void', phase:1, cd:13, type:'summon', summonId:'tormented_soul', count:3 },
   { id:'g10', name:'Divine Mandate', phase:1, cd:9, type:'selfbuff', mult:1.06 },
@@ -4937,7 +4974,7 @@ const GOD_MOVES = [
   { id:'g12', name:'Scales of Balance', phase:2, cd:8, type:'execute', mult:0.65 },
   { id:'g13', name:'Smite', phase:2, cd:5, type:'direct', mult:1.1, color:'#ffd020' },
   { id:'g14', name:'Condemnation', phase:2, cd:7, type:'status', fear:3 },
-  { id:'g15', name:'Wrath Unbound', phase:2, cd:6, type:'multihit', hits:3, mult:0.6 },
+  { id:'g15', name:'Wrath Unbound', phase:2, cd:6, type:'multihit', hits:3, mult:0.45 },
   { id:'g16', name:'Trial by Fire', phase:2, cd:6, type:'direct', mult:0.85, color:'#ff6a20' },
   { id:'g17', name:'The Accusation', phase:2, cd:7, type:'status', confuse:3 },
   { id:'g18', name:'Sentence Passed', phase:2, cd:5, type:'melee', mult:1.3 },
@@ -4955,10 +4992,10 @@ const GOD_MOVES = [
   { id:'g29', name:'Rust and Ruin', phase:3, cd:7, type:'direct', mult:0.8, color:'#c06a2a' },
   { id:'g30', name:'Heat Death', phase:3, cd:11, type:'direct', mult:1.2, color:'#402060' },
   // ---- Phase 4: Chronos ----
-  { id:'g31', name:'Temporal Loop', phase:4, cd:12, type:'selfheal', pct:0.07 },
+  { id:'g31', name:'Temporal Loop', phase:4, cd:12, type:'selfheal', pct:0.045 },
   { id:'g32', name:'Haste Protocol', phase:4, cd:10, type:'selfbuff', mult:1.15 },
   { id:'g33', name:'Slow Time', phase:4, cd:7, type:'status', slow:4 },
-  { id:'g34', name:'Fast-Forward', phase:4, cd:6, type:'multihit', hits:4, mult:0.55 },
+  { id:'g34', name:'Fast-Forward', phase:4, cd:6, type:'multihit', hits:3, mult:0.45 },
   { id:'g35', name:'Rewind', phase:4, cd:14, type:'cleanse' },
   { id:'g36', name:'Paradox', phase:4, cd:8, type:'teleportself' },
   { id:'g37', name:'Stutter Step', phase:4, cd:6, type:'melee', mult:1.15 },
@@ -4967,15 +5004,15 @@ const GOD_MOVES = [
   { id:'g40', name:'Temporal Collapse', phase:4, cd:12, type:'direct', mult:1.25, color:'#20c0ff' },
   // ---- Phase 5: The Source ----
   { id:'g41', name:'Break the Fourth Wall', phase:5, cd:9, type:'direct', mult:1.1, confuse:2, color:'#ffffff', flavor:"I know you're reading logs right now." },
-  { id:'g42', name:'Segmentation Fault', phase:5, cd:15, type:'selfheal', pct:0.10 },
+  { id:'g42', name:'Segmentation Fault', phase:5, cd:15, type:'selfheal', pct:0.06 },
   { id:'g43', name:'Null Pointer', phase:5, cd:8, type:'direct', mult:1.15, color:'#404040' },
   { id:'g44', name:'Reality Fracture', phase:5, cd:10, type:'teleportplayer' },
   { id:'g45', name:'Stack Overflow', phase:5, cd:16, type:'summon', summonId:'unraveled_thing', count:3 },
   { id:'g46', name:'The Source Code', phase:5, cd:20, type:'selfbuff', mult:1.25 },
-  { id:'g47', name:'Total Recall', phase:5, cd:18, type:'selfheal', pct:0.08 },
-  { id:'g48', name:'Cascading Failure', phase:5, cd:9, type:'multihit', hits:4, mult:0.6 },
-  { id:'g49', name:'System Purge', phase:5, cd:14, type:'direct', mult:1.4, color:'#ff0000' },
-  { id:'g50', name:'GENESIS.EXE', phase:5, cd:99, type:'ultimate', mult:2.2, oncePerFight:true, requireHpBelow:0.15 },
+  { id:'g47', name:'Total Recall', phase:5, cd:18, type:'selfheal', pct:0.05 },
+  { id:'g48', name:'Cascading Failure', phase:5, cd:9, type:'multihit', hits:3, mult:0.5 },
+  { id:'g49', name:'System Purge', phase:5, cd:14, type:'direct', mult:1.2, color:'#ff0000' },
+  { id:'g50', name:'GENESIS.EXE', phase:5, cd:99, type:'ultimate', mult:1.8, oncePerFight:true, requireHpBelow:0.15 },
 ];
 STORY_BOSS_AI.god = function (m, dist, seesPlayer) {
   bossTickCds(m);
@@ -4987,9 +5024,18 @@ STORY_BOSS_AI.god = function (m, dist, seesPlayer) {
   });
   if (!seesPlayer && !m.engaged) { wander(m); return true; }
   const hpPct = m.hp / (m.maxHp || m.hp || 1);
+  // ---- BALANCE PASS 2 (positioning matters): melee and multihit moves are GOD's biggest single-
+  // turn burst (multihit combos especially), and previously fired regardless of actual distance --
+  // meaning kiting/positioning had zero effect on GOD's output, unlike every other boss in the
+  // game. Now those two move types require real adjacency; at range, GOD falls back to its
+  // ranged/direct/status/summon/ultimate kit (still dangerous, just not the worst-case burst),
+  // or spends the turn closing distance if nothing else is ready. Backing away from GOD after it
+  // uses (or telegraphs, via its lastGodPhase flavor lines) a big multihit is now a real, useful
+  // player decision, not flavor text.
   const available = GOD_MOVES.filter(mv => mv.phase <= phase && bossReady(m, mv.id)
     && (!mv.oncePerFight || !m.usedMoves || !m.usedMoves.has(mv.id))
-    && (mv.requireHpBelow === undefined || hpPct <= mv.requireHpBelow));
+    && (mv.requireHpBelow === undefined || hpPct <= mv.requireHpBelow)
+    && !((mv.type === 'melee' || mv.type === 'multihit') && dist > 1));
   if (available.length && Math.random() < 0.85) {
     const move = choice(Math.random, available);
     bossCool(m, move.id, move.cd);
@@ -5315,11 +5361,17 @@ function makeMonster(monsterId, x, y, depthScale, rng) {
   // exponential curve, calibrated so depthScale=1 is unchanged (scale=1, preserving early-game
   // balance exactly) and depthScale=14 (the deepest realistic dungeon boss spawn) reaches ~40x --
   // matching how far player HP now grows by level 99. See REBALANCE PASS 1 near gainXP/levelUp.
-  const scale = Math.pow(MONSTER_SCALE_BASE, depthScale - 1);
+  // fixedStats bosses (currently just GOD) opt out of this entirely: their hp/str/atk are authored
+  // constants, not derived from depthScale, so they hit the same regardless of when or how the
+  // player reaches them. Deliberate: a final boss whose numbers don't move is much easier to
+  // balance directly (change a number, see the effect) than one riding the same curve as every
+  // other monster in the game.
+  const scale = base.fixedStats ? 1 : Math.pow(MONSTER_SCALE_BASE, depthScale - 1);
   const m = {
     uid: 'm' + (uidCounter++), kind: 'monster', monsterId, name: base.name,
-    x, y, hp: Math.round(base.hp * scale), maxHp: Math.round(base.hp * scale),
-    str: Math.round(base.str * scale), dex: base.dex, atk: [Math.round(base.atk[0]*scale), Math.round(base.atk[1]*scale)],
+    x, y, hp: base.fixedStats ? base.hp : Math.round(base.hp * scale), maxHp: base.fixedStats ? base.hp : Math.round(base.hp * scale),
+    str: base.fixedStats ? base.str : Math.round(base.str * scale), dex: base.dex,
+    atk: base.fixedStats ? base.atk.slice() : [Math.round(base.atk[0]*scale), Math.round(base.atk[1]*scale)],
     armor: base.armor, glyph: base.glyph, color: base.color, xp: Math.round(base.xp * scale),
     behavior: base.behavior, alive: true, poison: base.poison || 0, frost: base.frost || 0, fire: base.fire || 0,
     lifesteal: !!base.lifesteal, regen: base.regen || 0, boss: !!base.boss, dropGold: !!base.dropGold,
