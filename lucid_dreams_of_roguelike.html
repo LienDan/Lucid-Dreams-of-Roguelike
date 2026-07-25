@@ -1360,7 +1360,7 @@ const TALENTS_V2 = [
   { id:'warlord', name:'Warlord', desc:'+3 STR, +3 DEX, +5% critical hit chance', tier:3, requires:{level:10, talent:'battlehardened'}, apply:()=>{ player.str+=3; player.dex+=3; player.critBonus=(player.critBonus||0)+0.05; } },
   { id:'grandnecromancer', name:'Grand Necromancer', desc:'Summoned allies gain +2 Armor and never expire from duration', tier:3, requires:{level:10, talent:'necrobond'}, apply:()=>{ player.allyArmorBonus=2; player.allyPermanent=true; } },
   // tier 4 — capstones, requires level 15 + a tier-3 talent
-  { id:'ascended', name:'Ascended', desc:'+30 Max HP, +20 Max MP, +2 to all attributes', tier:4, requires:{level:15, talent:'archmage'}, apply:()=>{ player.maxHp+=30; player.hp+=30; player.maxMp+=20; player.mp+=20; player.str+=2; player.dex+=2; player.int+=2; player.con+=2; player.wis+=2; } },
+  { id:'ascended', name:'Ascended', desc:'+30 Max HP, +20 Max MP, +2 to all attributes', tier:4, requires:{level:15, talent:'archmage'}, apply:()=>{ player.maxHp+=30; player.hp+=30; player.maxMp+=20; player.mp+=20; player.str+=2; player.dex+=2; player.int+=2; player.con+=2; player.wil+=2; player.cha+=2; } },
   { id:'juggernaut', name:'Juggernaut', desc:'+30 Max HP, +5 Armor, +2 STR', tier:4, requires:{level:15, talent:'warlord'}, apply:()=>{ player.maxHp+=30; player.hp+=30; player.talentArmor=(player.talentArmor||0)+5; player.str+=2; } },
   { id:'lichform', name:'Lichform', desc:'You are permanently immune to poison and gain 15% lifesteal', tier:4, requires:{level:15, talent:'grandnecromancer'}, apply:()=>{ player.poisonImmune=true; player.lifestealBonus=0.15; } },
 ];
@@ -1923,7 +1923,7 @@ const MUTATIONS = [
   { id:'fearaura', name:'Fear Aura', category:'Psychic', activation:'active', corruptionReq:15, resource:'hp', selfCost:8, type:'debuff', stat:'fear', power:1, dur:8, range:5, aoe:true, aoeRadius:2, desc:'Your presence alone unravels the minds of nearby foes.' },
   { id:'precognition', name:'Precognition', category:'Psychic', activation:'passive', corruptionReq:10, desc:'Flashes of the immediate future flicker behind your eyes.', apply:()=>{ player.critBonus=(player.critBonus||0)+0.05; } },
   { id:'telekineticshove', name:'Telekinetic Shove', category:'Psychic', activation:'active', corruptionReq:15, resource:'hp', selfCost:7, type:'debuff', stat:'dex', power:-8, dur:10, range:5, knockback:3, desc:'An unseen force batters a foe off balance.' },
-  { id:'mentalfortitude', name:'Mental Fortitude', category:'Psychic', activation:'passive', corruptionReq:0, desc:'Your mind has hardened against the whispers you now hear.', apply:()=>{ player.int+=2; player.wis+=2; } },
+  { id:'mentalfortitude', name:'Mental Fortitude', category:'Psychic', activation:'passive', corruptionReq:0, desc:'Your mind has hardened against the whispers you now hear.', apply:()=>{ player.int+=2; player.wil+=2; } },
   { id:'psychicscream', name:'Psychic Scream', category:'Psychic', activation:'active', corruptionReq:35, resource:'hp', selfCost:14, type:'damage', power:[12,20], range:5, aoe:true, aoeRadius:2, desc:'A soundless shriek that tears at the minds of all nearby.' },
 
   { id:'cryoveins', name:'Cryo Veins', category:'Elemental', activation:'passive', corruptionReq:15, desc:'Your blood runs unnaturally cold.', apply:()=>{ player.mutationFrost=(player.mutationFrost||0)+2; } },
@@ -1933,13 +1933,13 @@ const MUTATIONS = [
   { id:'voidtouch', name:'Void Touch', category:'Elemental', activation:'active', corruptionReq:40, resource:'hp', selfCost:14, type:'execute', power:[10,18], range:5, desc:'Your touch unravels flesh at the seams.' },
   { id:'magneticphysiology', name:'Magnetic Physiology', category:'Elemental', activation:'passive', corruptionReq:20, desc:'Metal bends subtly around you.', apply:()=>{ player.mutationDmgBonus=(player.mutationDmgBonus||0)+3; } },
 
-  { id:'thirdeye', name:'Third Eye', category:'Aberrant', activation:'passive', corruptionReq:15, desc:'A vestigial eye has opened at your brow, seeing what should not be seen.', apply:()=>{ player.wis+=3; } },
+  { id:'thirdeye', name:'Third Eye', category:'Aberrant', activation:'passive', corruptionReq:15, desc:'A vestigial eye has opened at your brow, seeing what should not be seen.', apply:()=>{ player.wil+=3; } },
   { id:'tentaclelash', name:'Tentacle Lash', category:'Aberrant', activation:'active', corruptionReq:25, resource:'hp', selfCost:10, type:'damage', power:[9,16], range:1, aoe:true, aoeRadius:1, desc:'Something writhes free from beneath your coat and lashes out.' },
   { id:'chrysalisskin', name:'Chrysalis Skin', category:'Aberrant', activation:'passive', corruptionReq:30, desc:'Your skin has taken on a hardened, chitinous sheen.', apply:()=>{ player.mutationArmor=(player.mutationArmor||0)+4; player.maxHp+=15; player.hp+=15; } },
   { id:'warpstep', name:'Warp Step', category:'Aberrant', activation:'active', corruptionReq:35, resource:'hp', selfCost:12, type:'blinklike', power:30, range:0, desc:'You step through a fold in space that should not exist.' },
   { id:'hivemindwhisper', name:'Hivemind Whisper', category:'Aberrant', activation:'active', corruptionReq:45, resource:'hp', selfCost:15, type:'summon', summonId:'spirit', duration:60, range:0, desc:'You call out in a language older than words, and something answers.' },
   { id:'ninthdoor', name:'The Ninth Door', category:'Aberrant', activation:'active', corruptionReq:40, resource:'hp', mp:16, type:'travelbypass', power:0, range:0, desc:'Your mind carves a door where none should exist, opening onto the waystone network from anywhere — no waystone required, only a piece of yourself.' },
-  { id:'apotheosis', name:'Apotheosis', category:'Aberrant', activation:'passive', corruptionReq:60, desc:'You are becoming something else entirely.', apply:()=>{ player.str+=2; player.dex+=2; player.int+=2; player.con+=2; player.wis+=2; } },
+  { id:'apotheosis', name:'Apotheosis', category:'Aberrant', activation:'passive', corruptionReq:60, desc:'You are becoming something else entirely.', apply:()=>{ player.str+=2; player.dex+=2; player.int+=2; player.con+=2; player.wil+=2; player.cha+=2; } },
 ];
 
 // ===================== MUTATION EXPANSION: fill existing categories + 4 new ones, tier progression via corruptionReq =====================
@@ -1998,7 +1998,7 @@ MUTATIONS.push(
   { id:'boneclaws', name:'Bone Claws', category:'Physical', activation:'active', corruptionReq:5, resource:'hp', selfCost:4, type:'damage', power:[6,11], range:1, desc:'Small bone protrusions along your knuckles.' },
   { id:'minorclairvoyance', name:'Minor Clairvoyance', category:'Psychic', activation:'passive', corruptionReq:5, desc:'Faint flashes of insight.', apply:()=>{ player.critBonus=(player.critBonus||0)+0.03; } },
   { id:'psychicwhisper', name:'Psychic Whisper', category:'Psychic', activation:'active', corruptionReq:5, resource:'hp', selfCost:4, type:'debuff', stat:'dex', power:-4, dur:6, range:4, desc:'A faint, unsettling whisper only your target can hear.' },
-  { id:'wakingdreams', name:'Waking Dreams', category:'Psychic', activation:'passive', corruptionReq:20, desc:'The boundary between waking and dreaming has thinned.', apply:()=>{ player.wis+=2; } },
+  { id:'wakingdreams', name:'Waking Dreams', category:'Psychic', activation:'passive', corruptionReq:20, desc:'The boundary between waking and dreaming has thinned.', apply:()=>{ player.wil+=2; } },
   { id:'warmblood', name:'Warm Blood', category:'Elemental', activation:'passive', corruptionReq:5, desc:'Your blood runs slightly warmer than it should.', apply:()=>{ player.mutationFrost=(player.mutationFrost||0)+1; } },
   { id:'sparkfingers', name:'Spark Fingers', category:'Elemental', activation:'active', corruptionReq:10, resource:'hp', selfCost:5, type:'damage', power:[7,13], range:3, chainLightning:true, desc:'A small crackle of static discharge from your fingertips.' },
   { id:'emberskin', name:'Ember Skin', category:'Elemental', activation:'passive', corruptionReq:15, desc:'Faint warmth radiates from your skin.', apply:()=>{ player.mutationDmgBonus=(player.mutationDmgBonus||0)+2; } },
@@ -2050,11 +2050,11 @@ TALENTS_V2.push(
   { id:'unholyvessel', name:'Unholy Vessel', desc:'+20 Max HP; active mutations cost 25% less HP', tier:4, requires:{level:15, talent:'deepersight'}, apply:()=>{ player.maxHp+=20; player.hp+=20; player.mutationHpCostReduction=0.25; } },
   { id:'battletrance', name:'Battle Trance', desc:'+8% critical chance; Stamina regenerates twice as fast', tier:4, requires:{level:15, talent:'weaponmaster'}, apply:()=>{ player.critBonus=(player.critBonus||0)+0.08; player.staminaRegenBonus=true; } },
   // tier 5 capstones (level 20 + a tier-4 talent) — one grand finisher per major build path
-  { id:'transcendence', name:'Transcendence', desc:'+3 to all attributes; +20 Max HP/MP/Stamina/Charge', tier:5, requires:{level:20, talent:'ascended'}, apply:()=>{ player.str+=3; player.dex+=3; player.int+=3; player.con+=3; player.wis+=3; player.maxHp+=20; player.hp+=20; player.maxMp+=20; player.mp+=20; player.maxStamina=(player.maxStamina||100)+20; player.stamina=(player.stamina||100)+20; player.maxCharge=(player.maxCharge||60)+20; player.charge=(player.charge||60)+20; } },
+  { id:'transcendence', name:'Transcendence', desc:'+3 to all attributes; +20 Max HP/MP/Stamina/Charge', tier:5, requires:{level:20, talent:'ascended'}, apply:()=>{ player.str+=3; player.dex+=3; player.int+=3; player.con+=3; player.wil+=3; player.cha+=3; player.maxHp+=20; player.hp+=20; player.maxMp+=20; player.mp+=20; player.maxStamina=(player.maxStamina||100)+20; player.stamina=(player.stamina||100)+20; player.maxCharge=(player.maxCharge||60)+20; player.charge=(player.charge||60)+20; } },
   { id:'perfectsoldier', name:'Perfect Soldier', desc:'+5 STR/DEX, +10% technique damage, +5% crit', tier:5, requires:{level:20, talent:'juggernaut'}, apply:()=>{ player.str+=5; player.dex+=5; player.techniqueDmgBonus=(player.techniqueDmgBonus||0)+0.1; player.critBonus=(player.critBonus||0)+0.05; } },
   { id:'lichking', name:'Lich King', desc:'+30% spell damage, allies gain another +20% HP', tier:5, requires:{level:20, talent:'lichform'}, apply:()=>{ player.spellDmgBonus=(player.spellDmgBonus||0)+0.3; player.allyHpBonus=(player.allyHpBonus||0)+0.2; } },
   { id:'cybergod', name:'Machine Ascendant', desc:'+3 Cybernetic slots; active cybernetics cost 30% less Charge', tier:5, requires:{level:20, talent:'ironsynapse'}, apply:()=>{ player.cyberSlots=(player.cyberSlots||3)+3; player.cyberCostReduction=(player.cyberCostReduction||0)+0.3; } },
-  { id:'elderone', name:'The Elder One Stirs', desc:'+40 Max HP; active mutations cost 30% less HP; +2 all attributes', tier:5, requires:{level:20, talent:'unholyvessel'}, apply:()=>{ player.maxHp+=40; player.hp+=40; player.mutationHpCostReduction=(player.mutationHpCostReduction||0)+0.3; player.str+=2; player.dex+=2; player.int+=2; player.con+=2; player.wis+=2; } }
+  { id:'elderone', name:'The Elder One Stirs', desc:'+40 Max HP; active mutations cost 30% less HP; +2 all attributes', tier:5, requires:{level:20, talent:'unholyvessel'}, apply:()=>{ player.maxHp+=40; player.hp+=40; player.mutationHpCostReduction=(player.mutationHpCostReduction||0)+0.3; player.str+=2; player.dex+=2; player.int+=2; player.con+=2; player.wil+=2; player.cha+=2; } }
 );
 
 // ---- category tags for the guide/UI (retrofit onto existing talents, new ones set it inline) ----
@@ -2718,7 +2718,7 @@ const ITEM_SETS = {
     pieces: ['rc_mask', 'rc_robes', 'rc_gloves', 'rc_boots', 'rc_band'],
     bonuses: {
       2: { desc: '+10% critical chance', critBonus: 0.10 },
-      4: { desc: '+25% critical damage, +3 to all attributes', critDmgBonus: 0.25, str: 3, dex: 3, int: 3, con: 3 },
+      4: { desc: '+25% critical damage, +3 to all attributes', critDmgBonus: 0.25, str: 3, dex: 3, int: 3, con: 3, wil: 3, cha: 3 },
     },
   },
   // ---- second itemization pass: one set per remaining dimension (8 sets, faction-matched) ----
@@ -6358,6 +6358,27 @@ function isPlayerInWater() {
   const t = curTileAt(player.x, player.y);
   return !!(t && (t.feature === 'water' || t.biome === 'ocean'));
 }
+// ---- v4 balance pass: Charisma drives ally/summon/companion strength ----
+// Previously every summoned creature and recruited companion scaled off player.level alone
+// (depthScaleForPlayerLevel), with no stat interaction at all. This blends in a CHA-driven
+// multiplier on top of that existing level curve -- level still sets the *baseline* (so a fresh
+// CHA-focused character doesn't summon something absurdly overtuned at level 1), but CHA now
+// meaningfully widens or narrows how strong your allies get relative to someone who dumped
+// points elsewhere. 8 CHA (the baseline) is neutral (1.0x); every point above/below shifts it
+// 5%, softly clamped so a min-CHA build still has functional (if weak) summons.
+function charismaAllyMult() {
+  return Math.max(0.5, Math.min(2.2, 1 + (player.cha - 8) * 0.05));
+}
+// ---- v4 balance pass: WIL was previously decorative -- talents, mutations, and backgrounds all
+// handed it out (Third Eye, Mental Fortitude, Monk, Druid, Paladin...) but nothing in the game ever
+// read player.wil. It's now Willpower: a disciplined mind shortens how long poison, fear, confusion,
+// and slow actually hold you (a per-turn chance to shake off one extra turn early, applied at the
+// two places statuses tick down -- see processEntityStatus/endTurn), and also quickens passive HP/MP
+// recovery between fights (see the regen block in endTurn). 8 WIL (baseline) does nothing extra;
+// every point above adds resist chance, capped so it's never a full immunity.
+function willpowerResistChance() {
+  return Math.max(0, Math.min(0.5, (player.wil - 8) * 0.03));
+}
 function effStr(e) { return e === player ? player.str + getBuff('str') : e.str; }
 function effDex(e) {
   if (e !== player) return e.dex;
@@ -6865,9 +6886,16 @@ function renderCharacterSheet() {
   let html = `<div class="charstats">`;
   html += `<div>Level ${player.level} Adventurer &nbsp; XP ${player.xp}/${player.xpNext}${player.gameCompleted ? ' &nbsp; <span style="color:#ffd700">&#9733; Completed</span>' : ''}</div>`;
   html += `<div>HP ${player.hp}/${player.maxHp} &nbsp; MP ${player.mp}/${player.maxMp} &nbsp; Gold ${player.gold}</div><hr>`;
-  const stats = [['str','STR'],['dex','DEX'],['int','INT'],['con','CON'],['wis','WIS']];
-  stats.forEach(([k,label],i) => {
-    html += `<div class="modal-opt">${label}: ${player[k]}${player.statPoints>0?` <span class="dim">[press ${i+1} to +1]</span>`:''}</div>`;
+  const stats = [
+    ['str','STR','melee damage, weapon/armor STR requirements'],
+    ['dex','DEX','to-hit chance and evasion'],
+    ['int','INT','Max MP, spellcasting reliability'],
+    ['con','CON','Max HP'],
+    ['wil','WIL','resist poison/fear/confuse/slow, faster HP/MP regen'],
+    ['cha','CHA','stronger allies/summons/companions, better prices'],
+  ];
+  stats.forEach(([k,label,tip],i) => {
+    html += `<div class="modal-opt">${label}: ${player[k]}${player.statPoints>0?` <span class="dim">[press ${i+1} to +1]</span>`:''} <span class="dim" style="font-style:italic">— ${tip}</span></div>`;
   });
   html += `<div style="margin-top:6px">Unspent points: ${player.statPoints}</div><hr>`;
   html += `<div>Equipped:</div>`;
@@ -6881,10 +6909,10 @@ function renderCharacterSheet() {
   effects.forEach(e => {
     html += `<div class="modal-opt" style="${e.kind==='debuff'?'color:#e05a5a':'color:#5ae0d0'}">${e.label} <span class="dim">(${e.turns} turn${e.turns===1?'':'s'} left)</span></div>`;
   });
-  renderModal('Character Sheet', html, player.statPoints>0 ? 'Press 1-5 to spend a stat point. Esc to close.' : 'Esc to close.');
+  renderModal('Character Sheet', html, player.statPoints>0 ? 'Press 1-6 to spend a stat point. Esc to close.' : 'Esc to close.');
 }
 function spendStat(idx) {
-  const keys = ['str','dex','int','con','wis'];
+  const keys = ['str','dex','int','con','wil','cha'];
   if (player.statPoints <= 0) return;
   const k = keys[idx];
   if (!k) return;
@@ -7465,7 +7493,14 @@ function repPriceMult(key) {
     // more than a genuinely earned local reputation could.
     mult += Math.sign(rep[otherKey]) * state.priceRipple * Math.min(1, Math.abs(rep[otherKey]) / 40);
   }
-  return Math.max(0.75, Math.min(1.25, mult));
+  // v4: CHA nudges prices everywhere, independent of earned reputation -- a silver tongue gets a
+  // modestly better deal even from a kingdom that's never heard of you. Deliberately small (a maxed
+  // CHA build tops out around a 6% discount) so reputation, not raw stats, stays the primary price
+  // lever. This is also the hook point for a future NPC-disposition/settlement overhaul: any
+  // per-NPC or per-settlement reaction system should read player.cha through here (or a sibling
+  // function) rather than reinventing a separate price/attitude path.
+  mult -= (player.cha - 8) * 0.0075;
+  return Math.max(0.7, Math.min(1.25, mult));
 }
 
 // ---- Radiant Quests: expanded templates (Phase 1) ----
@@ -8262,6 +8297,14 @@ function spawnAlly(monsterId, duration, nameOverride) {
   if (!spot) { log('There is no room for a summon nearby.'); return null; }
   const a = makeMonster(monsterId, spot.x, spot.y, depthScaleForPlayerLevel(player.level), Math.random);
   a.kind = 'ally'; a.owner = true; a.duration = player.allyPermanent ? 0 : (duration || 0); a.alive = true;
+  // CHA scales a freshly-summoned ally's HP, attack, and STR on top of the level-based curve above --
+  // see charismaAllyMult(). A commanding presence calls out (and holds) a noticeably stronger servant.
+  const chaMult = charismaAllyMult();
+  if (chaMult !== 1) {
+    a.maxHp = Math.max(1, Math.round(a.maxHp * chaMult)); a.hp = a.maxHp;
+    a.atk = [Math.max(1, Math.round(a.atk[0] * chaMult)), Math.max(1, Math.round(a.atk[1] * chaMult))];
+    if (a.str) a.str = Math.max(1, Math.round(a.str * chaMult));
+  }
   if (player.allyHpBonus) { a.maxHp = Math.round(a.maxHp * (1 + player.allyHpBonus)); a.hp = a.maxHp; }
   if (player.allyArmorBonus) a.armor = (a.armor || 0) + player.allyArmorBonus;
   if (nameOverride) a.name = nameOverride;
@@ -8811,7 +8854,10 @@ function scaleCompanionToPlayer(npc) {
     npc.baseHp = npc.maxHp; npc.baseStr = npc.str; npc.baseDex = npc.dex;
     npc.baseArmor = npc.armor; npc.baseAtk = npc.atk.slice();
   }
-  const scale = Math.pow(MONSTER_SCALE_BASE, depthScaleForPlayerLevel(player.level) - 1);
+  // v4: CHA now blends into the same curve -- a companion still grows with your level (the
+  // relationship/story reason they're worth bringing at all), but how commanding a leader you
+  // are (CHA) now separately widens or narrows how much they bring to a fight. See charismaAllyMult().
+  const scale = Math.pow(MONSTER_SCALE_BASE, depthScaleForPlayerLevel(player.level) - 1) * charismaAllyMult();
   const hpRatio = npc.maxHp > 0 ? npc.hp / npc.maxHp : 1; // preserve current damage %, don't full-heal on every level-up
   npc.maxHp = Math.max(1, Math.round(npc.baseHp * scale));
   npc.hp = Math.max(1, Math.round(npc.maxHp * hpRatio));
@@ -9894,7 +9940,11 @@ function newPlayer() {
     // (called once, right after archetype/custom creation finishes picking final stats) this is what
     // actually differentiates classes at level 1 -- HP now scales off CON and MP off INT instead of
     // every archetype sharing the same flat 26/16 regardless of how tanky or squishy it's meant to be.
-    str: 8, dex: 8, int: 8, con: 8, wis: 8,
+    // v4 balance pass: added CHA as a full 6th attribute. It drives ally/summon/companion power
+    // (see charismaAllyMult()) and nudges trade prices via repPriceMult() -- the same hook a future
+    // NPC-disposition/settlement overhaul can plug into. WIL, previously inert, now governs Willpower:
+    // resistance to poison/fear/confuse/slow and passive HP/MP regen speed (see processEntityStatus/endTurn).
+    str: 8, dex: 8, int: 8, con: 8, wil: 8, cha: 8,
     level: 1, xp: 0, xpNext: xpNeededForLevel(1), statPoints: 0, talentPoints: 0, talents: {},
     maxHp: 28, hp: 28, maxMp: 16, mp: 16, gold: 40,
     maxStamina: 90, stamina: 90, secondWindMax: 0, secondWindCharges: 0,
@@ -10021,11 +10071,16 @@ function processEntityStatus(e) {
       const d = Math.min(e.statusPoison, 4);
       e.hp -= d;
       e.statusPoison = Math.max(0, e.statusPoison - 1);
+      // Willpower (WIL): a chance to shake off an additional turn of poison on top of the normal tick.
+      if (e === player && e.statusPoison > 0 && Math.random() < willpowerResistChance()) e.statusPoison--;
       if (e === player) { log(`Poison courses through you (${d} damage).`); lastDamageSource = 'poison'; }
       if (e.hp <= 0) onDeath(e, null);
     }
   }
-  if (e.statusSlow > 0) e.statusSlow--;
+  if (e.statusSlow > 0) {
+    e.statusSlow--;
+    if (e === player && e.statusSlow > 0 && Math.random() < willpowerResistChance()) e.statusSlow--;
+  }
   if (e.regen) e.hp = Math.min(e.maxHp, e.hp + e.regen);
   if (e === player && player.mutationRegen) player.hp = Math.min(player.maxHp, player.hp + player.mutationRegen);
 }
@@ -11794,8 +11849,16 @@ function endTurn() {
     if (b.turns <= 0) delete player.buffs[stat];
   }
   processEntityStatus(player);
-  if (player.statusFear > 0) { player.statusFear--; if (player.statusFear === 0) log('Your courage returns.'); }
-  if (player.statusConfuse > 0) { player.statusConfuse--; if (player.statusConfuse === 0) log('Your head clears.'); }
+  if (player.statusFear > 0) {
+    player.statusFear--;
+    if (player.statusFear > 0 && Math.random() < willpowerResistChance()) player.statusFear--; // Willpower (WIL)
+    if (player.statusFear === 0) log('Your courage returns.');
+  }
+  if (player.statusConfuse > 0) {
+    player.statusConfuse--;
+    if (player.statusConfuse > 0 && Math.random() < willpowerResistChance()) player.statusConfuse--; // Willpower (WIL)
+    if (player.statusConfuse === 0) log('Your head clears.');
+  }
   if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
   processTerrainEffects();
   if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
@@ -11809,7 +11872,10 @@ function endTurn() {
     player.stamina = Math.min(player.maxStamina || 100, (player.stamina || 0) + Math.max(0, staminaRegen - encumbranceDrag));
   }
   player.charge = Math.min(player.maxCharge || 60, (player.charge || 0) + 3);
-  const regenInterval = player.regenBonus ? 5 : 10;
+  // Willpower (WIL) quickens the passive HP/MP trickle: every ~3 points of WIL above baseline
+  // shaves a turn off the interval, floored so it can never tick every single turn.
+  const wilRegenSpeedup = Math.floor(Math.max(0, player.wil - 8) / 3);
+  const regenInterval = Math.max(4, (player.regenBonus ? 5 : 10) - wilRegenSpeedup);
   if (turnCount % regenInterval === 0) { player.hp = Math.min(player.maxHp, player.hp + 1); player.mp = Math.min(player.maxMp, player.mp + 1); }
   // ---- v3: passive auto-repair from talents/cybernetics/mutations (Blacksmith's Touch, Nanite
   // Repair Mesh, Flesh-Melding Symbiosis) -- slow, steady, and stacks if you have more than one ----
@@ -12340,7 +12406,7 @@ function updateSidebar() {
   document.getElementById('level-text').textContent = `Lv ${player.level}`;
   document.getElementById('xp-text').textContent = `XP ${player.xp}/${player.xpNext}`;
   document.getElementById('gold-text').textContent = `Gold: ${player.gold}${player.talentPoints?` · Talent pts: ${player.talentPoints}`:''}`;
-  document.getElementById('stats-list').innerHTML = `STR ${player.str} &nbsp; DEX ${player.dex} &nbsp; INT ${player.int}<br>CON ${player.con} &nbsp; WIS ${player.wis} &nbsp; AC ${getArmorOf(player)}`;
+  document.getElementById('stats-list').innerHTML = `STR ${player.str} &nbsp; DEX ${player.dex} &nbsp; INT ${player.int}<br>CON ${player.con} &nbsp; WIL ${player.wil} &nbsp; CHA ${player.cha}<br>AC ${getArmorOf(player)}`;
   const eq = player.equipment;
   document.getElementById('equip-list').innerHTML = SLOT_ORDER.map(k => `${k}: ${eq[k] ? eq[k].name : '-'}`).join('<br>');
   player.quickslots = player.quickslots || [null, null, null, null];
@@ -12426,6 +12492,13 @@ function applyLoadedSave(data) {
   SEED = data.seed;
   turnCount = data.turnCount || 0;
   zoomIndex = (data.zoomIndex !== undefined) ? data.zoomIndex : 5;
+  // v4.1: the WIS stat was renamed to WIL internally (display was already "WIL"; the property
+  // name itself is now consistent too). Saves written before this rename still carry `wis` --
+  // migrate that value over so nobody's invested points silently reset to baseline.
+  if (data.player && data.player.wis !== undefined && data.player.wil === undefined) {
+    data.player.wil = data.player.wis;
+    delete data.player.wis;
+  }
   player = Object.assign(newPlayer(), data.player);  // recover dungeon state if the player was mid-dungeon when saved
   // restore kingdom-relation drift from the previous session (clearWorldRegistries() above already
   // cleared it fresh) -- old saves made before this feature simply won't have the field, and that's
@@ -12518,7 +12591,7 @@ const ARCHETYPES = [
       player.equipment.hand=makeItem('spear',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
       player.knownTechniques.push('piercingthrust','guardstance'); } },
   { id:'ranger', name:'Ranger', desc:'A survivalist marksman at home in the wilds, picking foes off from a distance.',
-    apply: () => { player.dex+=4; player.con+=1; player.wis+=1; player.gold+=80;
+    apply: () => { player.dex+=4; player.con+=1; player.wil+=1; player.gold+=80;
       player.equipment.hand=makeItem('bow',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
       player.knownTechniques.push('aimedshot','eagleeye'); } },
   { id:'duelist', name:'Duelist', desc:'A blade in each hand, weaving offense and defense in the same breath.',
@@ -12538,16 +12611,16 @@ const ARCHETYPES = [
       player.equipment.hand=makeItem('waraxe',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
       player.knownTechniques.push('ragingblow','recklessswing'); } },
   { id:'monk', name:'Monk', desc:'A disciplined martial artist who channels inner stillness into devastating strikes.',
-    apply: () => { player.wis+=3; player.dex+=2; player.con+=1; player.gold+=55;
+    apply: () => { player.wil+=3; player.dex+=2; player.con+=1; player.gold+=55;
       player.equipment.body=makeItem('robe',0,Math.random); player.equipment.gloves=makeItem('gloves',0,Math.random);
       player.knownTechniques.push('meditativestrike','kiflow'); } },
   { id:'commander', name:'Commander', desc:'A battlefield tactician who holds the line and turns the tide with a shout.',
-    apply: () => { player.str+=2; player.wis+=2; player.con+=2; player.gold+=95;
+    apply: () => { player.str+=2; player.cha+=2; player.con+=2; player.gold+=95;
       player.equipment.hand=makeItem('longsword',0,Math.random); player.equipment.offhand=makeItem('shield',0,Math.random); player.equipment.body=makeItem('chainmail',0,Math.random);
       player.knownTechniques.push('battlecry','shieldwall'); } },
   // ---- arcane & elemental casters ----
   { id:'mage', name:'Mage', desc:'A scholar of the raw arcane, wielding spells over steel.',
-    apply: () => { player.int+=4; player.wis+=2; player.gold+=60;
+    apply: () => { player.int+=4; player.wil+=2; player.gold+=60;
       player.equipment.hand=makeItem('staff',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
       player.knownSpells.push('magicmissile','shield'); } },
   { id:'elementalist', name:'Elementalist', desc:'Hurls fire and ice with equal enthusiasm and very little subtlety.',
@@ -12555,11 +12628,11 @@ const ARCHETYPES = [
       player.equipment.hand=makeItem('wand_fire',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
       player.knownSpells.push('firebolt','frostbolt'); } },
   { id:'stormcaller', name:'Stormcaller', desc:'Calls down wind and lightning to scatter foes before they can close in.',
-    apply: () => { player.int+=3; player.wis+=2; player.dex+=1; player.gold+=65;
+    apply: () => { player.int+=3; player.wil+=2; player.dex+=1; player.gold+=65;
       player.equipment.hand=makeItem('oak_staff',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
       player.knownSpells.push('galewind','lightningjavelin'); } },
   { id:'chronomancer', name:'Chronomancer', desc:'Bends the flow of time around themself, just slightly, just enough.',
-    apply: () => { player.int+=3; player.dex+=2; player.wis+=1; player.gold+=65;
+    apply: () => { player.int+=3; player.dex+=2; player.wil+=1; player.gold+=65;
       player.equipment.hand=makeItem('wand_arcane',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
       player.knownSpells.push('accelerate','foresight'); } },
   { id:'illusionist', name:'Illusionist', desc:'Wins fights by making sure the enemy can never quite tell where you are.',
@@ -12568,15 +12641,15 @@ const ARCHETYPES = [
       player.knownSpells.push('mirrorimage','phantomstep'); } },
   // ---- life, death & nature casters ----
   { id:'paladin', name:'Paladin', desc:'A holy warrior — armored, devout, and lethal to anything undead.',
-    apply: () => { player.str+=2; player.wis+=3; player.con+=1; player.gold+=90;
+    apply: () => { player.str+=2; player.wil+=2; player.cha+=1; player.con+=1; player.gold+=90;
       player.equipment.hand=makeItem('holy_mace',0,Math.random); player.equipment.body=makeItem('chainmail',0,Math.random);
       player.knownSpells.push('smite','purify'); } },
   { id:'druid', name:'Druid', desc:'Speaks for the wild places, calling on thorns, roots, and old green magic.',
-    apply: () => { player.wis+=4; player.dex+=1; player.gold+=55;
+    apply: () => { player.wil+=4; player.dex+=1; player.gold+=55;
       player.equipment.hand=makeItem('oak_staff',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
       player.knownSpells.push('thornwhip','naturesward'); } },
   { id:'necromancer', name:'Necromancer', desc:'A student of death, commanding the fallen to fight in their own place.',
-    apply: () => { player.int+=4; player.wis+=1; player.gold+=70;
+    apply: () => { player.int+=4; player.cha+=2; player.gold+=70;
       player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
       player.knownSpells.push('summonskeleton','drain'); } },
   { id:'bloodmage', name:'Blood Mage', desc:'Pays for power in their own blood, and it always seems to be worth it.',
@@ -12584,7 +12657,7 @@ const ARCHETYPES = [
       player.equipment.hand=makeItem('stiletto',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
       player.knownSpells.push('bloodpact','hemorrhage'); } },
   { id:'summoner', name:'Summoner', desc:'Prefers to let something else do the fighting, and calls it out of thin air.',
-    apply: () => { player.int+=3; player.wis+=3; player.gold+=60;
+    apply: () => { player.int+=3; player.wil+=1; player.cha+=3; player.gold+=60;
       player.equipment.hand=makeItem('staff',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
       player.knownSpells.push('summonwolf','summonspirit'); } },
   { id:'alchemist', name:'Alchemist', desc:'Turns flasks, gas, and volatile compounds into a surprisingly deep bag of tricks.',
@@ -12593,7 +12666,7 @@ const ARCHETYPES = [
       player.inventory.push(makeItem('antidote',0,Math.random));
       player.knownSpells.push('alchemistfire','acidflask'); } },
   { id:'chef', name:'Chef', desc:'A food-fueled fighter who cooks up buffs mid-battle and never goes into a fight hungry.',
-    apply: () => { player.str+=2; player.con+=3; player.wis+=1; player.gold+=70;
+    apply: () => { player.str+=2; player.con+=3; player.wil+=1; player.gold+=70;
       player.equipment.hand=makeItem('cleaver',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
       player.inventory.push(makeItem('meat_raw',0,Math.random)); player.inventory.push(makeItem('meat_raw',0,Math.random)); player.inventory.push(makeItem('meat_raw',0,Math.random));
       player.inventory.push(makeItem('herb',0,Math.random)); player.inventory.push(makeItem('herb',0,Math.random));
@@ -12610,7 +12683,7 @@ const ARCHETYPES = [
       player.knownRecipes.push('craft_landmine','craft_firebomb','craft_frostbomb');
       player.knownTechniques.push('wrenchbash','quickrig'); } },
   { id:'herbalist', name:'Herbalist', desc:'A field botanist who brews toxins and tonics on the fly, poisoning foes as readily as mending wounds.',
-    apply: () => { player.wis+=3; player.int+=2; player.con+=1; player.gold+=65;
+    apply: () => { player.wil+=3; player.int+=2; player.con+=1; player.gold+=65;
       player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
       player.inventory.push(makeItem('herb',0,Math.random)); player.inventory.push(makeItem('herb',0,Math.random));
       player.inventory.push(makeItem('herb',0,Math.random)); player.inventory.push(makeItem('herb',0,Math.random));
@@ -12623,7 +12696,7 @@ const ARCHETYPES = [
       player.knownCyberIds.push('reflexbooster'); player.installedCyber.push('reflexbooster');
       const c=CYBERNETICS.find(x=>x.id==='reflexbooster'); if (c.apply) c.apply(); } },
   { id:'occultist', name:'Occultist', desc:'You have already glimpsed something you cannot unsee, and it changed you.',
-    apply: () => { player.int+=2; player.wis+=2; player.con+=1; player.gold+=50;
+    apply: () => { player.int+=2; player.wil+=2; player.con+=1; player.gold+=50;
       player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
       player.mutations.push('chitinoushide'); player.corruption=15;
       const m=MUTATIONS.find(x=>x.id==='chitinoushide'); if (m.apply) m.apply(); } },
@@ -12821,7 +12894,7 @@ function resetWorldState() {
 function archetypeChoice(letter) {
   if (letter === '<') { showTitleScreen(); return; }
   resetWorldState();
-  if (letter === '0') { player = newPlayer(); creationDraft = { points: CREATION_POINTS, statAdds:{str:0,dex:0,int:0,con:0,wis:0}, abilities:[], abilityCat:'spells', gold:0, items:[] }; showCreateStats(); return; }
+  if (letter === '0') { player = newPlayer(); creationDraft = { points: CREATION_POINTS, statAdds:{str:0,dex:0,int:0,con:0,wil:0,cha:0}, abilities:[], abilityCat:'spells', gold:0, items:[] }; showCreateStats(); return; }
   if (letter === '9') { player = newPlayer(); const arch = choice(Math.random, ARCHETYPES); arch.apply(); recalcVitalsFromStats(); player.scenario = 'archetype:' + arch.id; log(`*** Random roll: you are a ${arch.name}! ***`); showStartScreen(); return; }
   const idx = letter.charCodeAt(0) - 97;
   const arch = ARCHETYPES[idx];
@@ -12836,24 +12909,27 @@ function showCreateStats() {
   gameState = 'create_stats';
   const d = creationDraft;
   let html = `<div class="npcline">Points remaining: ${d.points} <span class="dim">(each stat capped at +${CREATION_MAX_STAT_ADD} during creation)</span></div>`;
-  const stats = [['str','STR'],['dex','DEX'],['int','INT'],['con','CON'],['wis','WIS']];
-  stats.forEach(([k,label], i) => {
+  const stats = [
+    ['str','STR','melee dmg'],['dex','DEX','to-hit/evasion'],['int','INT','max MP'],
+    ['con','CON','max HP'],['wil','WIL','status resist, regen'],['cha','CHA','ally/summon power, prices'],
+  ];
+  stats.forEach(([k,label,tip], i) => {
     const capped = d.statAdds[k] >= CREATION_MAX_STAT_ADD;
-    html += `<div class="modal-opt" onclick="simulateKey('${i+1}')">[${i+1}] ${label}: ${8+d.statAdds[k]} <span class="dim">(+1 for 1 point${capped?', capped':''})</span></div>`;
+    html += `<div class="modal-opt" onclick="simulateKey('${i+1}')">[${i+1}] ${label}: ${8+d.statAdds[k]} <span class="dim">(+1 for 1 point${capped?', capped':''} — ${tip})</span></div>`;
   });
   html += `<div class="modal-opt" onclick="simulateKey('<')" style="margin-top:6px">[&lt;] Back: choose a different path</div>`;
   html += `<div class="modal-opt" onclick="simulateKey('Enter')">[Enter] Next: choose starting abilities →</div>`;
-  renderModal('Create Character — Attributes', html, 'Press 1-5 to add a point, &lt; to go back, Enter to continue.');
+  renderModal('Create Character — Attributes', html, 'Press 1-6 to add a point, &lt; to go back, Enter to continue.');
 }
 function createStatsKey(key) {
   const d = creationDraft;
   if (key === 'Enter') { showCreateAbilities(); return; }
   if (key === '<') { showArchetypePicker(); return; }
-  const keys = ['str','dex','int','con','wis'];
+  const keys = ['str','dex','int','con','wil','cha'];
   const idx = parseInt(key,10) - 1;
   const k = keys[idx];
   if (!k || d.points <= 0) return;
-  if (d.statAdds[k] >= CREATION_MAX_STAT_ADD) { log(`STR/DEX/INT/CON/WIS are each capped at +${CREATION_MAX_STAT_ADD} during creation — further growth comes from leveling, gear, and talents.`); return; }
+  if (d.statAdds[k] >= CREATION_MAX_STAT_ADD) { log(`STR/DEX/INT/CON/WIL/CHA are each capped at +${CREATION_MAX_STAT_ADD} during creation — further growth comes from leveling, gear, and talents.`); return; }
   d.statAdds[k]++; d.points--;
   showCreateStats();
 }
@@ -12959,7 +13035,7 @@ function createFinalKey(key) {
 }
 function finishCustomCreation() {
   const d = creationDraft;
-  player.str += d.statAdds.str; player.dex += d.statAdds.dex; player.int += d.statAdds.int; player.con += d.statAdds.con; player.wis += d.statAdds.wis;
+  player.str += d.statAdds.str; player.dex += d.statAdds.dex; player.int += d.statAdds.int; player.con += d.statAdds.con; player.wil += d.statAdds.wil; player.cha += d.statAdds.cha;
   recalcVitalsFromStats();
   let maxMutationReq = -1;
   d.abilities.forEach(id => {
@@ -13113,6 +13189,12 @@ const GUIDE_SECTIONS = [
     the moment you finish character creation (premade or custom) — instead of every class sharing an identical flat
     HP/MP pool, a warrior's higher CON and a mage's higher INT genuinely produce a tankier warrior and a mana-richer
     mage right from level 1. Leveling up continues to grow both further based on your current CON/INT.</div>
+    <div class="modal-opt"><b>Six attributes, six distinct jobs:</b> STR raises melee damage and how well you carry
+    heavy weapons/armor; DEX raises your chance to hit and to be missed; CON raises Max HP; INT raises Max MP and
+    how reliably your spells land at full strength; WIL (Willpower) shortens how long poison, fear, confusion, and
+    slow hold you, and speeds up your passive HP/MP regen between fights; CHA (Charisma) strengthens every summon,
+    ally, and companion you bring into a fight, and nudges trade prices in your favor everywhere you go — the same
+    hook a future settlement/NPC rework will build on.</div>
     ${generateScenarioGuideHTML()}
     <div class="modal-opt" style="margin-top:6px">From the main menu you can also Continue a saved game, or start fresh.
     Saving/loading uses your browser's local storage (or an exported file) — see the Saves &amp; Meta tab.</div>` },
@@ -13640,7 +13722,7 @@ function handleKey(e) {
   if (gameState === 'confirmdelete') { if (key === 'y' || key === 'n' || key === 'Escape') { confirmDeleteSaveChoice(key); return; } return; }
   if (gameState === 'halloflegends') { if (key === 'Escape') { showTitleScreen(); return; } return; }
   if (gameState === 'create_archetype') { if (key === '<' || key === '0' || key === '9' || /^[a-z]$/.test(key)) archetypeChoice(key); return; }
-  if (gameState === 'create_stats') { if (key === 'Enter' || key === '<' || /^[1-5]$/.test(key)) createStatsKey(key); return; }
+  if (gameState === 'create_stats') { if (key === 'Enter' || key === '<' || /^[1-6]$/.test(key)) createStatsKey(key); return; }
   if (gameState === 'create_abilities') { if (key === 'Enter' || key === '<' || key === '[' || key === ']' || /^[1-4]$/.test(key) || /^[a-z]$/.test(key)) createAbilitiesKey(key); return; }
   if (gameState === 'create_final') { if (key === 'Enter' || key === 'g' || key === '<' || key === '[' || key === ']' || /^[a-z]$/.test(key)) createFinalKey(key); return; }
   if (gameState === 'start') { if (/^[a-z]$/.test(key)) beginScenario(key); return; }
@@ -13778,7 +13860,7 @@ function handleKey(e) {
   }
   if (gameState === 'character') {
     if (key === 'Escape') { closeModal(); return; }
-    if (/^[1-5]$/.test(key)) { spendStat(parseInt(key,10)-1); return; }
+    if (/^[1-6]$/.test(key)) { spendStat(parseInt(key,10)-1); return; }
     return;
   }
   if (gameState === 'spellbook') {
