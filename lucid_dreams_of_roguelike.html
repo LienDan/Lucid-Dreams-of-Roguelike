@@ -403,6 +403,10 @@
 
       <h2>Quests &amp; Kin</h2>
       <div class="bar-text" id="quest-text">No active quests</div>
+      <div id="mainquest-row" style="margin-top:4px">
+        <div class="bar-text" id="mainquest-title" style="color:var(--amber-bright)">-</div>
+        <div class="bar-text dim" id="mainquest-hint" style="line-height:1.4;font-size:11px">-</div>
+      </div>
       <div class="bar-text" id="spouse-text">Unmarried</div>
 
       <div id="compass-row" class="hidden">
@@ -450,7 +454,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.17.1-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.18.0-alpha</div>
     </div>
   </div>
 
@@ -1259,6 +1263,8 @@ const DUNGEON_THEMES = {
   sewer:          { name:'Sewer', tier:'common', genre:'cave', depthRange:[2,4], dtierMax:1 },
   ruins:          { name:'Ancient Ruins', tier:'uncommon', genre:'rooms', depthRange:[3,6], dtierMax:2 },
   crypt:          { name:'Forgotten Crypt', tier:'uncommon', genre:'rooms', depthRange:[3,6], dtierMax:2 },
+  ruinedlibrary:  { name:'Ruined Library', tier:'uncommon', genre:'rooms', depthRange:[2,5], dtierMax:2, bookHeavy:true,
+    factions:['undead','eldritch'] },
   castle:         { name:'Abandoned Castle', tier:'uncommon', genre:'rooms', depthRange:[4,7], dtierMax:2 },
   fortress:       { name:'Ruined Fortress', tier:'rare', genre:'rooms', depthRange:[6,10], dtierMax:3 },
   tower:          { name:'Ancient Tower', tier:'rare', genre:'rooms', depthRange:[6,10], dtierMax:3 },
@@ -1268,6 +1274,382 @@ const DUNGEON_TIER_WEIGHTS = { common: 65, uncommon: 25, rare: 10 };
 
 // quest templates for radiant quest generation
 const QUEST_MONSTER_POOL = ['wolf','boar','bandit','spider','jackal','snake','goblin','giantrat','skeleton'];
+
+// ===================== LORE & BOOKS =====================
+// Design goal (see player feedback): almost nothing about this game's systems should live only in
+// a Help menu nobody opens. Every entry below is a real, readable, in-world object -- a diary, a
+// field guide, a research paper, a half-burnt letter -- written first as a piece of the world, and
+// second (where it fits naturally) as the place a curious player learns a mechanic exists at all:
+// what dimensions are and how each is reached, that containers can be looted AND stocked, how
+// kingdom reputation and bounties work, what a waystone does, and so on. None of them read like a
+// tutorial; they read like something someone in this world would actually have written down.
+//
+// These are the persistent, hand-authored books -- the same ~90 exist in every world, seeded to
+// specific container types/roles below so where you find one makes sense (a dead adventurer's
+// diary in a wilderness sack, not a noble's vault; a bestiary on a scholar's desk, not a barrel of
+// turnips). generateProceduralBook() (defined further down, near the container/book placement
+// glue) supplements these with an unlimited number of unique, mad-libs-from-world-data books for
+// flavor and volume -- but the ~90 below are the ones that matter for teaching the game and for
+// carrying real narrative weight, and they're identical from world to world so players can discuss
+// and reference them.
+const BOOK_CATEGORIES = {
+  diary: 'Diary', history: 'History', bestiary: 'Field Guide', research: 'Research',
+  textbook: 'Textbook', letter: 'Letter', myth: 'Myth & Legend', guide: "Traveler's Guide",
+};
+const BOOKS_MANUAL = [
+// ---------------------------------------------------------------- DIMENSIONS (the big one) ----
+{ id:'dim_overview', title:'On the Rifts Between Worlds', author:'Magistra Ilyenne Vance', date:'a scholar\'s hand, undated', category:'research', tags:['dimensions'],
+  body:"There are, as best I can determine, no fewer than twelve worlds folded against our own, each reachable only through a rift -- a torn place that does not open on its own. In every case I have documented, the tear requires violence, sacrifice, or profound stillness on our side before it will show itself.\n\nMost commonly: something old and powerful enough to bend the boundary is killed at the heart of the place it has claimed as its own, and where it falls, the rift opens in its place. I have traced this pattern to guardians behind demonic gates, atop sky-borne bastions, at the bottom of flooded crypts, within grinding gear-sanctums, inside necropolises that will not stay buried, and elsewhere besides -- always somewhere shaped by what waits inside it.\n\nA smaller few worlds resist even this. One, I am told, is not guarded by any creature that can be fought at all, but is instead reached by resting -- truly resting, not merely sleeping -- at a very particular kind of altar, one that seems to exist to be found rather than defended. Others still require an object be carried to a specific standing structure and used there, the killing having already been done elsewhere first.\n\nI have not catalogued all twelve. I doubt one scholar could. But I set this down so that the next of us does not have to start from nothing." },
+{ id:'dim_bestiary_intro', title:'A Traveler\'s Warning, Scrawled in a Margin', author:'unknown', date:'undated', category:'letter', tags:['dimensions'],
+  body:"If you are reading this because you found a rift and are deciding whether to step through -- don't, not yet. Whatever killed the thing that was guarding it is not necessarily stronger than what waits on the other side. I have seen a party of six go through a gate stinking of demon-blood and come back missing two. Rest. Restock. Then go, because you will go, we always do." },
+{ id:'dim_launch_cradle', title:'Notes on a Wrecked Hulk', author:'Salvager Corrin Adze', date:'field notes, water-stained', category:'diary', tags:['dimensions'],
+  body:"Third week picking through the hulk. Whatever's haunting the lower decks doesn't patrol, it waits, and it waits close to something the old crew called a Launch Cradle -- half machine, half altar, I honestly can't tell which. There's a core, still faintly warm, wedged into a housing near the aft section. My guess: kill what's guarding it, pry the core loose, and that cradle does something with it. I'm not sticking around to test the theory alone. If someone finds this, bring backup, and don't touch the cradle empty-handed -- I don't think it does anything for you without the core seated first." },
+{ id:'dim_folding_stones', title:'The Folded Vault: A Warning to Cartographers', author:'Surveyor Denh Oskaro', date:'guild report, incomplete', category:'research', tags:['dimensions'],
+  body:"My instruments do not agree with each other inside the vault. A corridor I paced at forty strides measured sixty on the return. I believe this is not a flaw in the vault but its nature -- it does not occupy space the way the rest of the world does, and whatever keeps watch there is native to that fact in a way that made it very difficult to hit with a blade traveling in a straight line.\n\nTwo things were recovered from the guardian: a lens, bent in a way that hurts slightly to look at directly, and reports (unconfirmed by me) of a second component, a key, carried by something else entirely -- a wandering thing the old maps simply mark 'The Recursion,' as if giving it a fuller name would be unwise. Local legend holds that both, brought together and used at a specific ring of standing stones, fold a door open where there was none.\n\nI did not stay to confirm this. I recommend the next surveyor doesn't either, alone." },
+{ id:'dim_dream_sanctum', title:'A Monk\'s Instructions for the Slumbering Altar', author:'Brother Teodwin', date:'undated', category:'guide', tags:['dimensions'],
+  body:"Pilgrims ask me often how one reaches the Lucid Expanse, expecting a monster to slay or a key to find. There is neither. The altar asks only that you rest at it properly -- not the fitful sleep of the road, but true rest, undefended, trusting the place enough to close your eyes fully. Many cannot manage it on the first attempt. The Expanse does not reward force. It rewards stillness, which for most of us is the harder thing to offer." },
+{ id:'dim_abyssal', title:'Field Report: The Demon Gate', author:'Warden-Captain Ysolt Fenmark', date:'campaign log', category:'diary', tags:['dimensions'],
+  body:"Confirmed: the gate is guarded, not merely infested. Something old wears a title down there, and it does not flee. We lost the vanguard learning that. I am recommending any future expedition bring fire in quantity and someone who can heal through sustained damage, not burst. If it falls, and I believe it can, I expect whatever's behind that gate to become reachable -- the old texts agree that where these things die, the world thins out." },
+{ id:'dim_gilded_choir', title:'Hymnal Marginalia', author:'a chorister, name scratched out', date:'undated', category:'letter', tags:['dimensions'],
+  body:"They call it a bastion but it sings. I have stood beneath it and heard the choir before I ever saw the stair up. Something conducts them, and I do not think it considers itself a monster -- I think it considers itself righteous, which in my experience makes a thing considerably harder to reason with, and considerably easier to provoke into a fight you didn't ask for." },
+{ id:'dim_undertow', title:'Diving Log: The Flooded Crypt', author:'Diver Merah Kess', date:'expedition log', category:'diary', tags:['dimensions'],
+  body:"Water this deep shouldn't have current, and it does, and it moves toward something. We found the crypt seal three fathoms down, still airtight after however many years. Whatever kept it airtight this long is, I'd wager, still down there keeping it that way. Bringing rope, bringing light, bringing someone braver than me next time." },
+{ id:'dim_clockwork', title:'Maintenance Log, Gear Sanctum (Incomplete)', author:'unsigned', date:'mechanical hand', category:'diary', tags:['dimensions'],
+  body:"Cog-count off by four thousand this cycle. Sanctum keeper reports 'productivity optimal.' I do not think the keeper is reporting to us anymore. Recommend replacement of keeper. Recommend replacement performed with considerable force and from a safe distance." },
+{ id:'dim_bloom', title:'Botanist\'s Last Entry', author:'Herbalist Wrenna Sae', date:'field journal', category:'diary', tags:['dimensions'],
+  body:"The sepulchre is not overgrown, I was wrong to call it that in my first entry. It has been consumed and repurposed -- the vines are load-bearing now, holding up walls they long since ate through. Something is directing that growth. I don't think it's a plant the way I understand plants. I'm leaving my sample kit behind; whatever's down here, I don't want it in my bag when I find out what it actually is." },
+{ id:'dim_kernel', title:'Corrupted Log Fragment', author:'[SYSTEM]', date:'timestamp illegible', category:'diary', tags:['dimensions'],
+  body:"ERROR AT DEPTH — retry — retry — retry — something is catching every exception and rethrowing it as itself. we cannot patch what we cannot read. recommend physical intervention. recommend bringing something that has never touched a keyboard in its life. it will not expect that." },
+{ id:'dim_undercity', title:'A Citizen\'s Complaint, Filed and Ignored', author:'Resident, Undercity Spire district', date:'municipal record', category:'letter', tags:['dimensions'],
+  body:"To whoever still reads these: the Spire has not answered a maintenance request in longer than anyone alive can confirm, and yet the lights still function, the doors still open for authorized traffic, and something still signs the forms. I have stopped filing complaints about the Spire administrator. I do not think 'administrator' is entirely the right word for what signs them anymore." },
+{ id:'dim_necropolis', title:'The Unburied Queen: A Warning Carved in Bone', author:'unknown, translated', date:'ancient', category:'myth', tags:['dimensions'],
+  body:"She was buried seven times and rose seven times, and on the eighth her mourners simply stopped trying and built the necropolis around her instead, reasoning it was easier to worship a thing that would not stay dead than to keep failing to keep it that way. I do not know if this is history or fable. I know that the necropolis exists, and that something rules it, and that it has never once, in any account I have gathered, been described as resting." },
+{ id:'dim_wyrmreach', title:'Prospector\'s Boast, Overheard and Recorded', author:'tavern gossip', date:'undated', category:'letter', tags:['dimensions'],
+  body:"Old Corvin swears there's a lair out past the reach where the gold's stacked higher than a man and the thing sleeping on it hasn't opened both eyes at once in a century. He also swears he's been there and back three times. I believe the lair. I don't believe Corvin's been within a mile of it -- nobody comes back from a wyrm's hoard still owing money at the bar." },
+// ---------------------------------------------------------------- CONTAINERS / WORLD SYSTEMS ----
+{ id:'guide_containers', title:'A Quartermaster\'s Field Guide to Storing Your Life\'s Work', author:'Quartermaster Obed Tharn', date:'guild handbook, 4th printing', category:'guide', tags:['containers'],
+  body:"New recruits always ask why we bother with chests and crates in the field when a pack will do. The answer is simple: a pack goes where you go, and sometimes you need somewhere that doesn't. Cache your surplus in a barrel at a waypost, store trophies in a chest you mean to come back for, and don't be shy about leaving something behind if it's slowing you down -- a well-placed sack of supplies has saved more expeditions than any weapon I've issued.\n\nWorth remembering: a container left in the world stays exactly as you left it, contents and all, for as long as you're in the area to matter. Sort what's inside if it's gotten messy -- most containers will let you, same as your own pack. And don't assume everything with a lid is a threat; plenty of what you'll find is just someone's honest storage, not a trap." },
+{ id:'guide_bookshelves', title:'On Libraries and Their Keepers', author:'Archivist Sennah Oduya', date:'guild circular', category:'guide', tags:['containers','books'],
+  body:"A proper library does not keep its books behind glass; it keeps them on shelves, where hands can reach them, because a book no one touches might as well be a brick. If you find a bookshelf, a desk, or a study anywhere in your travels, look through it before you move on. You will find some books worth carrying, and I'd ask that you leave the rest for the next reader, though I know that's a request and not a rule I can enforce from here." },
+// ---------------------------------------------------------------- KINGDOMS, REPUTATION, LAW ----
+{ id:'guide_reputation', title:'How a Kingdom Remembers You', author:'Herald Cassian Bru', date:'a herald\'s primer', category:'guide', tags:['reputation'],
+  body:"Every hall keeps ledgers, but a kingdom's true memory isn't written down at all -- it's carried by the people who saw what you did. Do right by a settlement enough times and doors open that were closed before: better prices, warmer welcomes, work offered rather than demanded. Do wrong by one and word travels faster than you'd like; guards grow suspicious, merchants pad their prices, and a bounty follows you long after you've left the scene of whatever you did.\n\nReputation is regional, not universal. A name spoken with respect in one hold may mean nothing three kingdoms over -- or, if your deeds were dramatic enough, may have traveled ahead of you regardless. Either way, it is rarely wiped clean quickly, and never by force." },
+{ id:'guide_bounty', title:'A Watch Captain\'s Notes on Wanted Notices', author:'Watch-Captain Reyna Holt', date:'internal memo', category:'guide', tags:['bounty'],
+  body:"For the newer guards: a bounty isn't posted lightly, and it doesn't fade because the offender waited long enough. It follows the person, tallies with each new offense in our jurisdiction, and stays live until it's paid off, worked off, or the offender's luck runs out and someone collects the harder way. If you catch someone with coin enough to clear their own name, that's still justice done, whatever the older watchmen mutter about it." },
+{ id:'guide_marriage', title:'On Courtship Among the Wandering', author:'Matchmaker Old Prisca', date:'a well-worn pamphlet', category:'guide', tags:['marriage'],
+  body:"You would be surprised how many adventurers ask me this, sheepishly, after their third or fourth visit to the same town: is it foolish, to court someone while living the road? I tell them all the same thing. Affection is built the plain way -- time spent, kindness shown, gifts that say you were paying attention -- and it is not undone by distance if the visits keep coming. Marriage, when it happens, changes nothing about who you are out there. It only means someone's waiting for the knock on the door, and that the door, when you find it, is truly yours." },
+{ id:'guide_waystones', title:'The Waystone Network, Explained to a Child', author:'Cartographer Guild, primer edition', date:'undated', category:'guide', tags:['waystones'],
+  body:"Long before any of us were born, someone raised stones at the crossings of the old roads and taught them to remember each other. Touch one, and if you have stood at another before, you may ask to be taken there instead of walking the whole way again. It costs nothing but the asking. No one fully agrees on who built the first ones, but everyone agrees they're worth finding early, and worth marking on your own map the moment you do." },
+{ id:'guide_talents', title:'A Veteran\'s Notes on Growing Into Yourself', author:'Retired Blade Orin Vask', date:'personal notes, shared freely', category:'guide', tags:['talents'],
+  body:"Every fighter I've trained asks the same question sooner or later: when do I get stronger, really stronger, not just a sharper sword? The honest answer is that strength like that isn't bought, it's grown -- earned through the doing, banked as you go, and spent deliberately on the parts of yourself you mean to lean on hardest. Don't spread it thin trying to be good at everything. Pick what you already are, and become more of it." },
+{ id:'guide_tomes', title:'A Bookbinder\'s Note on Tomes That Bite Back', author:'Bookbinder Halvard Cray', date:'trade note', category:'guide', tags:['tomes'],
+  body:"Not every book is meant to be read the way you're reading this one. Some are meant to be studied, slowly, and once truly learned they change you in a way no amount of re-reading a page ever will. You'll know the difference by the weight -- a tome like that sits heavier in the hand than its size accounts for, as if it knows it's more than paper." },
+{ id:'guide_sets', title:'A Collector\'s Obsession, Justified', author:'Collector Fen Marrow', date:'personal correspondence', category:'guide', tags:['sets'],
+  body:"People mock me for chasing matched pieces instead of simply taking the strongest thing on offer. They stop mocking once they've worn a full matched set themselves and felt it click together into something greater than the sum of its parts. Some gear was made to be worn alone. Some was made to be worn as a set, and rewards you specifically for finding the rest of the family." },
+// ---------------------------------------------------------------- CYBERNETICS / ELDRITCH ----
+{ id:'research_cybernetics', title:'Grafted Steel: An Introduction', author:'Chief Surgeon Petra Aldwin', date:'medical treatise', category:'research', tags:['cybernetics'],
+  body:"The body accepts more than the old physicians believed possible, provided the graft is done with skill and the patient's will holds through the fever that follows. I have implanted reinforced limbs, subdermal plating, and neural threading with results ranging from remarkable to catastrophic, and the difference was rarely the surgery -- it was the patient's tolerance for becoming something new.\n\nI caution against grafting purely for power. I have seen it done well by soldiers who needed to survive what flesh alone could not, and I have seen it done poorly by the vain, who wanted strength without wanting to change, and found out too late that you cannot have the first without the second." },
+{ id:'research_eldritch', title:'On Mutation and the Cost of Power Not Meant for Us', author:'Scholar Ammon Thess', date:'banned in three kingdoms', category:'research', tags:['eldritch'],
+  body:"There is power out past the folded vaults and beneath the corrupted kernels that does not ask permission before it changes you. I have studied three subjects who touched it and survived, and none of the three would call what happened to them survival, exactly -- more a negotiation, ongoing, with something in their own blood now that wasn't there before.\n\nWhat I can say with confidence: the change is not undone by regret. Whatever you take from that kind of power, you keep, and it keeps a piece of you in turn. I do not say this to forbid the practice. I say it so that whoever reads this chooses with open eyes." },
+// ---------------------------------------------------------------- BESTIARY ----
+{ id:'best_undead', title:'Field Guide: The Restless Dead', author:'Grave-Warden Ilse Corbin', date:'guild manual', category:'bestiary', tags:['bestiary'],
+  body:"Skeletons rise fastest and think least -- expect persistence over cunning, and expect them to keep coming long after a living soldier would have broken and run. Ghouls retain more of what they were, which makes them more dangerous in a fight and considerably sadder to put down. Liches are neither fast nor mindless, and if you meet one that speaks first, listen carefully; it usually means it thinks it can win the conversation as easily as the fight, and it is frequently right about the conversation." },
+{ id:'best_demons', title:'Field Guide: Things That Come Through Gates', author:'Warden Ysolt Fenmark', date:'campaign appendix', category:'bestiary', tags:['bestiary'],
+  body:"Lesser demons are opportunists, not strategists -- they press when you're weak and flee when you're not, which makes them predictable if exhausting. Their masters are the opposite in every particular: patient, deliberate, and disturbingly willing to sacrifice the lesser ones as a delaying tactic while they finish whatever ritual you interrupted them mid-casting. Never assume a demon fight is over because the small ones stopped coming." },
+{ id:'best_golems', title:'Field Guide: Constructs and Clockwork', author:'Artificer Boyle Karst', date:'workshop notes', category:'bestiary', tags:['bestiary'],
+  body:"A golem does not tire, does not fear, and does not improvise -- which means every golem fight is, underneath the noise, a puzzle about what animates it and how to interrupt that, not a contest of endurance you can simply win by outlasting it. Look for a core, a rune, a keeper standing just out of the fray directing it. Remove that, and the strongest construct is just very heavy furniture." },
+{ id:'best_elementals', title:'Field Guide: Elemental Kin', author:'Druid Sable Wrenwood', date:'grove records', category:'bestiary', tags:['bestiary'],
+  body:"Elementals are not creatures so much as opinions the world holds about itself, given shape and temper. Fire ones are quick to anger and quicker to burn out. Water ones are patient to the point of unnerving, content to simply wear you down. None of them hold grudges past the fight, which is either a comfort or an insult depending on how the fight went for you." },
+{ id:'best_dragons', title:'Field Guide: Wyrmkind, What Little We Know', author:'Prospector\'s Guild, collective notes', date:'guild bestiary, undated', category:'bestiary', tags:['bestiary'],
+  body:"We know less about wyrms than any other creature in this guide, mostly because so few who study them closely survive to publish. What's agreed: they are old, they are proud, they remember insults across years rather than moments, and a hoard is not decoration to them but a ledger of every kill that mattered. Do not touch the hoard while the wyrm is watching. Do not assume it isn't watching." },
+{ id:'best_beasts', title:'Field Guide: Wolves, Boars, and the Ordinary Dangerous', author:'Ranger Coll Ambrose', date:'ranger handbook', category:'bestiary', tags:['bestiary'],
+  body:"Most beasts want food or territory, not glory, and will disengage from a fight that costs more than it's worth -- which means half of surviving a wolf pack is simply making the fight look expensive early. Boars are the exception: cornered or protecting young, they commit fully, and a committed boar does not read a battle the way a wolf does. Give it room before you give it a reason." },
+// ---------------------------------------------------------------- HISTORY ----
+{ id:'hist_old_kingdoms', title:'A Short History of the Old Kingdoms', author:'Court Historian Wendeline Ashcroft', date:'chronicle, first volume', category:'history', tags:['history'],
+  body:"Every hold now standing was built on the ruin of at least one that came before it -- this is not cynicism, it is simply how borders have always moved. The old kingdoms fell variously to famine, to war, to plague, and at least twice in the record to threats that came from no rival crown at all, but from below, or from between. What replaced them kept the roads, mostly, and the wells, always, and forgot everything else with a speed that should trouble us more than it does." },
+{ id:'hist_founding_myths', title:'On the Founding of Halls: A Comparative Study', author:'Scholar Beren Auk', date:'academic paper', category:'history', tags:['history'],
+  body:"I have collected forty-one founding stories from across as many settlements, and while the details vary -- a migration fleeing famine here, a war of succession there, a discovery on ruined ground somewhere else -- the shape is nearly always identical: desperate people, an unlikely stroke of fortune, and a founder who is remembered as wiser and braver than they likely were. I do not say this to diminish any hold's pride in its history. I say it because the sameness itself is the more interesting finding." },
+{ id:'hist_the_long_war', title:'Survivor\'s Account of the Long War', author:'Veteran Adalric Fenn', date:'oral history, transcribed', category:'diary', tags:['history'],
+  body:"They'll tell you it lasted a decade. It lasted longer than that in every way that matters -- longer in the fields that didn't recover, longer in the towns that never got their numbers back, longest of all in men like me who came home and found the war hadn't ended so much as stopped needing a battlefield to keep happening in my head. I write this down so someone remembers it wasn't glorious. It was necessary, maybe. It was never glorious." },
+// ---------------------------------------------------------------- DIARIES OF THE DEAD ----
+{ id:'diary_adventurer_1', title:'The Last Pages of Someone\'s Journal', author:'unknown', date:'undated, blood-spotted', category:'diary', tags:['diary'],
+  body:"Day nine without proper food. Kael says another day, always another day, and I'm starting to think he says it because he's afraid to be the one who says turn back. I would say it myself but I don't want it to be me either. Found good water today at least. Small mercies.\n\n[the entry ends mid-sentence]" },
+{ id:'diary_adventurer_2', title:'A Miner\'s Diary, Recovered', author:'Miner Oskar Bellum', date:'personal journal', category:'diary', tags:['diary'],
+  body:"Struck something in the lower tunnel that wasn't ore. Foreman says seal it and move on, and for once I agree with the foreman. Some things under this ground have been under it a very long time for a reason, and I'd rather be poor than curious about why." },
+{ id:'diary_adventurer_3', title:'Notes from a Failed Expedition', author:'Expedition Leader Dara Voss', date:'field log', category:'diary', tags:['diary'],
+  body:"Lost two more today. I keep telling myself the map was accurate and the danger was simply worse than the map could show, because the alternative is that I led them somewhere I should have known better than to go. Pressing on regardless. There's nothing behind us worth turning back for either." },
+{ id:'diary_soldier', title:'A Conscript\'s Letter Home, Never Sent', author:'Conscript Timo Reyes', date:'letter, undelivered', category:'letter', tags:['diary'],
+  body:"Mother, if you're reading this it means someone finally cleared the field and found where I fell, which means it's been longer than I'd like since I could have told you myself that I was scared the whole time and proud anyway, and that both of those things were true at once, the whole way through." },
+{ id:'diary_hermit', title:'A Hermit\'s Private Musings', author:'the Hermit of Greywater', date:'undated, many entries', category:'diary', tags:['diary'],
+  body:"People come to me for wisdom and I give them silence instead, because silence is the only wisdom I actually possess. Twenty years alone teaches you that most questions answer themselves if you stop asking them out loud." },
+{ id:'diary_scout', title:'A Scout\'s Trail Notes', author:'Scout Perrin Ash', date:'field notes', category:'diary', tags:['diary'],
+  body:"Marked the safe fords in red chalk, the bad ground in black. If you're reading this and my chalk's washed away, assume every ford is bad ground until proven otherwise. That assumption has kept me alive longer than any map." },
+{ id:'diary_alchemist_apprentice', title:'An Apprentice\'s Complaints', author:'Apprentice Iva Rennick', date:'personal diary', category:'diary', tags:['diary'],
+  body:"Master says I'll thank her one day for making me label every jar twice. I will not. I will, however, admit that the one time I skipped it I nearly poisoned the both of us, so perhaps thanks are owed after all, quietly, and only in writing where she can't see me admit it." },
+// ---------------------------------------------------------------- MYTHS & LEGENDS ----
+{ id:'myth_the_antagonist', title:'The Tale of the Nameless Rival', author:'oral tradition, many tellers', date:'undated, retold often', category:'myth', tags:['myth'],
+  body:"Every hold has a version of this story, and they never agree on the name, only the shape: someone who wanted what you wanted, took the shorter road to get it, and is waiting at the end regardless of which path you chose. The old tellers say the rival isn't evil, exactly -- just further along a road you're both on, and unwilling to step aside for you now that they've come this far." },
+{ id:'myth_something_beyond', title:'A Heretical Footnote', author:'anonymous, crossed out and rewritten twice', date:'undated, hand-copied', category:'myth', tags:['myth'],
+  body:"They warn you about the rival, the false god at the end of the long road, and they are right to. But I have read enough banned texts to suspect that even the rival is answering to something further back still, something none of the old stories name because none of the old tellers lived long enough to learn its name. I do not know if this is true. I know I would rather have written it down and been wrong than kept silent and been right." },
+{ id:'myth_first_waystone', title:'Who Raised the First Waystone?', author:'folk tale, several regional variants', date:'undated', category:'myth', tags:['waystones'],
+  body:"In one telling, it was a lost traveler who begged the road itself for mercy and was answered with a stone that remembered the way home. In another, it was built by hands none of us would recognize as hands at all, long before any kingdom kept records. Both versions agree on the ending: touch the stone, think of somewhere you've stood before, and trust it." },
+{ id:'myth_the_first_pact', title:'The First Pact With the Grafted Steel', author:'guild legend, disputed', date:'undated', category:'myth', tags:['cybernetics'],
+  body:"Legend holds that the first successful graft was not performed by a surgeon at all, but by a soldier with no other choice and a battlefield full of scrap, and that the technique was only refined afterward by physicians trying to understand what he'd done to himself out of desperation. Whether or not it's true, every surgeon I've met tells it as though it were, which perhaps says more about the craft than any textbook does." },
+// ---------------------------------------------------------------- TEXTBOOKS ----
+{ id:'text_alchemy_basics', title:'Principles of Practical Alchemy', author:'Master Alchemist Corda Vell', date:'academy textbook, abridged', category:'textbook', tags:['crafting'],
+  body:"The three rules I teach every first-year apply everywhere else in life too, which is probably why I remember them so easily: proportion matters more than quantity, patience matters more than heat, and anything that smells wrong before you've finished almost always is. Master those three and the recipes take care of themselves." },
+{ id:'text_smithing', title:'A Smith\'s Primer on Steel and Its Moods', author:'Master Smith Garrick Hollow', date:'workshop manual', category:'textbook', tags:['crafting'],
+  body:"Steel has moods the way people do, and a smith's whole education is learning to read them: when it wants to be folded, when it wants to be left alone, when it's about to crack if you strike it one more time out of impatience rather than judgment. I have never met a smith who claimed to have fully learned this. I have met several who pretended to, and their work always showed it." },
+{ id:'text_herbalism', title:'A Field Herbalist\'s Companion', author:'Herbalist Rowan Sae', date:'pocket guide', category:'textbook', tags:['crafting'],
+  body:"Half of herbalism is knowing what a plant can do. The other half, the half that keeps herbalists alive, is knowing what it can do to you if you're careless about handling it before you understand it. When in doubt, gloves first, questions after." },
+{ id:'text_swordsmanship', title:'Fundamentals of the Blade', author:'Fencing Master Ilario Cresci', date:'academy manual', category:'textbook', tags:['talents'],
+  body:"Students always want to learn the flourish before the stance, the killing blow before the footwork that makes it possible. I make them wait. A blade is only as fast as the feet underneath it, and I have buried more students of talent than students of patience, which should tell you which one I now teach first." },
+{ id:'text_spellcraft', title:'An Introduction to Woven Magic', author:'Magister Yusra Vell', date:'academy primer', category:'textbook', tags:['talents'],
+  body:"Magic is not commanded, whatever the storybooks say -- it is persuaded, gently, along channels that already want to carry it. Force works, briefly, and always costs more than persuasion would have. I tell my students: don't fight the weave. Ask it, clearly, for what you actually need, and it will usually oblige." },
+// ---------------------------------------------------------------- LETTERS ----
+{ id:'letter_merchant', title:'A Merchant\'s Letter to His Partner', author:'Merchant Aldous Penn', date:'business correspondence', category:'letter', tags:['letter'],
+  body:"The road tax at the eastern crossing has doubled again, and I'd complain more if the goods weren't still moving twice as fast since they cleared the bandits out of the pass. Small comforts. Send more rope on the next cart, ours is worn through, and tell your nephew I have not forgotten he still owes me for the lantern he broke." },
+{ id:'letter_lovers', title:'A Letter Kept, Never Answered', author:'signed only "yours, always"', date:'undated', category:'letter', tags:['marriage'],
+  body:"I know the road calls you louder than any town ever will, and I have stopped asking you to choose between it and me, because I don't think that's a fair thing to ask of someone built the way you're built. I will be here when you come back. I will also be here if you don't, which is the part I don't say out loud, because saying it makes it feel more possible than I want it to be." },
+{ id:'letter_noble', title:'A Noble\'s Correspondence, Intercepted', author:'Lord Ferran Vale', date:'private letter', category:'letter', tags:['history'],
+  body:"The peasantry grows restless over the grain tithe, and I have half a mind to lower it before they solve the problem themselves in a manner considerably less pleasant for the both of us. Advise discretion in this matter. My father built this hold on knowing when to bend before people decided to break something instead." },
+{ id:'letter_child', title:'A Child\'s Letter to a Traveling Parent', author:'signed "your very own"', date:'undated, small handwriting', category:'letter', tags:['letter'],
+  body:"i miss you and the goat had babies and mama says you'll be back before the frost but she always says that so i am not getting my hopes up too much just a little bit. bring me something from far away if you remember. i love you. come home." },
+// ---------------------------------------------------------------- QUESTS / RUMORS SYSTEM ----
+{ id:'guide_rumors', title:'On Asking the Right Questions', author:'Journeyman Bard Odile Quist', date:'a performer\'s notes', category:'guide', tags:['quests'],
+  body:"Every settlement has more work in it than what's posted on the board, if you're willing to ask people what's actually bothering them. Elders remember old debts and older dangers. Guards know exactly which roads they've stopped patrolling and why. Ask, listen past the first answer, and you'll find the road's never as short on purpose as it first looks." },
+{ id:'guide_dungeon_tiers', title:'Grading a Ruin Before You Enter It', author:'Delver\'s Guild, safety notice', date:'guild safety bulletin, undated', category:'guide', tags:['dungeons'],
+  body:"Not every hole in the ground is worth the same caution. Common ruins are common because they're survivable by most who try. Rare ones earn that word the hard way, and I have buried enough overconfident delvers to say plainly: match your gear to the grade before you match your pride to it." },
+
+// ---------------------------------------------------------------- DIMENSIONS (continued) ----
+{ id:'dim_boneyard', title:'Songs of the Boneyard', author:'Traveling Bard Osse Wren', date:'collected ballads, third edition', category:'myth', tags:['dimensions'],
+  body:"The Boneyard songs don't agree on anything except two things: the queen there is very old, and she will not be ruled. Every verse ends the same way -- with her rising from something that should have stopped her, and with whoever tried stopping her regretting the attempt.\n\nI've sung these songs in forty towns and the older the audience, the less they laugh at the ending." },
+{ id:'dim_clockwork_workers', title:'Maintenance Union Circular, Gear Sanctum', author:'Local 7, Sanctum Maintenance Union', date:'pre-collapse, date stripped', category:'history', tags:['dimensions'],
+  body:"Notice to all members: the Sanctum Keeper has declined for the third consecutive quarter to attend safety reviews, citing 'optimal productivity.' Management notes that the Keeper's door remains sealed from the inside. The union formally requests that management address this before it becomes a larger problem.\n\nThis circular was never answered." },
+{ id:'dim_undertow_depth', title:'Deep Dive Log, Expedition Three', author:'Salvager-Captain Merah Kess', date:'water-damaged, partially illegible', category:'diary', tags:['dimensions'],
+  body:"Day four in the crypt. Air pockets are [illegible] -- better than expected. Found what the crew calls the Mother Chamber. The current there is [illegible] coming from the walls. Something generates it. Something large.\n\nI have revised our exit plan. The original had us stopping to document. New plan: we document nothing and surface immediately upon retrieval of [illegible].\n\nIf you are reading this log because Expedition Three did not return: the Mother Chamber is real and it is [illegible]." },
+{ id:'dim_fourth_corridor_map', title:'Notes Toward a Map of the Folded Vault', author:'Surveyor Denh Oskaro, continued entries', date:'survey log, second volume', category:'research', tags:['dimensions'],
+  body:"The vault does not have a floor plan. I say this after sixteen attempts to draw one. The rooms are consistent within a given session; they do not persist to the next. Something is choosing a layout when you enter, not when the vault was built.\n\nThe thing that calls itself the Uncounted Angle is not lost in the vault. I believe the vault is an expression of it. Mapping the vault is, in some sense, trying to map a thought. This may be why it keeps changing.\n\nI have stopped trying to map it. I am now trying to understand what it wants, which feels simultaneously more productive and more dangerous." },
+
+// ---------------------------------------------------------------- NEW HISTORY ----
+{ id:'hist_road_builders', title:'On the Old Road Network', author:'Cartographer Fenwick Sae', date:'guild history, abridged', category:'history', tags:['history'],
+  body:"The roads were here before any kingdom now standing, and they are better built than anything any kingdom now standing has managed since. Straight runs of cut stone, drainage ditches still functional after centuries, marker posts in a script no living academic has fully translated.\n\nWhoever built them planned for us specifically -- the distances between waypoints match human walking speed, not cart speed, not horse speed. They knew we were coming. We still don't know who they were." },
+{ id:'hist_the_silence', title:'What the Historians Call the Silence', author:'Archivist Sennah Oduya', date:'guild lecture notes', category:'history', tags:['history'],
+  body:"There is a gap of roughly forty years in every regional record I have examined -- not a gap where records were lost, but a gap where records were not made at all. No births logged, no deaths logged, no deeds, no taxes, no letters. Settlements that existed before and after show no signs of violent interruption. People simply stopped writing things down for forty years and then started again, as if nothing had happened.\n\nI call this the Silence. I do not know what it was. Neither, apparently, did the people who lived through it, because when records resume, no one mentions it." },
+{ id:'hist_the_usurper', title:'A History of House Vane, Incomplete', author:'Court Historian, name removed', date:'censored, pre-restoration', category:'history', tags:['history'],
+  body:"The usurpation lasted eleven years and ended badly for everyone involved, including the usurper. I am required by the restoration court to note that this history is not a political document. I am further required to note that three chapters were removed by order of the current crown. I am not required to say which three, but a reader with patience and a count of the page numbers will notice the gap." },
+{ id:'hist_plague_of_89', title:'Plague Notes, Year 89 of the Consolidated Calendar', author:'Physician Bren Corvin', date:'medical record, public archive', category:'history', tags:['history'],
+  body:"It came from the eastern holds first, or so we believed at the time. I have since spoken to physicians in the east who say the same thing about the western holds. Nobody agrees on origin. Everyone agrees on the character: fast-moving, high mortality in the elderly and the very young, survivable by most others if they rested and kept water in them.\n\nWe lost perhaps one in eight. The historians will round this to 'devastating.' They are right to, though the number feels abstract now in a way it did not then." },
+{ id:'hist_the_great_compact', title:'The Great Compact: A Plain Summary', author:'Herald Cassian Bru, second printing', date:'public document, year 12 restored', category:'history', tags:['history'],
+  body:"The Compact is older than the kingdoms that signed it, which is the point of it. It says, in the plainest language its authors could manage: a kingdom may not send soldiers across another kingdom's border without declaration, may not poison wells, may not hold messengers hostage, and may not, under any circumstances, strike first at a settlement of fewer than five hundred souls.\n\nMost kingdoms have violated the Compact at least once. Most still cite it when the violation goes the other way. This is politics." },
+{ id:'hist_founding_of_guild', title:'How the Delver\'s Guild Was Founded and Why', author:'Charter Committee, First Year', date:'founding document, original', category:'history', tags:['history'],
+  body:"We are founded in response to a problem that has existed as long as there have been ruins to enter: people go in unprepared, fail to come back out, and the people who loved them are left with nothing but questions and a locked door.\n\nThe Guild does not make delving safe. We make it better-informed, better-equipped, and occasionally better-retrieved when something goes wrong. We do not promise survival. We promise that if you go in with our training, your odds are meaningfully better than they would be otherwise, and that someone will come looking if you don't come back." },
+
+// ---------------------------------------------------------------- NEW DIARIES ----
+{ id:'diary_noble_exile', title:'A Noble\'s Private Diary', author:'Lord-Exile Ferran Vale', date:'personal journal, third year of exile', category:'diary', tags:['diary'],
+  body:"Day 847. I have stopped counting the days except on paper, because saying the number aloud started to feel like a complaint and I was raised not to complain. The farmwork is harder than I imagined and easier than I deserved, probably. The family I board with does not know who I was. I prefer it this way.\n\nDay 901. My hands have calloused in places they never had occasion to before. There is something almost funny about this. I think this is the most honest thing I have owned." },
+{ id:'diary_dungeon_guard', title:'Guard\'s Log, Labyrinth Level Four', author:'Guard-Post Warden Aldric Fenn', date:'duty log, last season', category:'diary', tags:['diary'],
+  body:"Shift 1: Quiet. Two adventurers passed through going down. Seemed capable.\nShift 2: One adventurer came back up. Would not say what happened to the other. Let it go.\nShift 3: Heard something moving in the passage below that post rules say I'm not supposed to approach alone. Did not approach alone. Did not approach at all. Put it in the log.\nShift 4: Still quiet. The thing has stopped moving, which either means it left or it's waiting. I'm hoping left." },
+{ id:'diary_cartographer', title:'A Cartographer\'s Field Notes, East Survey', author:'Surveyor Corin Adze', date:'survey log, year 4', category:'diary', tags:['diary'],
+  body:"The problem with surveying land that's only recently settled is that the settlers name everything twice: once when they find it, because they need to call it something, and again six months later when they realize the first name was wrong or embarrassing. The ford I have as 'Widow's Crossing' on last year's map is now 'Lucky Ford.' I have not asked why.\n\nThe settlements themselves shift faster than the terrain, which is the opposite of what the guild expects. I'm submitting these notes with the caveat that by the time they reach the archive, half the names will be different again." },
+{ id:'diary_innkeeper', title:'Innkeeper\'s Journal, The Amber Rest', author:'Innkeeper Priss Corvin', date:'personal diary, several years', category:'diary', tags:['diary'],
+  body:"You learn a lot about people from how they behave when they think no one is watching. Travelers especially. They've been alone on the road for days and they're hungry and they let their guard down in ways they wouldn't at home.\n\nMost are decent. Some are not. I keep a list of the ones who aren't in the back of this book under the heading 'Do Not House Again,' and I share it with the innkeepers in the next three towns, because we look out for each other even when the kingdoms we're in don't look out for us." },
+{ id:'diary_temple_scribe', title:'A Temple Scribe\'s Daily Record', author:'Scribe Teodwin (later Brother Teodwin)', date:'years of novitiate', category:'diary', tags:['diary'],
+  body:"Year one, first entry: I am copying texts I do not understand and am told this is the point -- that the understanding comes later if the copying is done carefully enough first. I have my doubts about this theory but I have chosen to trust the process.\n\nYear three, an entry I keep returning to: I was copying a manuscript this morning and I understood it. Not just the words -- the thing the words were pointing at. I still do not know if this is what I was promised, but it is something I did not have before, and it is worth the thousand careful copies it cost me." },
+{ id:'diary_siege_survivor', title:'Surviving the Siege of Eastmark', author:'Civilian Tima Reyes', date:'personal account, aftermath year', category:'diary', tags:['history'],
+  body:"The siege lasted eighty-three days. On day forty I stopped believing it would end. On day sixty I stopped caring which way it ended, which I am not proud to admit but which seems important to put down honestly.\n\nWhat I remember most is not the fear, though there was fear. It's the boredom. Hours and hours of nothing, interrupted by something terrible, and then hours and hours of nothing again. No one writes about the boredom in the histories. I think they should." },
+{ id:'diary_failed_alchemist', title:'Lab Notes, Final Volume', author:'Alchemist Bren Rennick (disgraced)', date:'lab journal, final year', category:'diary', tags:['diary'],
+  body:"I was trying to fix something that couldn't be fixed the way I was trying to fix it. I know this now. The approach was correct but the theory was wrong, which is the worst kind of wrong because it means every result I thought I confirmed was confirming nothing but my own assumptions.\n\nI have written to the academy and asked them to remove my name from the original publication. They have declined to do so, which I understand but resent. The least I can do is put this note in every copy of this journal I can reach, so whoever reads the original work reads this alongside it." },
+
+// ---------------------------------------------------------------- NEW LETTERS ----
+{ id:'letter_to_the_dead', title:'A Letter to Someone Who Didn\'t Make It Back', author:'unsigned', date:'unsent, folded twice', category:'letter', tags:['letter'],
+  body:"I keep starting this and stopping because writing it feels like admitting something I'm not ready to admit yet. So I'll just say: I looked for you. We all looked for you. We went back three times more than we were supposed to and found nothing we could bring home. You would have done the same for us, which isn't comfort exactly, but it's something." },
+{ id:'letter_apprentice_to_master', title:'A Letter from an Apprentice', author:'Apprentice Iva (later Master Rennick)', date:'training year one', category:'letter', tags:['letter'],
+  body:"Master,\n\nI want to tell you that I understand now why you gave me the worst jobs first. I want to tell you I'm not still a little annoyed about the mop. I want to tell you the foundation work is paying off and I can see it clearly now.\n\nAll of the above is true and I'm still a little annoyed about the mop. But thank you regardless." },
+{ id:'letter_kingdom_treaty', title:'Draft Treaty Proposal, Kingdom of Ashford to the Hold of Vane', author:'Royal Chancellery, Ashford', date:'diplomatic draft, year 7 restored', category:'letter', tags:['history'],
+  body:"Article the First: Both parties agree to suspend hostilities at the current line, the position to be considered binding and not a concession of claim.\n\nArticle the Third: The fate of the disputed bridge at Crossing-Two is to be held in arbitration for no fewer than two years before any construction proceeds.\n\nNote in margin, different hand: They will never agree to Article the Third. Remove it or this is wasted parchment.\n\nNote in second margin, third hand: They agreed to Article the Third. I owe you an apology and a drink." },
+{ id:'letter_tax_collector', title:'A Tax Collector\'s Correspondence', author:'Assessor Dara Holt', date:'official correspondence', category:'letter', tags:['history'],
+  body:"To the Treasury Board:\n\nI am reporting that the eastern settlements are not lying about the harvest failure -- I have verified it personally. Collecting the standard tithe this season will leave families without food through winter. I recommend suspension of the autumn levy and carry-forward to spring.\n\nI anticipate this recommendation will be overruled. I am submitting it anyway so the record is clear about what was advised and when." },
+{ id:'letter_two_merchants', title:'Trade Correspondence', author:'Merchant Aldous Penn; reply by Merchant Kael Marrow', date:'business letters', category:'letter', tags:['letter'],
+  body:"Penn: The cloth shipment arrived twenty days late and half the blue dye had run in the rain. I expect a partial refund or a replacement shipment.\n\nMarrow: The cloth shipment left on time and arrived late because you chose a waystation I told you was unreliable in autumn. The dye running is a separate matter and I concede the point. Replacement dye follows under separate cover. The timing is your problem.\n\nPenn: That is fair. Apologies for the tone of the first letter.\n\nMarrow: Already forgotten." },
+{ id:'letter_ghost_report', title:'An Unusual Complaint Filed With the City Watch', author:'filed by: Resident Sable Kess', date:'city archive, civil complaint', category:'letter', tags:['myth'],
+  body:"I wish to formally report that the house at the corner of Ashford and Third has a ghost. I understand that this is not traditionally the Watch's jurisdiction. I am filing here because I filed with the temple two weeks ago and was told the ghost in question was not causing sufficient distress to warrant intervention.\n\nI would like to note, for the record, that the ghost knocks exactly three times every night at the third hour and I have not slept properly in six weeks. I consider this sufficient distress.\n\nThe Watch's note in response: Noted. We will send someone to have a look." },
+
+// ---------------------------------------------------------------- NEW BESTIARY ----
+{ id:'best_constructs_advanced', title:'Advanced Construct Theory: The Animated Sword Problem', author:'Artificer Boyle Karst, appendix', date:'appendix to workshop notes', category:'bestiary', tags:['bestiary'],
+  body:"A sword does not need to be alive to be animated, but an animated sword behaves as if it believes it is alive, which produces a consistency of behavior that makes it more dangerous than a mindless weapon and less dangerous than a conscious one. It follows rules because those rules are its nature, not because it has decided they are wise.\n\nFighting one: the rules are usually about protecting something. Find what it's protecting. Get between it and that thing, and it will prioritize you. This is not as good as it sounds in most cases but it is consistently better than chasing it around a room." },
+{ id:'best_spirits', title:'Field Notes: Spirits and What They Want', author:'Scholar Ammon Thess, field addendum', date:'field note, separately filed', category:'bestiary', tags:['bestiary'],
+  body:"Every spirit I have encountered wants something, and every spirit expresses this want through repetition -- the knocking at the door, the pacing in the hall, the searching motion that never finds what it's looking for. This is not madness. I believe it is the only form of communication available to them: an endless enactment of the last thing that mattered.\n\nWhether one can give a spirit what it wants and thereby resolve it is a question I have spent years studying. The answer appears to be: sometimes, with patience, and only if you can determine what it's actually repeating, which is frequently not what it appears to be repeating." },
+{ id:'best_swarms', title:'Field Guide: When There Are Many of Them', author:'Ranger Coll Ambrose, volume two', date:'ranger handbook appendix', category:'bestiary', tags:['bestiary'],
+  body:"Swarms behave according to different rules than individual creatures, and fighting one like an individual creature will get you killed. The swarm is not any of the bodies -- it's the pattern. Disrupting the pattern (fire works well for most; sharp sound can scatter certain insect swarms; cold makes them slow but not necessarily less dangerous) is the objective, not destroying every individual member.\n\nThe two things that don't work, in my experience: running (they have better endurance than you do) and staying still (they have more patience than you do). Move unpredictably, create disruptions, and break the pattern." },
+{ id:'best_liches_advanced', title:'On the Subject of Phylacteries', author:'Grave-Warden Ilse Corbin, second volume', date:'warden research, restricted', category:'bestiary', tags:['bestiary'],
+  body:"The phylactery is both the lich's greatest vulnerability and the reason a lich is so nearly impossible to destroy in practice: it is kept somewhere else, somewhere very carefully somewhere else, and the lich has had centuries to think about where 'somewhere else' should be.\n\nI have personally destroyed four phylacteries. The first one I found by luck. The second by following a chain of clues the lich itself had long since forgotten it left. The third by a method I'm not putting in writing because it took fifteen people and I don't want to give anyone the impression it's repeatable. I found the fourth by asking the lich where it was, which worked because it was old enough to have grown contemptuous of the possibility that anyone could actually get to it. Don't rely on that." },
+{ id:'best_mimics', title:'Field Guide: On Not Opening Things', author:'Delver Oskar Bellum', date:'personal warning, widely copied', category:'bestiary', tags:['bestiary'],
+  body:"The honest answer to 'how do I identify a mimic' is that a mimic is very good at being the thing it's mimicking, and the field signs people cite (the slight moisture, the smell, the texture of the hinge) are real but inconsistent and require a level of attention that is extremely hard to maintain when you've just cleared a room and want to know what's in the chest.\n\nMy actual advice: poke things with something long before you touch them. Develop the habit for everything, not just suspicious things. A mimic relies on the assumption that most chests are chests. Make that assumption expensive." },
+
+// ---------------------------------------------------------------- TEXTBOOKS (continued) ----
+{ id:'text_navigation', title:'Finding Your Way Without a Map', author:'Ranger Perrin Ash', date:'field manual, third edition', category:'textbook', tags:['talents'],
+  body:"The sky is always a map if you know how to read it. The moss is always a map. The way water runs is always a map. I have navigated across three continents without paper by learning to ask the land which way it's going and then adjusting for where I needed to be relative to that direction.\n\nPaper maps lie, go out of date, and get wet. The land does not lie. Learning to read it is harder than reading a map and more reliable in every circumstance where a map would fail you, which is usually the circumstance where getting lost is the most dangerous." },
+{ id:'text_poisons', title:'A Poisoner\'s Ethics (and Antidotes)', author:'Apothecary Rowan Sae, with addenda', date:'licensed practitioners only', category:'textbook', tags:['crafting'],
+  body:"I am not going to pretend this book cannot be used for harm. Any honest poisoner's manual can be. What I will say is that every substance covered here has at least one antidote listed alongside it, and the section on antidotes is longer than the section on preparations, which reflects my priorities.\n\nUse this to treat, to protect, to understand what you've encountered in the field. The listing of preparation methods is for the physician who needs to understand a patient's symptoms, not for someone who wants to recreate the cause." },
+{ id:'text_rune_basics', title:'Introduction to Runic Script', author:'Scholar Beren Auk', date:'academy primer, year one', category:'textbook', tags:['history'],
+  body:"Runes are not magic. I want to establish this early. Runes are a writing system, an old one, that was used extensively before and during the period we call the Silence, and which encodes information the same way any writing system encodes information.\n\nThe confusion arises because runes are frequently found on objects that do have magical properties, which leads students to conclude the script itself is the source of the effect. The script is the label. The effect comes from something else. Understanding this distinction is the first and most important step toward actually reading what the script says, rather than trying to activate it." },
+{ id:'text_horse_care', title:'The Stablehand\'s Complete Guide', author:'Master Stablehand Hella Foss', date:'guild training text', category:'textbook', tags:['crafting'],
+  body:"A horse is a partnership, not a tool. This is not sentiment -- it is practical reality. A horse that trusts you is faster, steadier, and more willing to do the alarming things that travel sometimes requires. A horse that does not trust you will find an opportunity to remind you of that fact at the worst possible moment.\n\nEverything else in this guide follows from that premise. Feeding schedules, shoe care, medical observation, behavioral signs of distress -- all of it is in service of understanding what your horse needs, so your horse understands you as someone worth listening to." },
+{ id:'text_enchantment_theory', title:'A Theoretical Framework for Object Enchantment', author:'Magister Yusra Vell, second edition', date:'advanced study text', category:'research', tags:['sets'],
+  body:"Objects do not hold magic the way a jar holds water. They hold it the way a river holds a habit -- the magic flows through established channels, and the channels become deeper with use and intention.\n\nThis has practical implications for matched sets: an enchanter who crafts multiple objects with the same intention builds resonant channels, and when those objects are used together, the intention amplifies itself. This is why the old craftspeople made sets. Not tradition. Not aesthetics. The mathematics of it. A set worn together is more than its pieces because its pieces were made to be more than themselves alone." },
+
+// ---------------------------------------------------------------- RESEARCH (continued) ----
+{ id:'research_dimensions_risk', title:'Mortality in Dimensional Transit: A Survey', author:'Magistra Ilyenne Vance, follow-up study', date:'research supplement, restricted', category:'research', tags:['dimensions'],
+  body:"Transit itself does not kill. I want to establish this clearly before the numbers: crossing a rift is not, in any documented case I have found, directly fatal. The mortality in dimensional travel comes from what is on the other side.\n\nThe variation is enormous. Mortality for first entries into the Gilded Choir (well-documented, multiple expeditions) runs at roughly twelve percent if the expedition is prepared. Mortality for first entries into the site we're now calling the Boneyard (four documented expeditions) ran at sixty percent for the first entry and fell with each subsequent attempt as surviving members brought knowledge back.\n\nThe implication is clear: survival is strongly correlated with knowing what you're entering. Come with intelligence, not just courage." },
+{ id:'research_corruption', title:'Field Study: Eldritch Contamination and Its Reversibility', author:'Scholar Ammon Thess, thesis', date:'submitted to academy, rejected (reviewed later)', category:'research', tags:['eldritch'],
+  body:"My thesis was rejected on the grounds that it could not be ethically replicated. This is correct. I replicated nothing -- I documented subjects who had already been exposed, with their knowledge and consent, and charted the progression over years.\n\nThe conclusion that earned the most controversy: contamination is not uniformly progressive. Three of my nine subjects showed no significant negative changes at the five-year mark, and one showed net improvements to cognition alongside the physical changes. This does not make exposure safe. It means our model of exposure as inevitably degenerative is wrong, and the variables that determine direction of change are the question we should be studying." },
+{ id:'research_waystone_origins', title:'Toward an Understanding of Waystone Resonance', author:'Artificer Boyle Karst, late career', date:'research paper, academy archive', category:'research', tags:['waystones'],
+  body:"The waystones do not teleport. I've established this to my own satisfaction through careful timing and mass measurements. They translate, which is a meaningful distinction: the traveler's reference frame doesn't jump, it slides, very quickly, along a path that exists but that we cannot observe directly.\n\nWhat does this mean practically? It means the path exists between every waystone pair, even when transit isn't occurring. It means something is maintaining that path. And it means whoever built the network did not invent a way to move through space -- they found a structure in space that already permitted it, and built stones to interface with that structure.\n\nWe don't build like this anymore. I'm not sure we could." },
+{ id:'research_monster_intelligence', title:'Do Monsters Think? A Study in Hostile Cognition', author:'Scholar Beren Auk, field study', date:'unconventional research, academy dispute', category:'research', tags:['bestiary'],
+  body:"The question is not as simple as 'yes' or 'no.' I have observed goblins playing. I have observed wolves demonstrating what can only be called mourning. I have observed something in a labyrinth that I can only describe as boredom. These are not animal behaviors in the simple sense.\n\nWhat I have not observed is a consistent ethical framework in any of these creatures -- which does not mean they are not intelligent, only that their intelligence does not generate the same categories we use. They pursue goals. They form attachments. They express something like preferences. Whether this constitutes thought in the sense that matters morally is the question I am genuinely unable to answer after five years of trying." },
+{ id:'research_curse_taxonomy', title:'A Classification of Curses, Preliminary', author:'Grave-Warden Ilse Corbin, working notes', date:'preliminary, do not cite', category:'research', tags:['bestiary'],
+  body:"I've been resisting classifying curses because classification implies understanding I don't yet have. But the working notes need organization, so here is a provisional taxonomy with the caveat that every category will certainly have exceptions I haven't found yet.\n\nType One curses act on probability -- things start going wrong in ways that are individually explicable but statistically impossible if considered together.\nType Two curses act on perception -- the victim experiences something that is not there, or fails to experience something that is.\nType Three curses act on connection -- the victim becomes isolated, forgettable, or paradoxically too memorable in all the wrong ways.\n\nThis leaves a Type Four that I don't have words for yet. I'm categorizing it as 'curses that appear to act on time' and refusing to say more until I have better evidence." },
+
+// ---------------------------------------------------------------- MYTHS (continued) ----
+{ id:'myth_river_god', title:'The River God\'s Bargain', author:'oral tradition, lowland settlements', date:'transcribed from spoken form', category:'myth', tags:['myth'],
+  body:"The river had a name before it had a god, and when the god arrived, it took the name for itself, which the river did not appreciate but could not prevent. The people of the lowlands learned quickly that appeasing the god and appeasing the river were not the same thing, and that knowing which one you were dealing with at a given moment was the most important skill a ferryman could have.\n\nThe bargain the first ferryman struck with the god is the reason the river floods every third year instead of every year: a third of what the river would have taken in exchange for two thirds of patience. The ferryman got the better deal. The river knew it and flooded harder every fourth year to make the point." },
+{ id:'myth_twins', title:'The Twin Heroes, Retold', author:'Bard Odile Quist, collected variant', date:'performance text, personal copy', category:'myth', tags:['myth'],
+  body:"In the telling I like best, the twins don't quarrel at the end -- they reach the same conclusion at the same moment from opposite directions, which is what twins do in the stories that understand what twins actually are. One twin went through the world doing the hard thing directly. The other twin went around every obstacle. Both paths led to the same place.\n\nThe versions where one twin is wrong and one is right miss the point entirely, I think. The whole story is about arriving at truth two ways at once. If one of them is just an obstacle for the other, you've turned a story about wisdom into a story about inheritance, and those are very different stories." },
+{ id:'myth_the_dream', title:'The Dream That Wouldn\'t End', author:'collected fragment, source unknown', date:'damaged, origin unclear', category:'myth', tags:['myth'],
+  body:"Someone dreamed the Lucid Expanse into being -- this is the version I've heard most often, and the one I believe least, because it implies a dreamer who would need to have been dreaming continuously since before any recorded time, which is impossible. But the versions that replace 'someone' with 'something' or 'everyone' are harder to dismiss.\n\nWhat the Expanse actually is, I can't tell you. I've been there. I came back. Everything I saw there was true and nothing I saw there was real, which is the most honest description I can give of a place that seems to exist specifically to make that distinction meaningless." },
+{ id:'myth_first_death', title:'The First Death, As Told to Children', author:'Temple tradition, transcribed', date:'oral catechism, written down at request of archivist', category:'myth', tags:['myth'],
+  body:"Death came into the world the same way all necessary things do: because something demanded it. The world before death was still, and still things rot, and rot is slow dying, and so there was dying anyway without the mercy of its being quick.\n\nDeath didn't ask for the job. Nobody ever does. But it took the job seriously, and it's still at it, and the old prayers say that the appropriate response is not to fear it but to acknowledge what it gives us that the alternative would not: an ending that is an ending, clean and complete, instead of an unending slow diminishment with no name." },
+{ id:'myth_the_sealed_door', title:'What\'s Behind the Sealed Door', author:'three tellers, three endings', date:'variant text, annotated', category:'myth', tags:['myth'],
+  body:"Every version of this story agrees on the setup: there is a door that cannot be opened, and there is a reason it cannot be opened, and there is someone who doesn't care about the reason.\n\nThe first ending: what's behind the door is nothing, and that nothing is so complete that the person who opened it is lost in it.\nThe second ending: what's behind the door is something so beautiful that the person who opened it never leaves.\nThe third ending: what's behind the door is behind every door, if you look at a door the right way, and the real question was never about the door.\n\nI have heard all three from the same teller in different years. I asked them which ending was true. They said: yes." },
+
+// ---------------------------------------------------------------- GUIDES (continued) ----
+{ id:'guide_combat_basics', title:'Staying Alive: A Pragmatic Guide', author:'Veteran Adalric Fenn, lecture notes', date:'training materials', category:'guide', tags:['talents'],
+  body:"Two things that will get you killed faster than anything else: standing still when you should be moving, and moving when you should be standing still. Learning to tell the difference is the whole of fighting.\n\nEverything else -- technique, equipment, strength -- multiplies whatever your instincts already are. Good instincts with bad technique survive more often than bad instincts with good technique. Train your instincts first. The technique will make more sense once your instincts stop lying to you." },
+{ id:'guide_reading_people', title:'A Trader\'s Guide to Not Getting Robbed', author:'Merchant Aldous Penn', date:'personal wisdom, collected', category:'guide', tags:['reputation'],
+  body:"People who are about to rob you don't usually look threatening. That's the point. They look normal, relaxed, a little friendly. The signals are smaller: where they're looking that isn't you, whether they're checking exits, whether the friendliness is calibrated to keep you from looking too carefully at them.\n\nI've been robbed three times. Each time I saw the signals and talked myself out of trusting them. Now I trust the signals and I've been robbed zero times in the subsequent fourteen years. The signals are not wrong. We talk ourselves out of them because we want to believe in the friendliness." },
+{ id:'guide_wilderness_survival', title:'The First Five Days: Wilderness Survival Basics', author:'Ranger Coll Ambrose', date:'ranger handbook, chapter one', category:'guide', tags:['crafting'],
+  body:"Day one: water. Not food. Water. You can survive five to seven days without food. You can die in one without water in bad heat or heavy exertion. Find water first. Everything else comes second.\n\nDay two, if you haven't found shelter yet: shelter. Temperature kills faster than hunger. A bad night in cold rain with no cover sets you back more than a day without food.\n\nDay three onward: now you can start thinking about the rest. Food is actually fourth on this list -- third is fire if you're in a cold environment, fourth is food, fifth is figuring out where you are.\n\nMost people who die in the wilderness died on day one doing things in the wrong order." },
+{ id:'guide_trade_basics', title:'A Fair Deal: Commerce for the Traveling Adventurer', author:'Merchant Kael Marrow', date:'guild pamphlet', category:'guide', tags:['reputation'],
+  body:"Merchants remember prices. This is the single most important thing to understand about trading: the person across from you knows what they paid for what they're selling, knows what they need to make on it, and has seen every attempt to talk them down that exists. Don't try to talk them down. Try to understand what they actually want.\n\nMerchants who seem flexible about price are usually inflexible about something else -- delivery terms, exclusivity, a favor owed. Finding out what they actually value and offering that instead of gold is almost always more productive than arguing about the number in front of you." },
+{ id:'guide_kinship', title:'Notes on Being Known in a Place', author:'Elder Oduya Ashcroft, retirement reflections', date:'late life notes', category:'guide', tags:['reputation'],
+  body:"There is a difference between being known and being understood, and both are different from being trusted. I spent the first twenty years of my life being known everywhere I went and trusted nowhere, because what I was known for was being useful in a crisis, and people don't trust useful strangers -- they use them.\n\nTrust, I've found, comes from continuity. Being present when nothing is happening. Remembering small things. Keeping small commitments that didn't matter enough to lie about. The big commitments matter too, but they matter less than the small ones accumulating into evidence that you are consistently the same person across time and circumstance." },
+];
+
+
+// ---- procedural books: unlimited unique supplementary volumes, built from small templates and
+// world data (kingdom names, biomes, monster names) so no two worlds -- and often no two
+// bookshelves -- read exactly the same. These carry flavor and volume; the ~52 books above carry
+// the load-bearing lore and mechanic explanations. Both are drawn from the identical `book` item
+// shape, so nothing downstream (reading, sorting, storing) needs to know which kind it has. ----
+const PROC_BOOK_FIRST = ['Kael','Wren','Iva','Tobias','Meret','Osric','Dara','Fenwick','Ysolde','Renn','Aldric','Sable','Corin','Halla','Ptolan','Sena','Brannor','Ilya','Marek','Odessa'];
+const PROC_BOOK_LAST = ['Ashford','Voss','Rennick','Thorne','Blackwood','Marrow','Sae','Karst','Fenmark','Oduya','Vell','Bellum','Cray','Kess','Adze','Holt','Auk','Bru'];
+function procBookAuthor(rng) { return `${choice(rng, PROC_BOOK_FIRST)} ${choice(rng, PROC_BOOK_LAST)}`; }
+function procBookDate(rng) {
+  const styles = [
+    () => `${randInt(rng, 3, 400)} years before the present`,
+    () => `written in a shaking hand, undated`,
+    () => `a merchant's ledger, dated by the season of ${choice(rng, ['thaw','harvest','frost','bloom'])}`,
+    () => `undated, the ink long since faded`,
+  ];
+  return choice(rng, styles)();
+}
+const PROC_TEMPLATES = [
+  { category:'diary', title: (rng,ctx) => `${choice(rng,['Field','Trail','Camp','Expedition'])} Diary of ${procBookAuthor(rng)}`,
+    body: (rng,ctx) => [
+      `Day ${randInt(rng,2,40)} out from ${ctx.kingdomName || 'the last town I knew'}. ${choice(rng,['Rations running low.','Found a stream, good water at least.','No sign of the road markers I was told to expect.','Weather turned foul before midday.'])}`,
+      `${choice(rng,['Saw tracks I didn\'t like the look of near camp.','Met a trapper who warned us off the low trail.','Lost a full day to weather we should have planned for.','The others are getting nervous, and I don\'t blame them.'])} ${choice(rng,['Pressing on regardless.','Considering turning back, but we\'ve come too far to waste it.','Made camp early to be safe.'])}`,
+    ].join('\n\n') },
+  { category:'letter', title: (rng,ctx) => `A Letter, Never Delivered`,
+    body: (rng,ctx) => [
+      `To whoever finds this before I can send it properly -- if you're reading it instead, something's gone wrong and I'd rather you know I was thinking of home at the end than not.`,
+      `${choice(rng,['Tell them the debt is settled, whatever they hear otherwise.','The money\'s hidden where we always hid things as kids, they\'ll know where.','Don\'t let them blame themselves for letting me go. It was my choice.'])}`,
+    ].join('\n\n') },
+  { category:'research', title: (rng,ctx) => `Notes on the ${choice(rng,['Local Fauna','Regional Geology','Old Roads','Border Disputes','Weather Patterns'])} of ${ctx.kingdomName || 'These Lands'}`,
+    body: (rng,ctx) => [
+      `My survey of this region continues to turn up more questions than the last. ${choice(rng,['The soil here doesn\'t match anything in the standard texts.','Local wildlife shows patterns I can\'t yet explain.','The old maps disagree with the terrain in ways that trouble me.'])}`,
+      `I intend to submit a fuller report once I've ${choice(rng,['secured better funding','survived the winter','convinced the guild this is worth pursuing','found someone who believes me'])}. Until then, these notes will have to do.`,
+    ].join('\n\n') },
+  { category:'history', title: (rng,ctx) => `A Chronicle of ${ctx.kingdomName || 'a Forgotten Hold'}`,
+    body: (rng,ctx) => [
+      `${ctx.kingdomName || 'This hold'} was ${choice(rng,['founded in desperation and grew in spite of it','built on ground its founders were warned away from','raised by people fleeing something worse than what they found'])}. Its history since has been ${choice(rng,['quieter than most, which is its own kind of blessing','marked by more conflict than its size would suggest','largely forgotten by everyone who didn\'t live it'])}.`,
+      `What little remains of the founding generation's own words suggests they'd be ${choice(rng,['proud of what it became','baffled by what it became','unsurprised, honestly, by any of it'])}.`,
+    ].join('\n\n') },
+  { category:'bestiary', title: (rng,ctx) => `Hunter's Notes: ${ctx.monsterName ? ctx.monsterName : 'A Creature Best Avoided'}`,
+    body: (rng,ctx) => [
+      `${ctx.monsterName ? `The ${ctx.monsterName}` : 'This creature'} is ${choice(rng,['more dangerous in numbers than alone','deceptively slow until it isn\'t','best fought at range if you have the option','not worth the fight unless it\'s already started'])}.`,
+      `${choice(rng,['I\'ve lost good hunting partners underestimating it.','A clean kill pays well, but don\'t go looking for one alone.','Local guides can point you toward its usual ground, for a price.'])}`,
+    ].join('\n\n') },
+  { category:'textbook', title: (rng,ctx) => `A ${choice(rng,['Journeyman\'s','Apprentice\'s','Novice\'s'])} Notes on ${choice(rng,['Knifework','Herb Preservation','Rope and Knots','Fire-Starting','Reading Weather'])}`,
+    body: (rng,ctx) => [
+      `Master ${procBookLastOnly(rng)} always said the basics get you further than the tricks, and after ${randInt(rng,2,15)} years at this I finally believe it.`,
+      `${choice(rng,['Practice the dull parts until they\'re boring. That\'s when you know it\'s learned.','Every shortcut I was ever taught cost me something later.','Write down what works. You will forget by winter otherwise.'])}`,
+    ].join('\n\n') },
+  { category:'myth', title: (rng,ctx) => `A Local Tale: ${choice(rng,['The Wanderer Who Never Slept','The Debt That Followed','The Light Under the Hill','The Promise Kept Too Late','The Stranger at the Crossroads'])}`,
+    body: (rng,ctx) => [
+      `Every telling of this one changes in the middle, but it always ends the same way: ${choice(rng,['the debt gets paid, one way or another','the wanderer finds what they were looking for, and wishes they hadn\'t','the promise is kept, far too late to matter to the one who asked for it','the light goes out the moment someone finally looks directly at it'])}.`,
+      `${choice(rng,['I heard it first from an innkeeper who swore it happened to her aunt.','The old ones tell it best, by the fire, in winter.','Take it as you like. I\'ve stopped deciding whether I believe it.'])}`,
+    ].join('\n\n') },
+];
+function procBookLastOnly(rng) { return choice(rng, PROC_BOOK_LAST); }
+let procBookUidCounter = 1;
+// Builds one unique procedural book. `ctx` is optional flavor context (nearby kingdom name,
+// a monster name if generated for a bestiary-shelf, etc.) -- passed in by whatever's placing it
+// so the result feels locally relevant rather than generic.
+function generateProceduralBook(rng, ctx) {
+  ctx = ctx || {};
+  const tpl = choice(rng, PROC_TEMPLATES);
+  const title = tpl.title(rng, ctx);
+  const body = tpl.body(rng, ctx);
+  return makeBookItemRaw({
+    id: 'proc_' + (procBookUidCounter++) + '_' + Math.random().toString(36).slice(2,7),
+    title, author: procBookAuthor(rng), date: procBookDate(rng), category: tpl.category,
+    tags: ['procedural'], body, manual: false,
+  });
+}
+// Shared factory behind both manual and procedural books -- produces a real inventory item, same
+// shape as any weapon/potion/material, so it slots into every existing item system unmodified.
+function makeBookItemRaw(def) {
+  return {
+    uid: 'i' + Math.random().toString(36).slice(2, 9), id: 'book_' + def.id, type: 'book',
+    name: def.title, glyph: '?', color: '#a0c9e0', value: def.manual === false ? 2 : 5,
+    bookId: def.id, title: def.title, author: def.author, date: def.date,
+    category: def.category, categoryLabel: BOOK_CATEGORIES[def.category] || 'Book',
+    tags: def.tags || [], body: def.body, manual: def.manual !== false,
+  };
+}
+function makeManualBookItem(bookDef) { return makeBookItemRaw(bookDef); }
+// Picks a manual book that hasn't already been placed this world, when one's available and
+// requested; falls back to a procedural book otherwise so books never run out.
+const worldPlacedBookIds = new Set();
+function pickUnplacedManualBook(rng, filterFn) {
+  const pool = BOOKS_MANUAL.filter(b => !worldPlacedBookIds.has(b.id) && (!filterFn || filterFn(b)));
+  if (!pool.length) return null;
+  const def = choice(rng, pool);
+  worldPlacedBookIds.add(def.id);
+  return makeManualBookItem(def);
+}
+// The glue between the container system and the book library: given a freshly-created container,
+// decides whether to seed a book into it, and which kind. Bookshelves/desks in role-appropriate
+// spots get a strong chance (or a guarantee, for the Ruined Library theme's forced books);
+// everything else gets a small, pleasant-surprise chance. Manual books are preferred while any
+// remain unplaced in this world, so the curated library gets fully seeded before procedural
+// filler starts appearing, but procedural books can still turn up anywhere for variety.
+function maybeStockBookContainer(container, kind, roleId, rng, ctx) {
+  ctx = ctx || {};
+  const isBookFurniture = kind === 'bookshelf' || kind === 'desk' || kind === 'cabinet';
+  let chance = isBookFurniture ? 0.75 : 0.08;
+  if (roleId === 'elder' || roleId === 'trainer' || roleId === 'priest' || roleId === 'necromancer_trainer') chance = 0.9;
+  if (ctx.theme === 'ruinedlibrary' || (DUNGEON_THEMES[ctx.theme] && DUNGEON_THEMES[ctx.theme].bookHeavy)) chance = 0.97;
+  const bookCount = (isBookFurniture && rng() < chance) ? randInt(rng, 1, kind === 'bookshelf' ? 3 : 1) : 0;
+  for (let i = 0; i < bookCount; i++) {
+    let book = (rng() < 0.6) ? pickUnplacedManualBook(rng) : null;
+    if (!book) book = generateProceduralBook(rng, { kingdomName: ctx.kingdomName });
+    container.contents.push(book);
+  }
+}
+
+
 
 // ===================== DATA EXPANSION PACK 3 =====================
 
@@ -1426,6 +1808,7 @@ const ENTRANCE_GLYPHS = {
   abandonedhouse: { glyph: '+', name: 'a ruined door' }, cave: { glyph: 'O', name: 'a dark cave mouth' },
   sewer: { glyph: 'O', name: 'a sewer grate' }, ruins: { glyph: 'n', name: 'a crumbling archway' },
   crypt: { glyph: 'n', name: 'a sunken crypt entrance' }, castle: { glyph: '=', name: 'a castle gate' },
+  ruinedlibrary: { glyph: 'H', name: 'a collapsed library facade' },
   fortress: { glyph: '=', name: 'a fortress gate' }, tower: { glyph: 'I', name: 'the base of a tower' },
   labyrinth: { glyph: '#', name: 'a maze of standing stones' },
 };
@@ -6020,6 +6403,7 @@ function buildSettlement(chunk, cx, cy, seedVal) {
     npc.homeArea = { x0: chunk.cx*CH+p.x, y0: chunk.cy*CH+p.y, x1: chunk.cx*CH+p.x+p.w-1, y1: chunk.cy*CH+p.y+p.h-1 };
     chunk.npcs.push(npc);
     settlement.buildings.push({ x: p.x, y: p.y, w: p.w, h: p.h, role: roleId, npcId: npc.uid });
+    placeContainersInBuilding(chunk, p, roleId, rng, settlementTierNum(tier));
   });
 
   const guardCounts = { hamlet:0, village:1, town:3, city:6 };
@@ -6049,6 +6433,7 @@ function buildSettlement(chunk, cx, cy, seedVal) {
   }
 
   scatterDecorations(chunk, placed, tier, rng);
+  scatterWorldContainers(chunk, placed, tier, rng);
   if (flavorId === 'farming') scatterFarmingExtras(chunk, rng);
   if (flavorId === 'fishing') scatterDocks(chunk, rng);
   if (flavorId === 'mining') scatterOrePiles(chunk, rng);
@@ -6251,6 +6636,219 @@ function removeItemAt(x, y, uid) {
 function placeItemAt(x, y, it) {
   if (curIsDungeon()) curDungeonLevel().items.push({ x, y, item: it });
   else { const t = curTileAt(x, y); if (t) t.items.push(it); }
+}
+
+// ===================== IN-WORLD CONTAINERS =====================
+// Design goal (see player feedback): a chest/barrel/sack/etc. should be a real object that stays
+// exactly where it is -- open it, take what you want, leave the rest, and it's still there (and
+// still holding whatever you left in it) next time you walk by, for as long as this play session
+// keeps that chunk/dungeon level loaded. That's the same persistence guarantee everything else in
+// the world already has (see the save/load design note above: the world is regenerated fresh from
+// its seed each session, same as monsters and ground loot always have been) -- containers don't
+// regress that, they just finally give you a reason to come back to a specific tile.
+//
+// A container lives in exactly one of two places, mirroring how items already work:
+//   - Overworld/dimension tiles: an array at t.containers (usually 0 or 1 entries, but nothing
+//     stops two barrels sharing a tile if a generator ever wants that).
+//   - Dungeon levels: level.containers, an array of {x, y, container} entries, exactly parallel
+//     to level.items's {x, y, item} shape.
+// Every container object itself looks like: { cuid, kind, name, glyph, color, locked, opened,
+// contents: [items] }. `contents` is a normal item array -- the same item objects/shapes that
+// live in player.inventory or on the ground -- so every existing item-rendering helper
+// (durabilityTag, describeItem, item icons, etc.) works on container contents unmodified.
+let containerUidCounter = 1;
+const CONTAINER_KINDS = {
+  chest:      { name: 'Chest',       glyph: '=', color: '#e0c34a', capacity: 24 },
+  trunk:      { name: 'Trunk',       glyph: '=', color: '#a9834a', capacity: 30 },
+  barrel:     { name: 'Barrel',      glyph: 'o', color: '#9c7440', capacity: 14 },
+  sack:       { name: 'Sack',        glyph: '&', color: '#c9a06a', capacity: 10 },
+  crate:      { name: 'Crate',       glyph: '#', color: '#a9834a', capacity: 18 },
+  urn:        { name: 'Urn',         glyph: 'n', color: '#8a8a7a', capacity: 8 },
+  bookshelf:  { name: 'Bookshelf',   glyph: 'H', color: '#8a6a3d', capacity: 40 },
+  desk:       { name: 'Desk',        glyph: 'n', color: '#a9834a', capacity: 12 },
+  cabinet:    { name: 'Cabinet',     glyph: 'H', color: '#7a6a5a', capacity: 20 },
+  weaponrack: { name: 'Weapon Rack', glyph: 'H', color: '#9a9a9a', capacity: 12 },
+  coffin:     { name: 'Coffin',      glyph: '=', color: '#5a5a5a', capacity: 10 },
+  reliquary:  { name: 'Reliquary',   glyph: 'n', color: '#e0c060', capacity: 8 },
+  vault:      { name: 'Vault Case',  glyph: '=', color: '#4ae0d0', capacity: 16 },
+};
+const WILDERNESS_CONTAINER_FLAVOR = [
+  'Someone made camp here once and never came back for their things.',
+  'Half-buried in the dirt, like it was dropped in a hurry.',
+  'Old, but dry inside. Whoever left it took care to seal it first.',
+  'A trader\'s lost cargo, by the look of it -- fallen off a cart long since gone.',
+  'Weathered and forgotten, but not empty.',
+];
+function makeContainer(kind, opts) {
+  opts = opts || {};
+  const def = CONTAINER_KINDS[kind] || CONTAINER_KINDS.chest;
+  return {
+    cuid: 'ctr' + (containerUidCounter++),
+    kind, name: opts.name || def.name, glyph: def.glyph, color: def.color, capacity: def.capacity,
+    locked: !!opts.locked, opened: false,
+    desc: opts.desc || null,
+    contents: opts.contents || [],
+  };
+}
+function containersAt(x, y) {
+  if (curIsDungeon()) {
+    const lvl = curDungeonLevel();
+    if (!lvl.containers) return [];
+    return lvl.containers.filter(e => e.x === x && e.y === y).map(e => e.container);
+  }
+  const t = curTileAt(x, y);
+  return (t && t.containers) ? t.containers : [];
+}
+function curContainerAt(x, y) { const arr = containersAt(x, y); return arr.length ? arr[0] : null; }
+function placeContainerAt(x, y, container) {
+  if (curIsDungeon()) {
+    const lvl = curDungeonLevel();
+    if (!lvl.containers) lvl.containers = [];
+    lvl.containers.push({ x, y, container });
+  } else {
+    const t = curTileAt(x, y);
+    if (!t) return;
+    if (!t.containers) t.containers = [];
+    t.containers.push(container);
+  }
+}
+// Sorts a container's (or, via the same helper, could sort anything shaped like item[]) contents
+// into a stable, sensible order: gear before consumables before materials before misc/books, then
+// alphabetically within each group. Used by the container UI's [S]ort action.
+const CONTAINER_SORT_TYPE_ORDER = ['weapon','armor','consumable','scroll','tome','material','recipe','key','book','chest','misc'];
+function sortItemArray(arr) {
+  arr.sort((a, b) => {
+    const ta = CONTAINER_SORT_TYPE_ORDER.indexOf(a.type), tb = CONTAINER_SORT_TYPE_ORDER.indexOf(b.type);
+    const oa = ta === -1 ? 99 : ta, ob = tb === -1 ? 99 : tb;
+    if (oa !== ob) return oa - ob;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+  return arr;
+}
+const CONTAINER_FOOD_IDS = ['meat_raw','herb','wood','cloth'];
+const CONTAINER_MATERIAL_IDS = ['pelt','fang','bone','ore','leather_scrap','iron_ingot','herb','wood','cloth'];
+// Rolls plausible contents for a given container kind/power tier. Kept deliberately separate
+// from lootBaseIdsFor()/dropLoot() (monster/combat loot) -- these are hand-placed world objects,
+// not kill rewards, so they lean toward smaller, thematic finds rather than combat-scaled gear,
+// with the notable exception of chests/trunks/vaults, which are allowed to hold real equipment
+// (that's the point of finding one sitting in a dungeon or a noble's study).
+function rollContainerLoot(rng, kind, tier) {
+  tier = tier || 0;
+  const items = [];
+  const n = randInt(rng, 1, 3);
+  switch (kind) {
+    case 'chest': case 'trunk': case 'vault': case 'reliquary': {
+      const maxValueTier = Math.min(4, tier + 1);
+      const baseIds = ITEM_BASES.filter(b => {
+        if (b.type === 'misc' || b.type === 'chest' || b.type === 'corpse' || b.type === 'material' || b.type === 'book') return false;
+        if (b.setId || b.isUnique) return false;
+        if ((b.type === 'weapon' || b.type === 'armor') && (b.valueTier || 0) > maxValueTier) return false;
+        return true;
+      }).map(b => b.id);
+      for (let i = 0; i < n; i++) items.push(makeItem(choice(rng, baseIds), tier, rng));
+      const g = makeItem('gold', 0, rng); g.amount = randInt(rng, 8, 24) * (tier + 1); items.push(g);
+      break;
+    }
+    case 'weaponrack': {
+      const weaponIds = ITEM_BASES.filter(b => b.type === 'weapon' && (b.valueTier || 0) <= Math.min(3, tier + 1)).map(b => b.id);
+      for (let i = 0; i < Math.max(1, n - 1); i++) items.push(makeItem(choice(rng, weaponIds), Math.max(0, tier - 1), rng));
+      break;
+    }
+    case 'barrel': case 'sack': case 'crate': {
+      for (let i = 0; i < n; i++) { const id = choice(rng, CONTAINER_FOOD_IDS.concat(CONTAINER_MATERIAL_IDS)); const it = makeItem(id, 0, rng); it.amount = randInt(rng, 1, 4); items.push(it); }
+      if (rng() < 0.15) { const g = makeItem('gold', 0, rng); g.amount = randInt(rng, 2, 10); items.push(g); }
+      break;
+    }
+    case 'urn': case 'coffin': {
+      const g = makeItem('gold', 0, rng); g.amount = randInt(rng, 5, 18) * (tier + 1); items.push(g);
+      if (rng() < 0.35) { const it = makeItem(choice(rng, CONTAINER_MATERIAL_IDS), 0, rng); it.amount = randInt(rng, 1, 3); items.push(it); }
+      break;
+    }
+    case 'cabinet': {
+      for (let i = 0; i < n; i++) items.push(makeItem(choice(rng, ['herb','cloth','iron_ingot','leather_scrap']), 0, rng));
+      if (rng() < 0.3) { const rid = choice(rng, RECIPES).id; items.push({ uid:'i'+Math.random().toString(36).slice(2,9), id:rid, type:'recipe', name:'Recipe: '+RECIPES.find(r=>r.id===rid).name, glyph:'?', color:'#a0c9e0', value:0 }); }
+      break;
+    }
+    case 'desk': case 'bookshelf': default: {
+      // handled by placeContainersInBuilding/placeContainersInRoom, which layer books on top of
+      // (or instead of) whatever this rolls -- desks/bookshelves that come through here with no
+      // book layered on still get a small chance at a scroll or a recipe, so an empty-feeling
+      // bookshelf is rare rather than the rule.
+      if (rng() < 0.4) { const scrollIds = ITEM_BASES.filter(b=>b.type==='scroll').map(b=>b.id); if (scrollIds.length) items.push(makeItem(choice(rng, scrollIds), tier, rng)); }
+      break;
+    }
+  }
+  // Desks, sacks, and crates sometimes contain a world rumor note pointing at the current quest
+  // objective -- gives players a natural reason to open every container, and seeds the trail of
+  // clues throughout the world rather than them only appearing in the quest log.
+  if (typeof maybeAddRumorNote === 'function') maybeAddRumorNote(rng, items, kind);
+  return items;
+}
+// Which container kinds a given settlement role's building interior is likely to have, and how
+// many. Every profile leans into what that NPC would plausibly keep around -- a blacksmith's
+// weapon rack, a priest's reliquary, a scholarly elder's desk and bookshelf -- rather than
+// identical furniture in every building, and doubles as the primary way BOOKS (see the LORE &
+// BOOKS section) end up somewhere that makes narrative sense to find them.
+const ROLE_CONTAINER_PROFILES = {
+  farmer: ['sack','crate'], elder: ['bookshelf','desk'], child: ['sack'],
+  merchant: ['crate','chest'], blacksmith: ['weaponrack','crate'], innkeeper: ['barrel','cabinet'],
+  guard: ['weaponrack'], watchman: ['weaponrack'], captain: ['weaponrack','chest'],
+  trainer: ['bookshelf','desk'], necromancer_trainer: ['bookshelf','coffin'],
+  priest: ['bookshelf','reliquary'], ranger: ['sack','crate'], hunter: ['sack','crate'],
+  baker: ['barrel','sack'], chef: ['barrel','sack'], tailor: ['cabinet','crate'],
+  alchemist: ['cabinet','desk'], noble: ['cabinet','vault','desk'], bard: ['desk','cabinet'],
+  fisherman: ['barrel','crate'], stablehand: ['sack','crate'], beggar: ['sack'],
+};
+function settlementTierNum(tier) { return { hamlet:0, village:1, town:2, city:3 }[tier] || 0; }
+// Called once per building, right after it's laid out and its NPC assigned -- places 1-2
+// role-appropriate containers on open interior floor tiles (never on the door or the NPC's own
+// spawn tile), rolls their contents, and (via maybeStockBookContainer, defined in the LORE &
+// BOOKS section) has a chance to seed a real, readable book into anything shelf/desk-shaped.
+function placeContainersInBuilding(chunk, p, roleId, rng, tierNum) {
+  const profile = ROLE_CONTAINER_PROFILES[roleId] || ['crate'];
+  const doorX = p.x + Math.floor(p.w / 2), doorY = p.y + p.h - 1;
+  const npcX = p.x + 1, npcY = p.y + 1;
+  const openSpots = [];
+  for (let ly = p.y + 1; ly < p.y + p.h - 1; ly++) for (let lx = p.x + 1; lx < p.x + p.w - 1; lx++) {
+    if ((lx === doorX && ly === doorY) || (lx === npcX && ly === npcY)) continue;
+    openSpots.push({ x: lx, y: ly });
+  }
+  if (!openSpots.length) return;
+  const count = Math.min(openSpots.length, profile.length > 1 && rng() < 0.6 ? 2 : 1);
+  const shuffledSpots = shuffleArray(rng, openSpots.slice());
+  for (let i = 0; i < count; i++) {
+    const kind = profile[i % profile.length];
+    const spot = shuffledSpots[i];
+    const container = makeContainer(kind, { contents: rollContainerLoot(rng, kind, tierNum), locked: (kind === 'vault' || kind === 'chest') && rng() < 0.2 });
+    if (typeof maybeStockBookContainer === 'function') maybeStockBookContainer(container, kind, roleId, rng);
+    // NOTE: must mutate chunk.tiles directly, not call placeContainerAt() -- this runs *during*
+    // generateChunk(), before the chunk exists in worldChunks, so placeContainerAt's normal
+    // curTileAt()->getChunk() lookup would try to generate this same chunk again to find it,
+    // recursing infinitely. Every container placement call in world/dungeon generation code
+    // follows this same direct-mutation rule; placeContainerAt() itself remains correct and safe
+    // for genuine gameplay-time use (see pickUp()/render()), where the chunk is already cached.
+    const t = chunk.tiles[spot.y][spot.x];
+    if (!t.containers) t.containers = [];
+    t.containers.push(container);
+  }
+}
+// Exterior clutter for a settlement: a handful of barrels/crates/sacks scattered around open
+// ground between buildings (never on a building tile, road, or water) -- the "you can just see
+// this stuff sitting around town" layer that interiors alone don't cover.
+function scatterWorldContainers(chunk, placed, tier, rng) {
+  const count = { hamlet: 2, village: 4, town: 7, city: 11 }[tier] || 3;
+  const kinds = ['barrel','crate','sack'];
+  let placedCount = 0, tries = 0;
+  while (placedCount < count && tries < count * 12) {
+    tries++;
+    const lx = randInt(rng, 2, CH - 3), ly = randInt(rng, 2, CH - 3);
+    const t = chunk.tiles[ly][lx];
+    if (!t.walkable || t.building !== null || t.feature) continue;
+    const kind = choice(rng, kinds);
+    if (!t.containers) t.containers = [];
+    t.containers.push(makeContainer(kind, { contents: rollContainerLoot(rng, kind, 0) }));
+    placedCount++;
+  }
 }
 
 function blocksSight(x, y) {
@@ -7148,6 +7746,80 @@ function closeModal() {
   render();
 }
 
+// ---- in-world container UI: two-pane take/store, exactly like Trade but with your own stuff on
+// both sides and no gold changing hands. See the IN-WORLD CONTAINERS section above for the data
+// model this operates on. ----
+let containerTarget = null, containerMode = 'take', containerPage = 0;
+function openContainer(container) {
+  Sound.play('uiOpen');
+  gameState = 'container'; containerTarget = container; containerMode = 'take'; containerPage = 0;
+  if (!container.opened) {
+    container.opened = true;
+    if (container.desc) log(container.desc);
+  }
+  renderContainer();
+}
+function renderContainer() {
+  const c = containerTarget;
+  const list = containerMode === 'take' ? c.contents : player.inventory.filter(i => i.type !== 'corpse');
+  let html = `<div class="npcline dim">[Tab] switch to ${containerMode === 'take' ? 'store' : 'take'} &nbsp; [S] sort this ${c.name.toLowerCase()} &nbsp; ${containerMode==='take' ? '[A] take all' : ''}</div>`;
+  html += `<div class="trade-col-title">${containerMode === 'take' ? `Inside the ${c.name} (${c.contents.length}/${c.capacity}):` : 'Your inventory (store):'}</div>`;
+  const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  if (containerPage >= totalPages) containerPage = totalPages - 1;
+  const pageStart = containerPage * PAGE_SIZE;
+  const pageItems = list.slice(pageStart, pageStart + PAGE_SIZE);
+  if (!pageItems.length) html += `<div class="npcline dim">(empty)</div>`;
+  pageItems.forEach((it, i) => {
+    const letter = String.fromCharCode(97 + i);
+    const amt = it.amount && it.amount > 1 ? ` x${it.amount}` : '';
+    html += `<div class="modal-opt" onclick="simulateKey('${letter}')"><span style="color:${it.color}">[${letter}] ${it.glyph} ${it.name}${amt}</span>${durabilityTag(it)}</div>`;
+  });
+  if (totalPages > 1) html += `<div style="margin-top:6px" class="dim">Page ${containerPage+1}/${totalPages} &nbsp; <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey('[')">[prev]</span> <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey(']')">[next]</span></div>`;
+  renderModal(`${c.name}${c.locked ? ' (locked)' : ''}`, html, 'Letter/click to move an item, Tab to switch side, Esc to close.');
+}
+// Moves one item across (container -> inventory, or inventory -> container). Books/readable
+// items move exactly like anything else -- storing a book you found in a bookshelf back where
+// you found it, or carrying it off to read later, are both meant to just work.
+function containerTransact(letter) {
+  const c = containerTarget;
+  const idx = (containerPage || 0) * PAGE_SIZE + (letter.charCodeAt(0) - 97);
+  if (containerMode === 'take') {
+    const it = c.contents[idx];
+    if (!it) return;
+    player.inventory.push(it);
+    c.contents.splice(idx, 1);
+    Sound.play('pickup');
+    log(`You take ${it.name} from the ${c.name.toLowerCase()}.`);
+  } else {
+    const list = player.inventory.filter(i => i.type !== 'corpse');
+    const it = list[idx];
+    if (!it) return;
+    if (c.contents.length >= c.capacity) { Sound.play('uiError'); log(`The ${c.name.toLowerCase()} is full.`); return; }
+    player.inventory = player.inventory.filter(i => i.uid !== it.uid);
+    c.contents.push(it);
+    Sound.play('drop');
+    log(`You put ${it.name} in the ${c.name.toLowerCase()}.`);
+  }
+  updateSidebar();
+  renderContainer();
+}
+function containerTakeAll() {
+  const c = containerTarget;
+  if (!c.contents.length) { log('Nothing left to take.'); return; }
+  const names = c.contents.map(i => i.name);
+  player.inventory.push(...c.contents);
+  c.contents = [];
+  Sound.play('pickup');
+  log(`You take everything from the ${c.name.toLowerCase()}: ${names.join(', ')}.`);
+  updateSidebar();
+  renderContainer();
+}
+function containerSort() {
+  sortItemArray(containerTarget.contents);
+  Sound.play('uiOpen');
+  renderContainer();
+}
+
 // ---------------- inventory / character / spellbook / help UI ----------------
 
 
@@ -7294,6 +7966,11 @@ const DEFAULT_SETTINGS = {
   autosaveEnabled: true,
   autosaveInterval: 50,
   layout: {},
+  // Off by default, per design: the quest tracker/journal/NPC rumors always give general,
+  // in-world guidance (direction + rough distance, or narrative leads), but never a pinpoint
+  // location unless the player opts in here. Turning this on adds exact tile distances to the
+  // same hints, for players who just want a marker to walk to.
+  exactQuestMarker: false,
 };
 let settings = null;
 let settingsReturnState = 'title';
@@ -7750,6 +8427,254 @@ function checkMainQuestDimensionVisit(dimId) {
   if (stage && stage.type === 'visit_dimension' && stage.targetDimensionId === dimId) advanceStory();
 }
 
+// ===================== QUEST GUIDANCE / NAVIGATION AID SYSTEM =====================
+// Design goal (see player feedback): the main questline should never leave the player with no
+// idea where to go or what to do once they've actually got a lead, but it also shouldn't hand
+// over a GPS marker by default, and it definitely shouldn't hand over the answer before the
+// player has done anything to earn it -- the fun of this kind of game is asking around, reading
+// what you find, and following a trail. So there are really three tiers now:
+//   - Gated: until the player has learned the current lead in-world (an NPC tells them, they
+//     read a rumor note that happens to carry it), every surface shows the same honest "no lead
+//     yet" line. See hasQuestLead() / markQuestLeadKnown() just below.
+//   - Always on once unlocked: a direction + rough distance bucket ("north-east, a fair distance
+//     away"), or a narrative lead when there's no fixed coordinate to point at yet (e.g. "said to
+//     lurk in frozen mountains -- you'd have to go looking").
+//   - Opt-in (settings.exactQuestMarker, off by default): the same hint, but with an exact tile
+//     distance appended, for players who'd rather just have a marker.
+// mainQuestGuidance() is the single source of truth for quest guidance text -- the sidebar
+// tracker, the full quest log, and the "ask about your journey" dialogue option all call through
+// it, so the wording never drifts out of sync between the three places a player might see it.
+
+// Maps each act-4 dimension gatekeeper boss to the dungeon theme that guards it, so a hint about
+// "defeat X" can point at "somewhere shaped like a <theme>" even before the exact dungeon is
+// found, and at the exact dungeon's entrance (if already registered) once it is.
+const BOSS_DUNGEON_THEME = {
+  archdemon_malphegor: { theme: 'demon_gate', flavor: 'said to guard a demonic gate, somewhere' },
+  seraphiel:            { theme: 'sky_bastion', flavor: 'said to watch over a bastion raised high in the sky' },
+  hollow_signal:        { theme: 'derelict_hulk', flavor: 'said to haunt the wreck of some derelict hulk' },
+  uncounted_angle:      { theme: 'folded_vault', flavor: 'said to wait inside a vault that folds in on itself' },
+  fathom_mother:        { theme: 'flooded_crypt', flavor: 'said to lurk at the bottom of a flooded crypt' },
+  master_cog:           { theme: 'gear_sanctum', flavor: 'said to turn endlessly at the heart of a gear sanctum' },
+  rootmind:             { theme: 'overgrown_sepulchre', flavor: 'said to have consumed an overgrown sepulchre whole' },
+  unhandled_exception:  { theme: 'corrupted_kernel', flavor: 'said to corrupt everything near a broken kernel' },
+  admin7:               { theme: 'undercity_spire', flavor: 'said to still administer an undercity spire, alone' },
+  unburied_queen:       { theme: 'necropolis', flavor: 'said to rule a necropolis that will not stay buried' },
+  aurelith:             { theme: 'wyrmreach_lair', flavor: 'said to hoard gold at the heart of a wyrmreach lair' },
+};
+// Which dimension each gatekeeper's death (or, for the two item-gated ones, whose death drops
+// the key item) ultimately opens -- shared by both the guidance system below and the lore books.
+const DIMENSION_GATE_INFO = {
+  abyssal_wastes:      { bossId: 'archdemon_malphegor', kind: 'boss_kill' },
+  gilded_choir:        { bossId: 'seraphiel', kind: 'boss_kill' },
+  the_undertow:        { bossId: 'fathom_mother', kind: 'boss_kill' },
+  clockwork_expanse:   { bossId: 'master_cog', kind: 'boss_kill' },
+  the_bloom:           { bossId: 'rootmind', kind: 'boss_kill' },
+  corrupted_kernel:    { bossId: 'unhandled_exception', kind: 'boss_kill' },
+  neo_kalyx:           { bossId: 'admin7', kind: 'boss_kill' },
+  the_boneyard:        { bossId: 'unburied_queen', kind: 'boss_kill' },
+  wyrmreach:           { bossId: 'aurelith', kind: 'boss_kill' },
+  the_drift:           { bossId: 'hollow_signal', kind: 'item_structure', itemName: 'Ignition Core', structureName: 'a Launch Cradle' },
+  fourth_corridor:      { bossId: 'uncounted_angle', kind: 'item_structure', itemName: 'Bent Lens', structureName: 'the standing Folding Stones', secondBossId: 'the_recursion', secondItemName: 'Recursive Key' },
+  lucid_expanse:       { kind: 'discovery', structureName: "a Dream Sanctum's slumbering altar" },
+};
+function fuzzyDistanceLabel(dist) {
+  if (dist < 15) return 'very close by';
+  if (dist < 40) return 'not far';
+  if (dist < 90) return 'a fair distance away';
+  return 'far, far away';
+}
+// Shared by the sidebar tracker, quest log, and "ask about your journey" -- appends an exact
+// tile count only when the player has opted into it in Settings.
+function distancePhrase(dir, dist) {
+  const rough = fuzzyDistanceLabel(dist);
+  if (settings && settings.exactQuestMarker) return `${dir} of here, ${rough} (~${dist} tiles)`;
+  return `${dir} of here, ${rough}`;
+}
+function nearestRegisteredDungeonOfTheme(theme, fromX, fromY) {
+  let best = null, bestD = Infinity;
+  for (const dg of dungeonRegistry.values()) {
+    if (dg.theme !== theme) continue;
+    const d = chebyshev(fromX, fromY, dg.x, dg.y);
+    if (d < bestD) { bestD = d; best = dg; }
+  }
+  return best ? { dg: best, dist: bestD } : null;
+}
+// Core hint builder for a single quest-stage-like object ({type, targetBossId, targetTier,
+// targetDimensionId, targetCount}). Returns a short, flavorful sentence -- never a raw coordinate.
+function questStageHint(stage) {
+  if (!stage) return null;
+  const fx = player.x, fy = player.y;
+  if (stage.type === 'kill_boss') {
+    const bossId = stage.targetBossId;
+    if (bossId === 'the_antagonist' || bossId === 'god') {
+      return 'This confrontation finds you once everything before it is finished -- there is nowhere else useful to look yet.';
+    }
+    // Check if this boss is a dimension gatekeeper -- if so, the player needs to find and enter
+    // the dimension first, then find the sub-dungeon inside it. Point at the dimension (and its
+    // unlock condition) rather than trying to locate a dungeon theme that only exists inside a
+    // dimension the player may not have visited yet.
+    const dimEntry = Object.entries(DIMENSION_GATE_INFO).find(([, g]) => g.bossId === bossId || g.secondBossId === bossId);
+    if (dimEntry) {
+      const [dimId, gate] = dimEntry;
+      const dim = DIMENSIONS[dimId];
+      const alreadyOpen = (player.discoveredDimensions || []).includes(dimId);
+      const themeInfo = BOSS_DUNGEON_THEME[bossId];
+      if (alreadyOpen) {
+        const subFound = nearestRegisteredDungeonOfTheme(themeInfo ? themeInfo.theme : null, fx, fy);
+        if (subFound) {
+          const dir = getDirection(fx, fy, subFound.dg.x, subFound.dg.y);
+          return `${themeInfo ? themeInfo.flavor[0].toUpperCase() + themeInfo.flavor.slice(1) : 'The target'} inside ${dim.name} -- and you've already been there. Find ${subFound.dg.name}, ${distancePhrase(dir, subFound.dist)}.`;
+        }
+        return `${themeInfo ? themeInfo.flavor[0].toUpperCase() + themeInfo.flavor.slice(1) : 'The target'} inside ${dim.name}, which you've already opened. Look for a dungeon entrance once you're through the rift.`;
+      }
+      // Dimension not yet open -- give the same hint as visit_dimension would
+      if (gate.kind === 'discovery') return `The boss waits inside ${dim.name}, but that realm is reached by resting at ${gate.structureName} rather than by fighting anything here.`;
+      if (gate.kind === 'item_structure') {
+        const need = [gate.itemName];
+        if (bossId === gate.secondBossId && gate.secondItemName) need.push(gate.secondItemName);
+        return `To reach this boss, you need to open the way into ${dim.name} first -- that requires ${need.join(' and ')} used at ${gate.structureName}. Find those first.`;
+      }
+      // boss_kill to open the dimension -- but this boss IS the gatekeeper, so what's needed is
+      // finding their sub-dungeon on the overworld (dimension gate dungeon that hasn't been
+      // registered yet because the player hasn't been to that dimension chunk).
+      const overallDimGate = DIMENSION_GATE_INFO[dimId];
+      if (overallDimGate && overallDimGate.bossId !== bossId) {
+        // secondBossId case (the_recursion for fourth_corridor)
+        return `${themeInfo ? themeInfo.flavor[0].toUpperCase() + themeInfo.flavor.slice(1) : 'The target'}, but to reach them you'll need to open the way into ${dim.name} first by defeating its primary gatekeeper there.`;
+      }
+      return `This boss guards the entrance to ${dim.name}. Find the dimension portal -- it opens once they fall. ${themeInfo ? themeInfo.flavor[0].toUpperCase() + themeInfo.flavor.slice(1) : ''}, somewhere in the wider world.`;
+    }
+    // Standard overworld boss -- look them up in the overworld boss roster for biome hint, or
+    // in dungeonRegistry if they're a dungeon-specific boss with a theme.
+    const themeInfo = BOSS_DUNGEON_THEME[bossId];
+    if (themeInfo) {
+      const found = nearestRegisteredDungeonOfTheme(themeInfo.theme, fx, fy);
+      if (found) {
+        const dir = getDirection(fx, fy, found.dg.x, found.dg.y);
+        return `${themeInfo.flavor[0].toUpperCase()}${themeInfo.flavor.slice(1)} -- and ${found.dg.name} matches that description, ${distancePhrase(dir, found.dist)}.`;
+      }
+      return `${themeInfo.flavor[0].toUpperCase()}${themeInfo.flavor.slice(1)}, but nothing matching that has turned up on any map you've seen yet. Keep exploring, or ask around a settlement.`;
+    }
+    const owb = OVERWORLD_BOSSES.find(b => b.id === bossId);
+    if (owb) {
+      const biomeNames = owb.biomes.map(b => (BIOMES[b] && BIOMES[b].name) || b).join(', ');
+      return `Word is this one roams ${biomeNames} territory, not any one fixed place -- you'll have to go looking there and hope to cross paths.`;
+    }
+    return `No one you've met yet seems to know much about this one. Try asking in a settlement, or dungeon rumor may point the way.`;
+  }
+  if (stage.type === 'dungeon_tier') {
+    let best = null, bestD = Infinity;
+    for (const dg of dungeonRegistry.values()) {
+      if (dg.tier !== stage.targetTier) continue;
+      const d = chebyshev(fx, fy, dg.x, dg.y);
+      if (d < bestD) { bestD = d; best = dg; }
+    }
+    if (best) { const dir = getDirection(fx, fy, best.x, best.y); return `${best.name} is a ${stage.targetTier}-tier dungeon, ${distancePhrase(dir, bestD)}. Clear it to its deepest level.`; }
+    return `No ${stage.targetTier}-tier dungeon has turned up nearby yet -- explore further out, or ask a local guard or elder where trouble's been reported.`;
+  }
+  if (stage.type === 'discover_kingdoms') {
+    const have = (player.discoveredKingdoms || []).length;
+    const need = stage.targetCount - have;
+    if (need <= 0) return 'You have set foot in enough kingdoms already -- this should resolve shortly.';
+    // Kingdoms are assigned deterministically by grid region whether or not the player has been
+    // there, same as the existing compass/dungeon-rumor precedent -- so a handful of unvisited
+    // ones nearby can be named and pointed toward without it being an unfair spoiler (nothing
+    // about the kingdom itself is revealed, just that traveling that way crosses a border).
+    const seen = new Set((player.discoveredKingdoms || []));
+    const pcx = Math.floor(fx / CH), pcy = Math.floor(fy / CH);
+    const candidates = [];
+    for (let ring = 8; ring <= 88 && candidates.length < 3; ring += 8) {
+      const k = getKingdom(pcx + ring, pcy);
+      const k2 = getKingdom(pcx - ring, pcy);
+      const k3 = getKingdom(pcx, pcy + ring);
+      const k4 = getKingdom(pcx, pcy - ring);
+      for (const [kk, dx, dy] of [[k,ring,0],[k2,-ring,0],[k3,0,ring],[k4,0,-ring]]) {
+        if (kk && !seen.has(kk.key) && !candidates.some(c => c.key === kk.key)) candidates.push({ key: kk.key, name: kk.name, dx, dy });
+      }
+    }
+    if (candidates.length) {
+      const parts = candidates.slice(0, 2).map(c => { const dir = getDirection(0,0,c.dx,c.dy); return `${c.name} (${dir})`; });
+      return `You need to set foot in ${need} more kingdom${need===1?'':'s'}. Unfamiliar borders lie: ${parts.join('; ')}.`;
+    }
+    return `You need to set foot in ${need} more kingdom${need===1?'':'s'}. Keep traveling outward in any direction you haven't explored.`;
+  }
+  if (stage.type === 'visit_dimension') {
+    const dimId = stage.targetDimensionId;
+    const dim = DIMENSIONS[dimId];
+    const gate = DIMENSION_GATE_INFO[dimId];
+    if ((player.discoveredDimensions || []).includes(dimId)) {
+      return `The way into ${dim.name} already stands open somewhere behind you -- find the rift you opened and cross through it.`;
+    }
+    if (!gate) return `Something about ${dim.name} still eludes you. Keep exploring and asking around.`;
+    if (gate.kind === 'discovery') return `${dim.name} isn't guarded by anything that can be fought -- rumor holds it's reached by resting at ${gate.structureName}, somewhere out there.`;
+    const themeInfo = BOSS_DUNGEON_THEME[gate.bossId];
+    if (gate.kind === 'item_structure') {
+      const need = [gate.itemName];
+      if (gate.secondItemName) need.push(gate.secondItemName);
+      const found = themeInfo ? nearestRegisteredDungeonOfTheme(themeInfo.theme, fx, fy) : null;
+      let s = `The way into ${dim.name} needs ${need.join(' and a ')} in hand, used at ${gate.structureName}.`;
+      if (found) { const dir = getDirection(fx, fy, found.dg.x, found.dg.y); s += ` ${found.dg.name} ${distancePhrase(dir, found.dist)} matches where you'd find that.`; }
+      else if (themeInfo) s += ` ${themeInfo.flavor[0].toUpperCase()}${themeInfo.flavor.slice(1)}, but you haven't found the place yet.`;
+      return s;
+    }
+    // boss_kill
+    if (themeInfo) {
+      const found = nearestRegisteredDungeonOfTheme(themeInfo.theme, fx, fy);
+      if (found) { const dir = getDirection(fx, fy, found.dg.x, found.dg.y); return `The way into ${dim.name} opens when its gatekeeper falls. ${found.dg.name} ${distancePhrase(dir, found.dist)} matches the description -- ${themeInfo.flavor}.`; }
+      return `The way into ${dim.name} opens when its gatekeeper falls -- ${themeInfo.flavor}, but you haven't found the place yet.`;
+    }
+    return `Something about ${dim.name} still eludes you. Keep exploring and asking around.`;
+  }
+  return null;
+}
+// ---- lead-gating: the player should never just KNOW where to go the instant a stage starts.
+// A stage's real hint (questStageHint) only surfaces once the player has actually learned it
+// from somewhere in-world -- an NPC telling them, a rumor note they've read, etc. Until then,
+// every surface (sidebar, quest log, "ask about your journey") shows the same honest "no lead
+// yet" line instead. This is tracked per-stage (leadKnownStage), so it resets naturally the
+// moment the story advances to a new stage -- new stage, new leg of the journey, new need to
+// find out where it leads.
+const NO_LEAD_TEXT = "You don't have a solid lead on this yet. Try talking to people in a settlement, reading whatever you find, or just keep exploring -- something will turn up.";
+function hasQuestLead() {
+  ensureStory();
+  if (!player.story) return false;
+  const stage = curStoryStage();
+  if (!stage || stage.type === 'auto' || stage.type === 'locked') return true;
+  return player.story.leadKnownStage === player.story.stageIndex;
+}
+// Called whenever the player actually learns their current lead in-world (an NPC tells them,
+// they read a rumor note, etc.) -- flips the gate open and nudges them that the log updated.
+// No-ops (and doesn't re-log) if this stage's lead is already known.
+function markQuestLeadKnown() {
+  ensureStory();
+  if (!player.story) return;
+  if (player.story.leadKnownStage === player.story.stageIndex) return;
+  player.story.leadKnownStage = player.story.stageIndex;
+  log('(Your quest log has been updated -- press [q] to see your new lead.)');
+}
+// Public entry point: hint for whatever the main quest currently wants. Also used by the
+// "ask about your journey" dialogue option and the sidebar tracker.
+function mainQuestGuidance() {
+  ensureStory();
+  const stage = curStoryStage();
+  if (!stage) return player.story && player.story.stages.every(s => s.done) ? 'Every step of this road is behind you now.' : null;
+  if (stage.type === 'auto' || stage.type === 'locked') return null;
+  if (!hasQuestLead()) return NO_LEAD_TEXT;
+  return questStageHint(stage);
+}
+// Keeps the always-visible sidebar tracker current -- called every updateSidebar() so it never
+// goes stale after a stage advances, a dungeon gets discovered, etc.
+function updateMainQuestTracker() {
+  const row = document.getElementById('mainquest-row');
+  if (!player.story) { row.classList.add('hidden'); return; }
+  const stage = curStoryStage();
+  if (!stage) { row.classList.add('hidden'); return; }
+  row.classList.remove('hidden');
+  document.getElementById('mainquest-title').textContent = `Main Quest: ${stage.title}`;
+  const hint = mainQuestGuidance();
+  document.getElementById('mainquest-hint').textContent = hint || stage.desc || '';
+}
+
 // ---- Kingdom Reputation: quests now actually change how a kingdom treats you ----
 function getKingdomRep(key) { ensureStory(); return player.story.kingdomRep[key] || 0; }
 function addKingdomRep(key, amount) {
@@ -8197,6 +9122,7 @@ function openItemAction(it, slot) {
     if ((it.type === 'consumable' || it.type === 'scroll') && THROWABLE_EFFECTS.has(it.effect)) opts.push(['t', 'Throw (choose target tile)']);
     if (it.type === 'consumable' || it.type === 'scroll') opts.push(['u', THROWABLE_EFFECTS.has(it.effect) ? 'Use on self' : 'Use']);
     if (it.type === 'chest') opts.push(['u', 'Open']);
+    if (it.type === 'book' || it.type === 'note') opts.push(['u', it.type === 'note' ? 'Read note' : 'Read']);
     if (it.type === 'recipe') opts.push(['u', 'Learn']);
     if (it.type === 'tome') opts.push(['u', 'Study (learn spell)']);
     if (it.type === 'cyberchip') opts.push(['u', 'Extract (learn blueprint)']);
@@ -8217,6 +9143,8 @@ function openItemAction(it, slot) {
 // ---- movement v2: shrine one-time buffs, corpse-aware pickup ----
 
 function pickUp() {
+  const container = curContainerAt(player.x, player.y);
+  if (container) { openContainer(container); return; }
   const items = itemsAt(player.x, player.y);
   if (!items.length) { log('There is nothing here to pick up.'); return; }
   const real = items.find(i => i.type !== 'corpse');
@@ -8262,6 +9190,10 @@ function openQuestLog() {
     const mark = s.done ? '✓' : (s.type === 'locked' ? '🔒' : '➤');
     const cls = (i === player.story.stageIndex && !s.done) ? 'modal-opt' : 'modal-opt dim';
     html += `<div class="${cls}">${mark} ${s.title}${(i === player.story.stageIndex) ? ': ' + s.desc : ''}</div>`;
+    if (i === player.story.stageIndex && !s.done) {
+      const hint = hasQuestLead() ? questStageHint(s) : NO_LEAD_TEXT;
+      if (hint) html += `<div class="modal-opt dim" style="padding-left:18px;font-style:italic">Where to look: ${hint}</div>`;
+    }
   });
   const active = player.quests.filter(q => !q.done);
   const done = player.quests.filter(q => q.done);
@@ -8278,6 +9210,66 @@ function openQuestLog() {
     for (const [key, v] of repEntries) { const kn = kingdomRegistry.get(key); html += `<div class="modal-opt dim">${kn ? kn.name : key}: ${v > 0 ? '+' : ''}${v}</div>`; }
   }
   renderModal('Quest Log', html, 'Esc to close.');
+}
+
+// ---- book reader & library/codex ----
+// Reading a book logs it to player.readLog (so the Library screen can list it even after the
+// physical copy is sold, dropped, or stored back in a container -- once read, always in your
+// codex) and shows its full text in a modal. Esc returns to wherever the player was (inventory,
+// or a container's contents), matching how every other item-action submenu already behaves.
+let bookReaderReturnState = 'inventory';
+function openBookReader(it) {
+  Sound.play('uiOpen');
+  bookReaderReturnState = (gameState === 'itemaction') ? 'inventory' : gameState;
+  if (!player.readLog) player.readLog = {};
+  if (!player.readLog[it.bookId]) {
+    player.readLog[it.bookId] = { title: it.title, author: it.author, date: it.date, category: it.category, categoryLabel: it.categoryLabel, body: it.body, manual: it.manual };
+    log(`You add "${it.title}" to your library.`);
+  }
+  // A found rumor note that happens to carry the current quest's lead is a legitimate, in-world
+  // way to learn it -- unlocks the same way an NPC telling you would.
+  if (it.category === 'note' && it.tags && it.tags.includes('quest_hint')) markQuestLeadKnown();
+  gameState = 'bookreader';
+  const paragraphs = it.body.split('\n\n').map(p => `<p style="margin:0 0 10px 0;line-height:1.5">${p}</p>`).join('');
+  const html = `<div class="dim" style="margin-bottom:10px;font-style:italic">by ${it.author} — ${it.date} — ${it.categoryLabel}</div>${paragraphs}`;
+  renderModal(it.title, html, 'Esc to close and put the book away.');
+}
+function closeBookReader() {
+  gameState = bookReaderReturnState;
+  if (gameState === 'container') { renderContainer(); }
+  else if (gameState === 'inventory') { renderInventory(); }
+  else if (gameState === 'library') { openLibrary(); }
+  else { closeModal(); return; }
+  document.getElementById('modal').classList.remove('hidden');
+}
+const LIBRARY_CATEGORY_ORDER = ['guide','research','history','bestiary','textbook','diary','letter','myth','note'];
+function openLibrary() {
+  Sound.play('uiOpen');
+  gameState = 'library';
+  if (!player.readLog) player.readLog = {};
+  const entries = Object.entries(player.readLog);
+  let html = `<div class="npcline dim">Everything you've read stays here, whether or not you still carry the book itself. ${entries.length} of ${BOOKS_MANUAL.length}+ known volumes read.</div>`;
+  if (!entries.length) {
+    html += `<div class="npcline dim" style="margin-top:10px">You haven't read anything yet. Look for books on shelves, desks, and in what you find exploring — press [g] to open a container you're standing on, then read what's inside from your pack.</div>`;
+  }
+  for (const cat of LIBRARY_CATEGORY_ORDER) {
+    const inCat = entries.filter(([,b]) => b.category === cat);
+    if (!inCat.length) continue;
+    html += `<div class="trade-col-title">${BOOK_CATEGORIES[cat] || cat}</div>`;
+    inCat.forEach(([bookId, b], i) => {
+      html += `<div class="modal-opt" onclick="openLibraryEntry('${bookId}')">${b.title} <span class="dim">— ${b.author}</span></div>`;
+    });
+  }
+  renderModal('Library', html, 'Click a title to re-read it. Esc to close.');
+}
+function openLibraryEntry(bookId) {
+  const b = player.readLog[bookId];
+  if (!b) return;
+  bookReaderReturnState = 'library';
+  gameState = 'bookreader';
+  const paragraphs = b.body.split('\n\n').map(p => `<p style="margin:0 0 10px 0;line-height:1.5">${p}</p>`).join('');
+  const html = `<div class="dim" style="margin-bottom:10px;font-style:italic">by ${b.author} — ${b.date} — ${b.categoryLabel}</div>${paragraphs}`;
+  renderModal(b.title, html, 'Esc to return to your library.');
 }
 
 // ---- talents ----
@@ -8354,6 +9346,57 @@ function directionsRumor(npc) {
   if (!found) return null;
   const dir = getDirection(npc.x, npc.y, found.dg.x, found.dg.y);
   return `If you head ${dir} from here, you'll find ${found.dg.name} (${found.dg.tier}), roughly ${found.dist} tiles away.`;
+}
+// Returns a quest-related conversational line for an NPC to deliver on first contact.
+// Written in NPC-dialogue voice (not quest-log mechanical voice) -- the same information but
+// delivered as something the NPC plausibly knows and would say to a passing adventurer.
+const NPC_QUEST_HINT_OPENERS = [
+  "Heard something that might interest a traveler like yourself.",
+  "Not my place to pry, but you look like someone with a purpose.",
+  "Everyone who comes through here lately seems to be asking the same kind of question.",
+  "An old soldier told me something before he left, weeks ago now.",
+  "You've got that look. The look of someone following a trail.",
+  "Keep your voice down, but there's been talk.",
+  "My uncle's a guard. He hears things. Last thing he told me --",
+];
+const QUEST_HINT_ROLES = new Set(['elder','guard','watchman','captain','innkeeper','merchant','ranger','hunter','bard','blacksmith','trainer']);
+const QUEST_HINT_CRYPTIC_ROLES = new Set(['priest','necromancer_trainer']);
+// Volunteered on first contact -- the NPC brings it up unprompted, in the voice of someone
+// passing along gossip they overheard. Learning the hint this way is what actually unlocks it
+// everywhere else (sidebar, quest log, further conversation).
+function npcQuestHintLine(npc) {
+  if (!player || !player.story) return null;
+  const stage = curStoryStage();
+  if (!stage || stage.type === 'auto' || stage.type === 'locked') return null;
+  const hint = questStageHint(stage);
+  if (!hint) return null;
+  // Not every NPC gives quest hints -- elders, guards, innkeepers, merchants, and travelers do;
+  // children and animals obviously don't; priests give a more cryptic version.
+  if (QUEST_HINT_CRYPTIC_ROLES.has(npc.roleId)) {
+    markQuestLeadKnown();
+    return `The signs have been troubling of late. ${hint.split('.')[0]}. The rest you'll have to find yourself.`;
+  }
+  if (!QUEST_HINT_ROLES.has(npc.roleId)) return null;
+  markQuestLeadKnown();
+  const opener = NPC_QUEST_HINT_OPENERS[Math.floor(Math.random() * NPC_QUEST_HINT_OPENERS.length)];
+  return `${opener} ${hint}`;
+}
+// Given directly, when the player asks "Ask about your journey" and doesn't have a lead yet --
+// only NPCs whose role plausibly has this information will actually answer; everyone else
+// honestly says they don't know. Answering also unlocks the lead, same as volunteering it does.
+function npcAskedQuestHintLine(npc) {
+  if (!player || !player.story) return null;
+  const stage = curStoryStage();
+  if (!stage || stage.type === 'auto' || stage.type === 'locked') return null;
+  const hint = questStageHint(stage);
+  if (!hint) return null;
+  if (QUEST_HINT_CRYPTIC_ROLES.has(npc.roleId)) {
+    markQuestLeadKnown();
+    return `The signs have been troubling of late. ${hint.split('.')[0]}. The rest you'll have to find yourself.`;
+  }
+  if (!QUEST_HINT_ROLES.has(npc.roleId)) return null;
+  markQuestLeadKnown();
+  return hint;
 }
 
 // ---- dialogue v2: gifts, quests, marriage, healer, directions ----
@@ -8799,6 +9842,19 @@ function render() {
   }
   if (curIsDungeon()) {
     for (const e of curDungeonLevel().items) if (e.item) drawG(e.x, e.y, e.item.glyph, e.item.color);
+    const lvl = curDungeonLevel();
+    if (lvl.containers) for (const e of lvl.containers) if (e.container) drawG(e.x, e.y, e.container.glyph, e.container.color);
+  } else if (curIsDimension()) {
+    const pcx = Math.floor(player.x/CH), pcy = Math.floor(player.y/CH);
+    for (let cy = pcy-1; cy<=pcy+1; cy++) for (let cx = pcx-1; cx<=pcx+1; cx++) {
+      const c = dimensionChunks.get(dimChunkKey(player.dimensionId, cx, cy));
+      if (!c) continue;
+      for (let ly=0; ly<CH; ly++) for (let lx=0; lx<CH; lx++) {
+        const t = c.tiles[ly][lx];
+        if (t.containers && t.containers.length) drawG(cx*CH+lx, cy*CH+ly, t.containers[0].glyph, t.containers[0].color);
+        else if (t.items && t.items.length) drawG(cx*CH+lx, cy*CH+ly, t.items[0].glyph, t.items[0].color);
+      }
+    }
   } else {
     const pcx = Math.floor(player.x/CH), pcy = Math.floor(player.y/CH);
     for (let cy = pcy-1; cy<=pcy+1; cy++) for (let cx = pcx-1; cx<=pcx+1; cx++) {
@@ -8806,7 +9862,8 @@ function render() {
       if (!c) continue;
       for (let ly=0; ly<CH; ly++) for (let lx=0; lx<CH; lx++) {
         const t = c.tiles[ly][lx];
-        if (t.items && t.items.length) drawG(cx*CH+lx, cy*CH+ly, t.items[0].glyph, t.items[0].color);
+        if (t.containers && t.containers.length) drawG(cx*CH+lx, cy*CH+ly, t.containers[0].glyph, t.containers[0].color);
+        else if (t.items && t.items.length) drawG(cx*CH+lx, cy*CH+ly, t.items[0].glyph, t.items[0].color);
       }
     }
   }
@@ -9215,13 +10272,40 @@ function openDialogue(npc) {
     const lastTurn = (npc.lastTalkTurn === undefined || npc.lastTalkTurn === null) ? -9999 : npc.lastTalkTurn;
     const canGain = (turnCount - lastTurn) > cooldown;
     let line;
-    if (isSpouse) line = choice(Math.random, MARRIED_LINES);
-    else { line = npc.rumor; if (Math.random() < 0.3) { const dirs = directionsRumor(npc); if (dirs) line = dirs; } else if (Math.random() < 0.15) { const k = getKingdom(Math.floor(npc.x/CH), Math.floor(npc.y/CH)); line = k.history; } }
+    if (isSpouse) {
+      line = choice(Math.random, MARRIED_LINES);
+    } else {
+      // First time talking to this NPC (or haven't talked in a long while): proactively share
+      // a quest hint in NPC voice if their role supports it. After that, fall back to the normal
+      // dungeon-direction rumor or kingdom history line.
+      const isFirstTalk = npc.lastTalkTurn === undefined || npc.lastTalkTurn === null;
+      if (isFirstTalk) {
+        const questHint = npcQuestHintLine(npc);
+        if (questHint) { line = questHint; }
+        else { line = npc.rumor; if (Math.random() < 0.3) { const dirs = directionsRumor(npc); if (dirs) line = dirs; } else if (Math.random() < 0.15) { const k = getKingdom(Math.floor(npc.x/CH), Math.floor(npc.y/CH)); line = k.history; } }
+      } else {
+        line = npc.rumor;
+        if (Math.random() < 0.3) { const dirs = directionsRumor(npc); if (dirs) line = dirs; }
+        else if (Math.random() < 0.15) { const k = getKingdom(Math.floor(npc.x/CH), Math.floor(npc.y/CH)); line = k.history; }
+      }
+    }
     log(`${npc.name}: "${line}"`);
     if (canGain) { const talkGain = Math.max(0, Math.round(1 + speciesAffinityScore(player.species, npc.species))); npc.affection = (npc.affection || 0) + talkGain; npc.lastTalkTurn = turnCount; }
     checkDeliveryQuests(npc);
     closeModal();
   }});
+  if (!isSpouse && player.story && curStoryStage()) {
+    opts.push({ key: nextKey(), label: 'Ask about your journey', action: () => {
+      // If the player already has a lead, anyone can recall/confirm it -- it's their own
+      // knowledge at that point. If not, only NPCs whose role would plausibly know something
+      // actually answer; everyone else honestly says they don't know, which is what unlocking
+      // the lead through conversation is supposed to feel like rather than a guaranteed GPS ping.
+      const hint = hasQuestLead() ? mainQuestGuidance() : npcAskedQuestHintLine(npc);
+      log(`${npc.name}: "${hint ? hint : "Can't say I know anything that would help with that. Sorry, traveler."}"`);
+      checkDeliveryQuests(npc);
+      closeModal();
+    }});
+  }
   if (npc.shop) opts.push({ key: nextKey(), label: 'Trade', action: () => openTrade(npc) });
   if ((npc.teachSpells && npc.teachSpells.length) || (npc.teachRecipes && npc.teachRecipes.length)) opts.push({ key: nextKey(), label: 'Learn', action: () => openTrain(npc) });
   if (npc.canGiveQuest && !player.quests.some(q => q.giverId === npc.uid && !q.done)) opts.push({ key: nextKey(), label: 'Ask for work', action: () => offerRadiantQuests(npc) });
@@ -9294,6 +10378,80 @@ function showStartScreen() {
   }).join('');
   renderModal('Choose Your Beginning', html, 'Letter/click to choose.');
 }
+// ===================== IN-WORLD NOTES & RUMOR SCRAPS =====================
+// Design goal: a new player should be able to figure out where to go by exploring and asking
+// around and reading what they find -- but only once they've actually done one of those things.
+// Nothing hands over the current lead for free; it has to come from somewhere a player could
+// plausibly point to afterward ("the innkeeper told me" / "I found a note in that desk").
+// This system has two layers:
+//   1. A single fixed tutorial note dropped at the player's feet on new game start, teaching the
+//      pickup/read controls. It contains no quest information -- see spawnStarterRumorNote().
+//   2. World-scattered Rumor Notes that spawn in containers throughout the world, each pointing
+//      at the CURRENT quest objective in lore-voice (boss location, biome to search, dungeon to
+//      find), generated fresh from live quest state so they're always accurate. Finding and
+//      reading one of these is a legitimate way to learn the lead (see markQuestLeadKnown()),
+//      the same as an NPC volunteering it in conversation.
+// Notes are just book items with type:'note' instead of 'book' -- they share the same reader
+// UI, the same Library logging, and the same container/inventory/ground behavior. The only
+// difference is they're shorter, written in a more ad-hoc voice, and never listed under a
+// "by Author" heading in the Library (they just pile into a "Notes & Scraps" category).
+BOOK_CATEGORIES.note = 'Note';
+const NOTE_CATEGORY_ORDER_ADDITION = 'note';
+function makeNoteItem(id, title, body, author) {
+  return makeBookItemRaw({
+    id: 'note_' + id, title, author: author || 'unknown', date: 'undated', category: 'note',
+    tags: ['note'], body, manual: false,
+  });
+}
+// Generates a rumor note whose text is derived from live quest guidance -- always accurate, never
+// points at the wrong place, always seed-specific. Used for both the starter note and for notes
+// scattered throughout the world by rollContainerLoot and generateChunk.
+function generateQuestRumorNote(stage) {
+  if (!stage || stage.type === 'auto' || stage.type === 'locked') return null;
+  const hint = questStageHint(stage);
+  if (!hint) return null;
+  const RUMOR_VOICES = [
+    (title, hint) => `Heard at the tavern last market day:\n\n"${title}?" The old man laughed. "${hint} Told me by a warden I passed on the south road. Take it for what it's worth."`,
+    (title, hint) => `Scrawled on the back of an old map:\n\n${hint}\n\n(The handwriting gets hurried here, as if the writer was interrupted.)`,
+    (title, hint) => `A posted notice, half torn:\n\n${hint}\n\nAnyone with further information is asked to speak with the local watch. Reward offered.`,
+    (title, hint) => `Found tucked inside a boot:\n\nIf you're reading this, I didn't make it back. ${hint} I've written what I know.`,
+    (title, hint) => `Ink-stained field note:\n\n${hint}\n\n(Below this, in smaller writing: "If I'm wrong about this, don't come looking for me.")`,
+  ];
+  const voice = RUMOR_VOICES[Math.floor(Math.random() * RUMOR_VOICES.length)];
+  const note = makeNoteItem(
+    Math.random().toString(36).slice(2, 9),
+    `Rumor: ${stage.title}`,
+    voice(stage.title, hint)
+  );
+  // Marked so the book reader knows finding and reading this note is itself a legitimate,
+  // in-world way to learn the current lead -- see openBookReader's markQuestLeadKnown() call.
+  note.tags.push('quest_hint');
+  return note;
+}
+// Drops the tutorial note at the player's starting tile. NOTE: this deliberately does NOT also
+// drop a "Rumor Note" pointing at the current quest stage -- there's no in-world reason a note
+// telling the player exactly where to go would just be lying at their feet the moment they spawn;
+// nobody placed it there. The player learns their actual lead the honest way: by talking to
+// people, reading things they find out in the world, or exploring -- see hasQuestLead() /
+// markQuestLeadKnown() above.
+function spawnStarterRumorNote() {
+  const tutNote = makeNoteItem('how_to_read', 'A Crumpled Note', 'Someone left this here. Press [g] to pick up items you\'re standing on, then open your inventory [i] and press [u] on any readable item to read it.\n\nPress [L] anytime to reread anything you\'ve already read, even after you\'ve dropped it.');
+  placeItemAt(player.x, player.y, tutNote);
+}
+// Called by rollContainerLoot for certain containers (desks, sacks, crates) with a small chance
+// to add a world-relevant rumor note alongside the normal loot -- gives players a reason to
+// open every container they find, and naturally seeds the trail of clues throughout the world.
+function maybeAddRumorNote(rng, contents, kind) {
+  if (!player || !player.story) return;
+  const stage = curStoryStage();
+  if (!stage || stage.type === 'auto' || stage.type === 'locked') return;
+  const chance = kind === 'desk' ? 0.35 : (kind === 'sack' || kind === 'crate') ? 0.12 : 0.07;
+  if (rng() < chance) {
+    const note = generateQuestRumorNote(stage);
+    if (note) contents.push(note);
+  }
+}
+
 function beginScenario(letter) {
   const idx = letter.charCodeAt(0) - 97;
   const scenario = START_SCENARIOS[idx];
@@ -9308,9 +10466,29 @@ function beginScenario(letter) {
   } else {
     log(`You begin your journey as a ${scenario.name.toLowerCase()}.`);
   }
-  log("Press '?' at any time for the full guide and controls.");
+  // ---- new-player onboarding: push a clear tutorial sequence into the log so a brand new
+  // player immediately knows the three most important things (move, open quest log, talk to
+  // NPCs), and also knows exactly where to look when they want more. This fires only on first
+  // game start -- loading a save skips it entirely. ----
+  ensureStory();
+  const stage = curStoryStage();
+  if (stage) {
+    log(`*** Your quest: "${player.story.title}" — ${stage.title} ***`);
+    // No lead yet on turn 0 -- that's earned honestly in-world (see hasQuestLead()), not handed
+    // over for free. Tell the player as much, and how to go about getting one.
+    log("You don't know where to start yet — talk to people in a settlement, read what you find, or just keep exploring. Your quest log ([q]) will update the moment you've got a real lead.");
+  }
+  log("─── Getting started: move with arrow keys/WASD/numpad. Press [q] for your quest log. Press [t] near a person to talk — they may know something useful. Press [g] to open containers you're standing on. Press [?] for the full guide. ───");
+  // Drop a tutorial note at the player's feet teaching the 'g'/'i'/'u' pickup-and-read chain, and
+  // plant the idea that readable notes exist in the world. (No quest-hint note here -- see
+  // spawnStarterRumorNote's comment for why that would be immersion-breaking.)
+  spawnStarterRumorNote();
   markSeen();
   render();
+  // Schedule a second wave of guidance into the log after a short delay so it doesn't get buried
+  // under the first wave and the initial render. Players often miss all of turn-0's log in the
+  // excitement of seeing the world. This fires once on turn 1 automatically via endTurn() check.
+  player._pendingTutorialNudge = true;
 }
 
 // ---- auto-travel v3: 'H' returns to upstairs (dungeon) or nearest known settlement (overworld) ----
@@ -9469,15 +10647,74 @@ const TILE_FEATURE_DESCRIPTIONS = {
   statue: 'A worn, silent statue. It blocks the way.',
   brokenfloor: 'The shattered remains of a floor that gave way underfoot.',
   ice: 'A slick sheet of ice, frozen solid — but it will not last forever.',
+  dock: 'A weathered wooden dock, jutting out over the water.',
+  orepile: 'A pile of raw ore, ready for a pickaxe or a forge.',
+  windmill: 'An old windmill, its sails turning slowly in the wind.',
+  pasture: 'Fenced pasture, grazed low by whatever lives here.',
+  tentwall: 'The canvas wall of a tent, staked into the ground.',
+  poisongas: 'A roiling cloud of poison gas hangs in the air here — best not to breathe it in.',
+  scorched: 'Scorched, blackened ground — something burned hot here.',
+  waystone: 'A waystone, carved with old travel-wardings. Stand here to reach the fast-travel network for free.',
+  rift_portal: "A tear in the world, its edges rippling like heat over sand. It leads somewhere that isn't here.",
+  slumbering_altar: 'A dream-worn altar, half-sunk into itself. Resting here feels like it would take you somewhere else entirely.',
+  shrine: 'An ancient shrine, its purpose long outlived its builders.',
+  ritual_altar: 'A dark altar, stained with old ritual use. Something was done here, and maybe still could be.',
+  launch_cradle: 'A dead husk of scaffolding, curved like it once cradled something built to leave the ground entirely.',
+  folding_stone: 'A frame of standing stones, arranged in an order that hurts slightly to look directly at.',
+  hazard: 'The ground here looks unstable or dangerous — best tread carefully, or find another way around.',
 };
-function describeTile(t) {
+// A handful of tile features are dynamic per-tile (their exact flavor lives on the specific POI
+// instance, not the shared dictionary above) -- these get looked up by matching world coordinates
+// against the owning chunk's stored POI, so "a shrine" becomes "Standing Stones, humming faintly
+// with old magic" instead of the same generic line every time.
+const POI_FEATURE_KINDS = new Set(['poi_marker', 'shrine', 'ritual_altar', 'launch_cradle', 'folding_stone', 'hazard']);
+function poiAt(wx, wy) {
+  if (curIsDungeon() || curIsDimension()) return null;
+  const c = getChunk(Math.floor(wx / CH), Math.floor(wy / CH));
+  if (c && c.poi && c.poi.x === wx && c.poi.y === wy) return c.poi;
+  return null;
+}
+// Short, human name for the role an NPC-inhabited building serves -- used so standing inside one
+// tells you what kind of building it is, not just "bare floor".
+function buildingRoleLabel(roleId) {
+  const role = ROLES.find(r => r.id === roleId);
+  return role ? role.name : null;
+}
+function describeTile(t, wx, wy) {
   if (!t) return 'Nothing but darkness.';
   const b = BIOMES[t.biome] || (curIsDimension() && DIMENSIONS[player.dimensionId] && DIMENSIONS[player.dimensionId].biomes[t.biome]);
   let extra = '';
   if (t.feature === 'dungeon_entrance') { const dg = dungeonRegistry.get(t.dungeonId); extra = `<br>${dg.entranceName || 'An entrance'} — leads to ${dg.name} (${dg.tier} tier, ${dg.maxDepth} levels, recommended level ${dg.recommendedLevel || 1}+).`; }
-  else if (t.feature === 'shrine') extra = t.shrineUsed ? '<br>An ancient shrine, its magic spent.' : '<br>An ancient shrine hums with dormant power.';
+  else if (t.feature && POI_FEATURE_KINDS.has(t.feature) && wx !== undefined && wy !== undefined) {
+    // Named POIs (Weathered Monument, Standing Stones, Shipwreck, etc.) carry their own flavor
+    // text on the chunk -- use that instead of the generic per-feature line so the player learns
+    // what they're actually looking at, not just "a shrine" or "a marker".
+    const poi = poiAt(wx, wy);
+    let poiText = poi ? `<b>${poi.name}</b>${poi.lookExtra ? ' — ' + poi.lookExtra : ''}` : (TILE_FEATURE_DESCRIPTIONS[t.feature] || '');
+    if (t.feature === 'shrine' && t.shrineUsed !== undefined) poiText += t.shrineUsed ? ' Its magic feels spent now.' : ' It still hums with dormant power.';
+    if (poiText) extra = '<br>' + poiText;
+  }
   else if (t.feature && TILE_FEATURE_DESCRIPTIONS[t.feature]) extra = '<br>' + TILE_FEATURE_DESCRIPTIONS[t.feature];
+  // Standing inside a settlement building -- name the role it serves so an empty room reads as
+  // "the blacksmith's forge" rather than just "bare floor".
+  if (t.building !== null && t.building !== undefined && wx !== undefined && wy !== undefined && !curIsDungeon() && !curIsDimension()) {
+    const c = getChunk(Math.floor(wx / CH), Math.floor(wy / CH));
+    const bldg = c && c.settlement && c.settlement.buildings[t.building];
+    if (bldg) {
+      const label = buildingRoleLabel(bldg.role);
+      if (label) extra += `<br><span class="dim">You're inside what looks like the ${label.toLowerCase()}'s building.</span>`;
+    }
+  }
   return `${b ? b.name : 'Unknown terrain'}${extra}`;
+}
+// Describes an in-world container (chest, bookshelf, urn, etc.) for the look/examine system --
+// deliberately doesn't reveal contents (that's what opening it is for), just what it is and its
+// locked/opened state.
+function describeContainer(c) {
+  const kindName = (CONTAINER_KINDS[c.kind] || CONTAINER_KINDS.chest).name;
+  let s = c.desc ? c.desc : `${c.opened ? 'An opened' : 'A closed'} ${kindName.toLowerCase()}.`;
+  if (c.locked) s += ' It looks locked.';
+  return s;
 }
 function lookAtWorldPos(wx, wy) {
   const visRadius = curIsDungeon() ? 8 : 10;
@@ -9486,18 +10723,20 @@ function lookAtWorldPos(wx, wy) {
   const e = entityAt(wx, wy);
   gameState = 'look';
   if (e) { renderModal('Examine', describeEntity(e), 'Esc to close.'); return; }
+  const containers = containersAt(wx, wy);
   const items = itemsAt(wx, wy);
-  if (items.length) {
+  if (containers.length || items.length) {
     let html = '';
+    containers.forEach(c => { html += `<div class="modal-opt"><b>${c.glyph} ${c.name}</b><br>${describeContainer(c)}</div>`; });
     items.forEach(it => {
       if (it.type === 'corpse') { html += `<div class="modal-opt"><b>${it.glyph} ${it.name}</b><br>A fresh corpse, still warm. Necromancers can make use of it.</div>`; return; }
       html += `<div class="modal-opt"><b>${it.glyph} ${it.name}</b><br>${describeItem(it)}</div>`;
     });
-    html += `<hr><div class="npcline dim">Ground: ${describeTile(curTileAt(wx, wy))}</div>`;
-    renderModal('Examine', html, 'Esc to close.');
+    html += `<hr><div class="npcline dim">Ground: ${describeTile(curTileAt(wx, wy), wx, wy)}</div>`;
+    renderModal('Examine', html, containers.length ? 'Esc to close. (Step onto this tile and press [g] to open it.)' : 'Esc to close.');
     return;
   }
-  renderModal('Examine', describeTile(curTileAt(wx, wy)), 'Esc to close.');
+  renderModal('Examine', describeTile(curTileAt(wx, wy), wx, wy), 'Esc to close.');
 }
 function openLook() {
   Sound.play('uiOpen');
@@ -9510,7 +10749,9 @@ function openLook() {
   for (const n of curNPCs()) { if (!n.alive) continue; const d = chebyshev(n.x,n.y,player.x,player.y); if (d<=visRadius && hasLOS(player.x,player.y,n.x,n.y)) seenAny.push(n); }
   if (!seenAny.length) html += `<div class="npcline dim">You see no one nearby.</div>`;
   for (const e of seenAny) html += `<div class="modal-opt">${describeEntity(e)}</div><hr>`;
-  html += `<div class="trade-col-title">Standing on</div><div class="npcline">${describeTile(curTileAt(player.x,player.y))}</div>`;
+  html += `<div class="trade-col-title">Standing on</div><div class="npcline">${describeTile(curTileAt(player.x,player.y), player.x, player.y)}</div>`;
+  const containersHere = containersAt(player.x, player.y);
+  if (containersHere.length) html += `<div class="npcline">Here: ` + containersHere.map(c => `${c.name}${c.opened ? ' (opened)' : ''}`).join(', ') + ` — press [g] to open.</div>`;
   const groundItems = itemsAt(player.x, player.y).filter(i => i.type !== 'corpse');
   if (groundItems.length) html += `<div class="npcline">Here: ${groundItems.map(i => i.name).join(', ')}</div>`;
   if (!curIsDungeon() && !curIsDimension()) {
@@ -10694,6 +11935,20 @@ function generateChunk(cx, cy) {
         t.items.push(it);
       }
     }
+    // Rare wilderness find: an abandoned sack, crate, or urn sitting out in the open -- a
+    // scavenged camp, a lost supply drop, the last thing left of somebody's journey. Deliberately
+    // uncommon (rarer than the guaranteed settlement/dungeon placements above) so stumbling on
+    // one feels like a real find rather than expected furniture.
+    if (rng() < 0.035) {
+      const lx = randInt(rng, 1, CH - 2), ly = randInt(rng, 1, CH - 2);
+      const t = tiles[ly][lx];
+      if (t.walkable && t.feature === null) {
+        const kind = choice(rng, ['sack','crate','urn']);
+        const container = makeContainer(kind, { contents: rollContainerLoot(rng, kind, 0), desc: choice(rng, WILDERNESS_CONTAINER_FLAVOR) });
+        if (!t.containers) t.containers = [];
+        t.containers.push(container);
+      }
+    }
   }
   return chunk;
 }
@@ -11153,9 +12408,32 @@ function generateDimensionChunk(dimId, cx, cy) {
         t.items.push(makeItem(choice(rng, materialIds.length ? materialIds : ['ore']), 0, rng));
       }
     }
+    if (rng() < 0.05) {
+      const lx = randInt(rng, 1, CH - 2), ly = randInt(rng, 1, CH - 2);
+      const t = tiles[ly][lx];
+      if (t.walkable && !t.feature) {
+        const kinds = DIMENSION_CONTAINER_KINDS[dimId] || ['crate','sack'];
+        const kind = choice(rng, kinds);
+        const container = makeContainer(kind, { contents: rollContainerLoot(rng, kind, 2) });
+        if (typeof maybeStockBookContainer === 'function') maybeStockBookContainer(container, kind, null, rng, { dimensionId: dimId });
+        if (!t.containers) t.containers = [];
+        t.containers.push(container);
+      }
+    }
   }
   return chunk;
 }
+// Which container kinds feel at home scattered through each dimension's open ground -- flavor
+// over exact realism (an urn washed up in the Undertow, a sealed vault case abandoned mid-flight
+// in the Drift), but never wildly out of theme.
+const DIMENSION_CONTAINER_KINDS = {
+  abyssal_wastes: ['urn','crate','coffin'], lucid_expanse: ['desk','bookshelf','cabinet'],
+  gilded_choir: ['reliquary','vault','urn'], the_drift: ['vault','crate','cabinet'],
+  fourth_corridor: ['desk','cabinet','vault'], the_undertow: ['crate','urn','sack'],
+  clockwork_expanse: ['crate','cabinet','vault'], the_bloom: ['sack','crate','urn'],
+  corrupted_kernel: ['vault','cabinet','crate'], neo_kalyx: ['crate','cabinet','vault'],
+  the_boneyard: ['coffin','urn','crate'], wyrmreach: ['chest','vault','trunk'],
+};
 // Clears a small guaranteed-safe area around a special tile (arrival point, dungeon entrance) so
 // it's never accidentally boxed in by an unwalkable biome roll, using whichever biome the
 // dimension considers its "normal ground" rather than a hardcoded one.
@@ -11575,11 +12853,34 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
     gold.amount = Math.round(randInt(rng, 5, 15) * depth * variant.lootMod);
     level.items.push({ x: c.x, y: c.y, item: gold });
   }
-  const chestCount = rng() < 0.5 ? 1 : (rng() < 0.2 ? 2 : 0);
-  for (let i = 0; i < chestCount; i++) {
-    const c = choice(rng, floors);
-    const chestItem = Object.assign({}, ITEM_BASES.find(b=>b.id==='chest'), { uid:'i'+Math.random().toString(36).slice(2,9), tier: Math.max(0, Math.min(4, Math.round(Math.floor(depth/2) * variant.lootMod))), lootBias: meta.lootBias });
-    level.items.push({ x: c.x, y: c.y, item: chestItem });
+  // ---- world containers: chests placed in dungeons are now real, persistent objects (open them
+  // in place, take what you want, come back later -- see IN-WORLD CONTAINERS above) rather than a
+  // pickup item that vanishes the instant it's opened. A handful of theme-appropriate extra
+  // containers (urns in crypts/necropolises, bookshelves/desks in anything room-based and not a
+  // bare cave/sewer, sacks/crates everywhere else) round out the level so there's always
+  // something worth searching for beyond the stairs and the fight. ----
+  {
+    if (!level.containers) level.containers = [];
+    const ctier = Math.max(0, Math.min(4, Math.round(Math.floor(depth/2) * variant.lootMod)));
+    const chestCount = rng() < 0.5 ? 1 : (rng() < 0.2 ? 2 : 0);
+    for (let i = 0; i < chestCount; i++) {
+      const c = choice(rng, floors);
+      const container = makeContainer('chest', { contents: rollContainerLoot(rng, 'chest', ctier), locked: rng() < 0.25 });
+      level.containers.push({ x: c.x, y: c.y, container });
+    }
+    const isBookish = meta.genre !== 'cave' && theme !== 'sewer';
+    const extraCount = meta.bookHeavy ? randInt(rng, 4, 7) : randInt(rng, 1, 3);
+    for (let i = 0; i < extraCount; i++) {
+      const c = choice(rng, floors);
+      let kind;
+      if (meta.bookHeavy) kind = rng() < 0.7 ? choice(rng, ['bookshelf','bookshelf','desk']) : choice(rng, ['crate','urn']);
+      else if (theme === 'crypt' || theme === 'necropolis') kind = choice(rng, ['urn','coffin','urn']);
+      else if (isBookish && rng() < 0.5) kind = choice(rng, ['bookshelf','desk']);
+      else kind = choice(rng, ['crate','sack','barrel']);
+      const container = makeContainer(kind, { contents: rollContainerLoot(rng, kind, ctier) });
+      if (typeof maybeStockBookContainer === 'function') maybeStockBookContainer(container, kind, null, rng, { theme, isDungeon: true });
+      level.containers.push({ x: c.x, y: c.y, container });
+    }
   }
   // loot-biased special drop (cyber chip / eldritch mutagen) for themed dungeons
   if (meta.lootBias === 'cyber' && rng() < 0.6) {
@@ -12153,6 +13454,14 @@ function movePlayer(dx, dy) {
 // ---- turn processing v6: Charge regeneration ----
 function endTurn() {
   turnCount++;
+  // Turn-1 tutorial nudge: fires once, the turn after the world first renders, so the message
+  // appears on the player's first deliberate action rather than buried in the start-up flood.
+  if (turnCount === 1 && player._pendingTutorialNudge) {
+    delete player._pendingTutorialNudge;
+    const adj = findAdjacentNPC();
+    if (adj) log(`Tip: press [t] to talk to ${adj.name} nearby — they may know something useful.`);
+    else log(`Tip: look for settlements nearby — press [H] to auto-walk toward the nearest one, or check your quest log [q] for direction.`);
+  }
   if (activeDecoys.length) { for (const d of activeDecoys) d.turns--; activeDecoys = activeDecoys.filter(d => d.turns > 0); }
   for (const stat in player.buffs) {
     const b = player.buffs[stat];
@@ -12411,6 +13720,7 @@ function dipWeaponInFire() {
 }
 function useItem(it) {
   if (it.type === 'chest') { openChest(it); return; }
+  if (it.type === 'book' || it.type === 'note') { openBookReader(it); return; }
   if (it.type === 'cyberchip') {
     if (!player.knownCyberIds.includes(it.cyberId)) { player.knownCyberIds.push(it.cyberId); log(`You extract and study the chip: ${CYBERNETICS.find(c=>c.id===it.cyberId).name} blueprint learned! (install it via the Cybernetics screen, key Y)`); }
     else log('You already have this blueprint.');
@@ -12668,6 +13978,10 @@ function describeItem(it) {
     lines.push(`A vial of unstable eldritch mutagen. Drinking it grants the mutation ${m ? m.name : '???'} and raises your Corruption.`);
   } else if (it.type === 'key') {
     lines.push('A vault key. Carry it to the matching locked door and walk into the door to unlock it — consumed on use.');
+  } else if (it.type === 'book') {
+    lines.push(`${it.categoryLabel || 'Book'} by ${it.author}, ${it.date}. ${it.manual ? '' : '(one of many unique volumes scattered across the world)'}`);
+  } else if (it.type === 'note') {
+    lines.push(`A scrap of writing. Press [u] to read it. Whatever it says, your Library [L] will remember it.`);
   } else if (it.type === 'misc') {
     if (it.id === 'gold') lines.push('Currency.');
     else if (it.id === 'compass') lines.push('While carried, shows the direction to the nearest known dungeon in your status panel.');
@@ -12747,6 +14061,7 @@ function updateSidebar() {
   const questCount = player.quests.filter(q => !q.done).length;
   const bounty = currentRegionBounty();
   document.getElementById('quest-text').textContent = (questCount ? `${questCount} active quest(s) (press q)` : 'No active quests') + (bounty > 0 ? ` · Wanted here: ${bounty}g` : '');
+  updateMainQuestTracker();
   const allies = curAllies();
   const companions = player.companions.filter(c => c.alive);
   let allyHtml = allies.length ? allies.map(a => `${a.name} (${Math.max(0,a.hp)}/${a.maxHp})`).join('<br>') : '';
@@ -13185,6 +14500,7 @@ function renderSettingsTab(tabId) {
     body += row('Autosave', 'Automatically saves your game periodically.', toggleHtml('autosaveEnabled', s.autosaveEnabled));
     if (s.autosaveEnabled) body += row('Autosave Frequency', `Every ${s.autosaveInterval} turns.`, sliderHtml('autosaveInterval', s.autosaveInterval, 10, 200, 10));
     body += row('Confirm Before Quitting', 'Ask for confirmation when quitting to the title screen mid-game.', toggleHtml('confirmQuit', s.confirmQuit));
+    body += row('Exact Quest Marker', 'Off by default: your journal and NPCs give general direction and narrative leads, never a pinpoint. Turn this on to also show exact tile distances for your current quest stage, when a real location is known.', toggleHtml('exactQuestMarker', s.exactQuestMarker));
   } else if (tabId === 'accessibility') {
     body += row('Reduce Motion', 'Disables flicker/pulse effects on fire, gas, and other animated tiles.', toggleHtml('reduceMotion', s.reduceMotion));
     body += `<div class="npcline dim" style="margin-top:10px;">Font size and contrast live under the Display tab; HUD text density lives under HUD &amp; Layout.</div>`;
@@ -13547,9 +14863,9 @@ const GUIDE_SECTIONS = [
       ['+ / − or mouse wheel','Zoom in or out (9 zoom levels).'],
     ])}
     ${guideKeyTable('Actions', [
-      ['g','Pick up an item, or open a chest/container underfoot.'],
+      ['g','Pick up an item, or open a chest/barrel/sack/bookshelf/etc. underfoot — containers stay in the world exactly as you leave them.'],
       ['f','Fire your equipped ranged weapon at the nearest target in range.'],
-      ['t','Talk to an adjacent friendly NPC.'],
+      ['t','Talk to an adjacent friendly NPC — including an "Ask about your journey" option for a lead on your current main quest.'],
       ['x','Look/examine mode — inspect any visible tile, item, or creature.'],
       ['&gt; / &lt;','Descend / ascend stairs.'],
       ['m','Plant a Waystone Shard as a named fast-travel waypoint.'],
@@ -13562,7 +14878,8 @@ const GUIDE_SECTIONS = [
       ['z','Abilities — spells, techniques, active cybernetics, and active mutations together.'],
       ['T','Talents.'],
       ['K','Crafting &amp; Cooking.'],
-      ['q','Quest Log.'],
+      ['q','Quest Log — including a "Where to look" hint for your current main quest stage.'],
+      ['L','Library — every book you have read, kept for reference even after you have sold or dropped the physical copy.'],
       ['Y','Cybernetics management.'],
       ['U','Eldritch/mutation screen.'],
       ['V','Fast Travel.'],
@@ -13966,6 +15283,27 @@ const GUIDE_SECTIONS = [
     <div class="modal-opt">Dungeon-tier monsters and bosses, grouped by faction. Overworld wildlife (rabbits, wolves,
     bears, and the like) isn't listed here — it spawns based on biome and is generally weaker than anything below.</div>
     ${generateBestiaryGuideHTML()}` },
+  { id:'guidance', label:'Quests, Containers & Books', html: () => `
+    <div class="modal-opt"><b>Finding your way.</b> The main quest never hands you an exact marker by default — instead,
+    your always-visible sidebar tracker, the full Quest Log (<b>q</b>), and any NPC's "Ask about your journey" dialogue
+    option all give you a compass direction and a rough sense of distance ("north-east, a fair distance away"), or an
+    honest narrative lead when no exact location is known yet ("said to roam frozen mountains — you'll have to go
+    looking"). If you'd rather have precise tile distances added to those same hints, turn on <b>Exact Quest Marker</b>
+    under Gameplay settings — it's off by default on purpose, so exploring and asking around stays worthwhile.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>In-world containers.</b> Chests, trunks, barrels, sacks, crates,
+    urns, bookshelves, desks, cabinets, weapon racks, coffins, reliquaries, and vault cases are real, persistent
+    objects placed throughout the world — inside settlement buildings (matched to who lives there: a blacksmith keeps
+    a weapon rack, a priest a reliquary), scattered around a settlement's open ground, inside dungeons, and out in the
+    wider wilderness. Press <b>g</b> while standing on one to open it. Take what you want, leave the rest, or store
+    your own things there for later — it stays exactly as you left it. <b>Tab</b> switches between taking and storing,
+    <b>S</b> sorts its contents, and <b>A</b> takes everything at once.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Books &amp; the Library.</b> Bookshelves, desks, and cabinets
+    (especially an elder's, a scholar's, or a priest's) often hold real, readable books — diaries, field guides,
+    histories, research, letters, myths, and traveler's guides, some fixed and world-spanning, others uniquely
+    generated. Take one to your inventory and use it (<b>u</b> from the item menu) to read it in full. Ruined Library
+    dungeons are especially dense with them. Every book you've read is kept permanently in your <b>Library</b>
+    (<b>L</b>), even after you've sold, dropped, or stored the physical copy — a growing in-world reference for
+    everything from how the twelve dimensions are actually reached to how reputation, bounties, and marriage work.</div>` },
   { id:'mouse', label:'Mouse', html: () => `
     <div class="modal-opt">Every menu option is clickable. Click any visible map tile to examine it (including loose
     items — full stats shown, not just the ground biome). Scroll the mouse wheel over the map to zoom.</div>` },
@@ -14086,6 +15424,7 @@ function handleKey(e) {
     if (key === 'K') { openCraft(); return; }
     if (key === 'T') { openTalents(); return; }
     if (key === 'q') { openQuestLog(); return; }
+    if (key === 'L') { openLibrary(); return; }
     if (key === 'Y') { openCybernetics(); return; }
     if (key === 'U') { openEldritch(); return; }
     if (key === 'P') { openSaveLoadMenu(); return; }
@@ -14146,6 +15485,16 @@ function handleKey(e) {
   if (gameState === 'train') {
     if (key === 'Escape') { closeModal(); return; }
     if (/^[a-z]$/.test(key)) { trainLearn(key); return; }
+    return;
+  }
+  if (gameState === 'container') {
+    if (key === 'Escape') { closeModal(); return; }
+    if (key === 'Tab') { e.preventDefault(); containerMode = containerMode === 'take' ? 'store' : 'take'; containerPage = 0; renderContainer(); return; }
+    if (key === '[') { containerPage = Math.max(0, (containerPage||0) - 1); renderContainer(); return; }
+    if (key === ']') { containerPage = (containerPage||0) + 1; renderContainer(); return; }
+    if (key === 'S') { containerSort(); return; }
+    if (key === 'A' && containerMode === 'take') { containerTakeAll(); return; }
+    if (/^[a-t]$/.test(key)) { containerTransact(key); return; }
     return;
   }
   if (gameState === 'giftpick') {
@@ -14227,6 +15576,14 @@ function handleKey(e) {
     return;
   }
   if (gameState === 'questlog') {
+    if (key === 'Escape') { closeModal(); return; }
+    return;
+  }
+  if (gameState === 'bookreader') {
+    if (key === 'Escape') { closeBookReader(); return; }
+    return;
+  }
+  if (gameState === 'library') {
     if (key === 'Escape') { closeModal(); return; }
     return;
   }
