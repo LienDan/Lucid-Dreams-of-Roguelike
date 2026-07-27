@@ -454,7 +454,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.19.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.20.0-alpha</div>
     </div>
   </div>
 
@@ -5863,6 +5863,116 @@ const worldChunks = new Map();
 const dungeonRegistry = new Map(); // id -> {theme,maxDepth,levels:[],x,y}
 
 function chunkKey(cx, cy) { return cx + ',' + cy; }
+// ============================================================================
+// ---- SAVE SYSTEM: dirty-region tracking + time-gated repopulation ---------
+// The world is deterministic from SEED, so an unmutated chunk/dungeon-level looks identical
+// whether it's saved or simply regenerated on demand -- there's no need to write it to the save
+// file. Only locations actually touched by play (something killed, taken, opened, burned, etc.)
+// need to be persisted. This keeps save size bounded by "how much of the world you've actually
+// changed" rather than "how much of the world code has ever glanced at" -- which matters because
+// a few unrelated systems (start-of-game spawn placement, in particular) call getChunk() on
+// chunks the player never actually sets foot in.
+//
+// Coverage: curMonsters()/curNPCs() already restrict all combat/interaction to the 3x3 chunk
+// neighborhood around the player, so marking that same neighborhood dirty every turn (see
+// markPlayerAreaDirty(), called from endTurn()) is provably enough to catch every possible
+// combat/environmental mutation. A handful of things mutate world state WITHOUT spending a turn
+// (shop trades, container transactions, dialogue/affection/marriage) -- those are marked dirty
+// individually at their own entry point (openDialogue, openContainer, completeQuest). Fire/gas
+// that keeps ticking in a chunk after the player has already left it is marked from inside
+// processTerrainEffects() itself, at the exact tile(s) it touches.
+//
+// Dungeon levels don't need any of this: they're only ever generated when a player actually
+// descends to that depth, so dungeonRegistry is small and naturally bounded already -- it's
+// saved in full, unconditionally. See getSaveData().
+function markLocationDirty(wx, wy) {
+  if (curIsDungeon()) return;
+  const cx = Math.floor(wx / CH), cy = Math.floor(wy / CH);
+  if (curIsDimension()) {
+    const c = dimensionChunks.get(dimChunkKey(player.dimensionId, cx, cy));
+    if (c) c.dirty = true;
+  } else {
+    const c = worldChunks.get(chunkKey(cx, cy));
+    if (c) c.dirty = true;
+  }
+}
+function markPlayerAreaDirty() {
+  if (curIsDungeon()) return;
+  const cx0 = Math.floor(player.x / CH), cy0 = Math.floor(player.y / CH);
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) markLocationDirty((cx0 + dx) * CH, (cy0 + dy) * CH);
+}
+// How long (in turns) an area has to sit unvisited before it's even eligible to repopulate, and
+// the roll is scaled by how far past that threshold you are -- barely-old ground almost never
+// respawns anything, long-abandoned ground eventually will. Capped well below certainty so
+// returning to an old haunt doesn't guarantee a fresh ambush every single time.
+const REPOPULATE_MIN_TURNS = 800;
+function maybeRepopulateChunk(chunk, cx, cy) {
+  if (!chunk || chunk.settlement) return; // never spawn monsters inside a town
+  if (chunk.monsters.filter(m => m.alive).length >= 4) return;
+  const count = randInt(Math.random, 1, 2);
+  for (let i = 0; i < count; i++) {
+    const lx = randInt(Math.random, 1, CH - 2), ly = randInt(Math.random, 1, CH - 2);
+    const t = chunk.tiles[ly][lx];
+    if (!t.walkable || entityAt(cx * CH + lx, cy * CH + ly)) continue;
+    const b = BIOMES[t.biome] || (curIsDimension() && DIMENSIONS[player.dimensionId] && DIMENSIONS[player.dimensionId].biomes[t.biome]);
+    if (!b || !b.encounter || !b.encounter.length) continue;
+    const mid = weightedChoice(Math.random, b.encounter);
+    const scale = curIsDimension() ? 3 + Math.floor((Math.abs(cx) + Math.abs(cy)) / 6) : overworldDangerScale(cx, cy);
+    chunk.monsters.push(makeMonster(mid, cx * CH + lx, cy * CH + ly, scale, Math.random));
+  }
+  chunk.dirty = true;
+}
+function maybeRepopulateDungeonLevel(level, theme, depth) {
+  if (!level || level.monsters.filter(m => m.alive).length >= 6) return;
+  const meta = DUNGEON_THEMES[theme] || { genre: 'rooms', dtierMax: 2 };
+  const dtierCeil = Math.min(meta.dtierMax || 2, Math.ceil(depth / 3));
+  let pool = Object.keys(MONSTER_BASES).filter(k => MONSTER_BASES[k].dtier && MONSTER_BASES[k].dtier <= dtierCeil && !MONSTER_BASES[k].boss);
+  if (meta.factions && meta.factions.length) { const themed = pool.filter(k => meta.factions.includes(MONSTER_BASES[k].faction)); if (themed.length) pool = themed; }
+  const usablePool = pool.length ? pool : ['giantrat', 'goblin'];
+  const floors = [];
+  for (let y = 0; y < level.h; y++) for (let x = 0; x < level.w; x++) if (level.grid[y][x].walkable) floors.push({ x, y });
+  if (!floors.length) return;
+  const count = randInt(Math.random, 1, 2);
+  for (let i = 0; i < count; i++) {
+    const c = choice(Math.random, floors);
+    if (entityAt(c.x, c.y)) continue;
+    if ((level.upStairs && c.x === level.upStairs.x && c.y === level.upStairs.y) || (level.downStairs && c.x === level.downStairs.x && c.y === level.downStairs.y)) continue;
+    const mid = choice(Math.random, usablePool);
+    level.monsters.push(makeMonster(mid, c.x, c.y, depth, Math.random));
+  }
+}
+// Called once per turn (from endTurn()): stamps the player's current chunk/level with "you were
+// here as of this turn", and -- only on the turn you first arrive after a long absence -- rolls
+// for repopulation. Never fires mid-visit (lastVisitedTurn is refreshed every turn you stay, so
+// elapsed resets to ~0), and never fires from loading a save (this only runs from real gameplay
+// turns, not from applyLoadedSave()).
+function trackVisitAndMaybeRepopulate() {
+  if (curIsDungeon()) {
+    const lvl = curDungeonLevel();
+    if (!lvl) return;
+    if (lvl.lastVisitedTurn !== undefined) {
+      const elapsed = turnCount - lvl.lastVisitedTurn;
+      if (elapsed >= REPOPULATE_MIN_TURNS && Math.random() < Math.min(0.5, elapsed / 4000)) {
+        maybeRepopulateDungeonLevel(lvl, curDungeon().theme, player.dungeonDepth);
+      }
+    }
+    lvl.lastVisitedTurn = turnCount;
+    return;
+  }
+  const cx = Math.floor(player.x / CH), cy = Math.floor(player.y / CH);
+  const map = curIsDimension() ? dimensionChunks : worldChunks;
+  const key = curIsDimension() ? dimChunkKey(player.dimensionId, cx, cy) : chunkKey(cx, cy);
+  const c = map.get(key);
+  if (!c) return;
+  if (c.lastVisitedTurn !== undefined) {
+    const elapsed = turnCount - c.lastVisitedTurn;
+    if (elapsed >= REPOPULATE_MIN_TURNS && Math.random() < Math.min(0.5, elapsed / 4000)) {
+      maybeRepopulateChunk(c, cx, cy);
+    }
+  }
+  c.lastVisitedTurn = turnCount;
+}
+// ============================================================================
 
 function makeTile(biomeId) {
   const b = BIOMES[biomeId];
@@ -7018,6 +7128,7 @@ function processTerrainEffects() {
   const pendingSpreads = []; // [[x,y,turns,power,kind]] -- staged so we don't grow the array mid-iteration
   for (const entry of activeFxTiles) {
     const { t, x, y } = entry;
+    markLocationDirty(x, y);
     let keep = false;
     if (t.fireTurns > 0) {
       const occupant = entityAt(x, y);
@@ -7753,6 +7864,7 @@ let containerTarget = null, containerMode = 'take', containerPage = 0;
 function openContainer(container) {
   Sound.play('uiOpen');
   gameState = 'container'; containerTarget = container; containerMode = 'take'; containerPage = 0;
+  markPlayerAreaDirty();
   if (!container.opened) {
     container.opened = true;
     if (container.desc) log(container.desc);
@@ -9710,7 +9822,7 @@ function completeQuest(q) {
   player.gold += q.rewardGold || 0;
   gainXP(q.rewardXp || 0);
   const giver = findNPCByUid(q.giverId);
-  if (giver) giver.affection = (giver.affection || 0) + Math.round(15 * (1 + (player.affectionBonus || 0)));
+  if (giver) { giver.affection = (giver.affection || 0) + Math.round(15 * (1 + (player.affectionBonus || 0))); markLocationDirty(giver.x, giver.y); }
   if (q.kingdomKey && q.rewardRep) addKingdomRep(q.kingdomKey, q.rewardRep);
   if (q.type === 'caravan_guard' && q.partnerKingdomKey && q.rewardPartnerRep) addKingdomRep(q.partnerKingdomKey, q.rewardPartnerRep);
   if (q.type === 'sabotage' && q.rivalKingdomKey) addKingdomRep(q.rivalKingdomKey, -Math.round((q.rewardRep || 4) / 2));
@@ -10266,6 +10378,7 @@ function openDialogue(npc) {
   Sound.play('uiOpen');
   gameState = 'dialogue';
   dialogueNPC = npc;
+  markLocationDirty(npc.x, npc.y);
   const opts = [];
   let n = 0;
   const nextKey = () => String.fromCharCode(97 + (n++));
@@ -11888,7 +12001,7 @@ function generateChunk(cx, cy) {
     }
     tiles.push(row);
   }
-  const chunk = { cx, cy, tiles, npcs: [], monsters: [], settlement: null, dungeonEntrance: null, poi: null };
+  const chunk = { cx, cy, tiles, npcs: [], monsters: [], settlement: null, dungeonEntrance: null, poi: null, dirty: false, lastVisitedTurn: undefined };
 
   const sHash = coordHash(cx, cy, SEED + 12345);
   const centerBiome = tiles[Math.floor(CH/2)][Math.floor(CH/2)].biome;
@@ -12376,7 +12489,7 @@ function generateDimensionChunk(dimId, cx, cy) {
     }
     tiles.push(row);
   }
-  const chunk = { cx, cy, tiles, npcs: [], monsters: [], settlement: null, dungeonEntrance: null, poi: null };
+  const chunk = { cx, cy, tiles, npcs: [], monsters: [], settlement: null, dungeonEntrance: null, poi: null, dirty: false, lastVisitedTurn: undefined };
   const rng = mulberry32((cx * 928371 + cy * 12841 + SEED + dim.noiseSalt) | 0);
 
   // arrival chunk: guarantee a walkable landing spot with a permanent return portal
@@ -13457,6 +13570,8 @@ function movePlayer(dx, dy) {
 // ---- turn processing v6: Charge regeneration ----
 function endTurn() {
   turnCount++;
+  markPlayerAreaDirty();
+  trackVisitAndMaybeRepopulate();
   // Turn-1 tutorial nudge: fires once, the turn after the world first renders, so the message
   // appears on the player's first deliberate action rather than buried in the start-up flood.
   if (turnCount === 1 && player._pendingTutorialNudge) {
@@ -14389,16 +14504,34 @@ function updateSidebar() {
   } else compassRow.classList.add('hidden');
 }
 
-// ---- save / load system ----
-// Design note: the world is fully deterministic from SEED, so we save the player's full state
-// (stats, inventory, abilities, position, quests, relationships, etc.) plus the seed and turn
-// count, and regenerate the world around them on load. This means your character and everything
-// they carry/know persists perfectly; wildlife, loot, and NPC affection in the wider world reset
-// to that seed's fresh state (a full world-mutation save was out of scope for this pass).
-const SAVE_KEY = 'lucid_dreams_of_roguelike_save_v1';
+// ---- save / load system (v2) ----
+// The world is fully deterministic from SEED, so an unmutated chunk/dungeon-level looks
+// identical whether it's saved or freshly regenerated -- see the dirty-tracking note above
+// chunkKey()/markLocationDirty(). That means a save only actually needs to carry: the player,
+// the counters/seed needed to keep regenerating the rest of the world consistently, and whatever
+// chunks/dungeon-levels/dimension-chunks were actually touched by play. Everything untouched
+// (the overwhelming majority of a large explored world) is simply left out and regenerates
+// identically on demand -- dead monsters stay dead, looted containers stay looted, and burned
+// ground stays burned, without needing to write out the whole procedural world every time.
+const SAVE_KEY = 'lucid_dreams_of_roguelike_save_v2';
 function getSaveData() {
-  return { version: 1, seed: SEED, turnCount, zoomIndex, player: JSON.parse(JSON.stringify(player)),
-    kingdomRelationScores: Object.fromEntries(kingdomRelationScores) };
+  const dirtyChunks = [];
+  for (const [key, c] of worldChunks) if (c.dirty) dirtyChunks.push([key, c]);
+  const dirtyDimChunks = [];
+  for (const [key, c] of dimensionChunks) if (c.dirty) dirtyDimChunks.push([key, c]);
+  return {
+    version: 2, seed: SEED, turnCount, zoomIndex,
+    player: JSON.parse(JSON.stringify(player)),
+    kingdomRelationScores: Object.fromEntries(kingdomRelationScores),
+    uidCounter, containerUidCounter, procBookUidCounter,
+    worldChunks: dirtyChunks,
+    dimensionChunks: dirtyDimChunks,
+    // Dungeon levels are only ever generated when a player actually descends to that depth, so
+    // dungeonRegistry is already naturally bounded by real play -- no dirty-filtering needed,
+    // just save every dungeon (and every depth of it) that's been entered so far, in full.
+    dungeonRegistry: Array.from(dungeonRegistry.entries()),
+    dimensionSubDungeons: DIMENSION_SUBDUNGEONS.slice(),
+  };
 }
 function saveGame(isAuto) {
   try {
@@ -14427,10 +14560,24 @@ function deleteSaveGame() {
 }
 function applyLoadedSave(data) {
   if (!data || !data.player) { log('That save file looks corrupted.'); return; }
+  if (!data.version || data.version < 2) {
+    log('That save was made with an older, incompatible version of the game and cannot be loaded. Sorry — a fresh start is needed this time.');
+    return;
+  }
   clearWorldRegistries();
   SEED = data.seed;
   turnCount = data.turnCount || 0;
   zoomIndex = (data.zoomIndex !== undefined) ? data.zoomIndex : 5;
+  uidCounter = data.uidCounter || 1;
+  containerUidCounter = data.containerUidCounter || 1;
+  procBookUidCounter = data.procBookUidCounter || 1;
+  // Restore exactly the parts of the world that were ever actually mutated. Everything else
+  // (the vast majority of a large explored world) regenerates identically from SEED the moment
+  // it's looked at again -- see the dirty-tracking note above chunkKey().
+  if (data.worldChunks) for (const [key, c] of data.worldChunks) worldChunks.set(key, c);
+  if (data.dimensionChunks) for (const [key, c] of data.dimensionChunks) dimensionChunks.set(key, c);
+  if (data.dungeonRegistry) for (const [id, dg] of data.dungeonRegistry) dungeonRegistry.set(id, dg);
+  if (data.dimensionSubDungeons) DIMENSION_SUBDUNGEONS.push(...data.dimensionSubDungeons);
   // v4.1: the WIS stat was renamed to WIL internally (display was already "WIL"; the property
   // name itself is now consistent too). Saves written before this rename still carry `wis` --
   // migrate that value over so nobody's invested points silently reset to baseline.
@@ -14438,7 +14585,7 @@ function applyLoadedSave(data) {
     data.player.wil = data.player.wis;
     delete data.player.wis;
   }
-  player = Object.assign(newPlayer(), data.player);  // recover dungeon state if the player was mid-dungeon when saved
+  player = Object.assign(newPlayer(), data.player);
   // restore kingdom-relation drift from the previous session (clearWorldRegistries() above already
   // cleared it fresh) -- old saves made before this feature simply won't have the field, and that's
   // fine, relations just start from their deterministic seed baseline as before.
@@ -14446,18 +14593,14 @@ function applyLoadedSave(data) {
     for (const k in data.kingdomRelationScores) kingdomRelationScores.set(k, data.kingdomRelationScores[k]);
   }
   replayKingdomEventLog();
+  // The dungeon registry entry (including every depth actually visited, fully intact) was
+  // already restored above -- just make sure the exact depth the player was standing on exists
+  // (it should; this is a safety net for corrupted/edited save data, not the normal path).
   if (player.mode === 'dungeon' && player.dungeonId) {
-    const subMatch = findDimensionSubDungeonConfig(player.dungeonId);
-    if (subMatch) {
-      getDimensionChunk(subMatch.dim.id, subMatch.sub.cx, subMatch.sub.cy);
-    } else {
-      const parts = player.dungeonId.split('_');
-      const cx = parseInt(parts[1], 10), cy = parseInt(parts[2], 10);
-      if (!isNaN(cx) && !isNaN(cy)) getChunk(cx, cy);
-    }
     const dg = dungeonRegistry.get(player.dungeonId);
-    if (dg) { if (!dg.levels[player.dungeonDepth - 1]) dg.levels[player.dungeonDepth - 1] = generateDungeonLevel(dg.theme, player.dungeonDepth, dg.maxDepth, dg.variant); }
-    else {
+    if (dg) {
+      if (!dg.levels[player.dungeonDepth - 1]) dg.levels[player.dungeonDepth - 1] = generateDungeonLevel(dg.theme, player.dungeonDepth, dg.maxDepth, dg.variant);
+    } else {
       player.mode = 'overworld';
       player.x = player.overworldReturn ? player.overworldReturn.x : 0;
       player.y = player.overworldReturn ? player.overworldReturn.y : 0;
