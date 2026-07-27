@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.22.1-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.22.2-alpha</div>
     </div>
   </div>
 
@@ -2620,7 +2620,7 @@ MUTATIONS.push(
   { id:'minorclairvoyance', name:'Minor Clairvoyance', category:'Psychic', activation:'passive', corruptionReq:5, desc:'Faint flashes of insight.', apply:()=>{ player.critBonus=(player.critBonus||0)+0.03; } },
   { id:'psychicwhisper', name:'Psychic Whisper', category:'Psychic', activation:'active', corruptionReq:5, resource:'hp', selfCost:4, type:'debuff', stat:'dex', power:-4, dur:6, range:4, desc:'A faint, unsettling whisper only your target can hear.' },
   { id:'wakingdreams', name:'Waking Dreams', category:'Psychic', activation:'passive', corruptionReq:20, desc:'The boundary between waking and dreaming has thinned.', apply:()=>{ player.wil+=2; } },
-  { id:'warmblood', name:'Warm Blood', category:'Elemental', activation:'passive', corruptionReq:5, desc:'Your blood runs slightly warmer than it should.', apply:()=>{ player.mutationFrost=(player.mutationFrost||0)+1; } },
+  { id:'warmblood', name:'Warm Blood', category:'Elemental', activation:'passive', corruptionReq:5, desc:'Your blood runs slightly warmer than it should.', apply:()=>{ player.mutationFire=(player.mutationFire||0)+1; } },
   { id:'sparkfingers', name:'Spark Fingers', category:'Elemental', activation:'active', corruptionReq:10, resource:'hp', selfCost:5, type:'damage', power:[7,13], range:3, chainLightning:true, desc:'A small crackle of static discharge from your fingertips.' },
   { id:'emberskin', name:'Ember Skin', category:'Elemental', activation:'passive', corruptionReq:15, desc:'Faint warmth radiates from your skin.', apply:()=>{ player.mutationDmgBonus=(player.mutationDmgBonus||0)+2; } },
   { id:'unsettlingpresence', name:'Unsettling Presence', category:'Aberrant', activation:'passive', corruptionReq:5, desc:'People find it hard to place what\'s wrong about you.', apply:()=>{ player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.05; } },
@@ -2903,7 +2903,7 @@ ITEM_BASES.push(
   // ---- maces / hammers ----
   { id:'morningstar', name:'Morningstar', type:'weapon', slot:'hand', dmg:[3,8], str:10, glyph:')', color:'#9a9a9a', value:28 },
   { id:'maul', name:'Maul', type:'weapon', slot:'hand', dmg:[5,11], str:16, glyph:')', color:'#8f8f8f', value:60 },
-  { id:'holy_mace', name:'Holy Mace', type:'weapon', slot:'hand', dmg:[3,7], str:9, glyph:')', color:'#e0e0a0', value:50 },
+  { id:'holy_mace', name:'Holy Mace', type:'weapon', slot:'hand', dmg:[3,7], str:9, glyph:')', color:'#e0e0a0', value:50, antiUndead:true },
   // ---- spears / polearms ----
   { id:'pike', name:'Pike', type:'weapon', slot:'hand', dmg:[3,8], str:9, glyph:'/', color:'#b98d54', value:24 },
   // ---- fists / monk weapons (technique builds) ----
@@ -2929,16 +2929,16 @@ ITEM_BASES.push(
   // ---- armor: offhand ----
   { id:'off_hand_dagger', name:'Off-hand Dagger', type:'weapon', slot:'offhand', dmg:[1,4], str:3, glyph:')', color:'#cfd6dd', value:20 },
   // ---- armor: head ----
-  { id:'circlet_wisdom', name:'Circlet of Wisdom', type:'armor', slot:'head', armor:1, glyph:'^', color:'#e0c34a', value:60, intBonus:2 },
-  { id:'neural_interface', name:'Neural Interface Helm', type:'armor', slot:'head', armor:2, glyph:'^', color:'#4ae0d0', value:85, intBonus:2 },
-  { id:'crown_whispers', name:'Crown of Whispers', type:'armor', slot:'head', armor:2, glyph:'^', color:'#5a1a6a', value:120, intBonus:3 },
+  { id:'circlet_wisdom', name:"Scholar's Circlet", type:'armor', slot:'head', armor:1, glyph:'^', color:'#e0c34a', value:60, intBonus:2 },
+  { id:'neural_interface', name:'Cerebral Interface Band', type:'armor', slot:'head', armor:2, glyph:'^', color:'#4ae0d0', value:85, intBonus:2 },
+  { id:'crown_whispers', name:'Diadem of Whispers', type:'armor', slot:'head', armor:2, glyph:'^', color:'#5a1a6a', value:120, intBonus:3 },
   { id:'hood_shadows', name:'Hood of Shadows', type:'armor', slot:'head', armor:1, glyph:'^', color:'#2a2a2a', value:48, dexBonus:2 },
   // ---- armor: feet ----
-  { id:'boots_swiftness', name:'Boots of Swiftness', type:'armor', slot:'feet', armor:1, glyph:'[', color:'#5ac9e0', value:70, dexBonus:2 },
+  { id:'boots_swiftness', name:'Boots of Haste', type:'armor', slot:'feet', armor:1, glyph:'[', color:'#5ac9e0', value:70, dexBonus:2 },
   { id:'boots_the_fox', name:'Fleetfoot Boots', type:'armor', slot:'feet', armor:1, glyph:'[', color:'#c9704a', value:35, dexBonus:1 },
   // ---- armor: ring ----
-  { id:'ring_protection', name:'Ring of Protection', type:'armor', slot:'ring', armor:2, glyph:'=', color:'#5a9ae0', value:65 },
-  { id:'ring_fox', name:'Ring of the Fox', type:'armor', slot:'ring', armor:0, glyph:'=', color:'#c9704a', value:50, dexBonus:2 },
+  { id:'ring_protection', name:'Banded Ring', type:'armor', slot:'ring', armor:2, glyph:'=', color:'#5a9ae0', value:65 },
+  { id:'ring_fox', name:'Fox Fang Ring', type:'armor', slot:'ring', armor:0, glyph:'=', color:'#c9704a', value:50, dexBonus:2 },
   { id:'ring_ogre', name:"Ring of the Ogre", type:'armor', slot:'ring', armor:0, glyph:'=', color:'#7a5a2a', value:50, strBonus:2 },
   { id:'ring_scholar', name:'Ring of the Scholar', type:'armor', slot:'ring', armor:0, glyph:'=', color:'#5a7fe0', value:50, intBonus:2 },
   { id:'band_eternity', name:'Band of Eternity', type:'armor', slot:'ring', armor:1, glyph:'=', color:'#e0e0a0', value:140, conBonus:2 },
@@ -2952,11 +2952,11 @@ ITEM_BASES.push(
   { id:'thieves_gloves', name:"Thieves' Gloves", type:'armor', slot:'gloves', armor:1, glyph:'[', color:'#2a2a2a', value:26, dexBonus:1 },
   { id:'battle_gauntlets', name:'Battle Gauntlets', type:'armor', slot:'gloves', armor:3, glyph:'[', color:'#8f8f8f', value:48, strBonus:1 },
   { id:'spellcasters_gloves', name:"Spellcaster's Gloves", type:'armor', slot:'gloves', armor:1, glyph:'[', color:'#9a6ac9', value:44, intBonus:1 },
-  { id:'cyber_grips', name:'Cybernetic Grips', type:'armor', slot:'gloves', armor:2, glyph:'[', color:'#4ae0d0', value:65 },
+  { id:'cyber_grips', name:'Cybernetic Grips', type:'armor', slot:'gloves', armor:2, glyph:'[', color:'#4ae0d0', value:65, dexBonus:2 },
   // ---- armor: cloak ----
   { id:'assassins_cloak', name:"Assassin's Cloak", type:'armor', slot:'cloak', armor:1, glyph:'[', color:'#2a2a2a', value:48, dexBonus:1 },
   { id:'mages_cloak', name:"Mage's Cloak", type:'armor', slot:'cloak', armor:1, glyph:'[', color:'#7a5aa0', value:50, intBonus:1 },
-  { id:'cloak_the_void', name:'Cloak of the Void', type:'armor', slot:'cloak', armor:2, glyph:'[', color:'#1a0a2a', value:130 },
+  { id:'cloak_the_void', name:'Cloak of the Void', type:'armor', slot:'cloak', armor:2, glyph:'[', color:'#1a0a2a', value:130, eldritchDmgBonus:0.04 },
   { id:'nanoweave_cloak', name:'Nanoweave Cloak', type:'armor', slot:'cloak', armor:2, glyph:'[', color:'#4ae0d0', value:88 },
 
   // ---- consumables: potions ----
@@ -3117,13 +3117,13 @@ ITEM_BASES.push(
   { id:'bronze_shortsword', name:'Bronze Shortsword', type:'weapon', slot:'hand', dmg:[1,4], str:4, glyph:')', color:'#a97a3a', value:6 },
   { id:'iron_sword', name:'Iron Sword', type:'weapon', slot:'hand', dmg:[3,7], str:7, glyph:')', color:'#b6bcc4', value:18 },
   { id:'steel_broadsword', name:'Steel Broadsword', type:'weapon', slot:'hand', dmg:[4,10], str:12, glyph:')', color:'#dfe6ee', value:42 },
-  { id:'silver_blade', name:'Silver Blade', type:'weapon', slot:'hand', dmg:[3,8], str:9, glyph:')', color:'#e8e8f0', value:48 },
+  { id:'silver_blade', name:'Silver Blade', type:'weapon', slot:'hand', dmg:[3,8], str:9, glyph:')', color:'#e8e8f0', value:48, antiUndead:true },
   { id:'mythril_rapier', name:'Mythril Rapier', type:'weapon', slot:'hand', dmg:[4,9], str:8, glyph:')', color:'#a0d0ff', value:90, dexBonus:1 },
   { id:'adamant_greatsword', name:'Adamant Greatsword', type:'weapon', slot:'hand', dmg:[7,15], str:19, glyph:')', color:'#5a5a7a', value:140 },
   { id:'runic_longsword', name:'Runic Longsword', type:'weapon', slot:'hand', dmg:[5,11], str:12, glyph:')', color:'#5090c0', value:110, intBonus:1 },
   { id:'dwarven_waraxe', name:'Dwarven War Axe', type:'weapon', slot:'hand', dmg:[5,12], str:14, glyph:')', color:'#c9a06a', value:70 },
   { id:'obsidian_axe', name:'Obsidian Axe', type:'weapon', slot:'hand', dmg:[4,10], str:11, glyph:')', color:'#2a2a3a', value:55 },
-  { id:'berserker_cleaver', name:"Berserker's Cleaver", type:'weapon', slot:'hand', dmg:[6,14], str:17, glyph:')', color:'#c95050', value:95 },
+  { id:'berserker_cleaver', name:"Butcher's Cleaver", type:'weapon', slot:'hand', dmg:[6,14], str:17, glyph:')', color:'#c95050', value:95 },
   { id:'spiked_mace', name:'Spiked Mace', type:'weapon', slot:'hand', dmg:[4,9], str:13, glyph:')', color:'#9a9a9a', value:38 },
   { id:'warmaul', name:'Warmaul', type:'weapon', slot:'hand', dmg:[6,13], str:18, glyph:')', color:'#8f8f8f', value:75 },
   { id:'thunder_maul', name:'Thunder Maul', type:'weapon', slot:'hand', dmg:[7,16], str:20, glyph:')', color:'#e0c34a', value:150 },
@@ -3174,34 +3174,34 @@ ITEM_BASES.push(
 
   // ---- armor: body ----
   { id:'quilted_gambeson', name:'Quilted Gambeson', type:'armor', slot:'body', armor:2, glyph:'[', color:'#c9a06a', value:14 },
-  { id:'scale_mail', name:'Scale Mail', type:'armor', slot:'body', armor:5, glyph:'[', color:'#8a9a4a', value:45 },
+  { id:'scale_mail', name:'Rough Scale Mail', type:'armor', slot:'body', armor:5, glyph:'[', color:'#8a9a4a', value:45 },
   { id:'banded_mail', name:'Banded Mail', type:'armor', slot:'body', armor:7, glyph:'[', color:'#9a9a9a', value:75 },
   { id:'dragon_scale_mail', name:'Dragon Scale Mail', type:'armor', slot:'body', armor:11, glyph:'[', color:'#3ac97a', value:220 },
-  { id:'mythril_chain', name:'Mythril Chain', type:'armor', slot:'body', armor:8, glyph:'[', color:'#a0d0ff', value:150 },
+  { id:'mythril_chain', name:'Mythril Chain', type:'armor', slot:'body', armor:8, glyph:'[', color:'#a0d0ff', value:150, dexBonus:2 },
   { id:'adamant_plate', name:'Adamant Plate', type:'armor', slot:'body', armor:13, glyph:'[', color:'#5a5a7a', value:300 },
   { id:'druid_hide', name:'Druid Hide', type:'armor', slot:'body', armor:4, glyph:'[', color:'#4a7a3a', value:38, intBonus:1 },
   { id:'shadow_leather', name:'Shadow Leather', type:'armor', slot:'body', armor:4, glyph:'[', color:'#2a2a3a', value:60, dexBonus:2 },
   { id:'arcane_vestments', name:'Arcane Vestments', type:'armor', slot:'body', armor:2, glyph:'[', color:'#7a5ac9', value:70, intBonus:3 },
   { id:'voidsilk_robe', name:'Voidsilk Robe', type:'armor', slot:'body', armor:3, glyph:'[', color:'#1a0a2a', value:140, intBonus:5 },
-  { id:'cultist_robes', name:'Cultist Robes', type:'armor', slot:'body', armor:2, glyph:'[', color:'#6a1a8a', value:50 },
+  { id:'cultist_robes', name:'Cultist Robes', type:'armor', slot:'body', armor:2, glyph:'[', color:'#6a1a8a', value:50, eldritchDmgBonus:0.05 },
   { id:'corrupted_plate', name:'Corrupted Plate', type:'armor', slot:'body', armor:12, glyph:'[', color:'#8a2a8a', value:260 },
-  { id:'bone_armor', name:'Bone Armor', type:'armor', slot:'body', armor:6, glyph:'[', color:'#d8d0c0', value:80 },
-  { id:'cyberweave_vest', name:'Cyberweave Vest', type:'armor', slot:'body', armor:6, glyph:'[', color:'#4ae0d0', value:110 },
+  { id:'bone_armor', name:'Bone Armor', type:'armor', slot:'body', armor:6, glyph:'[', color:'#d8d0c0', value:80, conBonus:1 },
+  { id:'cyberweave_vest', name:'Cyberweave Vest', type:'armor', slot:'body', armor:6, glyph:'[', color:'#4ae0d0', value:110, dexBonus:2 },
   { id:'combat_exosuit', name:'Combat Exosuit', type:'armor', slot:'body', armor:10, glyph:'[', color:'#a0a0b0', value:210 },
   { id:'nanoweave_bodysuit', name:'Nanoweave Bodysuit', type:'armor', slot:'body', armor:8, glyph:'[', color:'#3ae0a0', value:170, dexBonus:2 },
   // ---- armor: offhand ----
   { id:'round_shield', name:'Round Shield', type:'armor', slot:'offhand', armor:2, glyph:'(', color:'#9c7440', value:22 },
   { id:'tower_shield', name:'Tower Shield', type:'armor', slot:'offhand', armor:5, glyph:'(', color:'#b6bcc4', value:70 },
   { id:'spellward_tome', name:'Spellward Tome', type:'armor', slot:'offhand', armor:1, glyph:'(', color:'#7a5ac9', value:55, intBonus:3 },
-  { id:'cyber_deflector', name:'Cyber Deflector', type:'armor', slot:'offhand', armor:4, glyph:'(', color:'#4ae0d0', value:90 },
-  { id:'bone_ward', name:'Bone Ward', type:'armor', slot:'offhand', armor:2, glyph:'(', color:'#d8d0c0', value:45 },
+  { id:'cyber_deflector', name:'Cyber Deflector', type:'armor', slot:'offhand', armor:4, glyph:'(', color:'#4ae0d0', value:90, dexBonus:1 },
+  { id:'bone_ward', name:'Bone Ward', type:'armor', slot:'offhand', armor:2, glyph:'(', color:'#d8d0c0', value:45, poisonDmgReduction:0.1 },
   // ---- armor: head ----
   { id:'great_helm', name:'Great Helm', type:'armor', slot:'head', armor:3, glyph:'^', color:'#b6bcc4', value:55 },
   { id:'dragon_helm', name:'Dragon Helm', type:'armor', slot:'head', armor:5, glyph:'^', color:'#3ac97a', value:140 },
   { id:'circlet_of_wisdom', name:'Circlet of Wisdom', type:'armor', slot:'head', armor:1, glyph:'^', color:'#c0c0d0', value:70, intBonus:3 },
   { id:'crown_of_whispers', name:'Crown of Whispers', type:'armor', slot:'head', armor:2, glyph:'^', color:'#4a2a5a', value:160, intBonus:4 },
   { id:'neural_interface_helm', name:'Neural Interface Helm', type:'armor', slot:'head', armor:3, glyph:'^', color:'#4ae0d0', value:130, intBonus:2 },
-  { id:'void_mask', name:'Void Mask', type:'armor', slot:'head', armor:2, glyph:'^', color:'#1a0a2a', value:100 },
+  { id:'void_mask', name:'Void Mask', type:'armor', slot:'head', armor:3, glyph:'^', color:'#1a0a2a', value:100, dodgeChance:0.03 },
   { id:'horned_helm', name:'Horned Helm', type:'armor', slot:'head', armor:4, glyph:'^', color:'#8a6a3d', value:60 },
   // ---- armor: feet ----
   { id:'travelers_boots', name:"Traveler's Boots", type:'armor', slot:'feet', armor:1, glyph:'[', color:'#8a6a3d', value:15, dexBonus:1 },
@@ -3216,24 +3216,24 @@ ITEM_BASES.push(
   { id:'ring_of_the_bear', name:'Ring of the Bear', type:'armor', slot:'ring', armor:0, glyph:'=', color:'#8a5a3a', value:75, strBonus:3 },
   { id:'ring_of_the_owl', name:'Ring of the Owl', type:'armor', slot:'ring', armor:0, glyph:'=', color:'#5a5ac9', value:75, intBonus:3 },
   { id:'band_of_vitality', name:'Band of Vitality', type:'armor', slot:'ring', armor:0, glyph:'=', color:'#5ae09a', value:90, conBonus:3 },
-  { id:'void_band', name:'Void Band', type:'armor', slot:'ring', armor:0, glyph:'=', color:'#1a0a2a', value:140 },
+  { id:'void_band', name:'Void Band', type:'armor', slot:'ring', armor:0, glyph:'=', color:'#1a0a2a', value:100, eldritchDmgBonus:0.05 },
   // ---- armor: amulet ----
   { id:'amulet_of_protection', name:'Amulet of Protection', type:'armor', slot:'amulet', armor:1, glyph:'=', color:'#b6bcc4', value:70 },
   { id:'amulet_of_the_arcane', name:'Amulet of the Arcane', type:'armor', slot:'amulet', armor:0, glyph:'=', color:'#7a5ac9', value:85, intBonus:3 },
   { id:'amulet_of_fortitude', name:'Amulet of Fortitude', type:'armor', slot:'amulet', armor:0, glyph:'=', color:'#5ae09a', value:85, conBonus:3 },
-  { id:'eldritch_pendant', name:'Eldritch Pendant', type:'armor', slot:'amulet', armor:0, glyph:'=', color:'#4a2a5a', value:150, intBonus:2 },
-  { id:'cyber_neural_link', name:'Cyber Neural Link', type:'armor', slot:'amulet', armor:0, glyph:'=', color:'#4ae0d0', value:120, intBonus:2 },
+  { id:'eldritch_pendant', name:'Eldritch Pendant', type:'armor', slot:'amulet', armor:0, glyph:'=', color:'#4a2a5a', value:150, intBonus:4, eldritchDmgBonus:0.06 },
+  { id:'cyber_neural_link', name:'Cyber Neural Link', type:'armor', slot:'amulet', armor:0, glyph:'=', color:'#4ae0d0', value:120, intBonus:3, critBonus:0.03 },
   // ---- armor: cloak ----
   { id:'hooded_cloak', name:'Hooded Cloak', type:'armor', slot:'cloak', armor:1, glyph:'[', color:'#5a4a3a', value:20 },
   { id:'cloak_of_shadows', name:'Cloak of Shadows', type:'armor', slot:'cloak', armor:1, glyph:'[', color:'#2a2a3a', value:90, dexBonus:2 },
   { id:'dragonhide_cloak', name:'Dragonhide Cloak', type:'armor', slot:'cloak', armor:3, glyph:'[', color:'#3ac97a', value:150 },
-  { id:'void_shroud', name:'Void Shroud', type:'armor', slot:'cloak', armor:2, glyph:'[', color:'#1a0a2a', value:170 },
+  { id:'void_shroud', name:'Void Shroud', type:'armor', slot:'cloak', armor:2, glyph:'[', color:'#1a0a2a', value:150, dodgeChance:0.04 },
   { id:'cyber_camo_cloak', name:'Cyber Camo Cloak', type:'armor', slot:'cloak', armor:2, glyph:'[', color:'#4ae0d0', value:130, dexBonus:1 },
   // ---- armor: gloves ----
   { id:'reinforced_gloves', name:'Reinforced Gloves', type:'armor', slot:'gloves', armor:1, glyph:'[', color:'#9c7440', value:20 },
   { id:'gauntlets_of_might', name:'Gauntlets of Might', type:'armor', slot:'gloves', armor:2, glyph:'[', color:'#c95050', value:75, strBonus:2 },
-  { id:'cyberhands', name:'Cyberhands', type:'armor', slot:'gloves', armor:2, glyph:'[', color:'#4ae0d0', value:100 },
-  { id:'void_touched_gloves', name:'Void-Touched Gloves', type:'armor', slot:'gloves', armor:1, glyph:'[', color:'#1a0a2a', value:110 },
+  { id:'cyberhands', name:'Cyberhands', type:'armor', slot:'gloves', armor:2, glyph:'[', color:'#4ae0d0', value:100, dexBonus:3, critBonus:0.03 },
+  { id:'void_touched_gloves', name:'Void-Touched Gloves', type:'armor', slot:'gloves', armor:1, glyph:'[', color:'#1a0a2a', value:110, eldritchDmgBonus:0.08 },
 
   // ---- consumables: healing/mana tiers ----
   { id:'potion_supremeheal', name:'Potion of Major Healing', type:'consumable', effect:'heal', power:56, glyph:'!', color:'#ff0000', value:66 },
@@ -7789,12 +7789,20 @@ function totalStatBonus(it, stat) {
   if (it.bonuses && it.bonuses[stat]) v += it.bonuses[stat];
   return v;
 }
+// ---- flat player accumulators an item can carry directly (same fields talents/cybernetics/
+// mutations/set-bonuses already add to, per recomputeSetBonuses()'s note that these are all
+// existing, already-combat-tested accumulators). Weapon-specific combat mods (armor, fireDmg,
+// frostDmg, poisonDmg, lifesteal, armorPierce, antiUndead) are deliberately NOT in this list --
+// those are read directly off player.equipment.* at the point of use instead, so listing them
+// here would double-apply them. This list is only for stats with no other read site. ----
+const EQUIP_FLAT_BONUS_KEYS = ['dodgeChance', 'critBonus', 'critDmgBonus', 'eldritchDmgBonus', 'poisonDmgReduction', 'lifestealBonus', 'spellDmgBonus', 'techniqueDmgBonus'];
 function applyStatBonuses(it) {
   const s = totalStatBonus(it,'str'), d = totalStatBonus(it,'dex'), i = totalStatBonus(it,'int'), c = totalStatBonus(it,'con');
   if (s) player.str += s;
   if (d) player.dex += d;
   if (i) { player.int += i; const mpAdd = i * 2; player.maxMp += mpAdd; player.mp += mpAdd; }
   if (c) { player.con += c; const hpAdd = c * 3; player.maxHp += hpAdd; player.hp += hpAdd; }
+  for (const key of EQUIP_FLAT_BONUS_KEYS) { if (it[key]) player[key] = (player[key] || 0) + it[key]; }
 }
 function removeStatBonuses(it) {
   const s = totalStatBonus(it,'str'), d = totalStatBonus(it,'dex'), i = totalStatBonus(it,'int'), c = totalStatBonus(it,'con');
@@ -7802,6 +7810,7 @@ function removeStatBonuses(it) {
   if (d) player.dex -= d;
   if (i) { player.int -= i; const mpSub = i * 2; player.maxMp = Math.max(1, player.maxMp - mpSub); player.mp = Math.min(player.mp, player.maxMp); }
   if (c) { player.con -= c; const hpSub = c * 3; player.maxHp = Math.max(1, player.maxHp - hpSub); player.hp = Math.min(player.hp, player.maxHp); }
+  for (const key of EQUIP_FLAT_BONUS_KEYS) { if (it[key]) player[key] = (player[key] || 0) - it[key]; }
 }
 function equipItem(it) {
   if (it.type !== 'weapon' && it.type !== 'armor') { log("You can't equip that."); return; }
@@ -11595,6 +11604,12 @@ function applyEffectToTarget(spell, t) {
     if (t.hp <= 0) onDeath(t, player);
     if (spell.destructive) { const d = scorchArea(t.x, t.y, 2); if (d>0) log(`The blast scorches the land, destroying ${d} trees!`); }
     if (spell.igniteGround) { igniteTile(t.x, t.y, 4); }
+    // ---- BUG FIX: frost-flagged damage (frostbolt, glacialform, frostbite_mut) previously only
+    // interacted with terrain (freezing water/snuffing fire) via applyTerrainInteraction() -- the
+    // target it actually hit was never chilled, despite several of these abilities explicitly
+    // promising that in their own description text. Mirrors the same statusSlow chill monsters
+    // already apply with their own frost attacks (see doAttack()). ----
+    if (spell.frost && t.hp > 0) { t.statusSlow = Math.max(t.statusSlow || 0, 2); log(`${t.name} is chilled and slowed!`); }
     return;
   }
   if (spell.type === 'debuff') {
@@ -12024,12 +12039,14 @@ function doAttack(att, def) {
     return;
   }
   let dmg = randInt(Math.random, dmgRange[0], dmgRange[1]) + Math.floor(effStr(att) / 4);
+  let antiUndeadProc = false;
   if (isPlayer) dmg += Math.floor(player.level / 5);
   if (isPlayer && weapon) dmg = Math.round(dmg * abilityPenaltyFactor(weaponStrDeficit()));
   if (isPlayer && weapon && weapon.broken) dmg = Math.round(dmg * 0.35);
   if (isPlayer) {
     dmg += (player.cyberDmgBonus || 0);
     if (player.mutationFrost) dmg += randInt(Math.random, 0, player.mutationFrost);
+    if (player.mutationFire) dmg += randInt(Math.random, 0, player.mutationFire);
     if (weapon && weapon.ranged && player.rangedDmgBonus) dmg *= (1 + player.rangedDmgBonus);
     if (player.executeBonus && def.hp / (def.maxHp || def.hp || 1) < 0.25) dmg *= (1 + player.executeBonus);
     if (player.bossDmgBonus && (def.boss || def.miniboss)) dmg *= (1 + player.bossDmgBonus);
@@ -12046,6 +12063,11 @@ function doAttack(att, def) {
       const poisonAmt = def.poisonDmgReduction ? Math.max(0, Math.round(weapon.poisonDmg * (1 - def.poisonDmgReduction))) : weapon.poisonDmg;
       if (poisonAmt > 0) def.statusPoison = (def.statusPoison || 0) + poisonAmt;
     }
+    // ---- BUG FIX: Holy Mace / Silver Blade had "holy"/"silver" names and pricing but no mechanic
+    // to back it up -- the game already has this exact anti-undead multiplier wired up for thrown
+    // silver ammo and holy grenades (see SILVER_BONUS_IDS / dtype:'holy'), it just was never
+    // extended to these two melee weapons. ----
+    if (weapon.antiUndead && def.monsterId && SILVER_BONUS_IDS.has(def.monsterId)) { dmg = Math.round(dmg * 1.75); antiUndeadProc = true; }
   }
   if (isPlayer && weapon && getBuff('weaponfire') > 0) {
     const burnDmg = randInt(Math.random, 1, getBuff('weaponfire'));
@@ -12071,7 +12093,7 @@ function doAttack(att, def) {
   }
   if (settings.showDamageNumbers) spawnFloatingText(def.x, def.y, String(dmg), crit ? '#ffdd55' : (def === player ? '#ff6a5a' : '#ffffff'));
   if (def === player) Sound.play('playerHurt'); else if (isPlayer) Sound.play(crit ? 'critHit' : 'hit'); else Sound.play('enemyHit');
-  log(`${attName} hit${isPlayer ? '' : 's'} ${defName} for ${dmg}${crit ? ' (critical!)' : ''}.`);
+  log(`${attName} hit${isPlayer ? '' : 's'} ${defName} for ${dmg}${crit ? ' (critical!)' : ''}${antiUndeadProc ? ' (super effective!)' : ''}.`);
   if (weapon && weapon.lifesteal) att.hp = Math.min(att.maxHp, att.hp + Math.round(dmg * weapon.lifesteal));
   if (!isPlayer && att.lifesteal) att.hp = Math.min(att.maxHp, att.hp + Math.round(dmg * 0.5));
   if (isPlayer && player.lifestealBonus) att.hp = Math.min(att.maxHp, att.hp + Math.round(dmg * player.lifestealBonus));
