@@ -454,7 +454,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.20.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.21.0-alpha</div>
     </div>
   </div>
 
@@ -10128,6 +10128,9 @@ function lootBaseIdsFor(def) {
 // ---- loot v4: tome drops from monsters/bosses added ----
 function dropLoot(def) {
   const items = [];
+  // Anything a purpose-built throwing weapon stuck into this entity while it was still alive
+  // (see resolveThrownWeapon) comes loose and drops with the body now.
+  if (def.stuckItems && def.stuckItems.length) items.push(...def.stuckItems);
   const goldMult = 1 + (player.goldBonus || 0);
   if (def.guaranteedDrops && def.guaranteedDrops.length) items.push(...def.guaranteedDrops);
   // Boss-specific unique weapon/accessory (a chance roll, independent of any guaranteedDrops the
@@ -13798,6 +13801,40 @@ const THROWN_WEAPON_IDS = new Set(['throwing_axe','javelin','dagger']);
 // to the improvised catch-all instead, which is the honest behavior: they weren't built to be
 // thrown, so throwing one just wastes it for a bit of impact damage.
 const POTION_SPLASH_EFFECTS = new Set(['heal','poison','cureposion','cureconfuse','curefear','cureall']);
+// ---- does the physical item survive being thrown? -------------------------------------------
+// The rule of thumb: things that are USED UP by the act of throwing (a grenade detonates, a
+// potion shatters, a scroll burns) disappear; things that are just PHYSICAL OBJECTS that
+// happened to be thrown (a weapon, a shield, a lump of iron, a loaf of bread, a book) always
+// land somewhere and can be picked back up. This is the single source of truth every throw
+// resolver below checks, so the rule only has to be gotten right once.
+//
+// Extension point: set `it.throwConsumed = true/false` on any individual item to override the
+// default for it specifically, without touching this function at all.
+const THROW_CONSUMED_EFFECTS = new Set([
+  // grenades / aimed magical effects -- these are already fully resolved in the legacy switch
+  // inside resolveThrowAtTile before resolveGenericThrow is ever reached; listed here too so
+  // isThrowConsumed() (used by describeItem() etc.) agrees with what actually happens.
+  'aoefire', 'aoefrost', 'aoepoison', 'aoeconfuse', 'throwdmg', 'scrollfire', 'throwaoe', 'throwgas', 'throwemp', 'throwslow', 'throwsnare',
+  // splash potions: consumed the instant they hit (see resolveThrownPotionSplash)
+  'heal', 'poison', 'cureposion', 'cureconfuse', 'curefear', 'cureall',
+  // every other bottled/vial liquid -- no bespoke thrown effect written for these yet, but a
+  // glass vial still shatters and is gone even when it just deals plain impact damage
+  'mana', 'stamina', 'charge', 'buffstr', 'buffdex', 'buffint', 'buffarmor', 'buffcrit', 'buffregen',
+  'resistfire', 'resistfrost', 'resistpoison', 'invisibility', 'waterbreathing', 'curseremove', 'escape', 'reveal',
+  'phoenixcharge', 'ambrosia', 'titansfeast',
+  // a mine/charge thrown instead of carefully placed goes off on impact instead of sitting there
+  'planttrap',
+]);
+function isThrowConsumed(it) {
+  if (it.throwConsumed !== undefined) return it.throwConsumed; // per-item override -- the extension point
+  if (it.type === 'scroll') return true; // a single-use page always burns/unravels when used this way
+  if (it.type === 'weapon' || it.type === 'armor') return false; // physical gear always survives somewhere
+  if (it.type === 'consumable') {
+    if (it.foodFlavor || it.effect === 'food') return false; // solid meals/rations survive a throw (they just land)
+    return THROW_CONSUMED_EFFECTS.has(it.effect);
+  }
+  return false; // materials, books, tomes, notes, recipes, cyberchips, mutagens, gems, gold, stones, kits, misc trinkets
+}
 
 function itemWeight(it) {
   if (it.weight !== undefined) return it.weight; // authored items can always hand-set an exact weight
@@ -13950,9 +13987,12 @@ function resolveGenericThrow(it, wx, wy) {
 }
 // ---- weapons: a real thrown attack, not a flat damage number. Purpose-built throwing
 // weapons (daggers, javelins, throwing axes) fly true, keep their elemental/armor-pierce/
-// lifesteal mods, and almost always survive to be picked back up; anything else (a sword, a
-// mace, a two-handed warhammer) is an improvised throw -- weaker, less accurate, and much
-// likelier to be damaged or destroyed by the impact. ----
+// lifesteal mods, and rarely take real wear; anything else (a sword, a mace, a two-handed
+// warhammer) is an improvised throw -- weaker, less accurate, and rougher on durability. Either
+// way the weapon is NEVER simply lost: a miss or a bounce drops it on the ground, a kill drops
+// it with the body, and a piercing hit on a survivor has a chance to stick in them -- meaning
+// you get it back by looting their corpse once they're dead (or catching up to them if they
+// flee still carrying it). ----
 function resolveThrownWeapon(it, wx, wy, target) {
   const purposeBuilt = THROWN_WEAPON_IDS.has(it.id) || it.thrown;
   if (!target || target.alive === false || target.hp === undefined) {
@@ -13989,21 +14029,33 @@ function resolveThrownWeapon(it, wx, wy, target) {
   Sound.play(crit ? 'critHit' : 'hit');
   log(`You hurl ${it.name} at ${target.name} for ${dmg} damage${crit ? ' (critical!)' : ''}.`);
   if (it.lifesteal) player.hp = Math.min(player.maxHp, player.hp + Math.round(dmg * it.lifesteal));
-  if (target.hp <= 0) { onDeath(target, player); return; }
-  else if (target !== player && !target.engaged) target.engaged = true; // being hit wakes/aggros it, same as any other attack
-  // durability & recovery: purpose-built throwing weapons rarely break; an improvised throw of
-  // your actual melee weapon is a real gamble with its durability.
+  // durability: purpose-built throwing weapons barely notice the impact; an improvised throw of
+  // your actual melee weapon is rougher on it. Wear alone never destroys/vanishes the item --
+  // worst case it eventually goes 'broken' the same way normal use would, same as everywhere else.
   if (it.maxDurability !== undefined && it.maxDurability !== Infinity) wearItem(it, purposeBuilt ? 1 : 3);
-  const breakChance = purposeBuilt ? 0.04 : Math.min(0.6, 0.2 + itemWeight(it) * 0.03);
-  if (it.broken && Math.random() < 0.5 || Math.random() < breakChance) {
-    log(`${it.name} is destroyed by the impact.`);
+  if (target.hp <= 0) {
+    onDeath(target, player);
+    placeItemAt(wx, wy, it); // drops with the body -- always recoverable off the corpse
+    return;
+  }
+  if (target !== player && !target.engaged) target.engaged = true; // being hit wakes/aggros it, same as any other attack
+  // Piercing, purpose-built throwables (dagger/javelin/throwing axe) have a real chance to stick
+  // in a target that survives -- it's now carried on THEM, not lying on the ground, until they
+  // die (see dropLoot()) or you extend this with a way to pull it free early. Blunt/improvised
+  // throws (a sword, a mace, a shield) just bounce off and fall where they landed.
+  const stickChance = purposeBuilt ? 0.5 : 0.05;
+  if (Math.random() < stickChance) {
+    target.stuckItems = target.stuckItems || [];
+    target.stuckItems.push(it);
+    log(`${it.name} sticks fast in ${target.name}!`);
   } else {
-    placeItemAt(wx, wy, it); // lands where it struck -- go pick it back up
+    placeItemAt(wx, wy, it);
   }
 }
 // ---- armor: an ungainly, blunt-force throw. Decent middling damage for its weight, a chance
-// to stagger (briefly slow) whatever it hits, and it's rarely worth the trip to recover --
-// shields and plate don't survive being flung at someone nearly as well as a blade does. ----
+// to stagger (briefly slow) whatever it hits, and -- being all flat plate and straps rather
+// than a piercing edge -- it never sticks like a thrown blade might; it just bounces off and
+// lands nearby, always recoverable. ----
 function resolveThrownArmor(it, wx, wy, target) {
   if (!target || target.alive === false || target.hp === undefined) {
     log(`${it.name} thuds to the ground, striking nothing.`);
@@ -14029,11 +14081,10 @@ function resolveThrownArmor(it, wx, wy, target) {
   Sound.play('hit');
   log(`You hurl ${it.name} at ${target.name} for ${dmg} damage!`);
   if (Math.random() < 0.35 + Math.min(0.3, weight * 0.02)) { target.statusSlow = (target.statusSlow || 0) + 2; log(`${target.name} is staggered by the blow!`); }
-  if (target.hp <= 0) { onDeath(target, player); return; }
-  else if (target !== player && !target.engaged) target.engaged = true;
   if (it.maxDurability !== undefined && it.maxDurability !== Infinity) wearItem(it, 4);
-  if (Math.random() < 0.5 || it.broken) log(`${it.name} is battered apart by the impact.`);
-  else placeItemAt(wx, wy, it);
+  if (target.hp <= 0) { onDeath(target, player); placeItemAt(wx, wy, it); return; }
+  if (target !== player && !target.engaged) target.engaged = true;
+  placeItemAt(wx, wy, it);
 }
 // ---- potions/vials with a clean per-entity effect: the effect lands on WHOEVER is standing
 // on the tile, ally or enemy alike. Heal a friend from across the room, poison a foe directly
@@ -14088,16 +14139,21 @@ function resolveThrownTeleportScroll(it, wx, wy, target) {
   }
   log(`${it.name} flares, but ${target.name} finds no clear space to be banished to.`);
 }
-// ---- catch-all: food, gems, gold, books, tomes, recipes, cyberchips, mutagens, crafting
-// materials, and any future item type nobody's written a special case for yet. A small
-// weight-scaled bump of blunt damage, then the item is simply lost -- none of these were ever
-// built to be thrown, so throwing one is a real (if minor) trade of the item for a bit of
-// reach. Food thrown at a fleeing animal has a chance to stop it in its tracks to eat instead
-// of running, turning a lost ration into an easy kill. ----
+// ---- catch-all: materials, food, gems, gold, books, tomes, recipes, cyberchips, mutagens,
+// stones, kits, and any future item type nobody's written a special case for yet. None of these
+// were built to be thrown, so it's a clumsy improvised throw with modest weight-scaled damage --
+// but whether the physical object survives depends on what it actually IS (see
+// isThrowConsumed()): a lump of iron or a loaf of bread just lands on the ground and can be
+// picked back up, while an unclassified bottled liquid or explosive still shatters/detonates and
+// is gone, same as it would be if it had a bespoke thrown effect written for it. Food thrown at
+// a fleeing animal has a chance to stop it in its tracks to eat instead of running -- in that
+// specific case the item really is gone, because the animal just ate it. ----
 function resolveThrownImprovised(it, wx, wy, target) {
   const weight = itemWeight(it);
+  const consumed = isThrowConsumed(it);
   if (!target || target.alive === false || target.hp === undefined) {
-    log(`${it.name} lands with a soft thud, striking nothing.`);
+    log(consumed ? `${it.name} shatters on the ground, wasted.` : `${it.name} lands with a soft thud, striking nothing.`);
+    if (!consumed) placeItemAt(wx, wy, it);
     return;
   }
   if (it.effect === 'food' && target.behavior === 'flee' && target !== player) {
@@ -14106,15 +14162,20 @@ function resolveThrownImprovised(it, wx, wy, target) {
   const dist = chebyshev(player.x, player.y, wx, wy);
   let chance = 0.7 + (effDex(player) - effDex(target)) * 0.02 - Math.max(0, dist - 3) * 0.03;
   chance = Math.max(0.2, Math.min(0.9, chance));
-  if (Math.random() >= chance) { log(`Your thrown ${it.name} misses ${target.name}.`); return; }
+  if (Math.random() >= chance) {
+    log(consumed ? `Your thrown ${it.name} misses ${target.name} and shatters on the ground.` : `Your thrown ${it.name} misses ${target.name}.`);
+    if (!consumed) placeItemAt(wx, wy, it);
+    return;
+  }
   const dmg = Math.max(1, Math.round(1 + weight * 0.7 + Math.floor(effStr(player) / 8)));
   target.hp -= dmg;
   if (target === player) lastDamageSource = `a thrown ${it.name}`; else target.harmedByPlayer = true;
   if (settings.showDamageNumbers) spawnFloatingText(target.x, target.y, String(dmg), '#ffffff');
   Sound.play('hit');
-  log(`You throw ${it.name} at ${target.name} for ${dmg} damage.`);
-  if (target.hp <= 0) onDeath(target, player);
-  else if (target !== player && !target.engaged) target.engaged = true;
+  log(`You throw ${it.name} at ${target.name} for ${dmg} damage${consumed ? ', and it shatters on impact' : ''}.`);
+  if (target.hp <= 0) { onDeath(target, player); if (!consumed) placeItemAt(wx, wy, it); return; }
+  if (target !== player && !target.engaged) target.engaged = true;
+  if (!consumed) placeItemAt(wx, wy, it);
 }
 // A weapon held into an open flame catches fire itself for a few swings -- real, temporary
 // bonus fire damage on your next several attacks, with a chance to ignite whatever you hit
@@ -14413,12 +14474,12 @@ function describeItem(it) {
   if (canThrowItem(it) && it.type !== 'chest') {
     const range = throwRangeFor(it);
     let blurb;
-    if (it.type === 'weapon') blurb = (THROWN_WEAPON_IDS.has(it.id) || it.thrown) ? 'flies true, rarely breaks' : 'improvised throw, may be damaged or destroyed';
-    else if (it.type === 'armor') blurb = 'blunt improvised throw, chance to stagger, usually destroyed';
-    else if (THROWABLE_EFFECTS.has(it.effect)) blurb = 'grenade/aimed effect';
-    else if (POTION_SPLASH_EFFECTS.has(it.effect)) blurb = 'effect splashes onto whoever it hits, ally or foe';
-    else if (it.type === 'scroll' && it.effect === 'teleport') blurb = 'banishes whatever it hits to a random spot';
-    else blurb = 'improvised throw, minor damage';
+    if (it.type === 'weapon') blurb = (THROWN_WEAPON_IDS.has(it.id) || it.thrown) ? 'flies true; often sticks in what it hits, recoverable from the body' : 'improvised throw; bounces off and lands nearby, or drops with the body on a kill';
+    else if (it.type === 'armor') blurb = 'blunt improvised throw, chance to stagger; always recoverable on the ground';
+    else if (THROWABLE_EFFECTS.has(it.effect)) blurb = 'grenade/aimed effect, consumed on impact';
+    else if (POTION_SPLASH_EFFECTS.has(it.effect)) blurb = 'effect splashes onto whoever it hits, ally or foe; consumed on impact';
+    else if (it.type === 'scroll' && it.effect === 'teleport') blurb = 'banishes whatever it hits to a random spot; consumed on impact';
+    else blurb = isThrowConsumed(it) ? 'shatters/detonates on impact, consumed' : 'improvised throw, minor damage; always recoverable on the ground';
     lines.push(`Throwable — range ${range} (${blurb})`);
   }
   lines.push(`Value: ${it.value}g${it.amount && it.amount>1 ? ` (x${it.amount})` : ''}`);
