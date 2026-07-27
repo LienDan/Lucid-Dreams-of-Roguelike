@@ -454,7 +454,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.18.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.19.0-alpha</div>
     </div>
   </div>
 
@@ -7602,7 +7602,7 @@ function confirmTileTarget(wx, wy) {
   }
   if (p.kind === 'throw') {
     pendingTarget = null; gameState = 'playing';
-    resolveThrowAtTile(p.item, wx, wy);
+    resolveThrowAtTile(p.item, wx, wy, p.fromSlot);
     endTurn(); return;
   }
 }
@@ -9110,6 +9110,8 @@ function useQuickslot(slot) {
   else useItem(it);
   updateSidebar();
 }
+// Legacy set kept only for describeItem()'s flavor-text lookup below; the actual "can this be
+// thrown" gate is canThrowItem() now, which covers every item type, not just this whitelist.
 const THROWABLE_EFFECTS = new Set(['aoefire','aoefrost','aoepoison','aoeconfuse','throwdmg','scrollfire','throwaoe','throwgas','throwemp','throwslow','throwsnare']);
 function openItemAction(it, slot) {
   gameState = 'itemaction'; invSelected = it; invSelectedSlot = slot || null;
@@ -9117,9 +9119,10 @@ function openItemAction(it, slot) {
   if (slot) {
     opts.push(['u', 'Unequip']);
     if (slot === 'hand' && adjacentFireTile()) opts.push(['i', 'Dip in fire (burning weapon)']);
+    if (canThrowItem(it)) opts.push(['t', 'Throw (choose target tile)']);
   } else {
     if (it.type === 'weapon' || it.type === 'armor') opts.push(['e', 'Equip']);
-    if ((it.type === 'consumable' || it.type === 'scroll') && THROWABLE_EFFECTS.has(it.effect)) opts.push(['t', 'Throw (choose target tile)']);
+    if (canThrowItem(it)) opts.push(['t', 'Throw (choose target tile)']);
     if (it.type === 'consumable' || it.type === 'scroll') opts.push(['u', THROWABLE_EFFECTS.has(it.effect) ? 'Use on self' : 'Use']);
     if (it.type === 'chest') opts.push(['u', 'Open']);
     if (it.type === 'book' || it.type === 'note') opts.push(['u', it.type === 'note' ? 'Read note' : 'Read']);
@@ -13627,17 +13630,136 @@ function maybeGrantCookingBonusEffect(it) {
 }
 
 // ---- useItem v7: adds cyberware chips (learn cybernetic) and mutagen vials (grant mutation) ----
+// ============================================================================
+// ---- UNIVERSAL THROWING FRAMEWORK ------------------------------------------
+// Every item in the game is throwable now, not just the pre-flagged grenade/potion
+// consumables. What happens is *derived* from the item's own existing data (type, dmg,
+// str, armor, effect, value) instead of requiring a bespoke hand-written case for every
+// item that has ever existed or will ever be added -- drop a brand new weapon or potion
+// into ITEM_BASES with no extra work and it already throws sensibly. Items can still opt
+// into hand-tuned behavior (an explicit `range`/`radius`/`weight`/`thrown` field always
+// wins over the derived default), which is what keeps the existing grenade/potion arsenal
+// working exactly as before while everything else gets a good-faith generic behavior.
+//
+// The pieces:
+//   itemWeight(it)         -- how heavy something is, real field if set, else inferred
+//   throwRangeFor(it)      -- how far it can be thrown, real field if set, else weight-based
+//   canThrowItem(it)       -- gate for the inventory/equipment "Throw" option
+//   springHiddenTrapAt()   -- landing on an undiscovered trap tile sets it off, hurting
+//                             whatever's standing there (a bonus if you aimed a weapon at a
+//                             monster parked on a plate) even with nobody there at all
+//   resolveThrowAtTile()   -- top-level dispatcher: legacy grenade/potion effects first,
+//                             then falls through to the generic resolvers below for
+//                             everything that doesn't have one of those hand-authored effects
+//   resolveThrownWeapon        -- weapons: real to-hit/damage roll, purpose-built throwing
+//                                  weapons (daggers/javelins/axes/knives) fly true and rarely
+//                                  break; anything else is a clumsier improvised throw that's
+//                                  more likely to be damaged or destroyed on impact
+//   resolveThrownArmor         -- armor: a blunt, ungainly throw -- middling damage, decent
+//                                  chance to stagger (briefly slow) whatever it hits, and it's
+//                                  almost never worth recovering afterward
+//   resolveThrownPotionSplash  -- heal/poison/cure-type consumables: the effect lands on
+//                                  WHOEVER is standing on the tile, ally or enemy, not just
+//                                  you -- throw a healing potion at a foe and you've just
+//                                  healed your foe; throw a cure-poison flask to an ally
+//                                  stuck across the room and you've just saved them
+//   resolveThrownTeleportScroll -- a Scroll of Teleport thrown at a hostile banishes IT to a
+//                                  random spot instead of you -- a ranged "get this thing away
+//                                  from me" panic button that doesn't cost you the scroll's
+//                                  normal self-escape use
+//   resolveThrownImprovised    -- the catch-all: food, gems, gold, books, tomes, crafting
+//                                  materials, unrecognized future item types -- a small
+//                                  weight-scaled bump of damage, then the item is lost
+// ============================================================================
+
+// Purpose-built thrown weapons: designed to be chucked, so they fly true and survive the
+// impact almost every time. Everything else (a sword, a warhammer, a shield) can still be
+// thrown, it's just a clumsier improvised throw with a real chance of breaking.
+const THROWN_WEAPON_IDS = new Set(['throwing_axe','javelin','dagger']);
+// Consumable "drink" effects with a clean, meaningful reaction when splashed on an entity
+// instead of drunk by the player. Buff potions, mana, stamina, charge, resist-X, and food are
+// deliberately left out of this set (a monster has no MP/Stamina/Charge pool and there's no
+// generic monster buff system to hook a STR/DEX/armor/crit potion into) -- those fall through
+// to the improvised catch-all instead, which is the honest behavior: they weren't built to be
+// thrown, so throwing one just wastes it for a bit of impact damage.
+const POTION_SPLASH_EFFECTS = new Set(['heal','poison','cureposion','cureconfuse','curefear','cureall']);
+
+function itemWeight(it) {
+  if (it.weight !== undefined) return it.weight; // authored items can always hand-set an exact weight
+  switch (it.type) {
+    case 'weapon': {
+      let w = (it.str || 5) * 0.45;
+      if (it.ranged) w *= 0.7; // bows/guns/crossbows are built to be held and balanced, not chucked
+      if (THROWN_WEAPON_IDS.has(it.id)) w *= 0.6; // knives/axes/javelins are made to fly
+      return Math.max(1, w);
+    }
+    case 'armor': {
+      const slotBase = { body: 6, head: 2, feet: 2, offhand: 3, ring: 0.2 }[it.slot] || 3;
+      return Math.max(0.5, slotBase + (it.armor || 0) * 0.8);
+    }
+    case 'consumable': case 'scroll': return it.throwWeight !== undefined ? it.throwWeight : 1;
+    case 'misc': return it.id === 'gold' ? 0.1 : 1;
+    case 'chest': return 20;
+    default: return 1.5; // books, tomes, recipes, cyberchips, mutagens, crafting materials, etc.
+  }
+}
+// Explicit `range` (every grenade/potion/scroll already has one) always wins -- this only
+// kicks in for the newly-throwable stuff (weapons, armor, misc) that never had one authored.
+function throwRangeFor(it) {
+  const bonus = (player.throwRangeBonus || 0) + Math.floor(effStr(player) / 10);
+  if (it.range !== undefined) return it.range + bonus;
+  const w = itemWeight(it);
+  return Math.max(2, Math.round(8 - w * 0.6)) + bonus;
+}
+function canThrowItem(it) {
+  return !!it && it.type !== 'chest' && it.type !== 'corpse';
+}
+// A thrown item landing on a hidden trap sets it off -- your own weight-triggered pressure
+// plate, sprung deliberately instead of by accident. If something's standing there it eats
+// both the trap AND whatever the thrown item itself does; if nothing's there, the trap still
+// fires (fire/gas fill the area, an alarm still wakes the level) but there's nobody to hurt.
+function springHiddenTrapAt(x, y) {
+  const t = curTileAt(x, y);
+  if (!curIsDungeon() || !t || !t.hiddenTrap || t.trapTriggered) return;
+  const occupant = entityAt(x, y);
+  if (occupant && occupant.alive !== false && occupant.hp !== undefined) {
+    t.trapTriggered = true; t.glyph = '^'; t.color = '#c93a3a';
+    log('Your throw lands square on a hidden trap!');
+    triggerTrapAt(t, x, y, occupant);
+    return;
+  }
+  t.trapTriggered = true; t.glyph = '^'; t.color = '#c93a3a';
+  const kind = t.trapType || 'dart';
+  Sound.play('trap');
+  if (kind === 'fire') { log('Your throw sets off a hidden fire trap -- flames roar up from the floor!'); igniteArea(x, y, 2); }
+  else if (kind === 'gas') { log('Your throw triggers a hidden gas trap -- fumes hiss out across the area!'); gasArea(x, y, 2, 7, 4, 'poison'); }
+  else if (kind === 'alarm') { log('Your throw sets off a hidden alarm rune -- you hear things stirring in the dark!'); for (const m of curMonsters()) { if (m.alive && chebyshev(m.x, m.y, x, y) <= 22 && Math.random() < 0.6) m.engaged = true; } }
+  else if (kind === 'floorbreak') { log('Your throw strikes a weak point in the floor, and it collapses!'); t.feature = 'brokenfloor'; t.glyph = ':'; t.color = '#4a3a2a'; }
+  else { log(`Your throw triggers a hidden ${kind} trap, but there's nothing standing there to hurt.`); }
+}
 // ---- thrown items: land wherever you actually aim them, not at your own feet ----
-function beginThrowTargeting(it) {
-  const range = 6 + (player.throwRangeBonus || 0);
-  beginTileTargeting('throw', { item: it, range, aoeRadius: it.radius || 0 });
+function beginThrowTargeting(it, fromSlot) {
+  const range = throwRangeFor(it);
+  beginTileTargeting('throw', { item: it, fromSlot: fromSlot || null, range, aoeRadius: it.radius || 0 });
   log(`Throw ${it.name} (range ${range}) — click a tile, or press Enter/Space to snap to the nearest foe. Esc to cancel.`);
 }
-function resolveThrowAtTile(it, wx, wy) {
+function resolveThrowAtTile(it, wx, wy, fromSlot) {
   const dmgMult = 1 + (player.alchemyPotencyBonus||0) + (player.throwDmgBonus||0);
   const radius = (it.radius||3) + (player.throwRadiusBonus||0);
-  player.inventory = player.inventory.filter(i => i.uid !== it.uid);
+  // Pull the item out of wherever it actually lives right now: an equipped slot, a stack in
+  // the inventory (only decrement the stack, don't vanish the whole pile), or a single
+  // non-stacking item (weapons/armor, one uid each).
+  if (fromSlot) {
+    removeStatBonuses(it);
+    player.equipment[fromSlot] = null;
+    recomputeSetBonuses();
+  } else if (it.amount && it.amount > 1) {
+    it.amount--;
+  } else {
+    player.inventory = player.inventory.filter(i => i.uid !== it.uid);
+  }
   Sound.play('drink');
+  springHiddenTrapAt(wx, wy);
   switch (it.effect) {
     case 'aoefire': {
       const hit = hostilesWithinRadius(wx, wy, radius);
@@ -13655,12 +13777,12 @@ function resolveThrowAtTile(it, wx, wy) {
       break;
     }
     case 'aoepoison': {
-      gasArea(wx, wy, 6, it.power, 'poison');
+      gasArea(wx, wy, radius, 7, it.power, 'poison');
       log(`${it.name} shatters and releases a spreading cloud of choking gas.`);
       break;
     }
     case 'aoeconfuse': {
-      gasArea(wx, wy, 5, it.power||3, 'confuse');
+      gasArea(wx, wy, radius, 6, it.power||3, 'confuse');
       log(`${it.name} shatters in a flash, and disorienting fumes spread outward.`);
       break;
     }
@@ -13683,7 +13805,7 @@ function resolveThrowAtTile(it, wx, wy) {
       break;
     }
     case 'throwgas': {
-      gasArea(wx, wy, 6, it.power || 4, 'poison');
+      gasArea(wx, wy, radius, 7, it.power || 4, 'poison');
       log('A billowing cloud of gas settles over the area.');
       break;
     }
@@ -13697,8 +13819,187 @@ function resolveThrowAtTile(it, wx, wy) {
       hit.forEach(h => { h.statusSlow = (h.statusSlow||0) + 4; log(`${h.name} is caught and slowed!`); });
       break;
     }
+    default: resolveGenericThrow(it, wx, wy);
   }
   updateSidebar();
+}
+// Dispatches anything that fell through the legacy grenade/potion switch above (no special
+// `effect` case matched) to a type-appropriate generic handler.
+function resolveGenericThrow(it, wx, wy) {
+  const target = entityAt(wx, wy);
+  if (it.type === 'weapon') { resolveThrownWeapon(it, wx, wy, target); return; }
+  if (it.type === 'armor') { resolveThrownArmor(it, wx, wy, target); return; }
+  if (it.type === 'scroll' && it.effect === 'teleport') { resolveThrownTeleportScroll(it, wx, wy, target); return; }
+  if ((it.type === 'consumable' || it.type === 'scroll') && POTION_SPLASH_EFFECTS.has(it.effect)) { resolveThrownPotionSplash(it, wx, wy, target); return; }
+  resolveThrownImprovised(it, wx, wy, target);
+}
+// ---- weapons: a real thrown attack, not a flat damage number. Purpose-built throwing
+// weapons (daggers, javelins, throwing axes) fly true, keep their elemental/armor-pierce/
+// lifesteal mods, and almost always survive to be picked back up; anything else (a sword, a
+// mace, a two-handed warhammer) is an improvised throw -- weaker, less accurate, and much
+// likelier to be damaged or destroyed by the impact. ----
+function resolveThrownWeapon(it, wx, wy, target) {
+  const purposeBuilt = THROWN_WEAPON_IDS.has(it.id) || it.thrown;
+  if (!target || target.alive === false || target.hp === undefined) {
+    log(`${it.name} clatters to the ground, striking nothing.`);
+    placeItemAt(wx, wy, it);
+    return;
+  }
+  const dist = chebyshev(player.x, player.y, wx, wy);
+  let chance = 0.62 + (purposeBuilt ? 0.08 : -0.1) + (effDex(player) - effDex(target)) * 0.02 - Math.max(0, dist - 3) * 0.03;
+  chance = Math.max(0.15, Math.min(0.92, chance));
+  if (Math.random() >= chance) {
+    log(`Your thrown ${it.name} misses ${target.name}.`);
+    if (settings.showDamageNumbers) spawnFloatingText(target.x, target.y, 'Miss', '#8a7f6a');
+    Sound.play('miss');
+    placeItemAt(wx, wy, it);
+    return;
+  }
+  let dmg = randInt(Math.random, it.dmg[0], it.dmg[1]) + Math.floor(effStr(player) / 5);
+  if (!purposeBuilt) dmg = Math.round(dmg * 0.7); // clumsier than a weapon actually designed to be thrown
+  if (it.broken) dmg = Math.round(dmg * 0.35);
+  if (player.throwDmgBonus) dmg = Math.round(dmg * (1 + player.throwDmgBonus));
+  if (it.fireDmg) dmg += randInt(Math.random, 0, it.fireDmg);
+  if (it.frostDmg) dmg += randInt(Math.random, 0, it.frostDmg);
+  if (it.poisonDmg) { const p = target.poisonDmgReduction ? Math.max(0, Math.round(it.poisonDmg * (1 - target.poisonDmgReduction))) : it.poisonDmg; if (p > 0) target.statusPoison = (target.statusPoison || 0) + p; }
+  let defArmor = getArmorOf(target);
+  if (it.armorPierce) defArmor = Math.max(0, defArmor - it.armorPierce);
+  dmg -= defArmor;
+  let crit = false;
+  if (Math.random() < 0.08 + (purposeBuilt ? 0.05 : 0)) { dmg *= 2; crit = true; }
+  dmg = Math.max(1, Math.round(dmg));
+  target.hp -= dmg;
+  if (target === player) lastDamageSource = 'a thrown weapon'; else target.harmedByPlayer = true;
+  if (settings.showDamageNumbers) spawnFloatingText(target.x, target.y, String(dmg), crit ? '#ffdd55' : '#ffffff');
+  Sound.play(crit ? 'critHit' : 'hit');
+  log(`You hurl ${it.name} at ${target.name} for ${dmg} damage${crit ? ' (critical!)' : ''}.`);
+  if (it.lifesteal) player.hp = Math.min(player.maxHp, player.hp + Math.round(dmg * it.lifesteal));
+  if (target.hp <= 0) { onDeath(target, player); return; }
+  else if (target !== player && !target.engaged) target.engaged = true; // being hit wakes/aggros it, same as any other attack
+  // durability & recovery: purpose-built throwing weapons rarely break; an improvised throw of
+  // your actual melee weapon is a real gamble with its durability.
+  if (it.maxDurability !== undefined && it.maxDurability !== Infinity) wearItem(it, purposeBuilt ? 1 : 3);
+  const breakChance = purposeBuilt ? 0.04 : Math.min(0.6, 0.2 + itemWeight(it) * 0.03);
+  if (it.broken && Math.random() < 0.5 || Math.random() < breakChance) {
+    log(`${it.name} is destroyed by the impact.`);
+  } else {
+    placeItemAt(wx, wy, it); // lands where it struck -- go pick it back up
+  }
+}
+// ---- armor: an ungainly, blunt-force throw. Decent middling damage for its weight, a chance
+// to stagger (briefly slow) whatever it hits, and it's rarely worth the trip to recover --
+// shields and plate don't survive being flung at someone nearly as well as a blade does. ----
+function resolveThrownArmor(it, wx, wy, target) {
+  if (!target || target.alive === false || target.hp === undefined) {
+    log(`${it.name} thuds to the ground, striking nothing.`);
+    placeItemAt(wx, wy, it);
+    return;
+  }
+  const dist = chebyshev(player.x, player.y, wx, wy);
+  let chance = 0.55 + (effDex(player) - effDex(target)) * 0.02 - Math.max(0, dist - 2) * 0.05;
+  chance = Math.max(0.15, Math.min(0.85, chance));
+  if (Math.random() >= chance) {
+    log(`Your thrown ${it.name} sails past ${target.name}.`);
+    Sound.play('miss');
+    placeItemAt(wx, wy, it);
+    return;
+  }
+  const weight = itemWeight(it);
+  let dmg = Math.max(1, Math.round(weight * 0.9 + (it.armor || 0) * 0.6 + Math.floor(effStr(player) / 6)));
+  dmg -= Math.round(getArmorOf(target) * 0.5); // armor absorbs the impact of more armor. poetic.
+  dmg = Math.max(1, dmg);
+  target.hp -= dmg;
+  if (target === player) lastDamageSource = 'a thrown piece of armor'; else target.harmedByPlayer = true;
+  if (settings.showDamageNumbers) spawnFloatingText(target.x, target.y, String(dmg), '#ffffff');
+  Sound.play('hit');
+  log(`You hurl ${it.name} at ${target.name} for ${dmg} damage!`);
+  if (Math.random() < 0.35 + Math.min(0.3, weight * 0.02)) { target.statusSlow = (target.statusSlow || 0) + 2; log(`${target.name} is staggered by the blow!`); }
+  if (target.hp <= 0) { onDeath(target, player); return; }
+  else if (target !== player && !target.engaged) target.engaged = true;
+  if (it.maxDurability !== undefined && it.maxDurability !== Infinity) wearItem(it, 4);
+  if (Math.random() < 0.5 || it.broken) log(`${it.name} is battered apart by the impact.`);
+  else placeItemAt(wx, wy, it);
+}
+// ---- potions/vials with a clean per-entity effect: the effect lands on WHOEVER is standing
+// on the tile, ally or enemy alike. Heal a friend from across the room, poison a foe directly
+// instead of drinking the vial yourself, or -- if you aim carelessly -- heal the very thing
+// you were trying to kill. That risk is the point. ----
+function resolveThrownPotionSplash(it, wx, wy, target) {
+  if (!target || target.alive === false || target.hp === undefined) {
+    log(`${it.name} shatters on the ground, its contents wasted.`);
+    return;
+  }
+  const isPlayer = target === player;
+  const potencyMult = 1 + (player.alchemyPotencyBonus || 0);
+  switch (it.effect) {
+    case 'heal': {
+      const amt = Math.round(it.power * potencyMult);
+      target.hp = Math.min(target.maxHp || target.hp, target.hp + amt);
+      log(isPlayer ? `The potion douses you, restoring ${amt} HP!` : `${it.name} douses ${target.name}, restoring ${amt} HP!${target.kind !== 'ally' ? ' (probably not what you wanted)' : ''}`);
+      break;
+    }
+    case 'poison': {
+      const immune = (target.poisonDmgReduction || 0) >= 1 || (isPlayer && getBuff('resistpoison') > 0);
+      if (immune) log(`${isPlayer ? 'You are' : target.name + ' is'} unaffected -- the poison finds no purchase.`);
+      else { target.statusPoison = (target.statusPoison || 0) + it.power; log(`${it.name} shatters across ${isPlayer ? 'you' : target.name} in a spray of venom!`); }
+      break;
+    }
+    case 'cureposion': target.statusPoison = 0; log(`${isPlayer ? 'Your' : target.name + "'s"} poison is washed away.`); break;
+    case 'cureconfuse': target.statusConfuse = 0; log(`${isPlayer ? 'Your mind clears' : target.name + "'s mind clears"}.`); break;
+    case 'curefear': target.statusFear = 0; log(`${isPlayer ? 'Your courage steadies' : target.name + "'s courage steadies"}.`); break;
+    case 'cureall': target.statusPoison = 0; target.statusConfuse = 0; target.statusFear = 0; log(`A wave of clarity washes over ${isPlayer ? 'you' : target.name} -- all afflictions cleansed.`); break;
+  }
+  if (target.hp !== undefined && target.hp <= 0) onDeath(target, it.effect === 'poison' ? player : null);
+  if (target !== player && it.effect === 'poison' && !target.engaged) target.engaged = true;
+}
+// ---- a Scroll of Teleport thrown at a hostile banishes IT to a random spot on the level
+// instead of you -- a ranged panic button that gets a dangerous enemy off your back without
+// spending the scroll's normal self-escape charge on yourself. ----
+function resolveThrownTeleportScroll(it, wx, wy, target) {
+  if (!target || target.alive === false || target === player) {
+    log(`${it.name} flares and burns away uselessly -- there was nothing there to banish.`);
+    return;
+  }
+  for (let i = 0; i < 30; i++) {
+    const nx = target.x + randInt(Math.random, -12, 12);
+    const ny = target.y + randInt(Math.random, -12, 12);
+    if (curWalkable(nx, ny) && !entityAt(nx, ny)) {
+      target.x = nx; target.y = ny;
+      Sound.play('blink');
+      log(`${target.name} vanishes in a flash of light, banished elsewhere!`);
+      target.engaged = false;
+      return;
+    }
+  }
+  log(`${it.name} flares, but ${target.name} finds no clear space to be banished to.`);
+}
+// ---- catch-all: food, gems, gold, books, tomes, recipes, cyberchips, mutagens, crafting
+// materials, and any future item type nobody's written a special case for yet. A small
+// weight-scaled bump of blunt damage, then the item is simply lost -- none of these were ever
+// built to be thrown, so throwing one is a real (if minor) trade of the item for a bit of
+// reach. Food thrown at a fleeing animal has a chance to stop it in its tracks to eat instead
+// of running, turning a lost ration into an easy kill. ----
+function resolveThrownImprovised(it, wx, wy, target) {
+  const weight = itemWeight(it);
+  if (!target || target.alive === false || target.hp === undefined) {
+    log(`${it.name} lands with a soft thud, striking nothing.`);
+    return;
+  }
+  if (it.effect === 'food' && target.behavior === 'flee' && target !== player) {
+    if (Math.random() < 0.5) { target.statusSlow = (target.statusSlow || 0) + 3; log(`${target.name} stops to eat ${it.name.toLowerCase()} instead of fleeing!`); return; }
+  }
+  const dist = chebyshev(player.x, player.y, wx, wy);
+  let chance = 0.7 + (effDex(player) - effDex(target)) * 0.02 - Math.max(0, dist - 3) * 0.03;
+  chance = Math.max(0.2, Math.min(0.9, chance));
+  if (Math.random() >= chance) { log(`Your thrown ${it.name} misses ${target.name}.`); return; }
+  const dmg = Math.max(1, Math.round(1 + weight * 0.7 + Math.floor(effStr(player) / 8)));
+  target.hp -= dmg;
+  if (target === player) lastDamageSource = `a thrown ${it.name}`; else target.harmedByPlayer = true;
+  if (settings.showDamageNumbers) spawnFloatingText(target.x, target.y, String(dmg), '#ffffff');
+  Sound.play('hit');
+  log(`You throw ${it.name} at ${target.name} for ${dmg} damage.`);
+  if (target.hp <= 0) onDeath(target, player);
+  else if (target !== player && !target.engaged) target.engaged = true;
 }
 // A weapon held into an open flame catches fire itself for a few swings -- real, temporary
 // bonus fire damage on your next several attacks, with a chance to ignite whatever you hit
@@ -13994,6 +14295,17 @@ function describeItem(it) {
     if (parts.length) lines.push(parts.join(', '));
   }
   if (it.intBonus) lines.push(`+${it.intBonus} INT`);
+  if (canThrowItem(it) && it.type !== 'chest') {
+    const range = throwRangeFor(it);
+    let blurb;
+    if (it.type === 'weapon') blurb = (THROWN_WEAPON_IDS.has(it.id) || it.thrown) ? 'flies true, rarely breaks' : 'improvised throw, may be damaged or destroyed';
+    else if (it.type === 'armor') blurb = 'blunt improvised throw, chance to stagger, usually destroyed';
+    else if (THROWABLE_EFFECTS.has(it.effect)) blurb = 'grenade/aimed effect';
+    else if (POTION_SPLASH_EFFECTS.has(it.effect)) blurb = 'effect splashes onto whoever it hits, ally or foe';
+    else if (it.type === 'scroll' && it.effect === 'teleport') blurb = 'banishes whatever it hits to a random spot';
+    else blurb = 'improvised throw, minor damage';
+    lines.push(`Throwable — range ${range} (${blurb})`);
+  }
   lines.push(`Value: ${it.value}g${it.amount && it.amount>1 ? ` (x${it.amount})` : ''}`);
   return lines.join('<br>');
 }
@@ -15523,7 +15835,7 @@ function handleKey(e) {
     if (key === 'u' && invSelectedSlot) { unequipSlot(invSelectedSlot); invSelectedSlot = null; gameState='inventory'; renderInventory(); return; }
     if (key === 'i' && invSelectedSlot === 'hand') { dipWeaponInFire(); gameState='playing'; closeModal(); return; }
     if (key === 'e') { equipItem(invSelected); invSelectedSlot = null; gameState='inventory'; renderInventory(); return; }
-    if (key === 't' && THROWABLE_EFFECTS.has(invSelected.effect)) { const it = invSelected; closeModal(); beginThrowTargeting(it); return; }
+    if (key === 't' && canThrowItem(invSelected)) { const it = invSelected, slot = invSelectedSlot; closeModal(); invSelectedSlot = null; beginThrowTargeting(it, slot); return; }
     if (key === 'q' && !invSelectedSlot) { promptQuickslotAssign(invSelected); return; }
     if (key === 'u') {
       // useItem() can open its own follow-up screen (e.g. a Recall Stone opens the fast-travel
