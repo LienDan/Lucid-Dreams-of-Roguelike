@@ -124,10 +124,26 @@
     display:flex; flex-direction:column; align-items:center; justify-content:flex-start;
     padding:12px; flex:1; min-width:0; overflow:auto;
   }
+  .canvas-wrap{ position:relative; display:inline-block; }
   #canvas{
     background:#000; border:1px solid var(--line); image-rendering:pixelated;
     box-shadow: 0 0 0 1px #000, 0 4px 24px rgba(0,0,0,0.6);
   }
+  /* Screen shake for big explosions (tactical nuke, etc). Respects the reduceMotion setting --
+     see triggerScreenShake(), which skips applying this class entirely when that's on. */
+  @keyframes screenShake{
+    0%{ transform:translate(0,0); } 10%{ transform:translate(-8px,-5px); } 20%{ transform:translate(7px,4px); }
+    30%{ transform:translate(-6px,6px); } 40%{ transform:translate(6px,-6px); } 50%{ transform:translate(-4px,3px); }
+    60%{ transform:translate(4px,-3px); } 70%{ transform:translate(-3px,2px); } 80%{ transform:translate(2px,-2px); }
+    90%{ transform:translate(-1px,1px); } 100%{ transform:translate(0,0); }
+  }
+  #canvas.screen-shake{ animation:screenShake 0.5s cubic-bezier(.36,.07,.19,.97) both; }
+  #explosion-flash{
+    position:absolute; inset:0; pointer-events:none; opacity:0; z-index:5;
+    background:radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(255,200,120,0.55) 45%, rgba(255,120,40,0) 75%);
+    transition:opacity 0.55s ease-out;
+  }
+  #explosion-flash.flash-active{ opacity:1; transition:opacity 0.08s ease-in; }
   .loc-row{
     display:flex; justify-content:space-between; width:100%; max-width:816px;
     font-size:1.2rem; color:var(--amber); padding:6px 2px; letter-spacing:0.5px;
@@ -358,7 +374,10 @@
 
   <div class="layout">
     <div class="gamearea">
-      <canvas id="canvas"></canvas>
+      <div class="canvas-wrap">
+        <canvas id="canvas"></canvas>
+        <div id="explosion-flash"></div>
+      </div>
       <div class="loc-row">
         <span id="loc-text">-</span>
         <span id="pos-text">-</span>
@@ -454,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.21.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.22.0-alpha</div>
     </div>
   </div>
 
@@ -602,6 +621,16 @@ const Sound = (function () {
     bump() { tone(90, { type: 'square', a: 0.001, d: 0.03, r: 0.04, peak: 0.15 }); },
     blink() { tone(300, { type: 'sine', slideTo: 900, slideDur: 0.12, a: 0.002, d: 0.06, r: 0.1, peak: 0.2 }); tone(1200, { delay: 0.11, type: 'sine', a: 0.001, d: 0.03, r: 0.06, peak: 0.14 }); },
     summon() { tone(200, { type: 'sawtooth', slideTo: 500, slideDur: 0.3, a: 0.02, d: 0.15, r: 0.2, peak: 0.2 }); noiseBurst({ dur: 0.25, filterFreq: 900, delay: 0.05, peak: 0.15 }); },
+    // a big multi-layered detonation: a hard low-end thump, a bright crack on top, then a long
+    // rolling rumble tail -- distinct from every other bang in the game (grenades reuse 'trap'
+    // or 'hit'; this is reserved for genuinely massive explosions like the tactical nuke).
+    bigExplosion() {
+      noiseBurst({ dur: 0.5, filterFreq: 220, filterType: 'lowpass', peak: 0.55 });
+      tone(55, { type: 'sawtooth', slideTo: 28, slideDur: 0.6, a: 0.005, d: 0.3, r: 0.5, peak: 0.5 });
+      noiseBurst({ dur: 0.18, filterFreq: 2600, filterType: 'highpass', delay: 0.02, peak: 0.35 });
+      noiseBurst({ dur: 1.4, filterFreq: 350, filterType: 'lowpass', delay: 0.12, peak: 0.3, a: 0.05, d: 0.5, r: 1.0, s: 0.1 });
+      tone(38, { type: 'sine', delay: 0.15, a: 0.05, d: 0.6, r: 0.8, peak: 0.3 });
+    },
 
     footstepGrass() { const f = 400 + Math.random() * 100; noiseBurst({ dur: 0.05, filterFreq: f, filterType: 'bandpass', peak: 0.06 }); },
     footstepStone() { noiseBurst({ dur: 0.04, filterFreq: 2200 + Math.random() * 400, filterType: 'highpass', peak: 0.07 }); },
@@ -802,7 +831,7 @@ const ITEM_BASES = [
   { id:'potion_str', name:'Potion of Strength', type:'consumable', effect:'buffstr', power:2, glyph:'!', color:'#c97a3a', value:35 },
   { id:'potion_poison', name:'Vial of Poison', type:'consumable', effect:'poison', power:8, glyph:'!', color:'#5ac95a', value:10 },
   { id:'food_ration', name:'Food Ration', type:'consumable', effect:'food', power:1, glyph:'%', color:'#c9a06a', value:5 },
-  { id:'scroll_identify', name:'Scroll of Identify', type:'scroll', effect:'identify', glyph:'?', color:'#e0d6a0', value:12 },
+  { id:'scroll_identify', name:'Scroll of Treasure Sense', type:'scroll', effect:'identify', glyph:'?', color:'#e0d6a0', value:12 },
   { id:'scroll_teleport', name:'Scroll of Teleport', type:'scroll', effect:'teleport', glyph:'?', color:'#a05ae0', value:30 },
   { id:'scroll_fire', name:'Scroll of Fireball', type:'scroll', effect:'scrollfire', power:14, glyph:'?', color:'#e0785a', value:28 },
   { id:'stone_waymark', name:'Waystone Shard', type:'consumable', effect:'placewaypoint', glyph:'\u2666', color:'#e8ab52', value:40 },
@@ -956,6 +985,32 @@ function itemPowerMult(monsterScale) {
 // quest rewards, and anywhere else that only has the player's own level to key off of).
 function playerLevelPowerMult(level) {
   return 1 + Math.pow(Math.max(0, (level || 1) - 1) / 12, 1.15);
+}
+// ---- single source of truth for "can this base item show up in a generic loot roll" ----
+// Every chest, shop, monster-drop table, and overworld scatter used to carry its own
+// copy-pasted filter (six separate copies as of the last audit), and every one of them only
+// capped weapon/armor rarity by valueTier -- consumables were never capped at all, which is
+// how a Tactical Nuke could turn up in a level-1 house chest. Now there's exactly one function
+// that decides eligibility, every loot site calls it, and adding a new "don't hand this out
+// for free" item anywhere in the game is a single `craftOnly:true` (or `isUnique`/`setId`) on
+// the item definition -- no loot-site code ever needs to change again.
+function lootEligibleBaseIds(maxValueTier, opts) {
+  opts = opts || {};
+  const allowCraftOnly = !!opts.allowCraftOnly;
+  const excludeTypes = opts.excludeTypes || ['misc', 'chest', 'corpse', 'material'];
+  return ITEM_BASES.filter(b => {
+    if (excludeTypes.includes(b.type)) return false;
+    if (b.setId || b.isUnique) return false;
+    if (b.craftOnly && !allowCraftOnly) return false;
+    if ((b.type === 'weapon' || b.type === 'armor') && (b.valueTier || 0) > maxValueTier) return false;
+    // consumables/scrolls get the same rarity ceiling via value now, instead of slipping through
+    // uncapped -- a rough value-per-tier band so a tier-0 pouch can't roll an 800g superweapon.
+    if ((b.type === 'consumable' || b.type === 'scroll') && !b.craftOnly) {
+      const consumableCap = [60, 150, 300, 500, 100000][Math.max(0, Math.min(4, maxValueTier))];
+      if ((b.value || 0) > consumableCap) return false;
+    }
+    return true;
+  }).map(b => b.id);
 }
 function makeItem(baseId, rarity, rng, powerMult) {
   rng = rng || Math.random;
@@ -2818,7 +2873,7 @@ RECIPES.push(
   { id:'craft_silvered_knife', name:'Forge Silvered Knife', category:'crafting', inputs:[{id:'silver_ore',qty:1},{id:'iron_ingot',qty:1}], output:{id:'silvered_knife',qty:1} },
   { id:'craft_scroll_recall', name:'Inscribe Scroll of Recall', category:'crafting', inputs:[{id:'moonstone',qty:1},{id:'cloth',qty:1}], output:{id:'scroll_recall',qty:1} },
   { id:'craft_scroll_cureall', name:'Inscribe Scroll of Cure All', category:'crafting', inputs:[{id:'herb',qty:2},{id:'moonstone',qty:1}], output:{id:'scroll_cureall',qty:1} },
-  { id:'craft_scroll_identify', name:'Inscribe Scroll of Identify', category:'crafting', inputs:[{id:'moonstone',qty:1}], output:{id:'scroll_identify',qty:1} },
+  { id:'craft_scroll_identify', name:'Inscribe Scroll of Treasure Sense', category:'crafting', inputs:[{id:'moonstone',qty:1}], output:{id:'scroll_identify',qty:1} },
   { id:'craft_scroll_fire', name:'Inscribe Scroll of Fire', category:'crafting', inputs:[{id:'sulfur',qty:1},{id:'cloth',qty:1}], output:{id:'scroll_fire',qty:1} },
   { id:'craft_scroll_frost', name:'Inscribe Scroll of Frost', category:'crafting', inputs:[{id:'frost_lotus',qty:1},{id:'cloth',qty:1}], output:{id:'scroll_frost',qty:1} },
   { id:'craft_mythril_ingot', name:'Refine Mythril Ingot', category:'crafting', inputs:[{id:'mythril_ore',qty:2}], output:{id:'mythril_blade',qty:1} },
@@ -2910,8 +2965,8 @@ ITEM_BASES.push(
   { id:'potion_fireres', name:'Potion of Fire Resistance', type:'consumable', effect:'resistfire', dur:25, glyph:'!', color:'#e0785a', value:30 },
   { id:'potion_frostres', name:'Potion of Frost Resistance', type:'consumable', effect:'resistfrost', dur:25, glyph:'!', color:'#8ad0e0', value:30 },
   { id:'potion_poisonres', name:'Potion of Poison Resistance', type:'consumable', effect:'resistpoison', dur:25, glyph:'!', color:'#5ac95a', value:30 },
-  { id:'potion_nightvision', name:'Potion of Night Vision', type:'consumable', effect:'reveal', radius:14, dur:40, glyph:'!', color:'#a0e0a0', value:20 },
-  { id:'potion_luck', name:'Potion of Luck', type:'consumable', effect:'buffcrit', power:0.1, dur:20, glyph:'!', color:'#e0c34a', value:55 },
+  { id:'potion_nightvision', name:'Potion of Night Vision', type:'consumable', effect:'nightvision', dur:40, glyph:'!', color:'#a0e0a0', value:20 },
+  { id:'potion_luck', name:'Potion of Luck', type:'consumable', effect:'buffcrit', power:0.1, dur:20, glyph:'!', color:'#e0c34a', value:38 },
   { id:'potion_giant_strength', name:'Potion of Giant Strength', type:'consumable', effect:'buffstr', power:5, dur:20, glyph:'!', color:'#c9503a', value:70 },
   { id:'elixir_supreme_healing', name:'Elixir of Supreme Healing', type:'consumable', effect:'heal', power:90, glyph:'!', color:'#ff1a1a', value:120 },
   { id:'elixir_mana_wellspring', name:'Elixir of the Mana Wellspring', type:'consumable', effect:'mana', power:60, glyph:'!', color:'#1a3ae0', value:110 },
@@ -2938,14 +2993,14 @@ ITEM_BASES.push(
   { id:'lockpick', name:'Lockpick Set', type:'misc', glyph:'"', color:'#909090', value:15 },
   { id:'torch', name:'Torch', type:'misc', glyph:'!', color:'#e0a03a', value:4 },
   // ---- scrolls ----
-  { id:'scroll_lightning', name:'Scroll of Lightning', type:'scroll', effect:'scrollfire', power:16, glyph:'?', color:'#e0e05a', value:32 },
+  { id:'scroll_lightning', name:'Scroll of Lightning', type:'scroll', effect:'scrollfire', power:16, dtype:'lightning', glyph:'?', color:'#e0e05a', value:32 },
   { id:'scroll_shield', name:'Scroll of Shielding', type:'scroll', effect:'buffarmor', power:8, dur:12, glyph:'?', color:'#5a9ae0', value:26 },
   { id:'scroll_haste', name:'Scroll of Haste', type:'scroll', effect:'buffdex', power:3, dur:12, glyph:'?', color:'#e0e05a', value:28 },
   { id:'scroll_summonwolf', name:'Scroll of Summon Wolf', type:'scroll', effect:'scrollsummon', summonId:'wolf', duration:40, glyph:'?', color:'#c0c0c0', value:35 },
   { id:'scroll_detect', name:'Scroll of Detection', type:'scroll', effect:'reveal', radius:20, glyph:'?', color:'#e0d6a0', value:18 },
   { id:'scroll_invisibility', name:'Scroll of Invisibility', type:'scroll', effect:'invisibility', dur:12, glyph:'?', color:'#c0c0e0', value:40 },
   { id:'scroll_removecurse', name:'Scroll of Remove Curse', type:'scroll', effect:'curseremove', glyph:'?', color:'#e0e0a0', value:30 },
-  { id:'scroll_smite', name:'Scroll of Smite', type:'scroll', effect:'scrollfire', power:14, glyph:'?', color:'#e0e0a0', value:32 },
+  { id:'scroll_smite', name:'Scroll of Smite', type:'scroll', effect:'scrollfire', power:14, dtype:'holy', glyph:'?', color:'#e0e0a0', value:32 },
   // ---- materials ----
   { id:'silver_ore', name:'Silver Ore', type:'material', glyph:'*', color:'#e0e6ee', value:12 },
   { id:'mythril_ore', name:'Mythril Ore', type:'material', glyph:'*', color:'#8ad0e0', value:40 },
@@ -3024,7 +3079,7 @@ ITEM_BASES.push(
   { id:'antitoxin_broth', name:'Antitoxin Broth', type:'consumable', effect:'resistpoison', dur:60, power:0, glyph:'%', color:'#5ac95a', value:35, foodFlavor:true },
   { id:'fireproof_chili', name:'Fireproof Chili', type:'consumable', effect:'resistfire', dur:60, glyph:'%', color:'#e0785a', value:35, foodFlavor:true },
   { id:'frostward_soup', name:'Frostward Soup', type:'consumable', effect:'resistfrost', dur:60, glyph:'%', color:'#8ad0e0', value:35, foodFlavor:true },
-  { id:'nightvision_tea', name:'Nightvision Tea', type:'consumable', effect:'reveal', radius:14, glyph:'!', color:'#a0e0a0', value:20, foodFlavor:true },
+  { id:'nightvision_tea', name:'Nightvision Tea', type:'consumable', effect:'nightvision', dur:45, glyph:'!', color:'#a0e0a0', value:20, foodFlavor:true },
   { id:'waterlung_soup', name:'Waterlung Soup', type:'consumable', effect:'waterbreathing', dur:60, glyph:'%', color:'#3a9ae0', value:30, foodFlavor:true },
   { id:'luckydraw_pudding', name:'Lucky Draw Pudding', type:'consumable', effect:'buffcrit', power:0.12, dur:30, glyph:'%', color:'#e0c34a', value:40, foodFlavor:true },
   { id:'swiftfoot_noodles', name:'Swiftfoot Noodles', type:'consumable', effect:'buffdex', power:5, dur:25, glyph:'%', color:'#8ac93a', value:38, foodFlavor:true },
@@ -3045,10 +3100,15 @@ ITEM_BASES.push(
 );
 
 // ===================== ENDGAME CRAFTABLE SUPERWEAPONS =====================
+// These are deliberately NOT part of any generic loot roll (see `craftOnly` below, honored by
+// lootEligibleBaseIds() and every shop/chest/drop table that calls it) -- the only ways to get
+// one are: crafting the recipe yourself, or the rare top-security vault bonus roll in
+// openChest(), which only fires on the very highest chest tier. No peasant's house chest,
+// common bandit, or general store should ever hand you one of these.
 ITEM_BASES.push(
-  { id:'tactical_nuke', name:'Tactical Nuke', type:'consumable', effect:'throwaoe', power:[60,110], radius:5, range:6, glyph:'*', color:'#8aff5a', value:800 },
-  { id:'void_core_bomb', name:'Void Core Bomb', type:'consumable', effect:'throwaoe', power:[45,90], radius:4, range:6, glyph:'*', color:'#1a0a2a', value:650 },
-  { id:'antimatter_charge', name:'Antimatter Charge', type:'consumable', effect:'planttrap', power:[70,130], radius:5, glyph:'*', color:'#e03aa0', value:900 },
+  { id:'tactical_nuke', name:'Tactical Nuke', type:'consumable', effect:'nukeblast', power:[140,220], radius:9, falloffRadius:13, range:14, selfDamageRadius:3, glyph:'*', color:'#8aff5a', value:800, craftOnly:true },
+  { id:'void_core_bomb', name:'Void Core Bomb', type:'consumable', effect:'nukeblast', power:[100,170], radius:7, falloffRadius:10, range:12, selfDamageRadius:2, dtype:'void', glyph:'*', color:'#1a0a2a', value:650, craftOnly:true },
+  { id:'antimatter_charge', name:'Antimatter Charge', type:'consumable', effect:'planttrap', power:[90,150], radius:6, glyph:'*', color:'#e03aa0', value:900, craftOnly:true },
 );
 
 // ===================== ITEM EXPANSION PACK: ~50 weapons, ~55 armor, ~50 consumables/scrolls =====================
@@ -3176,9 +3236,9 @@ ITEM_BASES.push(
   { id:'void_touched_gloves', name:'Void-Touched Gloves', type:'armor', slot:'gloves', armor:1, glyph:'[', color:'#1a0a2a', value:110 },
 
   // ---- consumables: healing/mana tiers ----
-  { id:'potion_supremeheal', name:'Potion of Supreme Healing', type:'consumable', effect:'heal', power:70, glyph:'!', color:'#ff0000', value:90 },
+  { id:'potion_supremeheal', name:'Potion of Major Healing', type:'consumable', effect:'heal', power:56, glyph:'!', color:'#ff0000', value:66 },
   { id:'potion_greatermana', name:'Potion of Greater Mana', type:'consumable', effect:'mana', power:30, glyph:'!', color:'#3a5ae0', value:35 },
-  { id:'potion_suprememana', name:'Potion of Supreme Mana', type:'consumable', effect:'mana', power:55, glyph:'!', color:'#1a2ae0', value:75 },
+  { id:'potion_suprememana', name:'Potion of Major Mana', type:'consumable', effect:'mana', power:45, glyph:'!', color:'#1a2ae0', value:60 },
   // ---- consumables: stat buff potions (every build) ----
   { id:'potion_dex', name:'Potion of Agility', type:'consumable', effect:'buffdex', power:2, dur:40, glyph:'!', color:'#5ac9e0', value:35 },
   { id:'potion_int', name:'Potion of Intellect', type:'consumable', effect:'buffint', power:2, dur:40, glyph:'!', color:'#7a5ac9', value:35 },
@@ -3202,8 +3262,8 @@ ITEM_BASES.push(
   { id:'gas_grenade', name:'Gas Grenade', type:'consumable', effect:'aoepoison', power:6, radius:3, glyph:'*', color:'#5ac93a', value:26 },
   { id:'greater_gas_grenade', name:'Greater Gas Grenade', type:'consumable', effect:'aoepoison', power:12, radius:4, glyph:'*', color:'#3a9a1a', value:55 },
   { id:'flashbang', name:'Flashbang', type:'consumable', effect:'aoeconfuse', power:4, radius:4, glyph:'*', color:'#e0e0a0', value:24 },
-  { id:'void_charge', name:'Void Charge', type:'consumable', effect:'aoefire', power:[16,30], radius:4, glyph:'*', color:'#5a1a8a', value:150 },
-  { id:'nuke_core', name:'Reactor Core Charge', type:'consumable', effect:'aoefire', power:[30,55], radius:6, glyph:'*', color:'#e0e0e0', value:400 },
+  { id:'void_charge', name:'Void Charge', type:'consumable', effect:'aoefire', power:[16,30], radius:4, dtype:'void', glyph:'*', color:'#5a1a8a', value:150 },
+  { id:'nuke_core', name:'Reactor Core Charge', type:'consumable', effect:'aoefire', power:[30,55], radius:6, glyph:'*', color:'#e0e0e0', value:400, craftOnly:true },
   { id:'throwing_star', name:'Throwing Stars', type:'consumable', effect:'throwdmg', power:[2,5], range:5, glyph:'/', color:'#b6bcc4', value:9 },
   { id:'silvered_knife', name:'Silvered Throwing Knives', type:'consumable', effect:'throwdmg', power:[4,9], range:5, glyph:'/', color:'#e8e8f0', value:22 },
   // ---- scrolls ----
@@ -3857,6 +3917,12 @@ OVERWORLD_BOSSES.forEach(b => {
 
 // ---- faction tagging for every pre-existing monster (drives theme-aware dungeon placement) ----
 const UNDEAD_IDS = new Set(['skeleton','zombie','mummy','wraith','lich','bog-zombie','giantbat','skeleton_archer','skeleton_warrior','zombie_crawler','banshee','revenant','death_knight','plague_zombie','lich_acolyte','crypt_stalker']);
+// Silvered ammunition (Silver Shot, Silvered Throwing Knives) used to be purely cosmetic
+// reskins of the plain versions -- same damage, no actual reason to prefer them despite the
+// name. Reusing the same undead-vulnerability list that Holy Light already checks gives silver
+// the interaction the name promises without inventing a whole new resistance system.
+const SILVER_BONUS_IDS = new Set([...UNDEAD_IDS, 'vampire']);
+const SILVER_AMMO_ITEM_IDS = new Set(['silver_shot', 'silvered_knife']);
 const LEGACY_MONSTER_FACTIONS = {
   rabbit:'beast', deer:'beast', gull:'beast', crab:'beast', boar:'beast', wolf:'beast', spider:'beast',
   bear:'beast', bandit:'human', scorpion:'beast', jackal:'beast', vulture:'beast', yeti:'beast',
@@ -6199,12 +6265,12 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
 function generateShopInventory(roleId, rng) {
   const items = [];
   let pool;
-  if (roleId === 'blacksmith') pool = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor') && !b.setId && !b.isUnique);
-  else if (roleId === 'innkeeper' || roleId === 'baker' || roleId === 'chef') pool = ITEM_BASES.filter(b => b.type === 'consumable' && b.id !== 'antidote');
-  else if (roleId === 'alchemist') pool = ITEM_BASES.filter(b => b.type === 'consumable');
+  if (roleId === 'blacksmith') pool = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor') && !b.setId && !b.isUnique && !b.craftOnly);
+  else if (roleId === 'innkeeper' || roleId === 'baker' || roleId === 'chef') pool = ITEM_BASES.filter(b => b.type === 'consumable' && b.id !== 'antidote' && !b.craftOnly);
+  else if (roleId === 'alchemist') pool = ITEM_BASES.filter(b => b.type === 'consumable' && !b.craftOnly);
   else if (roleId === 'tailor') pool = ITEM_BASES.filter(b => b.type === 'armor' && ['cloak','gloves','amulet','circlet','sandals','robe'].includes(b.id));
   else if (roleId === 'fisherman') pool = ITEM_BASES.filter(b => ['meat_cooked','stew','holy_water'].includes(b.id));
-  else pool = ITEM_BASES.filter(b => b.type !== 'misc' && b.type !== 'material' && b.type !== 'chest' && b.type !== 'corpse' && !b.setId && !b.isUnique);
+  else pool = ITEM_BASES.filter(b => b.type !== 'misc' && b.type !== 'material' && b.type !== 'chest' && b.type !== 'corpse' && !b.setId && !b.isUnique && !b.craftOnly);
   const n = randInt(rng, 5, 9);
   for (let i = 0; i < n; i++) {
     const base = choice(rng, pool);
@@ -6613,12 +6679,7 @@ function placePOI(chunk, cx, cy, rng) {
     chunk.tiles[ly][lx].items.push(chest);
   }
   if (poiType.lootItems) {
-    const baseIds = ITEM_BASES.filter(b => {
-      if (b.type === 'misc' || b.type === 'chest' || b.type === 'corpse') return false;
-      if (b.setId || b.isUnique) return false;
-      if ((b.type === 'weapon' || b.type === 'armor') && (b.valueTier || 0) > 2) return false;
-      return true;
-    }).map(b => b.id);
+    const baseIds = lootEligibleBaseIds(2, { excludeTypes: ['misc', 'chest', 'corpse'] });
     for (let i = 0; i < poiType.lootItems; i++) {
       const ox = lx + randInt(rng,-2,2), oy = ly + randInt(rng,-2,2);
       if (ox<0||oy<0||ox>=CH||oy>=CH || !chunk.tiles[oy][ox].walkable) continue;
@@ -6849,13 +6910,15 @@ function rollContainerLoot(rng, kind, tier) {
   switch (kind) {
     case 'chest': case 'trunk': case 'vault': case 'reliquary': {
       const maxValueTier = Math.min(4, tier + 1);
-      const baseIds = ITEM_BASES.filter(b => {
-        if (b.type === 'misc' || b.type === 'chest' || b.type === 'corpse' || b.type === 'material' || b.type === 'book') return false;
-        if (b.setId || b.isUnique) return false;
-        if ((b.type === 'weapon' || b.type === 'armor') && (b.valueTier || 0) > maxValueTier) return false;
-        return true;
-      }).map(b => b.id);
+      const baseIds = lootEligibleBaseIds(maxValueTier, { excludeTypes: ['misc', 'chest', 'corpse', 'material', 'book'] });
       for (let i = 0; i < n; i++) items.push(makeItem(choice(rng, baseIds), tier, rng));
+      // A true high-security vault or reliquary (not a common house chest/trunk) at max tier
+      // gets a small, deliberate shot at a craft-only superweapon -- the "place that makes
+      // sense" the nuke should actually come from, instead of any random container.
+      if ((kind === 'vault' || kind === 'reliquary') && tier >= 4 && rng() < 0.06) {
+        const superIds = ITEM_BASES.filter(b => b.craftOnly).map(b => b.id);
+        if (superIds.length) items.push(makeItem(choice(rng, superIds), tier, rng));
+      }
       const g = makeItem('gold', 0, rng); g.amount = randInt(rng, 8, 24) * (tier + 1); items.push(g);
       break;
     }
@@ -7083,6 +7146,46 @@ function affectEntityWithGas(e, kind, power) {
 // Kind-specific trap effects, now applied to whichever entity actually triggered it (defaults to
 // the player for old call sites that don't pass one) instead of being hardcoded to the player --
 // see enterTileAsEntity, which is what lets NPCs/monsters trigger traps at all now.
+// ---- level-wide alarm: one function, called by every alarm source in the game (trap runes,
+// wrong lever pulls, a hidden alarm rune sprung by a thrown item, a nuke going off...). The old
+// behavior was a single dice roll against monsters already within a fixed radius, which is why
+// "activating an alarm" in a bandit camp often did almost nothing -- most of the camp was never
+// close enough to be considered, and it only ever got that one roll. Now an alarm marks the
+// level as alerted for a number of turns; nearby monsters react immediately, and tickDungeonAlarm
+// (called once per turn from endTurn) keeps giving the rest of the level's monsters a chance to
+// notice and start converging as the turns pass, exactly like sound actually spreading through a
+// dungeon. Anything that should trigger a swarm just needs to call this -- no per-caller logic. ----
+function soundLevelAlarm(x, y, opts) {
+  opts = opts || {};
+  if (!curIsDungeon()) return;
+  const lvl = curDungeonLevel();
+  if (!lvl) return;
+  const immediateRadius = opts.immediateRadius != null ? opts.immediateRadius : 12;
+  lvl.alarm = { x, y, turnsLeft: opts.duration || 20, wholeLevel: !!opts.wholeLevel };
+  let woken = 0;
+  for (const m of curMonsters()) {
+    if (!m.alive || m.engaged) continue;
+    if (chebyshev(m.x, m.y, x, y) <= immediateRadius && Math.random() < 0.7) { m.engaged = true; woken++; }
+  }
+  if (!opts.silent) log(woken > 0 ? `Shouts ring out nearby -- ${woken} ${woken === 1 ? 'foe reacts' : 'foes react'} at once!` : 'An alarm echoes through the dungeon...');
+}
+function tickDungeonAlarm() {
+  if (!curIsDungeon()) return;
+  const lvl = curDungeonLevel();
+  if (!lvl || !lvl.alarm || lvl.alarm.turnsLeft <= 0) { if (lvl && lvl.alarm) delete lvl.alarm; return; }
+  lvl.alarm.turnsLeft--;
+  const { x, y, wholeLevel } = lvl.alarm;
+  for (const m of curMonsters()) {
+    if (!m.alive || m.engaged) continue;
+    const d = chebyshev(m.x, m.y, x, y);
+    // Farther-off monsters take longer to react -- sound has to reach them, then they have to
+    // actually start moving -- so a swarm visibly builds over several turns instead of the
+    // whole level snapping to attention (or not reacting at all) on a single frame.
+    const chance = wholeLevel ? 0.3 : Math.max(0, 0.35 - d * 0.015);
+    if (Math.random() < chance) m.engaged = true;
+  }
+  if (lvl.alarm.turnsLeft <= 0) delete lvl.alarm;
+}
 function triggerTrapAt(t, x, y, entity) {
   const e = entity || player;
   const isP = e === player;
@@ -7112,7 +7215,56 @@ function triggerTrapAt(t, x, y, entity) {
     gasArea(x, y, 2, 7, 4, 'poison');
   } else if (kind === 'alarm') {
     log('An alarm rune flares — you hear things stirring in the dark!');
-    for (const m of curMonsters()) { if (m.alive && chebyshev(m.x,m.y,x,y) <= 22 && Math.random() < 0.6) m.engaged = true; }
+    soundLevelAlarm(x, y, { silent: true });
+  } else if (kind === 'mine') {
+    // Shared by player-planted mines (see the 'planttrap' item effect) and dungeon-generated
+    // mine traps (see placeTraps) -- an honest AOE detonation centered on whoever stepped on it,
+    // catching anyone else standing nearby too, instead of just a single-target tick.
+    const power = t.minePower || [10, 20];
+    const mradius = t.mineRadius != null ? t.mineRadius : 2;
+    Sound.play('bigExplosion');
+    const dmg = randInt(Math.random, power[0], power[1]);
+    e.hp -= dmg;
+    if (isP) lastDamageSource = 'a mine';
+    log(`${isP ? 'A hidden mine detonates under you!' : `A hidden mine detonates under ${e.name}!`} ${you} take${s} ${dmg} damage.`);
+    const caught = hostilesWithinRadius(x, y, mradius).filter(h => h !== e);
+    caught.forEach(h => { const d2 = randInt(Math.random, power[0], power[1]); h.hp -= d2; log(`${h.name} is caught in the blast for ${d2} damage!`); if (h.hp <= 0) onDeath(h, player); });
+    if (!isP) {
+      const pdist = chebyshev(player.x, player.y, x, y);
+      if (pdist > 0 && pdist <= mradius) { const pd = Math.round(randInt(Math.random, power[0], power[1]) * 0.6); player.hp -= pd; log(`You're caught in the mine's blast radius too! (-${pd} HP)`); }
+    }
+  } else if (kind === 'summon') {
+    // An ambush rune: pulls 1-3 monsters out of hiding around the trigger point, drawn from the
+    // same faction/tier pool the level itself was populated from (stored on the tile at
+    // generation time -- see placeTraps), so an ambush in a bandit camp summons bandits, not
+    // whatever's first alphabetically.
+    log(isP ? 'The floor rune flares — you\'ve triggered an ambush!' : `The floor rune flares around ${e.name} — an ambush!`);
+    const pool = (t.summonPool && t.summonPool.length) ? t.summonPool : ['giantrat', 'goblin'];
+    const lvl = curDungeonLevel();
+    if (lvl) {
+      const spawnCount = randInt(Math.random, 1, 3);
+      let spawned = 0;
+      for (let tries = 0; tries < 20 && spawned < spawnCount; tries++) {
+        const sx = x + randInt(Math.random, -2, 2), sy = y + randInt(Math.random, -2, 2);
+        if (!curWalkable(sx, sy) || entityAt(sx, sy)) continue;
+        const mid = choice(Math.random, pool);
+        const mon = makeMonster(mid, sx, sy, t.summonDepth || 1, Math.random);
+        mon.engaged = true;
+        lvl.monsters.push(mon);
+        spawned++;
+      }
+      if (spawned) log(`${spawned} ${spawned === 1 ? 'foe emerges' : 'foes emerge'} from the shadows!`);
+    }
+  } else if (kind === 'confuse') {
+    log(isP ? 'A cloud of disorienting spores bursts around you!' : `A cloud of disorienting spores bursts around ${e.name}!`);
+    e.statusConfuse = (e.statusConfuse || 0) + 5;
+    hostilesWithinRadius(x, y, 2).filter(h => h !== e).forEach(h => { h.statusConfuse = (h.statusConfuse || 0) + 5; });
+  } else if (kind === 'net') {
+    log(isP ? 'A snare net springs up and tangles around your legs!' : `A snare net tangles around ${e.name}!`);
+    e.statusSlow = (e.statusSlow || 0) + 5;
+  } else if (kind === 'teleport') {
+    if (isP) { log('The floor rune dissolves beneath you -- you fall through space!'); blinkPlayer(18); }
+    else { const nx = x + randInt(Math.random, -10, 10), ny = y + randInt(Math.random, -10, 10); if (curWalkable(nx, ny) && !entityAt(nx, ny)) { e.x = nx; e.y = ny; log(`${e.name} vanishes and reappears elsewhere!`); } }
   } else if (kind === 'floorbreak') {
     const dmg = randInt(Math.random, 6, 14);
     e.hp -= dmg;
@@ -7461,12 +7613,57 @@ function enterTileAsEntity(e, nx, ny) {
     }
   }
 }
+// ---- real pathfinding fallback for chasers: a plain BFS over the current dungeon grid. Only
+// invoked when the cheap greedy step below is blocked, so the common case (open floor, nothing
+// in the way) stays just as fast as before -- this only kicks in exactly when it's needed, which
+// is also exactly when it matters (a corridor bend, a room corner, routing around a pillar). ----
+function bfsNextStep(e, tx, ty) {
+  if (!curIsDungeon()) return null; // bounded-grid search isn't meaningful on the open overworld
+  if (e.x === tx && e.y === ty) return null;
+  const startKey = e.x + ',' + e.y;
+  const visited = new Set([startKey]);
+  const queue = [{ x: e.x, y: e.y }];
+  const cameFrom = Object.create(null);
+  let qi = 0;
+  const maxNodes = DW2 * DH2;
+  let found = false;
+  while (qi < queue.length && visited.size < maxNodes) {
+    const cur = queue[qi++];
+    if (cur.x === tx && cur.y === ty) { found = true; break; }
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]) {
+      const nx = cur.x + dx, ny = cur.y + dy;
+      const key = nx + ',' + ny;
+      if (visited.has(key)) continue;
+      const isGoal = nx === tx && ny === ty;
+      if (!isGoal && !isPassableFor(e, nx, ny)) continue;
+      visited.add(key);
+      cameFrom[key] = cur;
+      queue.push({ x: nx, y: ny });
+      if (isGoal) { found = true; qi = queue.length; break; }
+    }
+  }
+  if (!found) return null;
+  let curKey = tx + ',' + ty;
+  let step = { x: tx, y: ty };
+  while (cameFrom[curKey] && !(cameFrom[curKey].x === e.x && cameFrom[curKey].y === e.y)) {
+    step = cameFrom[curKey];
+    curKey = step.x + ',' + step.y;
+  }
+  return step;
+}
 function stepToward(e, tx, ty) {
   let dx = Math.sign(tx - e.x), dy = Math.sign(ty - e.y);
   const opts = [[dx, dy], [dx, 0], [0, dy]].filter(o => o[0] !== 0 || o[1] !== 0);
   for (const [ox, oy] of opts) {
     const nx = e.x + ox, ny = e.y + oy;
     if (isPassableFor(e, nx, ny) && !entityAt(nx, ny)) { enterTileAsEntity(e, nx, ny); return true; }
+  }
+  // The direct step is blocked (wall corner, pillar, a bend in the corridor) -- fall back to a
+  // real path instead of just standing there. This is what actually lets an alarmed swarm reach
+  // you through a dungeon layout instead of stalling out at the first turn in the hallway.
+  if (curIsDungeon()) {
+    const step = bfsNextStep(e, tx, ty);
+    if (step && isPassableFor(e, step.x, step.y) && !entityAt(step.x, step.y)) { enterTileAsEntity(e, step.x, step.y); return true; }
   }
   return false;
 }
@@ -8011,11 +8208,22 @@ function renderLog() {
 }
 
 // ---------------- vision / seen tracking ----------------
+// Single source of truth for "how far can the player currently see," used by markSeen(), the
+// live render() visibility circle, and the look/examine range checks -- previously each of
+// those hardcoded its own `curIsDungeon() ? 8 : 10` and only markSeen() actually applied
+// visionBonus/permaNightVision, so a temporary vision buff (or the permanent night-vision
+// perk) would silently affect what got marked "explored" without matching what was actually
+// drawn as visible or examinable this turn.
+function currentVisRadius() {
+  let radius = curIsDungeon() ? 8 : 10;
+  radius += player.visionBonus || 0;
+  if (curIsDungeon() && player.permaNightVision) radius += 3;
+  if (getBuff('nightvision') > 0) radius += 5;
+  return radius;
+}
 function markSeen() {
   const inDungeon = curIsDungeon();
-  let radius = inDungeon ? 8 : 10;
-  radius += player.visionBonus || 0;
-  if (inDungeon && player.permaNightVision) radius += 3;
+  let radius = currentVisRadius();
   for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) {
     if (dx*dx + dy*dy > radius*radius) continue;
     const wx = player.x + dx, wy = player.y + dy;
@@ -8238,6 +8446,31 @@ function initHudDragging() {
 let floatingTexts = [];
 let floatingTextAnimRunning = false;
 const FLOAT_TEXT_LIFETIME = 750; // ms
+// ---- big-impact screen effects (screen shake + flash), used by nukeblast and reusable for any
+// future massive-explosion or high-impact effect. Both respect settings.reduceMotion so players
+// sensitive to motion/flashing aren't forced into it. ----
+function triggerScreenShake(intensity, durationMs) {
+  if (settings.reduceMotion) return;
+  const el = document.getElementById('canvas');
+  if (!el) return;
+  intensity = intensity || 1;
+  el.style.setProperty('--shake-scale', intensity);
+  el.classList.remove('screen-shake');
+  // force reflow so re-adding the class restarts the animation even if one is already playing
+  void el.offsetWidth;
+  el.classList.add('screen-shake');
+  el.style.animationDuration = (durationMs || 500) + 'ms';
+  setTimeout(() => el.classList.remove('screen-shake'), durationMs || 500);
+}
+function triggerScreenFlash(color, durationMs) {
+  const el = document.getElementById('explosion-flash');
+  if (!el) return;
+  if (color) el.style.background = `radial-gradient(circle, ${color} 0%, rgba(255,200,120,0.5) 45%, rgba(255,120,40,0) 75%)`;
+  el.classList.remove('flash-active');
+  void el.offsetWidth;
+  el.classList.add('flash-active');
+  setTimeout(() => el.classList.remove('flash-active'), settings.reduceMotion ? 10 : (durationMs || 550));
+}
 function spawnFloatingText(x, y, text, color) {
   floatingTexts.push({ x, y, text, color, start: performance.now() });
   if (!floatingTextAnimRunning) {
@@ -9224,7 +9457,7 @@ function useQuickslot(slot) {
 }
 // Legacy set kept only for describeItem()'s flavor-text lookup below; the actual "can this be
 // thrown" gate is canThrowItem() now, which covers every item type, not just this whitelist.
-const THROWABLE_EFFECTS = new Set(['aoefire','aoefrost','aoepoison','aoeconfuse','throwdmg','scrollfire','throwaoe','throwgas','throwemp','throwslow','throwsnare']);
+const THROWABLE_EFFECTS = new Set(['aoefire','aoefrost','aoepoison','aoeconfuse','throwdmg','scrollfire','throwaoe','nukeblast','throwgas','throwemp','throwslow','throwsnare']);
 function openItemAction(it, slot) {
   gameState = 'itemaction'; invSelected = it; invSelectedSlot = slot || null;
   let opts = [];
@@ -9257,13 +9490,67 @@ function openItemAction(it, slot) {
 
 // ---- movement v2: shrine one-time buffs, corpse-aware pickup ----
 
+// ---- generic interaction-choice modal ----
+// Reusable any time a single player-initiated action (pick up, talk, eventually anything else)
+// could reasonably apply to more than one thing at once -- e.g. a container and a dropped item
+// sharing a tile, or several NPCs all standing adjacent to you. Deliberately does NOT prompt when
+// there's only one legitimate option: presentChoice() just runs that option immediately, so a
+// lone item on the ground or a lone nearby NPC behaves exactly as it always did, with zero added
+// friction. It only ever surfaces a menu when there's real ambiguity to resolve. Adding a new
+// kind of "could be more than one thing here" interaction later is just building an options
+// array and calling this -- no new UI plumbing required.
+let pendingChoiceOptions = null;
+function presentChoice(title, options, hint) {
+  const real = (options || []).filter(Boolean);
+  if (!real.length) return;
+  if (real.length === 1) { real[0].action(); return; }
+  pendingChoiceOptions = real;
+  gameState = 'choice';
+  Sound.play('uiOpen');
+  let html = '';
+  real.forEach((opt, i) => {
+    const letter = String.fromCharCode(97 + i);
+    html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${opt.label}</div>`;
+  });
+  renderModal(title, html, hint || 'Letter/click to choose, Esc to cancel.');
+}
+function resolveChoiceKey(key) {
+  if (!pendingChoiceOptions) return;
+  if (key === 'Escape') { pendingChoiceOptions = null; closeModal(); return; }
+  if (!/^[a-z]$/.test(key)) return;
+  const idx = key.charCodeAt(0) - 97;
+  const opt = pendingChoiceOptions[idx];
+  if (!opt) return;
+  pendingChoiceOptions = null;
+  closeModal();
+  opt.action();
+}
 function pickUp() {
-  const container = curContainerAt(player.x, player.y);
-  if (container) { openContainer(container); return; }
-  const items = itemsAt(player.x, player.y);
-  if (!items.length) { log('There is nothing here to pick up.'); return; }
-  const real = items.find(i => i.type !== 'corpse');
-  if (!real) { log('There is a corpse here. (Some spells can make use of it.)'); return; }
+  const containers = containersAt(player.x, player.y);
+  const allHere = itemsAt(player.x, player.y);
+  const items = allHere.filter(i => i.type !== 'corpse');
+  const hasCorpse = allHere.some(i => i.type === 'corpse');
+  const options = [];
+  containers.forEach(c => options.push({ label: `Open ${c.name}`, action: () => openContainer(c) }));
+  items.forEach(it => {
+    const qtyTag = it.amount > 1 ? ` x${it.amount}` : '';
+    options.push({ label: `Pick up ${it.name}${qtyTag}`, action: () => { pickUpSpecificItem(it); updateSidebar(); endTurn(); } });
+  });
+  // Only worth its own option when there's more than one item to actually bulk up -- with a
+  // single item it would just be a redundant duplicate of the option already listed above.
+  if (items.length > 1) options.push({ label: 'Pick up everything', action: () => { items.forEach(pickUpSpecificItem); updateSidebar(); endTurn(); } });
+  if (!options.length) {
+    log(hasCorpse ? 'There is a corpse here. (Some spells can make use of it.)' : 'There is nothing here to pick up.');
+    return;
+  }
+  presentChoice('What would you like to do here?', options);
+}
+// Performs the actual pickup for one item -- split out from pickUp() so both the single-item
+// fast path and the multi-option "pick up everything" bulk action share exactly one
+// implementation. Doesn't call endTurn()/updateSidebar() itself: opening a container is free
+// (no turn cost, matching the original behavior), but taking an item does cost a turn -- so
+// that call is left to whichever caller actually represents "the player picked something up."
+function pickUpSpecificItem(real) {
   if (real.id === 'gold') { player.gold += (real.amount || 1); Sound.play('gold'); log(`You pick up ${real.amount || 1} gold.`); }
   else {
     const qty = real.amount || 1;
@@ -9277,8 +9564,6 @@ function pickUp() {
   }
   removeItemAt(player.x, player.y, real.uid);
   checkGatherQuests();
-  updateSidebar();
-  endTurn();
 }
 function fireRangedWeapon() {
   const w = player.equipment.hand;
@@ -9657,6 +9942,9 @@ function autoExplore() {
 
 
 // ---- input handling v2 (full rewrite: adds look/craft/talents/questlog/giftpick/ranged/auto) ----
+function findAdjacentNPCs() {
+  return curNPCs().filter(n => n.alive && chebyshev(n.x, n.y, player.x, player.y) <= 1);
+}
 function findAdjacentNPC() {
   for (const n of curNPCs()) if (n.alive && chebyshev(n.x, n.y, player.x, player.y) <= 1) return n;
   return null;
@@ -9892,7 +10180,7 @@ function render() {
   ctx.font = `bold ${Math.max(6, v.ts-2)}px 'Consolas', 'Courier New', monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  const visRadius = curIsDungeon() ? 8 : 10;
+  const visRadius = currentVisRadius();
 
   for (let sy = 0; sy < v.h; sy++) {
     for (let sx = 0; sx < v.w; sx++) {
@@ -10078,14 +10366,17 @@ function openChest(chestItem) {
   const powerMult = chestItem.powerMult || 1;
   const n = randInt(Math.random, 2, 4);
   const maxValueTier = Math.min(4, tier + 1);
-  const baseIds = ITEM_BASES.filter(b => {
-    if (b.type === 'misc' || b.type === 'chest' || b.type === 'corpse' || b.type === 'material') return false;
-    if (b.setId || b.isUnique) return false;
-    if ((b.type === 'weapon' || b.type === 'armor') && (b.valueTier || 0) > maxValueTier) return false;
-    return true;
-  }).map(b => b.id);
+  const baseIds = lootEligibleBaseIds(maxValueTier);
   const gotten = [];
   for (let i = 0; i < n; i++) { const it = makeItem(choice(Math.random, baseIds), tier, Math.random, powerMult); player.inventory.push(it); gotten.push(it.name); }
+  // Craft-only superweapons never come from the generic roll above -- they're gated behind a
+  // separate, deliberately rare check that only ever fires on the single highest chest tier
+  // (a maxed-out reinforced vault/reliquary, tier 4), so finding one still means you found a
+  // place that made sense to keep one, not a random townsperson's kitchen chest.
+  if (tier >= 4 && chestItem.secured && Math.random() < 0.05) {
+    const superIds = ITEM_BASES.filter(b => b.craftOnly).map(b => b.id);
+    if (superIds.length) { const s = makeItem(choice(Math.random, superIds), tier, Math.random, powerMult); player.inventory.push(s); gotten.push(s.name); }
+  }
   const gold = randInt(Math.random, 10, 30) * (tier+1) * powerMult;
   player.gold += Math.round(gold);
   if (Math.random() < 0.15) { const rid = choice(Math.random, RECIPES).id; if (!player.knownRecipes.includes(rid)) { player.knownRecipes.push(rid); gotten.push('Recipe: ' + RECIPES.find(r=>r.id===rid).name); } }
@@ -10118,12 +10409,7 @@ function lootRarityFor(def) {
 }
 function lootBaseIdsFor(def) {
   const maxValueTier = Math.min(4, monsterPowerTier(def) + 1);
-  return ITEM_BASES.filter(b => {
-    if (b.type === 'misc' || b.type === 'chest' || b.type === 'corpse' || b.type === 'material') return false;
-    if (b.setId || b.isUnique) return false;
-    if ((b.type === 'weapon' || b.type === 'armor') && (b.valueTier || 0) > maxValueTier) return false;
-    return true;
-  }).map(b => b.id);
+  return lootEligibleBaseIds(maxValueTier);
 }
 // ---- loot v4: tome drops from monsters/bosses added ----
 function dropLoot(def) {
@@ -10836,7 +11122,7 @@ function describeContainer(c) {
   return s;
 }
 function lookAtWorldPos(wx, wy) {
-  const visRadius = curIsDungeon() ? 8 : 10;
+  const visRadius = currentVisRadius();
   const dx = wx - player.x, dy = wy - player.y;
   if (dx*dx+dy*dy > visRadius*visRadius || !hasLOS(player.x, player.y, wx, wy)) { log("You can't make that out from here."); return; }
   const e = entityAt(wx, wy);
@@ -10860,7 +11146,7 @@ function lookAtWorldPos(wx, wy) {
 function openLook() {
   Sound.play('uiOpen');
   gameState = 'look';
-  const visRadius = curIsDungeon() ? 8 : 10;
+  const visRadius = currentVisRadius();
   let html = '';
   const seenAny = [];
   for (const m of curMonsters()) { if (!m.alive) continue; const d = chebyshev(m.x,m.y,player.x,player.y); if (d<=visRadius && hasLOS(player.x,player.y,m.x,m.y)) seenAny.push(m); }
@@ -12044,12 +12330,7 @@ function generateChunk(cx, cy) {
       if (t.walkable) {
         // unguarded overworld scatter finds (dropped by nobody in particular) stay modest --
         // this is what previously let a "Corrupted Plate of Eternity" turn up sitting in a field.
-        const baseIds = ITEM_BASES.filter(b => {
-          if (b.type === 'misc' || b.type === 'chest' || b.type === 'corpse') return false;
-          if (b.setId || b.isUnique) return false;
-          if ((b.type === 'weapon' || b.type === 'armor') && (b.valueTier || 0) > 1) return false;
-          return true;
-        }).map(b => b.id);
+        const baseIds = lootEligibleBaseIds(1, { excludeTypes: ['misc', 'chest', 'corpse'] });
         const it = makeItem(choice(rng, baseIds), 0, rng);
         t.items.push(it);
       }
@@ -12957,12 +13238,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
     const c = choice(rng, floors);
     const rarity = Math.max(0, Math.min(4, Math.round(Math.floor(depth / 3) * variant.lootMod)));
     const maxValueTier = Math.min(4, rarity + 1);
-    const baseIds = ITEM_BASES.filter(b => {
-      if (b.type === 'misc' || b.type === 'chest' || b.type === 'corpse') return false;
-      if (b.setId || b.isUnique) return false;
-      if ((b.type === 'weapon' || b.type === 'armor') && (b.valueTier || 0) > maxValueTier) return false;
-      return true;
-    }).map(b => b.id);
+    const baseIds = lootEligibleBaseIds(maxValueTier, { excludeTypes: ['misc', 'chest', 'corpse'] });
     const it = makeItem(choice(rng, baseIds), rarity, rng);
     level.items.push({ x: c.x, y: c.y, item: it });
   }
@@ -13027,7 +13303,54 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
   if (rng() < 0.4) placeLockedVault(grid, floors, level, rng, up, down, meta);
   if (meta.genre === 'rooms' && rooms.length >= 3 && rng() < 0.3) placeLeverPuzzle(grid, rooms, level, rng, up, down, meta);
   if (meta.genre === 'rooms' && rng() < 0.35) placeStatues(grid, floors, rng, up, down, meta);
+  validateAndRepairLockedDoors(grid, up);
   return level;
+
+  // ---- safety net, run once generation is otherwise finished: whatever the cause, a locked or
+  // lever-puzzle door that doesn't actually separate anything from the rest of the level is a
+  // dead, confusing obstacle -- exactly the "locked door in the middle of a room that leads
+  // nowhere" problem. For every such door, flood-fill reachability from the up-stairs twice: once
+  // with the door treated as open, once with it treated as the wall it currently is. If opening
+  // it doesn't reveal any tile that wasn't already reachable another way, it was never gating
+  // anything (regardless of why), so it's converted to a normal, unlocked door instead of making
+  // the player hunt for a key or solve a puzzle that accomplishes nothing. ----
+  function validateAndRepairLockedDoors(g, upStairs) {
+    const doors = [];
+    for (let y = 0; y < DH2; y++) for (let x = 0; x < DW2; x++) {
+      const t = g[y] && g[y][x];
+      if (t && (t.feature === 'lockeddoor' || t.feature === 'leverdoor')) doors.push({ x, y, t });
+    }
+    if (!doors.length) return;
+    function floodSize() {
+      const visited = new Set([upStairs.x + ',' + upStairs.y]);
+      const stack = [[upStairs.x, upStairs.y]];
+      while (stack.length) {
+        const [cx, cy] = stack.pop();
+        for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+          const nx = cx + dx, ny = cy + dy, key = nx + ',' + ny;
+          if (nx < 0 || ny < 0 || ny >= DH2 || nx >= DW2 || visited.has(key)) continue;
+          const t = g[ny][nx];
+          if (!t || !t.walkable) continue;
+          visited.add(key);
+          stack.push([nx, ny]);
+        }
+      }
+      return visited.size;
+    }
+    for (const d of doors) {
+      const wasWalkable = d.t.walkable;
+      d.t.walkable = false;
+      const closedSize = floodSize();
+      d.t.walkable = true;
+      const openSize = floodSize();
+      d.t.walkable = wasWalkable;
+      if (openSize <= closedSize) {
+        // gates nothing -- unlock it for good rather than leave a pointless locked door standing
+        d.t.walkable = true; d.t.feature = 'door'; d.t.glyph = "'";
+        delete d.t.vaultToken; delete d.t.puzzleId;
+      }
+    }
+  }
 
   function dtile2(glyph, walkable, color) {
     return { glyph, walkable, color: color || (walkable ? '#5a5248' : '#3a352c'), bg: walkable ? '#161310' : '#0c0a08', feature: walkable?'floor':'wall' };
@@ -13040,16 +13363,32 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
   // traps affect an area or the whole level, same as the equivalent spells/grenades. ----
   function placeTraps(g, floors, rng, up, down, meta, depth) {
     const heavy = meta.hazard === 'traps';
-    const count = heavy ? 4 + Math.floor(depth/2) : (rng() < 0.65 ? 1 + Math.floor(depth/5) : 0);
-    const pool = heavy ? ['dart','spike','fire','gas','alarm','floorbreak','spike','fire','gas']
-                        : ['dart','spike','gas','alarm'];
+    // Wider variety than before -- confusion spores, snare nets, teleport runes, and ambush
+    // runes join the original dart/spike/fire/gas/alarm/floorbreak set, so a heavy-trap dungeon
+    // actually feels varied room to room instead of the same handful of tiles repeating.
+    const count = heavy ? 5 + Math.floor(depth/2) : (rng() < 0.65 ? 1 + Math.floor(depth/5) : 0);
+    const basePool = heavy
+      ? ['dart','spike','fire','gas','alarm','floorbreak','mine','confuse','net','teleport','summon','spike','fire','gas']
+      : ['dart','spike','gas','alarm','mine','confuse','net'];
+    // Ambush runes need to know what to summon -- reuse the exact same faction/tier pool the
+    // level's regular monsters were drawn from (see the monster population step above), so an
+    // ambush always matches the dungeon it's in.
+    const dtierCeil = Math.min(meta.dtierMax || 2, Math.ceil(depth/3));
+    let summonPool = Object.keys(MONSTER_BASES).filter(k => MONSTER_BASES[k].dtier && MONSTER_BASES[k].dtier <= dtierCeil && !MONSTER_BASES[k].boss);
+    if (meta.factions && meta.factions.length) {
+      const themedPool = summonPool.filter(k => meta.factions.includes(MONSTER_BASES[k].faction));
+      if (themedPool.length) summonPool = themedPool;
+    }
+    if (!summonPool.length) summonPool = ['giantrat', 'goblin'];
     for (let i = 0; i < count; i++) {
       const c = choice(rng, floors);
       if ((c.x===up.x&&c.y===up.y)||(c.x===down.x&&c.y===down.y)) continue;
       const t = g[c.y][c.x];
       if (!t.walkable || t.hiddenTrap || t.feature !== 'floor') continue;
       t.hiddenTrap = true;
-      t.trapType = choice(rng, pool);
+      t.trapType = choice(rng, basePool);
+      if (t.trapType === 'summon') { t.summonPool = summonPool.slice(); t.summonDepth = depth; }
+      if (t.trapType === 'mine') { t.minePower = [10 + depth, 20 + depth * 2]; t.mineRadius = 2; }
     }
   }
   // ---- water features: several distinct shapes so hazard dungeons don't all get the same
@@ -13268,6 +13607,11 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
         const x=vx+ox, y=vy+oy;
         if (x<2||y<2||x>=DW2-2||y>=DH2-2) { ok=false; break; }
         if ((x===up.x&&y===up.y)||(x===down.x&&y===down.y)) { ok=false; break; }
+        // The whole 3x3 pocket has to currently be solid, uncarved rock. If any of it is already
+        // floor, we'd just be knocking a "secret" door into a room that's already open on the
+        // other side -- a locked door in the middle of a room that gates nothing, which is
+        // exactly the generation bug this guards against.
+        if (!g[y] || !g[y][x] || g[y][x].walkable) { ok=false; break; }
         cells.push({x,y});
       }
       if (!ok) continue;
@@ -13276,7 +13620,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
       g[doorY][doorX] = { glyph:'+', color:'#8a6a3a', bg:'#1a140a', walkable:false, feature:'lockeddoor', vaultToken: token };
       const rarity = Math.max(1, Math.min(4, Math.round(Math.floor((level.depth||1)/2) * 1.3) + 1));
       const chestBase = ITEM_BASES.find(b=>b.id==='chest');
-      const chestItem = Object.assign({}, chestBase, { uid:'i'+Math.random().toString(36).slice(2,9), tier: rarity, lootBias: meta.lootBias });
+      const chestItem = Object.assign({}, chestBase, { uid:'i'+Math.random().toString(36).slice(2,9), tier: rarity, lootBias: meta.lootBias, secured: true });
       level.items.push({ x: vx, y: vy, item: chestItem });
       const key = { uid:'i'+Math.random().toString(36).slice(2,9), id:'vault_key', type:'key', name:'Tarnished Vault Key', glyph:'k', color:'#e8c34a', value:0, vaultToken: token };
       if (level.monsters.length && rng() < 0.6) {
@@ -13320,6 +13664,9 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
       for (let oy=-1; oy<=1; oy++) for (let ox=-1; ox<=1; ox++) {
         const x=vx+ox, y=vy+oy;
         if (x<2||y<2||x>=DW2-2||y>=DH2-2) { ok=false; break; }
+        // same guarantee as the locked vault: don't carve a door into a pocket that's already
+        // open floor, or the lever "reward" ends up gating nothing.
+        if (!g[y] || !g[y][x] || g[y][x].walkable) { ok=false; break; }
         cells.push({x,y});
       }
       if (ok) {
@@ -13327,7 +13674,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
         g[doorY][doorX] = { glyph:'+', color:'#6a7a9a', bg:'#1a140a', walkable:false, feature:'leverdoor', puzzleId };
         const rarity = Math.max(1, Math.min(4, Math.round(Math.floor((level.depth||1)/2) * 1.3)));
         const chestBase = ITEM_BASES.find(b=>b.id==='chest');
-        const chestItem = Object.assign({}, chestBase, { uid:'i'+Math.random().toString(36).slice(2,9), tier: rarity, lootBias: meta.lootBias });
+        const chestItem = Object.assign({}, chestBase, { uid:'i'+Math.random().toString(36).slice(2,9), tier: rarity, lootBias: meta.lootBias, secured: true });
         level.items.push({ x: vx, y: vy, item: chestItem });
       }
     }
@@ -13545,7 +13892,7 @@ function movePlayer(dx, dy) {
     } else {
       log(`You pull the ${t.leverName || 'lever'}. Wrong choice — something goes off!`);
       if (Math.random() < 0.5) { igniteArea(nx, ny, 2); log('Hidden vents spray flame across the room!'); }
-      else { for (const m of curMonsters()) { if (m.alive && chebyshev(m.x,m.y,nx,ny) <= 20 && Math.random() < 0.6) m.engaged = true; } log('An alarm rings through the dungeon!'); }
+      else { log('An alarm rings through the dungeon!'); soundLevelAlarm(nx, ny, { silent: true }); }
     }
   }
   if (curIsDungeon() && t.feature === 'poisongas') {
@@ -13602,6 +13949,7 @@ function endTurn() {
     if (player.statusConfuse === 0) log('Your head clears.');
   }
   if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
+  tickDungeonAlarm();
   processTerrainEffects();
   if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
   const curT = curTileAt(player.x, player.y);
@@ -13814,7 +14162,7 @@ const THROW_CONSUMED_EFFECTS = new Set([
   // grenades / aimed magical effects -- these are already fully resolved in the legacy switch
   // inside resolveThrowAtTile before resolveGenericThrow is ever reached; listed here too so
   // isThrowConsumed() (used by describeItem() etc.) agrees with what actually happens.
-  'aoefire', 'aoefrost', 'aoepoison', 'aoeconfuse', 'throwdmg', 'scrollfire', 'throwaoe', 'throwgas', 'throwemp', 'throwslow', 'throwsnare',
+  'aoefire', 'aoefrost', 'aoepoison', 'aoeconfuse', 'throwdmg', 'scrollfire', 'throwaoe', 'nukeblast', 'throwgas', 'throwemp', 'throwslow', 'throwsnare',
   // splash potions: consumed the instant they hit (see resolveThrownPotionSplash)
   'heal', 'poison', 'cureposion', 'cureconfuse', 'curefear', 'cureall',
   // every other bottled/vial liquid -- no bespoke thrown effect written for these yet, but a
@@ -13885,7 +14233,7 @@ function springHiddenTrapAt(x, y) {
   Sound.play('trap');
   if (kind === 'fire') { log('Your throw sets off a hidden fire trap -- flames roar up from the floor!'); igniteArea(x, y, 2); }
   else if (kind === 'gas') { log('Your throw triggers a hidden gas trap -- fumes hiss out across the area!'); gasArea(x, y, 2, 7, 4, 'poison'); }
-  else if (kind === 'alarm') { log('Your throw sets off a hidden alarm rune -- you hear things stirring in the dark!'); for (const m of curMonsters()) { if (m.alive && chebyshev(m.x, m.y, x, y) <= 22 && Math.random() < 0.6) m.engaged = true; } }
+  else if (kind === 'alarm') { log('Your throw sets off a hidden alarm rune -- you hear things stirring in the dark!'); soundLevelAlarm(x, y, { silent: true }); }
   else if (kind === 'floorbreak') { log('Your throw strikes a weak point in the floor, and it collapses!'); t.feature = 'brokenfloor'; t.glyph = ':'; t.color = '#4a3a2a'; }
   else { log(`Your throw triggers a hidden ${kind} trap, but there's nothing standing there to hurt.`); }
 }
@@ -13914,11 +14262,18 @@ function resolveThrowAtTile(it, wx, wy, fromSlot) {
   springHiddenTrapAt(wx, wy);
   switch (it.effect) {
     case 'aoefire': {
+      const isVoidFlavor = it.dtype === 'void';
       const hit = hostilesWithinRadius(wx, wy, radius);
-      hit.forEach(t => { const dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult); t.hp -= dmg; log(`The blast engulfs ${t.name} for ${dmg} fire damage.`); if (t.hp<=0) onDeath(t, player); });
-      const d = scorchArea(wx, wy, radius+1); if (d>0) log(`The flames spread, destroying ${d} trees!`);
-      igniteArea(wx, wy, radius);
-      log(`${it.name} bursts into flame where it lands.`);
+      hit.forEach(t => { const dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult); t.hp -= dmg; log(isVoidFlavor ? `${t.name} is torn apart by warping space for ${dmg} damage.` : `The blast engulfs ${t.name} for ${dmg} fire damage.`); if (t.hp<=0) onDeath(t, player); });
+      if (isVoidFlavor) {
+        // a void charge tears space, it doesn't set fires -- distinct from the ordinary
+        // firebomb/reactor-charge line above instead of silently reusing their flavor text.
+        log(`${it.name} collapses in on itself, briefly tearing a hole in reality!`);
+      } else {
+        const d = scorchArea(wx, wy, radius+1); if (d>0) log(`The flames spread, destroying ${d} trees!`);
+        igniteArea(wx, wy, radius);
+        log(`${it.name} bursts into flame where it lands.`);
+      }
       break;
     }
     case 'aoefrost': {
@@ -13940,20 +14295,117 @@ function resolveThrowAtTile(it, wx, wy, fromSlot) {
     }
     case 'throwdmg': {
       const t = entityAt(wx, wy);
-      if (t && t.alive !== false) { const dmg = randInt(Math.random, it.power[0], it.power[1]); t.hp -= dmg; log(`You hit ${t.name} for ${dmg}.`); if (t.hp<=0) onDeath(t, player); }
+      if (t && t.alive !== false) {
+        let dmg = randInt(Math.random, it.power[0], it.power[1]);
+        const isSilverBonus = SILVER_AMMO_ITEM_IDS.has(it.id) && t.monsterId && SILVER_BONUS_IDS.has(t.monsterId);
+        if (isSilverBonus) dmg = Math.round(dmg * 1.75);
+        t.hp -= dmg;
+        log(isSilverBonus ? `The silver bites deep into ${t.name} for ${dmg} damage (super effective!).` : `You hit ${t.name} for ${dmg}.`);
+        if (t.hp<=0) onDeath(t, player);
+      }
       else log(`${it.name} lands, striking nothing.`);
       break;
     }
     case 'scrollfire': {
       const t = entityAt(wx, wy);
-      if (t && t.alive !== false) { const dmg = randInt(Math.random, it.power, it.power+8); t.hp -= dmg; log(`The scroll erupts! ${t.name} takes ${dmg} fire damage.`); if (t.hp<=0) onDeath(t, player); }
-      igniteTile(wx, wy, 4);
+      const dmg = t && t.alive !== false ? randInt(Math.random, it.power, it.power+8) : 0;
+      if (t && t.alive !== false) {
+        t.hp -= dmg;
+        if (it.dtype === 'lightning') log(`A bolt of lightning cracks down! ${t.name} takes ${dmg} damage.`);
+        else if (it.dtype === 'holy') log(`Radiant light sears ${t.name} for ${dmg} damage.`);
+        else log(`The scroll erupts! ${t.name} takes ${dmg} fire damage.`);
+        if (t.hp<=0) onDeath(t, player);
+      }
+      // Only an actual fire scroll leaves flame behind -- lightning and holy light don't ignite
+      // the floor, which was the tell that these three were all silently the same scroll wearing
+      // different names.
+      if (!it.dtype || it.dtype === 'fire') igniteTile(wx, wy, 4);
       break;
     }
     case 'throwaoe': {
+      const flavorVerb = it.dtype === 'holy' ? 'is seared by radiant light for' : it.dtype === 'void' ? 'is torn apart by warping space for' : it.dtype === 'physical' ? 'is shredded by shrapnel for' : 'is caught in the blast for';
       const hit = hostilesWithinRadius(wx, wy, radius);
-      hit.forEach(h => { const dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult); h.hp -= dmg; log(`The blast tears into ${h.name} for ${dmg} damage.`); if (h.hp<=0) onDeath(h, player); });
+      hit.forEach(h => {
+        let dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult);
+        // Holy Water Flasks should actually matter against undead, same as every other holy-
+        // damage source in the game (Holy Light, Scroll of Smite) -- otherwise "holy" is just a
+        // color with no mechanical identity.
+        if (it.dtype === 'holy' && h.monsterId && UNDEAD_IDS.has(h.monsterId)) dmg = Math.round(dmg * 1.75);
+        h.hp -= dmg;
+        log(`${h.name} ${flavorVerb} ${dmg} damage.`);
+        if (h.hp<=0) onDeath(h, player);
+      });
       log(hit.length ? `${it.name} detonates!` : `${it.name} detonates, but nothing was close enough to catch the blast.`);
+      break;
+    }
+    // ---- superweapon-tier detonation: massive falloff-damage radius, terrain devastation,
+    // full audiovisual spectacle, and real risk if you throw it too close to yourself. This is
+    // its own effect (not just a bigger 'throwaoe') because a blast this size needs to behave
+    // differently: damage scales down with distance instead of being flat across the radius,
+    // it wrecks the environment instead of just hurting whoever's standing in it, and the
+    // thrower can catch part of it too -- exactly what "tactical" is supposed to mean. Any
+    // future superweapon just needs effect:'nukeblast' plus power/radius/falloffRadius/
+    // selfDamageRadius on its item def; nothing here is hardcoded to the nuke specifically.
+    case 'nukeblast': {
+      const innerRadius = radius; // full damage zone
+      const outerRadius = it.falloffRadius || radius + 4; // damage fades to ~0 by here
+      const isVoid = it.dtype === 'void';
+      Sound.play('bigExplosion');
+      triggerScreenFlash(isVoid ? 'rgba(180,120,255,0.9)' : 'rgba(255,255,255,0.95)', 650);
+      triggerScreenShake(1.6, 600);
+      const hit = hostilesWithinRadius(wx, wy, outerRadius);
+      let hitCount = 0;
+      hit.forEach(h => {
+        const dist = chebyshev(h.x, h.y, wx, wy);
+        const falloff = dist <= innerRadius ? 1 : Math.max(0, 1 - (dist - innerRadius) / Math.max(1, outerRadius - innerRadius));
+        if (falloff <= 0) return;
+        const dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult * falloff);
+        if (dmg <= 0) return;
+        hitCount++;
+        h.hp -= dmg;
+        h.statusSlow = Math.max(h.statusSlow || 0, 3);
+        log(`${isVoid ? 'The void tears through' : 'The blast wave rips through'} ${h.name} for ${dmg} damage!`);
+        if (h.hp <= 0) onDeath(h, player);
+      });
+      // the thrower isn't safe just because they aimed it somewhere else -- point-blank or
+      // close-range use costs real HP, which is the whole point of a tactical weapon with a
+      // real minimum safe distance.
+      const selfDist = chebyshev(player.x, player.y, wx, wy);
+      const selfDangerRadius = it.selfDamageRadius || 3;
+      if (selfDist <= selfDangerRadius) {
+        const selfFalloff = 1 - selfDist / Math.max(1, selfDangerRadius + 1);
+        const selfDmg = Math.max(1, Math.round(randInt(Math.random, it.power[0], it.power[1]) * 0.5 * selfFalloff));
+        player.hp -= selfDmg;
+        lastDamageSource = it.name;
+        log(`You're caught in the edge of the blast! (-${selfDmg} HP)`);
+        player.statusSlow = Math.max(player.statusSlow || 0, 3);
+      }
+      // devastate the environment: ignite/scorch the full outer radius, flatten statues and
+      // trees, and blow open any doors caught in the blast -- a nuke should visibly change the
+      // room, not just tick numbers off enemies standing in it.
+      const scorched = scorchArea(wx, wy, outerRadius);
+      if (isVoid) {
+        gasArea(wx, wy, Math.max(2, innerRadius - 1), 8, Math.round((it.power[0]||20) * 0.4), 'poison');
+      } else {
+        igniteArea(wx, wy, outerRadius);
+      }
+      let structuresDestroyed = 0;
+      for (let dy = -outerRadius; dy <= outerRadius; dy++) {
+        for (let dx = -outerRadius; dx <= outerRadius; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) > outerRadius) continue;
+          const tx = wx + dx, ty = wy + dy;
+          const t = curTileAt(tx, ty);
+          if (!t) continue;
+          if (t.feature === 'statue') { t.walkable = true; t.feature = 'floor'; t.glyph = '.'; t.color = '#5a4a38'; structuresDestroyed++; }
+          else if (t.feature === 'door' || t.feature === 'lockeddoor' || t.feature === 'leverdoor') { t.walkable = true; t.feature = 'floor'; t.glyph = "'"; t.color = '#5a4a38'; structuresDestroyed++; }
+        }
+      }
+      log(`*** ${it.name} DETONATES in a devastating ${isVoid ? 'implosion' : 'explosion'}! ***`);
+      if (hitCount) log(`The blast catches ${hitCount} ${hitCount === 1 ? 'target' : 'targets'} across the area.`);
+      if (scorched > 0) log(`The shockwave levels ${scorched} trees.`);
+      if (structuresDestroyed > 0) log(`${structuresDestroyed} structure${structuresDestroyed>1?'s':''} nearby ${structuresDestroyed>1?'are':'is'} blown apart.`);
+      // an alarm this loud reaches the whole level, not just nearby ears
+      if (curIsDungeon()) soundLevelAlarm(wx, wy, { immediateRadius: outerRadius + 6, wholeLevel: true });
       break;
     }
     case 'throwgas': {
@@ -13966,9 +14418,26 @@ function resolveThrowAtTile(it, wx, wy, fromSlot) {
       hit.forEach(h => { h.statusConfuse = (h.statusConfuse||0) + 3; log(`${h.name}'s systems scramble in the EMP burst!`); });
       break;
     }
-    case 'throwslow': case 'throwsnare': {
+    case 'throwslow': {
+      // Caltrops: scattered sharp spikes across an area -- anyone who walks through takes a
+      // little damage on top of a moderate slow. AOE, not single-target, matching "scattered."
       const hit = hostilesWithinRadius(wx, wy, radius);
-      hit.forEach(h => { h.statusSlow = (h.statusSlow||0) + 4; log(`${h.name} is caught and slowed!`); });
+      hit.forEach(h => {
+        const dmg = randInt(Math.random, 2, 5);
+        h.hp -= dmg;
+        h.statusSlow = (h.statusSlow || 0) + 4;
+        log(`${h.name} steps on caltrops, takes ${dmg} damage, and is hobbled!`);
+        if (h.hp <= 0) onDeath(h, player);
+      });
+      if (!hit.length) log('The caltrops scatter across the floor.');
+      break;
+    }
+    case 'throwsnare': {
+      // Net Trap: a single thrown net, not an area effect -- it only catches whatever is
+      // standing exactly where it lands, but holds much harder and longer than caltrops do.
+      const t = entityAt(wx, wy);
+      if (t && t.alive !== false) { t.statusSlow = (t.statusSlow || 0) + 8; log(`The net snaps tight around ${t.name}, pinning it in place!`); }
+      else log('The net falls open across empty ground.');
       break;
     }
     default: resolveGenericThrow(it, wx, wy);
@@ -14223,13 +14692,26 @@ function useItem(it) {
   }
   if (it.effect === 'placewaypoint') { plantWaystoneShard(it); return; }
   if (it.effect === 'recall') { beginBypassTravel({ type: 'item', item: it }); return; }
+  // "Use" on a grenade/nuke/offensive scroll means "use on self" -- see the "Use on self" label
+  // in openItemAction() -- i.e. detonate it right where you're standing, as opposed to "Throw"
+  // which opens free-aim tile targeting. Both now call the exact same resolveThrowAtTile() logic
+  // (just with different target coordinates), so there's only ever one implementation of what
+  // each grenade actually does. This is also what fixes the tactical nuke doing nothing: the old
+  // "Use" path only auto-aimed at nearestHostile() and silently no-opped if nothing was already
+  // in range; detonating at your own tile always goes off, exactly like pulling the pin.
+  if (THROWABLE_EFFECTS.has(it.effect)) {
+    resolveThrowAtTile(it, player.x, player.y, null);
+    updateSidebar();
+    endTurn();
+    return;
+  }
   if (it.type !== 'consumable' && it.type !== 'scroll') { log("You can't use that directly. Try equipping it."); return; }
   Sound.play(it.glyph === '%' ? 'eat' : 'drink');
   let consumed = true;
   switch (it.effect) {
     case 'heal': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult * healMult()); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You consume ${it.name} and recover ${amt} HP.`); break; }
     case 'mana': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult); player.mp = Math.min(player.maxMp, player.mp + amt); log(`You consume ${it.name} and recover ${amt} MP.`); break; }
-    case 'buffstr': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('str', it.power, Math.round(40*durMult)); break; }
+    case 'buffstr': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('str', it.power, Math.round((it.dur||40)*durMult)); break; }
     case 'buffdex': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('dex', it.power, Math.round((it.dur||40)*durMult)); break; }
     case 'buffint': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('int', it.power, Math.round((it.dur||40)*durMult)); break; }
     case 'buffarmor': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('armor', it.power, Math.round((it.dur||30)*durMult)); break; }
@@ -14240,24 +14722,52 @@ function useItem(it) {
     case 'cureall': { player.statusPoison = 0; player.statusFear = 0; player.statusConfuse = 0; log('A wave of clarity washes over you — all afflictions cleansed.'); break; }
     case 'stamina': { player.stamina = Math.min(player.maxStamina, player.stamina + it.power); log(`You recover ${it.power} Stamina.`); break; }
     case 'charge': { player.charge = Math.min(player.maxCharge, (player.charge||0) + it.power); log(`Your systems recharge ${it.power} Charge.`); break; }
-    case 'aoefire': { const dmgMult = 1 + (player.alchemyPotencyBonus||0) + (player.throwDmgBonus||0); const radius = (it.radius||3) + (player.throwRadiusBonus||0); const hit = hostilesWithinRadius(player.x, player.y, radius); hit.forEach(t => { const dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult); t.hp -= dmg; log(`The blast engulfs ${t.name} for ${dmg} fire damage.`); if (t.hp<=0) onDeath(t, player); }); const d = scorchArea(player.x, player.y, radius+1); if (d>0) log(`The flames spread, destroying ${d} trees!`); igniteArea(player.x, player.y, radius); break; }
-    case 'aoefrost': { const dmgMult = 1 + (player.alchemyPotencyBonus||0) + (player.throwDmgBonus||0); const radius = (it.radius||3) + (player.throwRadiusBonus||0); const hit = hostilesWithinRadius(player.x, player.y, radius); hit.forEach(t => { const dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult); t.hp -= dmg; log(`Freezing shrapnel tears into ${t.name} for ${dmg} frost damage.`); if (t.hp<=0) onDeath(t, player); }); const doused = extinguishArea(player.x, player.y, radius); if (doused > 0) log('The freezing blast douses the flames nearby.'); break; }
-    case 'aoepoison': { const radius = (it.radius||3) + (player.throwRadiusBonus||0); const hit = hostilesWithinRadius(player.x, player.y, radius); hit.forEach(t => { t.statusPoison = (t.statusPoison||0) + it.power; log(`${t.name} is engulfed in choking gas.`); }); break; }
-    case 'aoeconfuse': { const radius = (it.radius||3) + (player.throwRadiusBonus||0); const hit = hostilesWithinRadius(player.x, player.y, radius); hit.forEach(t => { t.statusConfuse = (t.statusConfuse||0) + (it.power||3); log(`${t.name} is disoriented by the flash!`); }); break; }
+    case 'aoefire': case 'aoefrost': case 'aoepoison': case 'aoeconfuse': case 'throwdmg': case 'scrollfire':
+      // unreachable: THROWABLE_EFFECTS redirects these to beginThrowTargeting() before the
+      // switch is ever entered. Cases kept only so this isn't mistaken for a missing effect.
+      break;
     case 'cureposion': { player.statusPoison = 0; log('The poison is cleansed from your body.'); break; }
     case 'poison': { player.statusPoison = (player.statusPoison||0) + it.power; log('That was a terrible idea.'); break; }
     case 'food': { const amt = Math.round((it.power || 2) * (1 + (player.cookingHealBonus || 0)) * healMult()); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You eat ${it.name} and recover ${amt} HP.`); maybeGrantCookingBonusEffect(it); break; }
-    case 'identify': { log('You feel more knowledgeable, though nothing seems to change.'); break; }
+    case 'identify': {
+      // There's nothing in this game that's ever unidentified, so this used to be a pure no-op
+      // -- flavor text and nothing else, every single time, regardless of anything the player
+      // did. Repurposed into a real detect-treasure effect: reveals (marks `seen`, same as
+      // revealArea/Night Vision use) every nearby container and item drop on the map, so it's
+      // an actually useful scouting tool instead of a dead item that happened to still drop.
+      const R = 20;
+      let found = 0;
+      if (curIsDungeon()) {
+        const lvl = curDungeonLevel();
+        if (lvl) {
+          const spots = [...(lvl.items || []).map(i => ({ x: i.x, y: i.y })), ...(lvl.containers || []).map(c => ({ x: c.x, y: c.y }))];
+          for (const p of spots) {
+            if (chebyshev(p.x, p.y, player.x, player.y) > R) continue;
+            const t = curTileAt(p.x, p.y);
+            if (t && !t.seen) { t.seen = true; found++; }
+          }
+        }
+      }
+      log(found > 0 ? `Your senses sharpen -- you can feel ${found} nearby treasure${found === 1 ? '' : 's'} calling out through the stone!` : 'You sense no treasure nearby.');
+      break;
+    }
     case 'teleport': { blinkPlayer(30); break; }
     case 'escape': { blinkPlayer(6); applyBuff('invis', 1, 8); log('You vanish in a puff of smoke!'); break; }
-    case 'throwdmg': { const t = nearestHostile(it.range||4); if (t) { const dmg = randInt(Math.random, it.power[0], it.power[1]); t.hp -= dmg; log(`You throw a knife at ${t.name} for ${dmg}.`); if (t.hp<=0) onDeath(t, player); } else log('No target in range.'); break; }
-    case 'scrollfire': { const t = nearestHostile(6); if (t) { const dmg = randInt(Math.random, it.power, it.power+8); t.hp -= dmg; log(`The scroll erupts! ${t.name} takes ${dmg} fire damage.`); if (t.hp<=0) onDeath(t, player); } else log('The scroll fizzles - no target.'); break; }
     case 'invisibility': { applyBuff('invis', 1, it.dur || 15); log('You fade from sight.'); break; }
     case 'resistfire': { applyBuff('resistfire', 1, it.dur || 25); log('Your skin feels warm and hardened against flame.'); break; }
     case 'resistfrost': { applyBuff('resistfrost', 1, it.dur || 25); log('A protective warmth surrounds you.'); break; }
     case 'resistpoison': { applyBuff('resistpoison', 1, it.dur || 25); log('Your blood runs strangely cool - toxins should slide off you now.'); break; }
     case 'waterbreathing': { applyBuff('waterbreathing', 1, it.dur || 40); log('Your lungs feel strange - you could breathe underwater now.'); break; }
     case 'reveal': { const n = revealArea(it.radius || 12); log(n > 0 ? `Your senses expand outward - ${n} nearby tiles are revealed!` : 'The area around you is already fully explored.'); break; }
+    case 'nightvision': {
+      // A genuine temporary vision-radius buff -- see markSeen()/render(), both of which now
+      // check getBuff('nightvision') -- instead of the old behavior (silently reusing the
+      // one-shot 'reveal' effect, which ignored this item's own `dur` field completely and
+      // just pinged the map once regardless of how long the potion was supposed to last).
+      applyBuff('nightvision', 1, it.dur || 40);
+      log('Your eyes adjust to the dark -- you can see much farther for a while.');
+      break;
+    }
     case 'curseremove': {
       let removed = 0;
       for (const slot in player.equipment) {
@@ -14279,8 +14789,10 @@ function useItem(it) {
     }
     case 'scrollsummon': { const a = spawnAlly(it.summonId, it.duration || 40); if (a) log(`You conjure ${a.name} to fight at your side!`); break; }
     case 'foodbuff': {
-      player.hp = Math.min(player.maxHp, player.hp + (it.power || 5));
-      applyBuff(it.statBuff, it.buffAmt, it.dur || 25);
+      const healMultC = 1 + (player.cookingHealBonus || 0);
+      const durMultC = 1 + (player.cookingDurBonus || 0);
+      player.hp = Math.min(player.maxHp, player.hp + Math.round((it.power || 5) * healMultC));
+      applyBuff(it.statBuff, it.buffAmt, Math.round((it.dur || 25) * durMultC));
       log(`${it.name} nourishes you and steels your ${it.statBuff.toUpperCase()}.`);
       maybeGrantCookingBonusEffect(it);
       break;
@@ -14309,48 +14821,33 @@ function useItem(it) {
       log("A Titan's Feast leaves you feeling utterly unstoppable.");
       break;
     }
-    // ---- thrown grenades: land at the nearest hostile's position and affect the area there ----
-    case 'throwaoe': {
-      const t = nearestHostile(it.range || 5);
-      if (!t) { log('No target in range to throw at.'); break; }
-      const dmgMult = 1 + (player.throwDmgBonus||0) + (player.alchemyPotencyBonus||0);
-      const radius = (it.radius||2) + (player.throwRadiusBonus||0);
-      const hit = hostilesWithinRadius(t.x, t.y, radius);
-      hit.forEach(h => { const dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult); h.hp -= dmg; log(`The blast tears into ${h.name} for ${dmg} damage.`); if (h.hp<=0) onDeath(h, player); });
-      break;
-    }
-    case 'throwgas': {
-      const t = nearestHostile(it.range || 5);
-      if (!t) { log('No target in range to throw at.'); break; }
-      const radius = (it.radius||3) + (player.throwRadiusBonus||0);
-      const hit = hostilesWithinRadius(t.x, t.y, radius);
-      hit.forEach(h => { h.statusPoison = (h.statusPoison||0) + it.power; log(`${h.name} is engulfed in choking gas.`); });
-      gasArea(t.x, t.y, 6, it.power || 4, 'poison');
-      log('A billowing cloud of gas settles over the area.');
-      break;
-    }
-    case 'throwemp': {
-      const t = nearestHostile(it.range || 5);
-      if (!t) { log('No target in range to throw at.'); break; }
-      const radius = (it.radius||3) + (player.throwRadiusBonus||0);
-      const hit = hostilesWithinRadius(t.x, t.y, radius);
-      hit.forEach(h => { h.statusConfuse = (h.statusConfuse||0) + 3; log(`${h.name}'s systems scramble in the EMP burst!`); });
-      break;
-    }
-    case 'throwslow': case 'throwsnare': {
-      const t = nearestHostile(it.range || 4);
-      if (!t) { log('No target in range to throw at.'); break; }
-      const radius = (it.radius||2) + (player.throwRadiusBonus||0);
-      const hit = hostilesWithinRadius(t.x, t.y, radius);
-      hit.forEach(h => { h.statusSlow = (h.statusSlow||0) + 4; log(`${h.name} is caught and slowed!`); });
-      break;
-    }
+    // 'throwaoe'/'nukeblast'/'throwgas'/'throwemp'/'throwslow'/'throwsnare' are unreachable here
+    // -- THROWABLE_EFFECTS redirects them to beginThrowTargeting() before this switch runs, so
+    // they always resolve through the same free-aim tile targeting the Throw action uses.
     case 'planttrap': {
-      const dmgMult = 1 + (player.throwDmgBonus||0) + (player.alchemyPotencyBonus||0);
-      const radius = (it.radius||2) + (player.throwRadiusBonus||0);
-      const hit = hostilesWithinRadius(player.x, player.y, radius);
-      hit.forEach(h => { const dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult); h.hp -= dmg; log(`The mine detonates, tearing into ${h.name} for ${dmg} damage!`); if (h.hp<=0) onDeath(h, player); });
-      if (!hit.length) log('You set off the mine, but nothing was close enough to catch the blast.');
+      // A "mine" that goes off the instant you place it, centered on you, was never really a
+      // mine -- it was just a worse version of throwing a grenade at your own feet. In a
+      // dungeon, this now actually arms a hidden trap tile where you're standing (reusing the
+      // same hiddenTrap/triggerTrapAt machinery every other trap in the game already uses) that
+      // waits for you or an enemy to walk onto it later, exactly like the name promises.
+      if (curIsDungeon()) {
+        const t = curTileAt(player.x, player.y);
+        if (t && t.walkable) {
+          t.hiddenTrap = true; t.trapTriggered = false; t.trapType = 'mine';
+          t.minePower = it.power; t.mineRadius = (it.radius || 2) + (player.throwRadiusBonus || 0);
+          log(`You carefully arm ${it.name} and step back. It's invisible now -- don't forget where you left it.`);
+        } else {
+          log("There's nowhere solid here to plant it.");
+        }
+      } else {
+        // No hidden-trap tile system outside dungeons -- falls back to an immediate blast
+        // centered on you, so the item is never a complete no-op in the overworld.
+        const dmgMult = 1 + (player.throwDmgBonus||0) + (player.alchemyPotencyBonus||0);
+        const radius = (it.radius||2) + (player.throwRadiusBonus||0);
+        const hit = hostilesWithinRadius(player.x, player.y, radius);
+        hit.forEach(h => { const dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult); h.hp -= dmg; log(`The mine detonates, tearing into ${h.name} for ${dmg} damage!`); if (h.hp<=0) onDeath(h, player); });
+        if (!hit.length) log('You set off the mine, but nothing was close enough to catch the blast.');
+      }
       break;
     }
     default: consumed = false;
@@ -15935,7 +16432,12 @@ function handleKey(e) {
     if (key === 'c') { openCharacterSheet(); return; }
     if (key === 'z') { openSpellbook(); return; }
     if (key === 'f') { fireRangedWeapon(); return; }
-    if (key === 't') { const n = findAdjacentNPC(); if (n) openDialogue(n); else log('There is no one to talk to nearby.'); return; }
+    if (key === 't') {
+      const nearby = findAdjacentNPCs();
+      if (!nearby.length) { log('There is no one to talk to nearby.'); return; }
+      presentChoice('Talk to whom?', nearby.map(n => ({ label: n.name, action: () => openDialogue(n) })));
+      return;
+    }
     if (key === 'x') { openLook(); return; }
     if (key === 'K') { openCraft(); return; }
     if (key === 'T') { openTalents(); return; }
@@ -16013,6 +16515,7 @@ function handleKey(e) {
     if (/^[a-t]$/.test(key)) { containerTransact(key); return; }
     return;
   }
+  if (gameState === 'choice') { resolveChoiceKey(key); return; }
   if (gameState === 'giftpick') {
     if (key === 'Escape') { gameState = 'dialogue'; openDialogue(dialogueNPC); return; }
     if (/^[a-z]$/.test(key)) { const idx = key.charCodeAt(0)-97; const it = giftList[idx]; if (it) giveGift(dialogueNPC, it); return; }
