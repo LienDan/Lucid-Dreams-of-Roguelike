@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.22.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.22.1-alpha</div>
     </div>
   </div>
 
@@ -6468,6 +6468,81 @@ function layoutBuildingsGrid(rng, margin, targetCount, sizeRange) {
 // ===================== WORLD GENERATION v6 =====================
 SHOP_ROLES.add('cybersmith');
 
+// ---- destructible environment features v1 ----
+// Trees and cacti aren't just decoration that either blocks you or vanishes instantly under a
+// 'destructive' blast -- they carry their own HP pool now, the same way a monster does. A melee
+// swing into one (see movePlayer) chips away at that HP over a few hits until it comes down and
+// opens your path; ambient fire that spreads across nearby grass (see processTerrainEffects) has
+// a modest per-turn chance to catch one and slowly burn it down too, on its own separate clock,
+// since a tree isn't a walkable "flammable ground tile" that fire spreads onto directly. Direct
+// fire-and-forget effects (fireball blast radius, a dragon's breath, a thrown bomb) still level
+// anything destructible in their radius outright, exactly as before -- see destroyDestructibleAt.
+// To make some other overworld feature breakable later (a fence, a totem, a barricade...), add
+// one entry here; nothing in movement, melee, or fire-spread code needs to know it exists.
+const DESTRUCTIBLE_FEATURES = {
+  tree: {
+    hpRange: [16, 30], chopVerb: 'chop into', fallVerb: 'The tree splinters and crashes down!',
+    flammable: true, fireDmgRange: [2, 5], fireCatchChance: 0.16,
+    fireResult:  { feature: 'scorched', glyph: ',', color: '#4a3a2a' },
+    meleeResult: { feature: 'stump',    glyph: '\u2229', color: '#5a4028' }
+  },
+  cactus: {
+    hpRange: [10, 18], chopVerb: 'hack at', fallVerb: 'The cactus topples in a shower of spines!',
+    flammable: false,
+    fireResult:  { feature: 'scorched', glyph: ',', color: '#4a3a2a' },
+    meleeResult: { feature: 'scorched', glyph: ',', color: '#4a3a2a' }
+  }
+};
+// Called once, wherever a destructible feature tile is first placed (world gen), so it starts
+// with an HP pool matching its type instead of every call site having to remember to set one.
+function initDestructibleFeature(t) {
+  const cfg = DESTRUCTIBLE_FEATURES[t.feature];
+  if (!cfg) return;
+  t.maxHp = randInt(Math.random, cfg.hpRange[0], cfg.hpRange[1]);
+  t.hp = t.maxHp;
+}
+// Instantly levels a destructible feature tile regardless of remaining HP -- used by AOE blasts
+// (scorchArea) and any other effect that should flatten it in one hit rather than chip at it.
+// method picks which look it's left with ('fire' scorches it, 'melee' leaves a stump/rubble).
+function destroyDestructibleAt(t, method) {
+  const cfg = DESTRUCTIBLE_FEATURES[t.feature];
+  if (!cfg) return false;
+  const result = (method === 'melee' ? cfg.meleeResult : cfg.fireResult) || cfg.fireResult;
+  t.feature = result.feature; t.glyph = result.glyph; t.color = result.color; t.walkable = true;
+  delete t.hp; delete t.maxHp;
+  return true;
+}
+// Chips damage off a destructible feature tile and levels it once HP runs out. Returns true if
+// this call destroyed it. x/y are only needed to keep the save-dirty tracking accurate for
+// damage dealt off-camera (see markLocationDirty's own doc comment) -- pass null when the caller
+// already marks the area dirty itself (e.g. every player action already does, via endTurn).
+function damageDestructibleFeature(t, x, y, dmg, method) {
+  const cfg = DESTRUCTIBLE_FEATURES[t.feature];
+  if (!cfg) return false;
+  if (t.hp == null) t.hp = t.maxHp = randInt(Math.random, cfg.hpRange[0], cfg.hpRange[1]);
+  t.hp -= dmg;
+  if (x != null && y != null) markLocationDirty(x, y);
+  if (t.hp > 0) return false;
+  return destroyDestructibleAt(t, method);
+}
+// The player bumping into a tree/cactus swings at it instead of just bouncing off -- same
+// weapon-and-strength damage formula doAttack uses for a bare-fisted/weapon hit, minus the
+// dodge/armor/crit machinery that only makes sense against a living target. Called from
+// movePlayer whenever the tile you tried to walk into is destructible.
+function attackDestructibleFeature(t, x, y) {
+  const cfg = DESTRUCTIBLE_FEATURES[t.feature];
+  if (!cfg) return;
+  const featureWas = t.feature;
+  const weapon = player.equipment.hand;
+  let dmg = randInt(Math.random, ...(weapon ? weapon.dmg : [1, 3])) + Math.floor(effStr(player) / 4);
+  if (weapon && weapon.broken) dmg = Math.round(dmg * 0.35);
+  dmg = Math.max(1, Math.round(dmg));
+  Sound.play('hit');
+  if (settings.showDamageNumbers) spawnFloatingText(x, y, String(dmg), '#ffffff');
+  const destroyed = damageDestructibleFeature(t, x, y, dmg, 'melee');
+  if (destroyed) log(`You ${cfg.chopVerb} the ${featureWas} for ${dmg}. ${cfg.fallVerb}`);
+  else log(`You ${cfg.chopVerb} the ${featureWas} for ${dmg}. (${t.hp}/${t.maxHp})`);
+}
 // ---- environment destruction (trees/cacti can be burned away) ----
 function scorchArea(cx, cy, radius) {
   if (typeof curIsDungeon === 'function' && curIsDungeon()) return 0;
@@ -6476,8 +6551,8 @@ function scorchArea(cx, cy, radius) {
     if (dx*dx + dy*dy > radius*radius) continue;
     const wx = cx+dx, wy = cy+dy;
     const t = getTile(wx, wy);
-    if (t && (t.feature === 'tree' || t.feature === 'cactus')) {
-      t.feature = 'scorched'; t.glyph = ','; t.color = '#4a3a2a'; t.walkable = true;
+    if (t && DESTRUCTIBLE_FEATURES[t.feature]) {
+      destroyDestructibleAt(t, 'fire');
       destroyed++;
     }
   }
@@ -7291,6 +7366,21 @@ function processTerrainEffects() {
         log(`${occupant === player ? 'You are' : occupant.name + ' is'} burned by the flames (${dmg}).`);
         if (occupant === player) { wearRandomArmorPiece(1); lastDamageSource = 'fire'; }
         if (occupant.hp <= 0) onDeath(occupant, null);
+      }
+      // ---- trees/cacti aren't flammable *ground* (see isFlammableTile -- they're not walkable,
+      // so fire can't spread onto their tile the normal way), but a burning neighbor should still
+      // be able to catch one and burn it down over several turns, same spirit as the ground
+      // spread below just on its own slower, independent roll per neighbor so a lone burning
+      // patch of grass doesn't instantly clear a whole treeline. ----
+      for (const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nx = x+dx, ny = y+dy;
+        const nt = curTileAt(nx, ny);
+        const cfg = nt && DESTRUCTIBLE_FEATURES[nt.feature];
+        if (cfg && cfg.flammable && Math.random() < cfg.fireCatchChance) {
+          const dmg = randInt(Math.random, cfg.fireDmgRange[0], cfg.fireDmgRange[1]);
+          const destroyed = damageDestructibleFeature(nt, nx, ny, dmg, 'fire');
+          if (destroyed) log(cfg.fallVerb || 'It burns down.');
+        }
       }
       // ---- throttled spread: a burning tile gets one modest roll for at most ONE new neighbor
       // per turn (not all 8 every time), so a forest fire advances gradually over many turns
@@ -11043,7 +11133,7 @@ const TILE_FEATURE_DESCRIPTIONS = {
   road: 'A worn dirt road, well-traveled.', floor: 'Bare floor.',
   furniture: 'A simple piece of furniture — a bed or table.', well: 'An old stone well.',
   farmland: 'Tilled farmland, crops growing in neat rows.', rubble: 'Scattered rubble and broken stone.',
-  rock: 'Rough, broken rock.', tree: 'A tall tree.', cactus: 'A spiny desert cactus.',
+  rock: 'Rough, broken rock.', tree: 'A tall tree.', cactus: 'A spiny desert cactus.', stump: 'The splintered stump of a felled tree.',
   chasm: 'A dark chasm plunges into the depths. You would need a bridge, flight, or a very long rope.',
   woodbridge: 'A rough plank bridge, lashed together with rope. Wood — it would burn.',
   lockeddoor: 'A locked door, reinforced and unyielding. It needs a matching key.',
@@ -11743,8 +11833,8 @@ function applyTerrainInteraction(spell, x, y) {
     if (isWaterTile(t)) steamBurst(x, y);
     else igniteTile(x, y, 4 + randInt(Math.random, 0, 3));
   }
-  if (spell.destructive && (t.feature === 'tree' || t.feature === 'cactus')) {
-    t.feature = 'scorched'; t.glyph = ','; t.color = '#4a3a2a'; t.walkable = true;
+  if (spell.destructive && DESTRUCTIBLE_FEATURES[t.feature]) {
+    destroyDestructibleAt(t, 'fire');
   }
   if (spell.gasCloud) addGasCloud(x, y, spell.dur || 6, spell.power || 4, spell.gasKind);
   if (spell.frost) {
@@ -12280,9 +12370,9 @@ function generateChunk(cx, cy) {
       const t = makeTile(biomeId);
       const h = coordHash(wx, wy, SEED + 42);
       if (t.walkable) {
-        if (biomeId === 'forest' && h < 0.12) { t.feature = 'tree'; t.walkable = false; t.glyph = 'T'; t.color = '#2e6b2e'; }
-        else if (biomeId === 'denseforest' && h < 0.28) { t.feature = 'tree'; t.walkable = false; t.glyph = 'T'; t.color = '#1f4f1f'; }
-        else if (biomeId === 'desert' && h < 0.03) { t.feature = 'cactus'; t.walkable = false; t.glyph = 'Y'; t.color = '#3f7a3f'; }
+        if (biomeId === 'forest' && h < 0.12) { t.feature = 'tree'; t.walkable = false; t.glyph = 'T'; t.color = '#2e6b2e'; initDestructibleFeature(t); }
+        else if (biomeId === 'denseforest' && h < 0.28) { t.feature = 'tree'; t.walkable = false; t.glyph = 'T'; t.color = '#1f4f1f'; initDestructibleFeature(t); }
+        else if (biomeId === 'desert' && h < 0.03) { t.feature = 'cactus'; t.walkable = false; t.glyph = 'Y'; t.color = '#3f7a3f'; initDestructibleFeature(t); }
         else if (biomeId === 'swamp' && h < 0.10) { t.feature = 'water'; t.walkable = false; t.glyph = '~'; t.color = '#2a3a1a'; }
         else if (biomeId === 'plains' && h > 0.985) { t.feature = 'rock'; t.walkable = false; t.glyph='*'; t.color='#8a8a8a'; }
       }
@@ -13764,7 +13854,9 @@ function movePlayer(dx, dy) {
   if (gameState !== 'playing') return;
   floatingTexts = [];
   const intendedTarget = entityAt(player.x + dx, player.y + dy);
-  const isAttackAttempt = intendedTarget && intendedTarget !== player && (intendedTarget.kind === 'monster' || (intendedTarget.kind === 'npc' && intendedTarget.hostile));
+  const intendedTile = curTileAt(player.x + dx, player.y + dy);
+  const isAttackAttempt = (intendedTarget && intendedTarget !== player && (intendedTarget.kind === 'monster' || (intendedTarget.kind === 'npc' && intendedTarget.hostile)))
+    || !!(intendedTile && DESTRUCTIBLE_FEATURES[intendedTile.feature]);
   if (player.statusSlow > 0 && !isAttackAttempt && Math.random() < 0.5) {
     log("You're too sluggish to move!");
     endTurn(); return;
@@ -13791,6 +13883,10 @@ function movePlayer(dx, dy) {
   const t = curTileAt(nx, ny);
   const isWaterTile = t && (t.feature === 'water' || t.biome === 'ocean');
   if (!curWalkable(nx, ny)) {
+    if (t && DESTRUCTIBLE_FEATURES[t.feature]) {
+      attackDestructibleFeature(t, nx, ny);
+      endTurn(); return;
+    }
     if (t && t.feature === 'lockeddoor') {
       const key = player.inventory.find(i => i.type === 'key' && i.vaultToken === t.vaultToken);
       if (key) {
@@ -15926,8 +16022,10 @@ const GUIDE_SECTIONS = [
     there yet. Press <b>Enter</b>/<b>Space</b> instead of clicking to auto-aim at the nearest hostile, for when you
     just want the quick option. <b>Esc</b> cancels with no cost spent. AOE spells preview their blast radius and hit
     everyone caught in it — including you and your allies if you're careless about where you stand.</div>
-    <div class="modal-opt">Some powerful abilities (dragon breath, certain fire spells/cybernetics/mutations) can scorch
-    trees and cacti in the overworld, permanently clearing the land around the blast.</div>
+    <div class="modal-opt">Trees and cacti in the overworld are <b>breakable</b> — walk into one to swing at it with your
+    equipped weapon (or bare fists) just like attacking a monster; a few hits will fell it and permanently clear
+    your path. Some powerful abilities (dragon breath, certain fire spells/cybernetics/mutations) instead scorch
+    every tree and cactus in the blast outright, no matter its remaining health.</div>
     <div class="modal-opt" style="margin-top:6px"><b>Enemy AI:</b> not every monster fights the same way. Chargers (dragons,
     giants, hellhounds) close 2-3 tiles a turn and can breathe fire/frost/poison on approach. Splitters (oozes) divide into
     weaker copies when killed. Summoners (Goblin King, liches, Rogue AI Core) call reinforcements. Ambushers (assassins,
@@ -15943,7 +16041,9 @@ const GUIDE_SECTIONS = [
     random — a burning tile only has a modest chance to catch one neighbor per turn — so a forest fire builds over many
     turns rather than engulfing everything at once, and ground right next to water is prone to smothering out early. Once a
     patch of ground finishes burning it's left as scorched, unflammable ash for a good long while before it regrows and can
-    catch again. Fire hitting water doesn't just fizzle — it flashes into a burst of scalding <b>steam</b> that damages
+    catch again. A tree or cactus standing next to a burning tile has its own smaller, separate chance each turn to catch
+    and slowly burn down too — a grass fire left to spread through a forest will genuinely take the trees with it, not
+    just the ground underneath them. Fire hitting water doesn't just fizzle — it flashes into a burst of scalding <b>steam</b> that damages
     anyone standing in the water and leaves a brief fog behind. <b>Frost</b> spells and Frost Grenades genuinely put out
     fire wherever they land, on top of their frost damage — dousing a burning tile is a legitimate way to stop a fire you
     started (or one you didn't). Gas spells and grenades (Caustic Gas, Poison Cloud, Poison Gas Grenade, gas-cloud monsters)
