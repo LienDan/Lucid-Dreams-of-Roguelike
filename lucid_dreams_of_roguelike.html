@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.24.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.24.1-alpha</div>
     </div>
   </div>
 
@@ -7950,24 +7950,35 @@ function enterTileAsEntity(e, nx, ny) {
     }
   }
 }
-// ---- real pathfinding fallback for chasers: a plain BFS over the current dungeon grid. Only
-// invoked when the cheap greedy step below is blocked, so the common case (open floor, nothing
-// in the way) stays just as fast as before -- this only kicks in exactly when it's needed, which
-// is also exactly when it matters (a corridor bend, a room corner, routing around a pillar). ----
+// ---- real pathfinding fallback for chasers: a plain BFS over the local grid. Only invoked when
+// the cheap greedy step below is blocked, so the common case (open floor, nothing in the way)
+// stays just as fast as before -- this only kicks in exactly when it's needed, which is also
+// exactly when it matters (a corridor bend, a room corner, routing around a pillar or a lone
+// tree). Works identically in dungeons and on the open overworld: dungeons search the whole
+// bounded level grid (DW2 x DH2), the overworld instead bounds the search to a radius around the
+// entity's own position (OVERWORLD_PATH_RADIUS) since that grid is effectively infinite. Either
+// way this is the ONE place any entity (monster, NPC, ally) ever looks for a path -- extend this,
+// not stepToward, if a future terrain type needs special routing logic. ----
+const OVERWORLD_PATH_RADIUS = 20; // tiles of slack around the entity to search before giving up; plenty for routing around a copse of trees, a building, a river bend, without letting a chase wander off scanning the whole (procedurally-generated, effectively unbounded) overworld
+const PATH_DIRS8 = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
 function bfsNextStep(e, tx, ty) {
-  if (!curIsDungeon()) return null; // bounded-grid search isn't meaningful on the open overworld
   if (e.x === tx && e.y === ty) return null;
+  const inDungeon = curIsDungeon();
+  // if the goal itself is already outside the search radius, don't bother -- the path search
+  // below would just exhaust its node budget without ever reaching it.
+  if (!inDungeon && (Math.abs(tx - e.x) > OVERWORLD_PATH_RADIUS || Math.abs(ty - e.y) > OVERWORLD_PATH_RADIUS)) return null;
   const startKey = e.x + ',' + e.y;
   const visited = new Set([startKey]);
   const queue = [{ x: e.x, y: e.y }];
   const cameFrom = Object.create(null);
   let qi = 0;
-  const maxNodes = DW2 * DH2;
+  const maxNodes = inDungeon ? DW2 * DH2 : (OVERWORLD_PATH_RADIUS * 2 + 1) * (OVERWORLD_PATH_RADIUS * 2 + 1);
   let found = false;
   while (qi < queue.length && visited.size < maxNodes) {
     const cur = queue[qi++];
     if (cur.x === tx && cur.y === ty) { found = true; break; }
-    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]) {
+    if (!inDungeon && (Math.abs(cur.x - e.x) > OVERWORLD_PATH_RADIUS || Math.abs(cur.y - e.y) > OVERWORLD_PATH_RADIUS)) continue;
+    for (const [dx, dy] of PATH_DIRS8) {
       const nx = cur.x + dx, ny = cur.y + dy;
       const key = nx + ',' + ny;
       if (visited.has(key)) continue;
@@ -7995,13 +8006,13 @@ function stepToward(e, tx, ty) {
     const nx = e.x + ox, ny = e.y + oy;
     if (isPassableFor(e, nx, ny) && !entityAt(nx, ny)) { enterTileAsEntity(e, nx, ny); return true; }
   }
-  // The direct step is blocked (wall corner, pillar, a bend in the corridor) -- fall back to a
-  // real path instead of just standing there. This is what actually lets an alarmed swarm reach
-  // you through a dungeon layout instead of stalling out at the first turn in the hallway.
-  if (curIsDungeon()) {
-    const step = bfsNextStep(e, tx, ty);
-    if (step && isPassableFor(e, step.x, step.y) && !entityAt(step.x, step.y)) { enterTileAsEntity(e, step.x, step.y); return true; }
-  }
+  // The direct step is blocked (wall corner, pillar, a bend in the corridor, a tree standing
+  // between two entities that both want to close distance) -- fall back to a real path instead
+  // of just standing there. This runs in dungeons AND the overworld, for any entity, so a bear
+  // and a guard aggroed on opposite sides of a tree will actually route around it instead of
+  // freezing a tile apart forever.
+  const step = bfsNextStep(e, tx, ty);
+  if (step && isPassableFor(e, step.x, step.y) && !entityAt(step.x, step.y)) { enterTileAsEntity(e, step.x, step.y); return true; }
   return false;
 }
 function stepAway(e, tx, ty) {
