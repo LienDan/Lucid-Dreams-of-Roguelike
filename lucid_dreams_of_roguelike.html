@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.22.2-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.23.0-alpha</div>
     </div>
   </div>
 
@@ -6062,6 +6062,171 @@ function getTile(wx, wy) {
   return c.tiles[ly][lx];
 }
 
+// ============================================================================
+// ---- LIVING WORLD AI FRAMEWORK — PART A: factions, abilities, data ---------
+// A data-driven overhaul of how every non-player entity (monster, NPC, ally)
+// decides what to do with its turn. Three independently-extensible layers:
+//   1) FACTIONS: who is disposed to fight whom, and why (settlement guards vs
+//      raiders, predators vs prey, the restless dead vs the living...).
+//   2) ABILITIES: a monster-side spell/eldritch/cybernetic/thrown-weapon
+//      library, gated by real resource pools (mp/stamina/charge/ammo) so
+//      casters run dry and archers run out of arrows -- see Part B below
+//      (near monsterAI) for the state machine that actually calls into it.
+//   3) DATA HEURISTICS: the bulk passes at the bottom of this section that
+//      look at each monster's existing faction/name/behavior and wire in
+//      abilities, swimming/flying, racial traits, and personality (fearless/
+//      skittish/predatory) automatically -- adding a new MONSTER_BASES entry
+//      with a faction and a name is enough for it to pick up sensible
+//      behavior here without editing this file again, exactly like the
+//      SPECIES table above wires a new people into chargen for free.
+// ============================================================================
+
+// ---- 1) FACTIONS: every faction belongs to one broad alignment. Disposition
+// between any two entities is a lookup between their two alignments, with a
+// short override list for factions that don't fit their alignment's default
+// (dragons are 'wild' but solitary apex predators that tolerate no one;
+// celestials are lumped with 'civil' because they side with settlements).
+const FACTION_ALIGNMENT = {
+  settlement:'civil', celestial:'civil',
+  beast:'wild', aquatic:'wild', plant:'wild', dragon:'wild', elemental:'wild',
+  human:'outlaw', goblinoid:'outlaw', orc:'outlaw', giantkin:'outlaw',
+  undead:'malevolent', demonic:'malevolent', eldritch:'malevolent', cosmic:'malevolent',
+  nonEuclid:'malevolent', drowned:'malevolent', virus:'malevolent', ooze:'malevolent',
+  archdemon:'malevolent', antagonist:'malevolent', source:'malevolent',
+  construct:'mechanical', cyber:'mechanical',
+};
+// symmetric alignment-pair -> disposition. Same-faction pairs are always 'allied'
+// (handled in rawFactionDisposition itself, not listed here). Predator/prey status
+// (see PART A heuristics below) can independently make two 'wild' creatures hostile
+// even though wild|wild defaults to neutral -- see isHostileTo in Part B.
+const ALIGNMENT_DISPOSITION = {
+  'civil|civil':'allied', 'civil|wild':'hostile', 'civil|outlaw':'hostile', 'civil|malevolent':'hostile', 'civil|mechanical':'wary',
+  'wild|wild':'neutral', 'wild|outlaw':'neutral', 'wild|malevolent':'hostile', 'wild|mechanical':'neutral',
+  'outlaw|outlaw':'neutral', 'outlaw|malevolent':'hostile', 'outlaw|mechanical':'neutral',
+  'malevolent|malevolent':'neutral', 'malevolent|mechanical':'hostile',
+  'mechanical|mechanical':'allied',
+};
+// per-faction-pair overrides that beat the alignment default above.
+const FACTION_DISPOSITION_OVERRIDES = {
+  'dragon|outlaw':'hostile', 'dragon|malevolent':'hostile', 'dragon|mechanical':'wary',
+  'celestial|wild':'neutral',
+};
+function factionAlignment(f) { return FACTION_ALIGNMENT[f] || 'wild'; }
+function factionPairKey(a, b) { return [a, b].sort().join('|'); }
+function rawFactionDisposition(fA, fB) {
+  if (fA === fB) return 'allied';
+  const ov = FACTION_DISPOSITION_OVERRIDES[factionPairKey(fA, fB)];
+  if (ov) return ov;
+  return ALIGNMENT_DISPOSITION[factionPairKey(factionAlignment(fA), factionAlignment(fB))] || 'neutral';
+}
+// The faction an arbitrary live entity (player/npc/monster/ally) reads as for hostility
+// purposes. The player and their allies/companions all read as 'settlement'.
+function entityFaction(e) {
+  if (e === player || e.kind === 'ally') return 'settlement';
+  if (e.kind === 'npc') return e.faction || 'settlement';
+  return e.faction || 'beast';
+}
+// NPC roles that will actively fight hostile creatures that come into range instead of only
+// ever reacting to the player -- town guards defend the settlement; hunters/rangers only
+// engage genuine wild threats (their job), not settlement politics.
+const NPC_DEFENDER_ROLES = new Set(['guard', 'watchman', 'captain']);
+const NPC_HUNTER_ROLES = new Set(['hunter', 'ranger']);
+
+// ---- 2) ABILITIES: a monster-side spell/eldritch/cyber/thrown library. Shares the same
+// damage/status vocabulary as the player's own spells (bolt/drain/debuff/heal/buff/summon)
+// so a Necromancer's Drain Life and the player's own Drain Life *feel* like the same spell,
+// without dragging in the player-only cost/talent plumbing those functions carry. See
+// tryMonsterCast/monsterCastAt in Part B for the executor.
+const MONSTER_ABILITY_LIBRARY = {
+  magicmissile: { name:'Magic Missile', kind:'bolt', power:[3,7], range:6, resource:'mp', cost:4, cooldown:3 },
+  firebolt:     { name:'Firebolt', kind:'bolt', element:'fire', power:[4,10], range:6, resource:'mp', cost:5, cooldown:3 },
+  frostbolt:    { name:'Frostbolt', kind:'bolt', element:'frost', power:[3,8], range:6, resource:'mp', cost:5, cooldown:3, slow:2 },
+  drainlife:    { name:'Drain Life', kind:'drain', power:[3,8], range:5, resource:'mp', cost:6, cooldown:4 },
+  curse_slow:   { name:'Curse of Sloth', kind:'debuff', stat:'slow', dur:5, range:5, resource:'mp', cost:5, cooldown:6 },
+  fearaura:     { name:'Dread Gaze', kind:'debuff', stat:'fear', dur:4, range:5, resource:'mp', cost:5, cooldown:6 },
+  confuseray:   { name:'Warp Mind', kind:'debuff', stat:'confuse', dur:4, range:5, resource:'mp', cost:5, cooldown:6 },
+  eldritchrend: { name:'Mind Rend', kind:'debuff', stat:'confuse', dur:5, range:6, resource:'mp', cost:6, cooldown:5 },
+  raise_dead:   { name:'Raise Dead', kind:'summon', summonId:'skeleton', summonMax:2, range:5, resource:'mp', cost:9, cooldown:12 },
+  healself:     { name:'Dark Mending', kind:'heal', power:[6,16], range:0, resource:'mp', cost:7, cooldown:8 },
+  emp_shock:    { name:'EMP Discharge', kind:'bolt', element:'shock', power:[3,9], range:5, resource:'charge', cost:6, cooldown:4 },
+  overclock:    { name:'Overclock', kind:'buff', statField:'atk', power:4, dur:6, range:0, resource:'charge', cost:5, cooldown:8 },
+  throw_bomb:   { name:'Firebomb', kind:'aoe', element:'fire', power:[4,9], radius:2, range:5, resource:'ammo', cooldown:3, thrown:true },
+  throw_frost:  { name:'Frost Flask', kind:'aoe', element:'frost', power:[3,7], radius:2, range:5, resource:'ammo', cooldown:3, thrown:true },
+};
+
+// ---- 3) DATA HEURISTICS: wire abilities/traits onto existing MONSTER_BASES entries by
+// reading their faction/name/behavior, exactly the way LEGACY_MONSTER_FACTIONS above filled
+// in faction gaps. Runs once at load, after every monster (including the expansion packs and
+// story bosses) has been defined. Scripted story bosses keep their bespoke hand-authored AI
+// entirely (see STORY_BOSS_AI) and are skipped here on purpose.
+for (const _mid in MONSTER_BASES) {
+  const base = MONSTER_BASES[_mid];
+  if (base.scriptedAI || base.fixedStats) continue;
+  const name = (base.name || '').toLowerCase();
+
+  // -- swimming / flying: real terrain traversal (see canFly/canSwim), not flavor text --
+  if (base.aquatic === undefined && (base.faction === 'aquatic' || base.faction === 'drowned' ||
+      /shark|fish|eel|kraken|crab|leviathan|siren|merfolk|serpent/.test(name))) base.aquatic = true;
+  if (base.flying === undefined && /bat|hawk|vulture|wyvern|drake|harpy|griffin|phoenix|thunderbird|wisp|specter|spectre|ghost|wraith|banshee|imp|gargoyle|angel|seraph|gull/.test(name)) base.flying = true;
+  if (base.flying === undefined && base.faction === 'dragon' && !/wyrm|worm/.test(name)) base.flying = true;
+
+  // -- racial traits: humanoid templates that map cleanly onto an existing SPECIES entry get
+  // that species' real racial traits (poison/fear resistance, armor, crit, etc), the same way
+  // an NPC of that species would -- an Orc raider genuinely gets Bloodfury and Thick Hide. --
+  if (!base.speciesId) {
+    if (base.faction === 'orc') base.speciesId = 'orc';
+    else if (base.faction === 'construct') base.speciesId = 'construct';
+    else if (/dark ?elf/.test(name)) base.speciesId = 'elf';
+  }
+
+  if (base.abilities) continue; // already hand-authored (e.g. boss templates) -- don't override
+
+  // -- organic spellcasters: named casters, or malevolent-faction ranged attackers that aren't
+  // secretly machines -- get a small themed spell list drawn from MONSTER_ABILITY_LIBRARY. --
+  const casterHint = /mage|witch|priest|shaman|warlock|sorcer|necromanc|cultist|wizard|oracle|coven|hex|druid|acolyte|cleric|conjur|enchant|seer/.test(name);
+  const machineHint = /drone|construct|golem|automaton|turret|sentinel|unit|mech\b/.test(name);
+  if (casterHint || (factionAlignment(base.faction) === 'malevolent' && base.behavior === 'ranged' && !machineHint)) {
+    let pool;
+    if (base.faction === 'undead' || /necro|death|grave|bone|lich/.test(name)) pool = ['drainlife', 'raise_dead', 'curse_slow'];
+    else if (base.faction === 'demonic') pool = ['firebolt', 'fearaura', 'curse_slow'];
+    else if (['eldritch', 'cosmic', 'nonEuclid'].includes(base.faction)) pool = ['eldritchrend', 'confuseray', 'drainlife'];
+    else if (base.faction === 'drowned') pool = ['frostbolt', 'curse_slow', 'drainlife'];
+    else pool = ['firebolt', 'frostbolt', 'magicmissile'];
+    if (base.boss || base.miniboss) pool = pool.concat(['healself']);
+    base.abilities = pool;
+    base.usesMp = true;
+    continue;
+  }
+
+  // -- cybernetics: anything reading as a machine gets charge-fueled attacks instead of mp --
+  if (base.faction === 'cyber' || machineHint) {
+    base.abilities = (base.behavior === 'ranged' || base.behavior === 'turret') ? ['emp_shock', 'overclock'] : ['overclock'];
+    base.usesCharge = true;
+    continue;
+  }
+
+  // -- thrown weapons: humanoid raiders/skirmishers without a spell list get a pouch of bombs
+  // instead, so ranged threats read as "skilled with a weapon" as often as "trained in magic" --
+  if (!base.thrower && ['goblinoid', 'orc', 'human'].includes(base.faction) &&
+      (base.behavior === 'ranged' || base.behavior === 'kiter' || /archer|thrower|skirmish|raider/.test(name))) {
+    base.thrower = true;
+    base.abilities = base.faction === 'orc' ? ['throw_bomb'] : ['throw_frost'];
+  }
+}
+// -- personality: predator/prey inside the 'wild' alignment (wolves hunt rabbits even though
+// wild|wild defaults to neutral -- see isHostileTo in Part B), plus who gets scared and who
+// gets angrier once badly hurt. Bosses and already-fearless templates are left alone. --
+const FEARLESS_ALIGNMENTS = new Set(['malevolent', 'mechanical']);
+for (const _mid in MONSTER_BASES) {
+  const base = MONSTER_BASES[_mid];
+  const align = factionAlignment(base.faction);
+  if (align === 'wild' && base.behavior !== 'flee') base.predator = true;
+  if (align === 'wild' && base.behavior === 'flee') base.prey = true;
+  if (base.fearless === undefined) base.fearless = !!(base.boss || base.scriptedAI || FEARLESS_ALIGNMENTS.has(align));
+  if (base.fleeHpPct === undefined && !base.fearless && base.behavior !== 'flee') base.fleeHpPct = base.predator ? 0.15 : 0.25;
+  if (!base.berserkHpPct && !base.boss && base.behavior !== 'flee' && ['orc', 'giantkin'].includes(base.faction)) base.berserkHpPct = 0.3;
+}
+
 
 // ---- NPC / Monster factories ----
 let uidCounter = 1;
@@ -6074,6 +6239,9 @@ const MONSTER_EXTRA_FIELDS = [
   'summonId', 'summonMax', 'ambush', 'ambushRange', 'burrower', 'phaser', 'berserkHpPct',
   'multiattack', 'range', 'preferredRange', 'miniboss', 'flying', 'aquatic', 'armorPierce',
   'causesFear', 'causesConfuse', 'bossPower', 'corrosive', 'scriptedAI', 'engageLine', 'deathLine', 'lore',
+  // ---- Living World AI framework (see Part A above / Part B near monsterAI) ----
+  'abilities', 'usesMp', 'usesCharge', 'thrower', 'speciesId', 'predator', 'prey',
+  'fearless', 'fleeHpPct', 'sleeper', 'patrolRadius', 'visionRange',
 ];
 // ---- v3 balance pass: overworld monsters now scale with distance from the origin ----
 // Previously every overworld spawn passed a flat depthScale of 1 no matter how far you'd
@@ -6120,6 +6288,25 @@ function makeMonster(monsterId, x, y, depthScale, rng) {
     state: 'idle', target: null, statusPoison: 0, statusSlow: 0, statusFear: 0, powerScale: scale, depthScale,
   };
   for (const f of MONSTER_EXTRA_FIELDS) if (base[f] !== undefined) m[f] = base[f];
+
+  // ---- Living World AI framework: resource pools, starting state, racial traits ----
+  // (see Part A near the faction tables above, and Part B near monsterAI for how these get used)
+  if (m.usesMp) { m.maxMp = Math.max(12, Math.round(16 * Math.sqrt(scale))); m.mp = m.maxMp; }
+  if (m.usesCharge) { m.maxCharge = Math.max(12, Math.round(16 * Math.sqrt(scale))); m.charge = m.maxCharge; }
+  if (m.thrower) { m.maxAmmo = Math.max(2, Math.round(3 + scale * 0.5)); m.ammo = m.maxAmmo; }
+  else if (['ranged', 'kiter', 'turret'].includes(m.behavior) && !m.usesMp) { m.maxAmmo = Math.max(4, Math.round(6 + scale * 1.5)); m.ammo = m.maxAmmo; }
+  if (m.behavior === 'charger' || m.multiTile || m.breathWeapon) { m.maxStamina = Math.max(20, Math.round(24 * Math.sqrt(scale))); m.stamina = m.maxStamina; }
+  m.abilityCooldowns = {};
+  // a species-mapped humanoid (orc raider, dark elf, construct golem, ...) gets that species'
+  // real racial traits applied, same hook the player and NPCs use.
+  if (m.speciesId) applyRacialTraits(m, getSpecies(m.speciesId));
+  // dungeon dwellers rest until something gets close; overworld wildlife just goes about its day.
+  const sleepEligible = !m.boss && !m.fearless && base.dtier !== undefined && m.behavior !== 'flee' && m.behavior !== 'turret';
+  m.sleeper = sleepEligible;
+  m.aiState = sleepEligible && rng() < 0.4 ? 'dormant' : (rng() < 0.5 ? 'patrol' : 'wander');
+  m.homeX = x; m.homeY = y;
+  m.patrolRadius = m.patrolRadius || (base.dtier !== undefined ? 7 : 10);
+  m.visionRange = m.visionRange || 9;
   return m;
 }
 
@@ -6232,6 +6419,11 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
     rumor: choice(rng, RUMORS), wanderCenter: { x, y }, hostile: false, healer: !!role.healer,
     spouse: null, canGiveQuest: QUEST_GIVER_ROLES.has(roleId) && rng() < 0.6,
     gender: appearance.gender, appearance: appearance.sentence, giftCount: 0, lastTalkTurn: -9999,
+    // ---- Living World AI framework: settlement-aligned by default, patrols a loose area around
+    // where they spawned (see Part A/B). Guards/hunters get a real "on duty" patrol; everyone else
+    // reads this as their idle wander center.
+    faction: 'settlement', aiState: 'patrol', homeX: x, homeY: y,
+    patrolRadius: NPC_DEFENDER_ROLES.has(roleId) ? 6 : 4, target: null,
   };
   // Now the real racial abilities too -- same trait hooks the player gets (poison/fire/fear
   // resistance, dodge, crit, low-HP damage bonus, free swimming, trap avoidance, etc.), so a
@@ -8605,12 +8797,15 @@ function allyAI(a) {
   if (a.duration > 0) { a.duration--; if (a.duration <= 0) { a.alive = false; log(`${a.name} crumbles to dust.`); return; } }
   processEntityStatus(a);
   if (!a.alive) return;
-  // find nearest hostile
-  let target = null, bestD = Infinity;
-  for (const m of curMonsters()) { if (!m.alive) continue; const d = chebyshev(a.x,a.y,m.x,m.y); if (d < bestD) { bestD = d; target = m; } }
-  for (const n of curNPCs()) { if (!n.alive || !n.hostile) continue; const d = chebyshev(a.x,a.y,n.x,n.y); if (d < bestD) { bestD = d; target = n; } }
-  if (target && bestD <= 1) { doAttack(a, target); return; }
-  if (target && bestD <= 7) { stepToward(a, target.x, target.y); return; }
+  // faction-aware target pick (see the Living World AI framework near monsterAI) -- an ally now
+  // fights any hostile monster OR hostile NPC, not just whichever monster happens to be closest.
+  const target = pickHostileTarget(a, 8);
+  a.target = target;
+  if (target) {
+    const d = chebyshev(a.x, a.y, target.x, target.y);
+    if (d <= 1) { doAttack(a, target); return; }
+    if (d <= 8) { stepToward(a, target.x, target.y); return; }
+  }
   // otherwise follow player
   const dPlayer = chebyshev(a.x,a.y,player.x,player.y);
   if (dPlayer > 2) stepToward(a, player.x, player.y);
@@ -10091,7 +10286,23 @@ function describeEntity(e) {
     const appearanceLine = base && base.desc ? base.desc : '';
     if (e.kind === 'ally') return `<b>${e.name}</b> (your ally)<br>${appearanceLine}<br>HP ${e.hp}/${e.maxHp}${e.duration>0?`<br>${e.duration} turns remaining`:'<br>Permanent, until slain'}${statusEffectsLine(e)}`;
     const behaviorFlavor = { aggressive:'It looks hostile.', flee:'It seems skittish and will flee.', ranged:'It can strike from a distance.' }[e.behavior] || '';
-    return `<b>${e.name}</b>${e.boss ? ' <span style="color:#e05ae0">(BOSS)</span>' : (e.miniboss ? ' <span style="color:#e0a03a">(Miniboss)</span>' : '')}<br>${appearanceLine}<br>HP ${e.hp}/${e.maxHp} · ATK ${e.atk[0]}-${e.atk[1]} · ARM ${e.armor}<br>${behaviorFlavor}${statusEffectsLine(e)}`;
+    // ---- Living World AI framework: surface aiState/resource pools/abilities so the player can
+    // actually read the world (a sleeping ogre, a spellcaster low on mana, an archer out of arrows).
+    const stateFlavor = {
+      dormant: 'It is fast asleep.', wander: 'It wanders idly.', patrol: 'It is patrolling the area.',
+      alert: 'Something has caught its attention — it looks alert.',
+      combat: e.target === player ? "It's hunting you!" : (e.target ? `It's locked in combat with ${e.target.name}!` : "It's engaged in combat!"),
+      flee: 'It is panicking and trying to flee!',
+      return: 'It is returning to its territory.',
+    }[e.aiState] || '';
+    const poolBits = [];
+    if (e.maxMp) poolBits.push(`MP ${e.mp}/${e.maxMp}`);
+    if (e.maxCharge) poolBits.push(`Charge ${e.charge}/${e.maxCharge}`);
+    if (e.maxStamina) poolBits.push(`Stamina ${e.stamina}/${e.maxStamina}`);
+    if (e.maxAmmo !== undefined) poolBits.push(`Ammo ${e.ammo}/${e.maxAmmo}`);
+    const poolLine = poolBits.length ? `<br><span class="dim">${poolBits.join(' · ')}</span>` : '';
+    const abilityLine = (e.abilities && e.abilities.length) ? `<br><span class="dim">Known: ${e.abilities.map(id => (MONSTER_ABILITY_LIBRARY[id]||{}).name || id).join(', ')}</span>` : '';
+    return `<b>${e.name}</b>${e.boss ? ' <span style="color:#e05ae0">(BOSS)</span>' : (e.miniboss ? ' <span style="color:#e0a03a">(Miniboss)</span>' : '')}<br>${appearanceLine}<br>HP ${e.hp}/${e.maxHp} · ATK ${e.atk[0]}-${e.atk[1]} · ARM ${e.armor}${poolLine}${abilityLine}<br>${stateFlavor || behaviorFlavor}${statusEffectsLine(e)}`;
   }
   if (e.kind === 'npc') {
     const aff = e.affection || 0;
@@ -10646,20 +10857,32 @@ function curNPCs() {
   return arr;
 }
 function companionFollowAI(n) {
-  let target = null, bestD = Infinity;
-  for (const m of curMonsters()) { if (!m.alive) continue; const d = chebyshev(n.x,n.y,m.x,m.y); if (d < bestD) { bestD = d; target = m; } }
-  if (target && bestD <= 1) { doAttack(n, target); return; }
-  if (target && bestD <= 6) { stepToward(n, target.x, target.y); return; }
+  const target = pickHostileTarget(n, 8);
+  n.target = target;
+  if (target) {
+    const d = chebyshev(n.x, n.y, target.x, target.y);
+    if (d <= 1) { doAttack(n, target); return; }
+    if (d <= 6) { stepToward(n, target.x, target.y); return; }
+  }
   const dPlayer = chebyshev(n.x, n.y, player.x, player.y);
   if (dPlayer > 2) stepToward(n, player.x, player.y);
 }
+// ---- Living World AI framework, NPC side: guards/watchmen/captains defend against ANY hostile
+// faction creature that wanders into range (bandits, wild predators, the restless dead...), not
+// only the player -- exactly what makes a settlement feel actively protected instead of a stage
+// set that only reacts to you. Hunters/rangers do the same but only for genuine wild game (their
+// actual job), and civilians who notice something hostile fighting nearby get scared and run,
+// rather than standing around like furniture while a wolf tears through the market square. ----
 function npcAI(n) {
   if (n.statusPoison) processEntityStatus(n);
   if (!n.alive || n.hp <= 0) return;
   if (n.following) { companionFollowAI(n); return; }
+  regenEntityAIPools(n);
   const dist = chebyshev(n.x, n.y, player.x, player.y);
   const invisible = getBuff('invis') > 0;
-  if (!n.hostile && ['guard','watchman','captain'].includes(n.roleId) && !curIsDungeon() && !invisible) {
+
+  // pre-existing bounty-triggered hostility toward the player specifically -- unchanged
+  if (!n.hostile && NPC_DEFENDER_ROLES.has(n.roleId) && !curIsDungeon() && !invisible) {
     const region = getRegionKey(n.x, n.y);
     const bounty = (player.bounties || {})[region] || 0;
     if (bounty >= 30 && dist <= 8 && hasLOS(n.x, n.y, player.x, player.y)) { n.hostile = true; log(`${n.name} recognizes you and draws their weapon!`); }
@@ -10670,9 +10893,31 @@ function npcAI(n) {
     if (seesPlayer || n.engaged) {
       n.engaged = true;
       if (dist <= 1) doAttack(n, player); else if (dist <= 8) stepToward(n, player.x, player.y);
-    }
+    } else wander(n);
     return;
   }
+
+  const isDefender = NPC_DEFENDER_ROLES.has(n.roleId), isHunter = NPC_HUNTER_ROLES.has(n.roleId);
+  if (isDefender || isHunter) {
+    let target = pickHostileTarget(n, isDefender ? 8 : 7);
+    if (target && isHunter && !isDefender && entityFaction(target) === 'settlement') target = null; // hunters stay out of settlement politics
+    n.target = target;
+    if (target) {
+      n.engaged = true;
+      const d = chebyshev(n.x, n.y, target.x, target.y);
+      if (d <= 1) doAttack(n, target); else stepToward(n, target.x, target.y);
+      return;
+    }
+    if (n.engaged) { n.engaged = false; }
+    if (n.aiState === 'patrol') { runIdleState(n, 'patrol'); return; }
+    wander(n);
+    return;
+  }
+
+  // civilians: something hostile nearby means it's time to run, not carry on shopping
+  const threat = pickHostileTarget(n, 6);
+  if (threat) { stepAway(n, threat.x, threat.y); return; }
+  if (n.aiState === 'patrol') { runIdleState(n, 'patrol'); return; }
   wander(n);
 }
 function relocateAllies() {
@@ -11105,7 +11350,9 @@ function generateBestiaryGuideHTML() {
     html += `<div class="modal-opt" style="margin-top:6px"><b style="text-transform:capitalize">${f}</b></div>`;
     byFaction[f].sort((a,b) => (a.dtier||a.bossPower||0) - (b.dtier||b.bossPower||0)).forEach(m => {
       const tag = m.boss ? ` <span class="dim">[BOSS, power ${m.bossPower||'?'}]</span>` : (m.miniboss ? ' <span class="dim">[miniboss]</span>' : '');
-      const behaviorTags = [m.behavior, m.splitInto?'splits':null, m.summonId?'summons':null, m.ambush?'ambush':null, m.burrower?'burrows':null, m.phaser?'phases':null, m.breathWeapon?'breathes '+m.breathWeapon:null, m.multiTile?'charges':null, m.multiattack?'multi-attack':null].filter(Boolean).join(', ');
+      const behaviorTags = [m.behavior, m.splitInto?'splits':null, m.summonId?'summons':null, m.ambush?'ambush':null, m.burrower?'burrows':null, m.phaser?'phases':null, m.breathWeapon?'breathes '+m.breathWeapon:null, m.multiTile?'charges':null, m.multiattack?'multi-attack':null,
+        m.usesMp?'casts spells':null, m.usesCharge?'cybernetic':null, m.thrower?'throws items':null, m.predator?'hunts weaker creatures':null,
+        m.flying?'flies':null, m.aquatic?'swims':null, m.fearless===false?'can be routed':null].filter(Boolean).join(', ');
       html += `<div class="modal-opt">• ${m.name}${tag} <span class="dim">(${behaviorTags})</span></div>`;
     });
   });
@@ -12020,7 +12267,7 @@ function getArmorOf(e) {
     }
     return a;
   }
-  return e.armor || 0;
+  return (e.armor || 0) + (e.buffArmorBonus || 0);
 }
 function doAttack(att, def) {
   const isPlayer = att === player;
@@ -12040,6 +12287,9 @@ function doAttack(att, def) {
   }
   let dmg = randInt(Math.random, dmgRange[0], dmgRange[1]) + Math.floor(effStr(att) / 4);
   let antiUndeadProc = false;
+  // a self-buffed non-player attacker (Overclock, etc -- see the AI framework's ability library)
+  // hits harder for the duration of its buff, same idea as the player's own strength buffs.
+  if (!isPlayer && att.buffAtkMult) dmg *= att.buffAtkMult;
   if (isPlayer) dmg += Math.floor(player.level / 5);
   if (isPlayer && weapon) dmg = Math.round(dmg * abilityPenaltyFactor(weaponStrDeficit()));
   if (isPlayer && weapon && weapon.broken) dmg = Math.round(dmg * 0.35);
@@ -12114,6 +12364,11 @@ function doAttack(att, def) {
   if (!isPlayer && att.causesConfuse && Math.random() < 0.35) { def.statusConfuse = (def.statusConfuse || 0) + 3; log(defIsPlayer ? 'Your mind reels in confusion!' : `${def.name}'s mind reels in confusion!`); }
   if (isPlayer && def !== player && (player.eldritchConfuseChance || 0) > 0 && Math.random() < player.eldritchConfuseChance) { def.statusConfuse = (def.statusConfuse || 0) + 3; log(`${def.name} reels in confusion at your unnatural touch!`); }
   if (isPlayer && def !== player && (player.eldritchFearChance || 0) > 0 && Math.random() < player.eldritchFearChance) { def.statusFear = (def.statusFear || 0) + 3; log(`${def.name} recoils in primal terror!`); }
+  // ---- Living World AI framework: a grudge. Whoever actually gets struck fights back against
+  // their attacker on their own next turn, even if faction disposition alone wouldn't normally
+  // put the two of them at odds (a provoked neutral beast, a struck civilian, a bandit who hit
+  // the wrong target in a crowd). See isHostileTo near monsterAI.
+  if (def !== player && def.alive && def.hp > 0) { if (!(def.grudgeAgainst instanceof Set)) def.grudgeAgainst = new Set(); def.grudgeAgainst.add(att); }
   if (def.hp <= 0) onDeath(def, att);
 }
 
@@ -12143,32 +12398,40 @@ function processEntityStatus(e) {
   if (e === player && player.mutationRegen) player.hp = Math.min(player.maxHp, player.hp + player.mutationRegen);
 }
 
-// ---- monster/boss AI v6: confusion status + breath weapons for overworld bosses ----
-function performBreathWeapon(m) {
+// ---- monster/boss AI v6: confusion status + breath weapons for overworld bosses. Generalized to
+// accept any target (defaults to the player so old call sites/scripted bosses stay unaffected) so
+// a dragon can breathe fire on a rival monster or an NPC just as readily as on the player. ----
+function performBreathWeapon(m, target) {
+  target = target || player;
+  const targetIsPlayer = target === player;
   let dmg = randInt(Math.random, Math.round(m.atk[0]*1.3), Math.round(m.atk[1]*1.6));
-  if (m.breathWeapon === 'fire' && getBuff('resistfire') > 0) dmg = Math.round(dmg * 0.4);
-  if (m.breathWeapon === 'fire' && player.fireDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - player.fireDmgReduction)));
-  if (m.breathWeapon === 'frost' && getBuff('resistfrost') > 0) dmg = Math.round(dmg * 0.4);
-  player.hp -= dmg;
-  lastDamageSource = `${m.name}'s ${m.breathWeapon} breath`;
+  if (targetIsPlayer) {
+    if (m.breathWeapon === 'fire' && getBuff('resistfire') > 0) dmg = Math.round(dmg * 0.4);
+    if (m.breathWeapon === 'fire' && player.fireDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - player.fireDmgReduction)));
+    if (m.breathWeapon === 'frost' && getBuff('resistfrost') > 0) dmg = Math.round(dmg * 0.4);
+  } else {
+    if (m.breathWeapon === 'fire' && target.fireDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - target.fireDmgReduction)));
+  }
+  target.hp -= dmg;
+  if (targetIsPlayer) lastDamageSource = `${m.name}'s ${m.breathWeapon} breath`;
   Sound.play('breathWeapon');
-  log(`${m.name} unleashes a devastating blast of ${m.breathWeapon}! You take ${dmg} damage.`);
+  log(`${m.name} unleashes a devastating blast of ${m.breathWeapon} at ${targetIsPlayer ? 'you' : target.name}! ${targetIsPlayer ? 'You take' : target.name + ' takes'} ${dmg} damage.`);
   if (m.breathWeapon === 'fire') {
-    const destroyed = scorchArea(player.x, player.y, 3);
+    const destroyed = scorchArea(target.x, target.y, 3);
     if (destroyed > 0) log(`The flames roar outward, destroying ${destroyed} trees!`);
-    igniteArea(player.x, player.y, 2);
+    igniteArea(target.x, target.y, 2);
   } else if (m.breathWeapon === 'frost') {
     // frost breath deals no extra status effect -- it just hits harder, handled in the dmg roll above
-    player.stamina = Math.max(0, (player.stamina||0) - 15);
-    log('The frost saps your stamina.');
+    if (targetIsPlayer) { player.stamina = Math.max(0, (player.stamina||0) - 15); log('The frost saps your stamina.'); }
+    else { target.statusSlow = (target.statusSlow||0) + 3; }
   } else if (m.breathWeapon === 'poison') {
-    player.statusPoison = (player.statusPoison||0) + 5;
-    log('A cloud of caustic vapor clings to you.');
+    target.statusPoison = (target.statusPoison||0) + 5;
+    log(targetIsPlayer ? 'A cloud of caustic vapor clings to you.' : `${target.name} is engulfed in caustic vapor.`);
   } else if (m.breathWeapon === 'void') {
-    player.statusConfuse = (player.statusConfuse||0) + 3;
-    log('Your mind reels from the unearthly blast.');
+    target.statusConfuse = (target.statusConfuse||0) + 3;
+    log(targetIsPlayer ? 'Your mind reels from the unearthly blast.' : `${target.name}'s mind reels from the unearthly blast.`);
   }
-  if (player.hp <= 0) onDeath(player, m);
+  if (target.hp <= 0) onDeath(target, m);
 }
 
 // ---- AI support helpers: enable splitting, summoning, and other special mechanics ----
@@ -12203,70 +12466,301 @@ function attackMulti(att, def) {
   }
 }
 
-function monsterAI(m) {
-  const dist = chebyshev(m.x, m.y, player.x, player.y);
-  if (m.statusPoison || m.regen || m.statusSlow) processEntityStatus(m);
-  if (!m.alive || m.hp <= 0) return;
-  if (m.statusSlow > 0 && Math.random() < 0.5 && dist > 1) return;
-  if (m.statusConfuse > 0) { m.statusConfuse--; wander(m); return; }
-  if (m.statusFear > 0) { m.statusFear--; stepAway(m, player.x, player.y); return; }
-  const vision = 9;
-  const invisible = getBuff('invis') > 0;
-  let seesPlayer = dist <= vision && hasLOS(m.x, m.y, player.x, player.y);
-  if (invisible && dist > 1) { seesPlayer = false; m.engaged = false; }
+// ============================================================================
+// ---- LIVING WORLD AI FRAMEWORK — PART B: the runtime state machine --------
+// See Part A (near the faction/ability tables, before "NPC / Monster
+// factories") for the data this leans on. Every non-scripted monster/NPC now
+// carries an `aiState` -- dormant / wander / patrol / alert / combat / flee /
+// return -- and moves between those states based on what it can currently
+// sense (sight, an ongoing fight nearby) and its own condition (HP%, morale).
+// All the original special-case tactics (ambush, burrower, phaser, turret,
+// summoner, gascloud, kiter, charger, swarm, breath weapons...) are preserved
+// verbatim in behavior, just generalized to fire against whichever hostile
+// entity is actually the current target instead of being hardcoded to the
+// player -- so the exact same code path that made a wolf hunt you now lets
+// that wolf hunt a rabbit, or a guard, or another monster entirely.
+// ============================================================================
 
-  // ---- Phantom Step decoy: a lingering double left behind can pull unengaged monsters, or
-  // even engaged ones some of the time, into wasting a turn on empty air. ----
-  if (activeDecoys.length && !m.ambush) {
-    for (const dc of activeDecoys) {
-      const dd = chebyshev(m.x, m.y, dc.x, dc.y);
-      if (dd <= vision && hasLOS(m.x, m.y, dc.x, dc.y) && (!m.engaged || Math.random() < 0.3) && (!seesPlayer || dd < dist)) {
-        if (dd <= 1) { log(`${m.name} lashes out at empty air where a phantom stood!`); return; }
-        stepToward(m, dc.x, dc.y);
-        return;
+// ---- hostility: the single source of truth every AI loop below calls into.
+// Preserves 100% of the old player-facing rules (an NPC's own .hostile flag;
+// "any non-'flee' monster fights the player on sight") so nothing regresses,
+// then layers faction disposition + predator/prey + grudges on top for every
+// other pairing (monster-vs-monster, monster-vs-NPC, NPC-vs-monster, ally
+// fights). See Part A above for FACTION_ALIGNMENT/rawFactionDisposition.
+function isHostileTo(a, b) {
+  if (!a || !b || a === b || !a.alive || !b.alive || a.hp <= 0 || b.hp <= 0) return false;
+  if ((a === player || b === player) && (a.kind === 'ally' || b.kind === 'ally')) return false;
+  if (a.kind === 'monster' && a.behavior === 'flee') return false; // prey/passive creatures never start a fight
+  if (a.grudgeAgainst instanceof Set && a.grudgeAgainst.has(b)) return true;
+
+  if (a === player || b === player) {
+    const mon = a === player ? b : a;
+    if (mon.kind === 'npc') return !!mon.hostile;
+    if (mon.kind === 'monster') return mon.behavior !== 'flee';
+    return false;
+  }
+
+  if (a.predator && b.prey) return true; // wolves hunt rabbits even though wild|wild defaults neutral
+
+  const fA = entityFaction(a), fB = entityFaction(b);
+  if (fA === fB) return false; // same faction never fights itself
+  const disp = rawFactionDisposition(fA, fB);
+  if (disp === 'hostile') return true;
+  if (disp === 'wary') return !!(a.engaged || b.engaged || a.aiState === 'combat' || b.aiState === 'combat');
+  return false;
+}
+// every entity currently capable of being a fight target, for target-selection scans below.
+function gatherPotentialTargets(e) {
+  const arr = [player];
+  arr.push(...curAllies());
+  arr.push(...curMonsters());
+  arr.push(...curNPCs());
+  return arr;
+}
+// picks (and remembers) the nearest thing `e` is hostile toward and can currently see. Sticks
+// with the current target for a bit past the raw vision range so a fight doesn't reset itself
+// every time the two combatants briefly lose exact line of sight around a corner.
+function pickHostileTarget(e, visionRange) {
+  if (e.target && e.target.alive && e.target.hp > 0 && isHostileTo(e, e.target)) {
+    if (chebyshev(e.x, e.y, e.target.x, e.target.y) <= visionRange + 3) return e.target;
+  }
+  let best = null, bestD = Infinity;
+  for (const cand of gatherPotentialTargets(e)) {
+    if (cand === e || !cand.alive || cand.hp <= 0) continue;
+    if (!isHostileTo(e, cand)) continue;
+    const d = chebyshev(e.x, e.y, cand.x, cand.y);
+    if (d > visionRange || d >= bestD) continue;
+    if (!hasLOS(e.x, e.y, cand.x, cand.y)) continue;
+    bestD = d; best = cand;
+  }
+  return best;
+}
+// broadcasts a fresh target to nearby same-side allies so a pack/garrison joins a fight together
+// instead of trickling in one at a time -- wolves hunt in packs, guards call for backup.
+function alertNearbyAllies(e, target, radius) {
+  const eFaction = entityFaction(e);
+  for (const other of gatherPotentialTargets(e)) {
+    if (other === e || other === target || !other.alive || other === player) continue;
+    if (chebyshev(e.x, e.y, other.x, other.y) > (radius || 6)) continue;
+    if (rawFactionDisposition(entityFaction(other), eFaction) !== 'allied') continue;
+    if (other.aiState === 'combat' || (other.kind === 'npc' && other.hostile)) continue;
+    if (!isHostileTo(other, target)) continue;
+    other.target = target; other.aiState = 'combat'; other.engaged = true;
+  }
+}
+// entities `caster` is hostile to within radius of (x,y) -- used by AoE monster abilities so a
+// thrown firebomb or a gas cloud only ever catches things the caster actually wants to hit.
+function hostilesToEntity(caster, cx, cy, radius) {
+  const out = [];
+  for (const cand of gatherPotentialTargets(caster)) {
+    if (cand === caster || !cand.alive || cand.hp <= 0) continue;
+    if (chebyshev(cand.x, cand.y, cx, cy) > radius) continue;
+    if (isHostileTo(caster, cand)) out.push(cand);
+  }
+  return out;
+}
+
+// ---- resource pools & cooldowns: ticks mp/charge/ammo/stamina regen, ability cooldowns, and
+// temporary self-buffs (Overclock etc) for any entity that has them. Safe no-op for entities
+// without pools (most NPCs, small critters), so it's cheap to call unconditionally each turn.
+function regenEntityAIPools(e) {
+  if (e.maxMp) e.mp = Math.min(e.maxMp, (e.mp || 0) + Math.max(1, Math.round(e.maxMp * 0.08)));
+  if (e.maxCharge) e.charge = Math.min(e.maxCharge, (e.charge || 0) + Math.max(1, Math.round(e.maxCharge * 0.1)));
+  if (e.maxStamina) e.stamina = Math.min(e.maxStamina, (e.stamina || 0) + 4);
+  if (e.maxAmmo && !e.target) e.ammo = Math.min(e.maxAmmo, (e.ammo || 0) + (Math.random() < 0.3 ? 1 : 0)); // slowly restocks while not fighting
+  if (e.abilityCooldowns) for (const k in e.abilityCooldowns) if (e.abilityCooldowns[k] > 0) e.abilityCooldowns[k]--;
+  if (e.buffArmorTurns) { e.buffArmorTurns--; if (e.buffArmorTurns <= 0) e.buffArmorBonus = 0; }
+  if (e.buffAtkTurns) { e.buffAtkTurns--; if (e.buffAtkTurns <= 0) e.buffAtkMult = 1; }
+}
+function monsterCanAfford(m, ab) {
+  if (!ab.resource) return true;
+  if (ab.resource === 'mp') return (m.mp || 0) >= ab.cost;
+  if (ab.resource === 'charge') return (m.charge || 0) >= ab.cost;
+  if (ab.resource === 'ammo') return (m.ammo || 0) > 0;
+  return true;
+}
+function monsterSpendCost(m, ab) {
+  if (ab.resource === 'mp') m.mp -= ab.cost;
+  else if (ab.resource === 'charge') m.charge -= ab.cost;
+  else if (ab.resource === 'ammo') m.ammo -= 1;
+}
+// executes a monster ability from MONSTER_ABILITY_LIBRARY against a target -- shares the same
+// damage/status vocabulary the player's own spells use (bolt/drain/debuff/heal/buff/summon).
+function monsterCastAt(caster, ab, target) {
+  const verb = ab.thrown ? 'hurls' : (ab.kind === 'heal' || ab.kind === 'buff' ? 'channels' : 'casts');
+  const atWhom = (ab.kind === 'heal' || ab.kind === 'buff') ? '' : ` at ${target === player ? 'you' : target.name}`;
+  log(`${caster.name} ${verb} ${ab.name}${atWhom}!`);
+  Sound.play(ab.kind === 'heal' || ab.kind === 'buff' ? 'castSpell' : (ab.thrown ? 'throw' : 'enemyCast'));
+  switch (ab.kind) {
+    case 'bolt': case 'drain': {
+      let dmg = randInt(Math.random, ab.power[0], ab.power[1]);
+      dmg = Math.round(dmg * (0.4 + 0.6 * (caster.powerScale || 1))); // gentler than raw powerScale so casters don't dwarf melee at high depth
+      dmg = Math.max(1, dmg - Math.floor(getArmorOf(target) / 2));
+      if (target === player) {
+        if (ab.element === 'fire' && player.fireDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - player.fireDmgReduction)));
+        if (ab.element === 'frost' && getBuff('resistfrost') > 0) dmg = Math.round(dmg * 0.5);
       }
+      target.hp -= dmg;
+      if (settings.showDamageNumbers) spawnFloatingText(target.x, target.y, String(dmg), '#c07af0');
+      log(`${target === player ? 'You take' : target.name + ' takes'} ${dmg} damage${ab.element ? (' of ' + ab.element) : ''}.`);
+      if (ab.slow) target.statusSlow = (target.statusSlow || 0) + ab.slow;
+      if (ab.kind === 'drain') caster.hp = Math.min(caster.maxHp, caster.hp + Math.round(dmg * 0.5));
+      if (target === player) lastDamageSource = `${caster.name}'s ${ab.name}`;
+      if (target.hp <= 0) onDeath(target, caster);
+      break;
+    }
+    case 'aoe': {
+      const hit = hostilesToEntity(caster, target.x, target.y, ab.radius || 2);
+      for (const h of hit) {
+        let dmg = Math.max(1, randInt(Math.random, ab.power[0], ab.power[1]) - Math.floor(getArmorOf(h) / 2));
+        h.hp -= dmg;
+        if (settings.showDamageNumbers) spawnFloatingText(h.x, h.y, String(dmg), '#e0785a');
+        if (h === player) lastDamageSource = `${caster.name}'s ${ab.name}`;
+        if (h.hp <= 0) onDeath(h, caster);
+      }
+      log(`The blast catches ${hit.length} nearby!`);
+      if (ab.element === 'fire') igniteArea(target.x, target.y, 1);
+      break;
+    }
+    case 'debuff': {
+      const turns = ab.dur || 4;
+      if (ab.stat === 'fear') { target.statusFear = (target.statusFear || 0) + turns; log(target === player ? 'Terror grips you!' : `Terror grips ${target.name}!`); }
+      else if (ab.stat === 'confuse') { target.statusConfuse = (target.statusConfuse || 0) + turns; log(target === player ? 'Your mind reels in confusion!' : `${target.name}'s mind reels in confusion!`); }
+      else if (ab.stat === 'slow') { target.statusSlow = (target.statusSlow || 0) + turns; log(target === player ? 'You feel sluggish.' : `${target.name} is slowed.`); }
+      break;
+    }
+    case 'heal': { const amt = randInt(Math.random, ab.power[0], ab.power[1]); caster.hp = Math.min(caster.maxHp, caster.hp + amt); log(`${caster.name} mends its wounds for ${amt}.`); break; }
+    case 'buff': {
+      if (ab.statField === 'armor') { caster.buffArmorBonus = ab.power || 4; caster.buffArmorTurns = ab.dur || 8; }
+      else { caster.buffAtkMult = 1 + ((ab.power || 4) / 10); caster.buffAtkTurns = ab.dur || 8; }
+      log(`${caster.name} surges with power!`);
+      break;
+    }
+    case 'summon': {
+      if ((caster.summonedCount || 0) >= (ab.summonMax || 2)) break;
+      const spot = findOpenAdjacent(caster.x, caster.y);
+      if (spot) {
+        const minion = makeMonster(ab.summonId, spot.x, spot.y, Math.max(1, (caster.depthScale || 1) - 1), Math.random);
+        minion.faction = caster.faction; minion.aiState = 'combat'; minion.target = target; minion.engaged = true;
+        addMonsterToWorld(minion);
+        caster.summonedCount = (caster.summonedCount || 0) + 1;
+        log(`${caster.name} raises ${minion.name} to fight at its side!`);
+      }
+      break;
     }
   }
+}
+// attempts one ability cast this turn; returns true if it used the turn.
+function tryMonsterCast(m, target, dist) {
+  if (!m.abilities || !m.abilities.length) return false;
+  if (Math.random() < 0.35) return false; // don't cast every single turn -- keep positioning/melee in the mix
+  for (const abId of m.abilities) {
+    const ab = MONSTER_ABILITY_LIBRARY[abId];
+    if (!ab || (m.abilityCooldowns[abId] || 0) > 0) continue;
+    if (ab.range && dist > ab.range) continue;
+    if (!monsterCanAfford(m, ab)) continue;
+    if (ab.kind === 'heal' && m.hp > m.maxHp * 0.7) continue; // don't waste a heal near full HP
+    if (ab.kind === 'buff' && m.buffAtkTurns > 0) continue; // already buffed
+    monsterSpendCost(m, ab);
+    m.abilityCooldowns[abId] = ab.cooldown;
+    monsterCastAt(m, ab, target);
+    return true;
+  }
+  return false;
+}
 
-  // ---- berserker: once badly wounded, surges with strength (one-time, then fights as normal) ----
-  if (m.berserkHpPct && !m.berserked && m.hp <= m.maxHp * m.berserkHpPct) {
-    m.berserked = true;
-    m.str = Math.round(m.str * 1.4);
-    m.atk = [Math.round(m.atk[0] * 1.4), Math.round(m.atk[1] * 1.4)];
-    m.dex = Math.round(m.dex * 1.15);
-    log(`${m.name} flies into a berserk rage!`);
+// ---- state transitions: called once per turn before dispatching to the state's own handler.
+// dormant creatures only ever wake from a genuinely close threat (an ambush) or from
+// alertNearbyAllies waking them directly when a pack-mate engages; every other state re-scans
+// for a fresh hostile target each turn and drops straight into 'combat' the moment it finds one.
+function updateAIState(m, vision) {
+  if (m.aiState === 'dormant') {
+    const target = pickHostileTarget(m, 3);
+    if (target) { m.aiState = 'combat'; m.target = target; m.engaged = true; log(`${m.name} stirs awake!`); alertNearbyAllies(m, target, 5); }
+    return;
+  }
+  if (m.aiState === 'combat') return; // handled entirely by runCombatState's own target-loss logic
+  const target = pickHostileTarget(m, vision);
+  if (target) {
+    if (m.aiState !== 'alert') log(`${m.name} notices ${target === player ? 'you' : target.name}!`);
+    m.aiState = 'combat'; m.target = target; m.engaged = true;
+    alertNearbyAllies(m, target, 6);
+    return;
+  }
+  if (m.aiState === 'alert') { m.alertTimer = (m.alertTimer || 0) - 1; if (m.alertTimer <= 0) m.aiState = 'return'; }
+}
+// used once by applyLoadedSave to scrub stale cross-entity references after a reload (see there).
+function resetStaleAIRef(e) {
+  if (!e) return;
+  e.target = null; e.engaged = false; e.grudgeAgainst = null;
+  if (e.aiState === 'combat' || e.aiState === 'alert' || e.aiState === 'flee') e.aiState = e.sleeper ? 'dormant' : 'wander';
+}
+function loseTarget(m) {
+  m.alertPoint = m.target ? { x: m.target.x, y: m.target.y } : { x: m.x, y: m.y };
+  m.aiState = 'alert'; m.alertTimer = 5; m.target = null; m.engaged = false;
+}
+function runAlertState(m) {
+  if (!m.alertPoint || chebyshev(m.x, m.y, m.alertPoint.x, m.alertPoint.y) <= 1) { m.aiState = 'return'; return; }
+  stepToward(m, m.alertPoint.x, m.alertPoint.y);
+}
+function runReturnState(m) {
+  const hx = m.homeX != null ? m.homeX : m.x, hy = m.homeY != null ? m.homeY : m.y;
+  if (chebyshev(m.x, m.y, hx, hy) <= 1) { m.aiState = m.sleeper ? 'dormant' : (Math.random() < 0.5 ? 'patrol' : 'wander'); return; }
+  stepToward(m, hx, hy);
+}
+function runFleeState(m) {
+  const threat = (m.fleeFrom && m.fleeFrom.alive) ? m.fleeFrom : ((m.target && m.target.alive) ? m.target : null);
+  if (!threat) { m.aiState = 'return'; return; }
+  const dist = chebyshev(m.x, m.y, threat.x, threat.y);
+  if (dist >= 8 || m.hp >= m.maxHp * ((m.fleeHpPct || 0.2) + 0.15)) { m.aiState = 'return'; m.fleeFrom = null; m.target = null; m.engaged = false; return; }
+  stepAway(m, threat.x, threat.y);
+}
+function runIdleState(m, mode) {
+  if (mode === 'patrol' && m.homeX != null) {
+    const d = chebyshev(m.x, m.y, m.homeX, m.homeY);
+    if (d > (m.patrolRadius || 6) && Math.random() < 0.6) { stepToward(m, m.homeX, m.homeY); return; }
+  }
+  if (Math.random() < 0.35) wander(m); // idle creatures don't move every single turn -- calmer, more alive than constant twitching
+}
+// the bulk of the original behavior-dispatch table, generalized to fight `m.target` instead of
+// always the player -- every special mechanic (ambush/burrower/phaser/turret/summoner/gascloud/
+// kiter/ranged+ammo/charger+stamina/swarm/breath weapons/multiattack) still works exactly as
+// before, it's just no longer hardcoded to a single hardcoded opponent.
+function runCombatState(m, vision) {
+  const target = m.target;
+  if (!target || !target.alive || target.hp <= 0) { loseTarget(m); return; }
+  const invisibleFromMe = target === player && getBuff('invis') > 0 && chebyshev(m.x, m.y, target.x, target.y) > 1;
+  const dist = chebyshev(m.x, m.y, target.x, target.y);
+  const seesTarget = !invisibleFromMe && dist <= vision && hasLOS(m.x, m.y, target.x, target.y);
+  if (!seesTarget && dist > vision + 4) { loseTarget(m); return; }
+
+  // morale: panics and runs once badly hurt, unless fearless (undead/constructs/bosses/etc)
+  if (!m.fearless && m.fleeHpPct && m.hp <= m.maxHp * m.fleeHpPct) {
+    m.aiState = 'flee'; m.fleeFrom = target; log(`${m.name} panics and tries to flee!`);
+    runFleeState(m); return;
   }
 
-  // ---- scripted story bosses: bespoke multi-phase AI takes over the whole turn ----
-  if (m.scriptedAI && STORY_BOSS_AI[m.scriptedAI]) {
-    if (!m.engageLineShown && (seesPlayer || dist <= 6)) {
-      m.engageLineShown = true;
-      if (m.engageLine) log(`${m.name}: "${m.engageLine}"`);
-      Sound.play('guardAlert');
-    }
-    if (STORY_BOSS_AI[m.scriptedAI](m, dist, seesPlayer)) return;
-  }
+  if (seesTarget && tryMonsterCast(m, target, dist)) return;
 
-  // ---- ambush: invisible/passive until the player is right on top of it ----
+  // ---- ambush: invisible/passive until the target is right on top of it ----
   if (m.ambush && !m.ambushTriggered) {
     if (dist > (m.ambushRange || 2)) return;
     m.ambushTriggered = true;
-    m.engaged = true;
     log(`${m.name} bursts from hiding!`);
   }
 
-  // ---- burrower: periodically goes underground (safe & hidden), then resurfaces near the player ----
+  // ---- burrower: periodically goes underground (safe & hidden), then resurfaces near the target ----
   if (m.burrower) {
     if (m.burrowed) {
       m.burrowTimer--;
       if (m.burrowTimer <= 0) {
         m.burrowed = false;
-        const spot = findOpenAdjacent(player.x, player.y);
+        const spot = findOpenAdjacent(target.x, target.y);
         if (spot) { m.x = spot.x; m.y = spot.y; }
         log(`${m.name} bursts up from below!`);
       }
       return;
-    } else if (seesPlayer && dist <= 5 && dist > 1 && Math.random() < 0.15) {
+    } else if (seesTarget && dist <= 5 && dist > 1 && Math.random() < 0.15) {
       m.burrowed = true; m.burrowTimer = randInt(Math.random, 2, 3);
       log(`${m.name} burrows underground!`);
       return;
@@ -12274,24 +12768,21 @@ function monsterAI(m) {
   }
 
   // ---- phaser: blinks short distances instead of walking, hard to pin down ----
-  if (m.phaser && seesPlayer && dist >= 2 && Math.random() < 0.3) {
-    const spot = findOpenAdjacent(player.x, player.y);
+  if (m.phaser && seesTarget && dist >= 2 && Math.random() < 0.3) {
+    const spot = findOpenAdjacent(target.x, target.y);
     if (spot) { m.x = spot.x; m.y = spot.y; log(`${m.name} flickers and reappears nearby!`); return; }
   }
 
-  // ---- turret: stationary, only ever attacks at range ----
-  if (m.behavior === 'turret') {
-    if (seesPlayer && dist <= (m.range || 6)) doAttack(m, player);
-    return;
-  }
+  if (m.behavior === 'turret') { if (seesTarget && dist <= (m.range || 6)) doAttack(m, target); return; }
 
   // ---- summoner: calls in reinforcements up to a cap, then fights normally ----
-  if (m.summonId && (m.summonCount || 0) < (m.summonMax || 2) && seesPlayer && dist <= 7) {
+  if (m.summonId && (m.summonCount || 0) < (m.summonMax || 2) && seesTarget && dist <= 7) {
     m.summonCooldown = (m.summonCooldown || 0) - 1;
     if (m.summonCooldown <= 0) {
       const spot = findOpenAdjacent(m.x, m.y);
       if (spot) {
         const minion = makeMonster(m.summonId, spot.x, spot.y, Math.max(1, (m.depthScale || 1) - 1), Math.random);
+        minion.aiState = 'combat'; minion.target = target; minion.engaged = true;
         addMonsterToWorld(minion);
         m.summonCount = (m.summonCount || 0) + 1;
         m.summonCooldown = 6;
@@ -12310,72 +12801,131 @@ function monsterAI(m) {
       m.gasCooldown = 5;
       return;
     }
-    if (seesPlayer && dist < 6) { if (dist > 1) stepToward(m, player.x, player.y); else attackMulti(m, player); }
+    if (seesTarget && dist < 6) { if (dist > 1) stepToward(m, target.x, target.y); else attackMulti(m, target); }
     else wander(m);
-    return;
-  }
-
-  if (m.behavior === 'flee') {
-    if (seesPlayer && dist < 6) stepAway(m, player.x, player.y); else wander(m);
     return;
   }
 
   // ---- kiter: ranged attacker that actively maintains a preferred distance band ----
   if (m.behavior === 'kiter') {
-    if (seesPlayer && dist <= (m.range || 6)) {
+    if (seesTarget && dist <= (m.range || 6)) {
+      if (m.maxAmmo && (m.ammo || 0) <= 0) { stepToward(m, target.x, target.y); if (dist <= 1) attackMulti(m, target); return; }
       const pref = m.preferredRange || 4;
-      if (dist < pref - 1) stepAway(m, player.x, player.y);
-      else if (dist > pref + 1) stepToward(m, player.x, player.y);
-      doAttack(m, player);
-    } else if (seesPlayer) stepToward(m, player.x, player.y); else wander(m);
+      if (dist < pref - 1) stepAway(m, target.x, target.y);
+      else if (dist > pref + 1) stepToward(m, target.x, target.y);
+      doAttack(m, target);
+      if (m.maxAmmo) m.ammo = Math.max(0, m.ammo - 1);
+    } else if (seesTarget) stepToward(m, target.x, target.y); else wander(m);
     return;
   }
 
+  // ---- ranged: keeps its distance and shoots -- but runs dry and has to close in eventually ----
   if (m.behavior === 'ranged') {
-    if (seesPlayer && dist <= 6) {
-      if (dist <= 2) stepAway(m, player.x, player.y);
-      if (dist <= 6) doAttack(m, player);
-    } else if (seesPlayer) stepToward(m, player.x, player.y); else wander(m);
+    if (seesTarget && dist <= 6) {
+      if (m.maxAmmo && (m.ammo || 0) <= 0) {
+        if (dist <= 1) attackMulti(m, target); else stepToward(m, target.x, target.y);
+        return;
+      }
+      if (dist <= 2) stepAway(m, target.x, target.y);
+      doAttack(m, target);
+      if (m.maxAmmo) m.ammo = Math.max(0, m.ammo - 1);
+    } else if (seesTarget) stepToward(m, target.x, target.y); else wander(m);
     return;
   }
 
   // ---- charger: closes distance fast (multiple tiles/turn) and can slam or breathe on approach ----
   if (m.behavior === 'charger') {
-    if (seesPlayer || m.engaged) {
-      m.engaged = true;
-      if (m.breathWeapon && dist <= 4 && dist >= 2 && Math.random() < 0.35) { performBreathWeapon(m); return; }
-      if (dist <= 1) { attackMulti(m, player); return; }
-      stepTowardMulti(m, player.x, player.y, m.multiTile || 2);
-      if (chebyshev(m.x, m.y, player.x, player.y) <= 1) attackMulti(m, player);
-    } else wander(m);
+    if (m.breathWeapon && dist <= 4 && dist >= 2 && Math.random() < 0.35 && (!m.maxStamina || m.stamina >= 15)) {
+      performBreathWeapon(m, target); if (m.maxStamina) m.stamina -= 15; return;
+    }
+    if (dist <= 1) { attackMulti(m, target); return; }
+    if (!m.maxStamina || m.stamina >= 5) { stepTowardMulti(m, target.x, target.y, m.multiTile || 2); if (m.maxStamina) m.stamina -= 5; }
+    else stepToward(m, target.x, target.y);
+    if (chebyshev(m.x, m.y, target.x, target.y) <= 1) attackMulti(m, target);
     return;
   }
 
   // ---- swarm: individually weak, but fights harder when packed with its own kind ----
   if (m.behavior === 'swarm') {
-    if (seesPlayer || m.engaged) {
-      m.engaged = true;
-      if (dist <= 1) {
-        const allies = curMonsters().filter(o => o.alive && o.monsterId === m.monsterId && o !== m && chebyshev(o.x, o.y, m.x, m.y) <= 3).length;
-        if (allies >= 2) {
-          const orig = m.atk;
-          m.atk = [Math.round(orig[0] * 1.5), Math.round(orig[1] * 1.5)];
-          doAttack(m, player);
-          m.atk = orig;
-        } else doAttack(m, player);
-      } else stepToward(m, player.x, player.y);
-    } else wander(m);
+    if (dist <= 1) {
+      const allies = curMonsters().filter(o => o.alive && o.monsterId === m.monsterId && o !== m && chebyshev(o.x, o.y, m.x, m.y) <= 3).length;
+      if (allies >= 2) {
+        const orig = m.atk;
+        m.atk = [Math.round(orig[0] * 1.5), Math.round(orig[1] * 1.5)];
+        doAttack(m, target);
+        m.atk = orig;
+      } else doAttack(m, target);
+    } else stepToward(m, target.x, target.y);
     return;
   }
 
   // default: aggressive melee (also carries multiattack / multiTile / breathWeapon if present)
-  if (seesPlayer || m.engaged) {
-    m.engaged = true;
-    if (m.breathWeapon && dist <= 4 && dist >= 2 && Math.random() < 0.35) { performBreathWeapon(m); return; }
-    if (dist <= 1) attackMulti(m, player);
-    else if (m.multiTile) { stepTowardMulti(m, player.x, player.y, m.multiTile); if (chebyshev(m.x, m.y, player.x, player.y) <= 1) attackMulti(m, player); }
-    else stepToward(m, player.x, player.y);
-  } else wander(m);
+  if (m.breathWeapon && dist <= 4 && dist >= 2 && Math.random() < 0.35 && (!m.maxStamina || m.stamina >= 15)) {
+    performBreathWeapon(m, target); if (m.maxStamina) m.stamina -= 15; return;
+  }
+  if (dist <= 1) attackMulti(m, target);
+  else if (m.multiTile) { stepTowardMulti(m, target.x, target.y, m.multiTile); if (chebyshev(m.x, m.y, target.x, target.y) <= 1) attackMulti(m, target); }
+  else stepToward(m, target.x, target.y);
+}
+
+function monsterAI(m) {
+  if (m.statusPoison || m.regen || m.statusSlow) processEntityStatus(m);
+  if (!m.alive || m.hp <= 0) return;
+  regenEntityAIPools(m);
+  if (m.statusSlow > 0 && Math.random() < 0.5) return;
+  if (m.statusConfuse > 0) { m.statusConfuse--; wander(m); return; }
+  if (m.statusFear > 0) { m.statusFear--; const away = (m.target && m.target.alive) ? m.target : player; stepAway(m, away.x, away.y); return; }
+
+  const vision = m.visionRange || 9;
+
+  // ---- scripted story bosses: bespoke multi-phase AI takes over the whole turn, untouched ----
+  if (m.scriptedAI && STORY_BOSS_AI[m.scriptedAI]) {
+    const dist = chebyshev(m.x, m.y, player.x, player.y);
+    const invisible = getBuff('invis') > 0;
+    let seesPlayer = dist <= vision && hasLOS(m.x, m.y, player.x, player.y);
+    if (invisible && dist > 1) seesPlayer = false;
+    if (!m.engageLineShown && (seesPlayer || dist <= 6)) {
+      m.engageLineShown = true;
+      if (m.engageLine) log(`${m.name}: "${m.engageLine}"`);
+      Sound.play('guardAlert');
+    }
+    if (STORY_BOSS_AI[m.scriptedAI](m, dist, seesPlayer)) return;
+  }
+
+  // ---- berserker: once badly wounded, surges with strength (one-time, then fights as normal) ----
+  if (m.berserkHpPct && !m.berserked && m.hp <= m.maxHp * m.berserkHpPct) {
+    m.berserked = true;
+    m.str = Math.round(m.str * 1.4);
+    m.atk = [Math.round(m.atk[0] * 1.4), Math.round(m.atk[1] * 1.4)];
+    m.dex = Math.round(m.dex * 1.15);
+    log(`${m.name} flies into a berserk rage!`);
+  }
+
+  // ---- Phantom Step decoy: a lingering double left behind can pull unengaged monsters, or
+  // even engaged ones some of the time, into wasting a turn on empty air. Only relevant while
+  // the player is actually a valid target for this monster in the first place. ----
+  if (activeDecoys.length && !m.ambush && isHostileTo(m, player) && (!m.target || m.target === player)) {
+    const dist = chebyshev(m.x, m.y, player.x, player.y);
+    for (const dc of activeDecoys) {
+      const dd = chebyshev(m.x, m.y, dc.x, dc.y);
+      if (dd <= vision && hasLOS(m.x, m.y, dc.x, dc.y) && (!m.engaged || Math.random() < 0.3) && (dd < dist)) {
+        if (dd <= 1) { log(`${m.name} lashes out at empty air where a phantom stood!`); return; }
+        stepToward(m, dc.x, dc.y);
+        return;
+      }
+    }
+  }
+
+  updateAIState(m, vision);
+  switch (m.aiState) {
+    case 'dormant': return;
+    case 'flee': runFleeState(m); return;
+    case 'alert': runAlertState(m); return;
+    case 'return': runReturnState(m); return;
+    case 'wander': runIdleState(m, 'wander'); return;
+    case 'patrol': runIdleState(m, 'patrol'); return;
+    case 'combat': runCombatState(m, vision); return;
+  }
 }
 
 // ---- chunk generation v6: wires in overworld boss spawning ----
@@ -15254,6 +15804,14 @@ function applyLoadedSave(data) {
   if (data.dimensionChunks) for (const [key, c] of data.dimensionChunks) dimensionChunks.set(key, c);
   if (data.dungeonRegistry) for (const [id, dg] of data.dungeonRegistry) dungeonRegistry.set(id, dg);
   if (data.dimensionSubDungeons) DIMENSION_SUBDUNGEONS.push(...data.dimensionSubDungeons);
+  // The Living World AI framework (see near monsterAI) lets entities target each other directly by
+  // object reference. A fresh `player` object is about to be created below, so any monster/NPC that
+  // was saved mid-fight with the player is now pointing at a stale clone -- harmless (it just wanders
+  // toward a dead reference and self-corrects in a few turns via the alert/return states) but cheap
+  // to clean up outright so nothing acts on stale data even briefly right after a load.
+  for (const c of worldChunks.values()) { for (const m of c.monsters) resetStaleAIRef(m); for (const n of c.npcs) resetStaleAIRef(n); }
+  for (const c of dimensionChunks.values()) { for (const m of c.monsters) resetStaleAIRef(m); for (const n of c.npcs) resetStaleAIRef(n); }
+  for (const dg of dungeonRegistry.values()) for (const lvl of dg.levels) { if (!lvl) continue; for (const m of lvl.monsters) resetStaleAIRef(m); }
   // v4.1: the WIS stat was renamed to WIL internally (display was already "WIL"; the property
   // name itself is now consistent too). Saves written before this rename still carry `wis` --
   // migrate that value over so nobody's invested points silently reset to baseline.
