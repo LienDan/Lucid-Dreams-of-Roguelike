@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.24.1-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.24.2-alpha</div>
     </div>
   </div>
 
@@ -1073,6 +1073,31 @@ function makeItem(baseId, rarity, rng, powerMult) {
   const maxDur = baseDurabilityFor(base, affixTier);
   if (maxDur !== null) { it.maxDurability = maxDur; it.durability = maxDur; it.broken = false; }
   return it;
+}
+
+// ---- item stacking (framework-wide) ----
+// Centralizes "does this item merge into an existing stack, or does it need its own slot" so
+// every place that adds an item into an item[] list -- player.inventory, a container's contents,
+// a shop's stock, etc. -- behaves consistently. Weapons/armor/chests are never stacked: each can
+// carry its own rolled mods, durability, or contents, so merging them would silently destroy that
+// data. Everything else (materials, consumables, scrolls, tomes, recipes, keys, misc) is identical
+// for every instance of the same id, so it's always safe to combine into one amount-tagged entry.
+// To make a future item type non-stacking (e.g. a unique per-instance "artifact"), just add its
+// type string to NO_STACK_TYPES -- nothing else needs to change.
+const NO_STACK_TYPES = new Set(['weapon', 'armor', 'chest', 'corpse']);
+function isStackableItem(item) { return !!item && !NO_STACK_TYPES.has(item.type); }
+// Adds `item` into `list`, merging into an existing same-id stack when possible instead of always
+// appending a new entry. Returns whichever item object now holds the combined amount (the
+// pre-existing stack it merged into, or `item` itself if it was pushed fresh) so callers that want
+// to reference the result (its final name/amount for a log line, etc.) still can.
+function addItemToList(list, item) {
+  if (!item) return item;
+  if (isStackableItem(item)) {
+    const existing = list.find(i => i.id === item.id);
+    if (existing) { existing.amount = (existing.amount || 1) + (item.amount || 1); return existing; }
+  }
+  list.push(item);
+  return item;
 }
 
 // ---- Monsters ----
@@ -6378,9 +6403,11 @@ function rollLoot(lootTable, rng) {
     if (rng() < entry.chance) {
       const qty = randInt(rng, entry.min, entry.max);
       const it = makeItem(entry.id, 0, rng);
-      it.amount = it.type === 'material' || it.id === 'gold' ? qty : 1;
-      for (let i = 0; i < (it.amount && it.type !== 'material' && it.id !== 'gold' ? qty - 1 : 0); i++) items.push(makeItem(entry.id, 0, rng));
-      items.push(it);
+      // Anything that isn't a one-of-a-kind weapon/armor/chest can carry its whole quantity as a
+      // single stacked entry -- no need to mint `qty` separate item objects for a pile of the
+      // same material, potion, or scroll (see addItemToList/isStackableItem above).
+      it.amount = isStackableItem(it) ? qty : 1;
+      addItemToList(items, it);
     }
   }
   return items;
@@ -7233,15 +7260,15 @@ function rollContainerLoot(rng, kind, tier) {
     case 'chest': case 'trunk': case 'vault': case 'reliquary': {
       const maxValueTier = Math.min(4, tier + 1);
       const baseIds = lootEligibleBaseIds(maxValueTier, { excludeTypes: ['misc', 'chest', 'corpse', 'material', 'book'] });
-      for (let i = 0; i < n; i++) items.push(makeItem(choice(rng, baseIds), tier, rng));
+      for (let i = 0; i < n; i++) addItemToList(items, makeItem(choice(rng, baseIds), tier, rng));
       // A true high-security vault or reliquary (not a common house chest/trunk) at max tier
       // gets a small, deliberate shot at a craft-only superweapon -- the "place that makes
       // sense" the nuke should actually come from, instead of any random container.
       if ((kind === 'vault' || kind === 'reliquary') && tier >= 4 && rng() < 0.06) {
         const superIds = ITEM_BASES.filter(b => b.craftOnly).map(b => b.id);
-        if (superIds.length) items.push(makeItem(choice(rng, superIds), tier, rng));
+        if (superIds.length) addItemToList(items, makeItem(choice(rng, superIds), tier, rng));
       }
-      const g = makeItem('gold', 0, rng); g.amount = randInt(rng, 8, 24) * (tier + 1); items.push(g);
+      const g = makeItem('gold', 0, rng); g.amount = randInt(rng, 8, 24) * (tier + 1); addItemToList(items, g);
       break;
     }
     case 'weaponrack': {
@@ -7250,17 +7277,17 @@ function rollContainerLoot(rng, kind, tier) {
       break;
     }
     case 'barrel': case 'sack': case 'crate': {
-      for (let i = 0; i < n; i++) { const id = choice(rng, CONTAINER_FOOD_IDS.concat(CONTAINER_MATERIAL_IDS)); const it = makeItem(id, 0, rng); it.amount = randInt(rng, 1, 4); items.push(it); }
-      if (rng() < 0.15) { const g = makeItem('gold', 0, rng); g.amount = randInt(rng, 2, 10); items.push(g); }
+      for (let i = 0; i < n; i++) { const id = choice(rng, CONTAINER_FOOD_IDS.concat(CONTAINER_MATERIAL_IDS)); const it = makeItem(id, 0, rng); it.amount = randInt(rng, 1, 4); addItemToList(items, it); }
+      if (rng() < 0.15) { const g = makeItem('gold', 0, rng); g.amount = randInt(rng, 2, 10); addItemToList(items, g); }
       break;
     }
     case 'urn': case 'coffin': {
-      const g = makeItem('gold', 0, rng); g.amount = randInt(rng, 5, 18) * (tier + 1); items.push(g);
-      if (rng() < 0.35) { const it = makeItem(choice(rng, CONTAINER_MATERIAL_IDS), 0, rng); it.amount = randInt(rng, 1, 3); items.push(it); }
+      const g = makeItem('gold', 0, rng); g.amount = randInt(rng, 5, 18) * (tier + 1); addItemToList(items, g);
+      if (rng() < 0.35) { const it = makeItem(choice(rng, CONTAINER_MATERIAL_IDS), 0, rng); it.amount = randInt(rng, 1, 3); addItemToList(items, it); }
       break;
     }
     case 'cabinet': {
-      for (let i = 0; i < n; i++) items.push(makeItem(choice(rng, ['herb','cloth','iron_ingot','leather_scrap']), 0, rng));
+      for (let i = 0; i < n; i++) addItemToList(items, makeItem(choice(rng, ['herb','cloth','iron_ingot','leather_scrap']), 0, rng));
       if (rng() < 0.3) { const rid = choice(rng, RECIPES).id; items.push({ uid:'i'+Math.random().toString(36).slice(2,9), id:rid, type:'recipe', name:'Recipe: '+RECIPES.find(r=>r.id===rid).name, glyph:'?', color:'#a0c9e0', value:0 }); }
       break;
     }
@@ -8392,7 +8419,7 @@ function tradeTransact(letter) {
     if (!it) return;
     const price = Math.round(it.value * 1.2 * repMult);
     if (player.gold < price) { Sound.play('uiError'); log("You can't afford that."); return; }
-    player.gold -= price; player.inventory.push(it); npc.shop.splice(idx, 1);
+    player.gold -= price; addItemToList(player.inventory, it); npc.shop.splice(idx, 1);
     Sound.play('tradeBuy');
     log(`You buy ${it.name} for ${price}g.`);
   } else {
@@ -8459,17 +8486,20 @@ function containerTransact(letter) {
   if (containerMode === 'take') {
     const it = c.contents[idx];
     if (!it) return;
-    player.inventory.push(it);
     c.contents.splice(idx, 1);
+    addItemToList(player.inventory, it);
     Sound.play('pickup');
     log(`You take ${it.name} from the ${c.name.toLowerCase()}.`);
   } else {
     const list = player.inventory.filter(i => i.type !== 'corpse');
     const it = list[idx];
     if (!it) return;
-    if (c.contents.length >= c.capacity) { Sound.play('uiError'); log(`The ${c.name.toLowerCase()} is full.`); return; }
+    // A stack merging into a pile already in the container doesn't need a new slot, so only
+    // block on capacity when this item would actually take one up.
+    const willMerge = isStackableItem(it) && c.contents.some(i => i.id === it.id);
+    if (!willMerge && c.contents.length >= c.capacity) { Sound.play('uiError'); log(`The ${c.name.toLowerCase()} is full.`); return; }
     player.inventory = player.inventory.filter(i => i.uid !== it.uid);
-    c.contents.push(it);
+    addItemToList(c.contents, it);
     Sound.play('drop');
     log(`You put ${it.name} in the ${c.name.toLowerCase()}.`);
   }
@@ -8480,7 +8510,7 @@ function containerTakeAll() {
   const c = containerTarget;
   if (!c.contents.length) { log('Nothing left to take.'); return; }
   const names = c.contents.map(i => i.name);
-  player.inventory.push(...c.contents);
+  c.contents.forEach(it => addItemToList(player.inventory, it));
   c.contents = [];
   Sound.play('pickup');
   log(`You take everything from the ${c.name.toLowerCase()}: ${names.join(', ')}.`);
@@ -9713,7 +9743,7 @@ function craftRecipe(recipeId) {
   }
   const qty = (r.output.qty || 1) + (r.category === 'cooking' ? (player.cookingYieldBonus || 0) : 0);
   let out = null;
-  for (let i = 0; i < qty; i++) { out = makeItem(r.output.id, 0, Math.random); player.inventory.push(out); }
+  for (let i = 0; i < qty; i++) { out = makeItem(r.output.id, 0, Math.random); out = addItemToList(player.inventory, out); }
   Sound.play('craftSuccess');
   log(qty > 1 ? `You craft ${qty}x ${out.name}.` : `You craft ${out.name}.`);
   if (saved > 0) log('Your skill meant some ingredients were not consumed.');
@@ -9921,11 +9951,7 @@ function pickUpSpecificItem(real) {
   if (real.id === 'gold') { player.gold += (real.amount || 1); Sound.play('gold'); log(`You pick up ${real.amount || 1} gold.`); }
   else {
     const qty = real.amount || 1;
-    // Weapons/armor/chests are never merged (each can have its own mods/tier), everything else stacks by id.
-    const stackable = real.type !== 'weapon' && real.type !== 'armor' && real.type !== 'chest';
-    const existing = stackable ? player.inventory.find(i => i.id === real.id) : null;
-    if (existing) { existing.amount = (existing.amount || 1) + qty; }
-    else { real.amount = qty; player.inventory.push(real); }
+    addItemToList(player.inventory, real);
     Sound.play('pickup');
     log(`You pick up ${real.name}${qty>1?` x${qty}`:''}.`);
   }
@@ -10751,19 +10777,19 @@ function openChest(chestItem) {
   const maxValueTier = Math.min(4, tier + 1);
   const baseIds = lootEligibleBaseIds(maxValueTier);
   const gotten = [];
-  for (let i = 0; i < n; i++) { const it = makeItem(choice(Math.random, baseIds), tier, Math.random, powerMult); player.inventory.push(it); gotten.push(it.name); }
+  for (let i = 0; i < n; i++) { const it = makeItem(choice(Math.random, baseIds), tier, Math.random, powerMult); addItemToList(player.inventory, it); gotten.push(it.name); }
   // Craft-only superweapons never come from the generic roll above -- they're gated behind a
   // separate, deliberately rare check that only ever fires on the single highest chest tier
   // (a maxed-out reinforced vault/reliquary, tier 4), so finding one still means you found a
   // place that made sense to keep one, not a random townsperson's kitchen chest.
   if (tier >= 4 && chestItem.secured && Math.random() < 0.05) {
     const superIds = ITEM_BASES.filter(b => b.craftOnly).map(b => b.id);
-    if (superIds.length) { const s = makeItem(choice(Math.random, superIds), tier, Math.random, powerMult); player.inventory.push(s); gotten.push(s.name); }
+    if (superIds.length) { const s = makeItem(choice(Math.random, superIds), tier, Math.random, powerMult); addItemToList(player.inventory, s); gotten.push(s.name); }
   }
   const gold = randInt(Math.random, 10, 30) * (tier+1) * powerMult;
   player.gold += Math.round(gold);
   if (Math.random() < 0.15) { const rid = choice(Math.random, RECIPES).id; if (!player.knownRecipes.includes(rid)) { player.knownRecipes.push(rid); gotten.push('Recipe: ' + RECIPES.find(r=>r.id===rid).name); } }
-  if (Math.random() < 0.18) { const tome = makeTome(tier, Math.random); player.inventory.push(tome); gotten.push(tome.name); }
+  if (Math.random() < 0.18) { const tome = makeTome(tier, Math.random); addItemToList(player.inventory, tome); gotten.push(tome.name); }
   log(`You break open the chest and find: ${gotten.join(', ')}, and ${gold} gold!`);
   updateSidebar();
 }
@@ -10799,16 +10825,16 @@ function dropLoot(def) {
   const items = [];
   // Anything a purpose-built throwing weapon stuck into this entity while it was still alive
   // (see resolveThrownWeapon) comes loose and drops with the body now.
-  if (def.stuckItems && def.stuckItems.length) items.push(...def.stuckItems);
+  if (def.stuckItems && def.stuckItems.length) def.stuckItems.forEach(it => addItemToList(items, it));
   const goldMult = 1 + (player.goldBonus || 0);
-  if (def.guaranteedDrops && def.guaranteedDrops.length) items.push(...def.guaranteedDrops);
+  if (def.guaranteedDrops && def.guaranteedDrops.length) def.guaranteedDrops.forEach(it => addItemToList(items, it));
   // Boss-specific unique weapon/accessory (a chance roll, independent of any guaranteedDrops the
   // boss might also carry -- e.g. Hollow Signal can drop both its Ignition Core key item AND,
   // separately, a chance at the Fractured Beam Emitter). Resolved centrally here so it works no
   // matter which of a boss's possible spawn paths (dungeon gate, main-quest encounter, wandering
   // world boss) actually produced this instance.
   if (def.boss && BOSS_UNIQUE_DROPS[def.monsterId] && Math.random() < BOSS_UNIQUE_DROPS[def.monsterId].chance) {
-    items.push(makeItem(BOSS_UNIQUE_DROPS[def.monsterId].itemId, 0, Math.random));
+    addItemToList(items, makeItem(BOSS_UNIQUE_DROPS[def.monsterId].itemId, 0, Math.random));
   }
   // Faction set-piece drop: any boss or miniboss belonging to one of the faction-set dimensions
   // (12 as of the second itemization pass -- see SET_DROP_FACTIONS) has a modest chance to drop a
@@ -10822,26 +10848,26 @@ function dropLoot(def) {
       const chance = def.boss ? 0.30 : 0.15;
       if (Math.random() < chance) {
         const pieceId = choice(Math.random, ITEM_SETS[setId].pieces);
-        items.push(makeItem(pieceId, 0, Math.random));
+        addItemToList(items, makeItem(pieceId, 0, Math.random));
       }
     }
   }
   if (def.kind === 'monster' || def.kind === 'ally') {
     const base = MONSTER_BASES[def.monsterId];
     const pTier = monsterPowerTier(def);
-    if (base && base.loot) items.push(...rollLoot(base.loot, Math.random));
-    if (Math.random() < 0.5 || def.dropGold) { const g = makeItem('gold', 0, Math.random); g.amount = Math.round(randInt(Math.random, 1, 10) * (def.boss ? 12 : 1) * goldMult); items.push(g); }
-    if (Math.random() < (0.10 + pTier * 0.05) || def.boss) { const baseIds = lootBaseIdsFor(def); items.push(makeItem(choice(Math.random, baseIds), def.boss ? Math.max(3, lootRarityFor(def)) : lootRarityFor(def), Math.random, itemPowerMult(def.powerScale || 1))); }
-    if (def.boss && Math.random() < 0.4) { const chestItem = makeItem('chest', 0, Math.random); chestItem.tier = Math.min(4, pTier + 1); chestItem.powerMult = itemPowerMult(def.powerScale || 1); items.push(chestItem); }
-    if (def.boss && Math.random() < 0.5) items.push(makeTome(randInt(Math.random,2,3), Math.random));
-    else if (Math.random() < 0.03) items.push(makeTome(randInt(Math.random,0,1), Math.random));
+    if (base && base.loot) rollLoot(base.loot, Math.random).forEach(it => addItemToList(items, it));
+    if (Math.random() < 0.5 || def.dropGold) { const g = makeItem('gold', 0, Math.random); g.amount = Math.round(randInt(Math.random, 1, 10) * (def.boss ? 12 : 1) * goldMult); addItemToList(items, g); }
+    if (Math.random() < (0.10 + pTier * 0.05) || def.boss) { const baseIds = lootBaseIdsFor(def); addItemToList(items, makeItem(choice(Math.random, baseIds), def.boss ? Math.max(3, lootRarityFor(def)) : lootRarityFor(def), Math.random, itemPowerMult(def.powerScale || 1))); }
+    if (def.boss && Math.random() < 0.4) { const chestItem = makeItem('chest', 0, Math.random); chestItem.tier = Math.min(4, pTier + 1); chestItem.powerMult = itemPowerMult(def.powerScale || 1); addItemToList(items, chestItem); }
+    if (def.boss && Math.random() < 0.5) addItemToList(items, makeTome(randInt(Math.random,2,3), Math.random));
+    else if (Math.random() < 0.03) addItemToList(items, makeTome(randInt(Math.random,0,1), Math.random));
     if (def.kind === 'monster' && !['rabbit','gull','fox','hawk'].includes(def.monsterId)) items.push(makeCorpse(def));
   } else if (def.kind === 'npc') {
-    if (def.gold) { const g = makeItem('gold', 0, Math.random); g.amount = Math.round(def.gold * goldMult); items.push(g); }
-    if (def.shop && def.shop.length) { items.push(...def.shop); }
+    if (def.gold) { const g = makeItem('gold', 0, Math.random); g.amount = Math.round(def.gold * goldMult); addItemToList(items, g); }
+    if (def.shop && def.shop.length) { def.shop.forEach(it => addItemToList(items, it)); }
     else {
       const pool = ROLE_DEATH_LOOT[def.roleId];
-      if (pool && Math.random() < 0.6) items.push(makeItem(choice(Math.random, pool), 0, Math.random));
+      if (pool && Math.random() < 0.6) addItemToList(items, makeItem(choice(Math.random, pool), 0, Math.random));
     }
   }
   for (const it of items) placeItemAt(def.x, def.y, it);
@@ -16171,30 +16197,30 @@ const ARCHETYPES = [
   { id:'alchemist', name:'Alchemist', desc:'Turns flasks, gas, and volatile compounds into a surprisingly deep bag of tricks.',
     apply: () => { player.int+=3; player.dex+=2; player.gold+=75;
       player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
-      player.inventory.push(makeItem('antidote',0,Math.random));
+      addItemToList(player.inventory, makeItem('antidote',0,Math.random));
       player.knownSpells.push('alchemistfire','acidflask'); } },
   { id:'chef', name:'Chef', desc:'A food-fueled fighter who cooks up buffs mid-battle and never goes into a fight hungry.',
     apply: () => { player.str+=2; player.con+=3; player.wil+=1; player.gold+=70;
       player.equipment.hand=makeItem('cleaver',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
-      player.inventory.push(makeItem('meat_raw',0,Math.random)); player.inventory.push(makeItem('meat_raw',0,Math.random)); player.inventory.push(makeItem('meat_raw',0,Math.random));
-      player.inventory.push(makeItem('herb',0,Math.random)); player.inventory.push(makeItem('herb',0,Math.random));
-      player.inventory.push(makeItem('potato',0,Math.random)); player.inventory.push(makeItem('onion',0,Math.random));
+      addItemToList(player.inventory, makeItem('meat_raw',0,Math.random)); addItemToList(player.inventory, makeItem('meat_raw',0,Math.random)); addItemToList(player.inventory, makeItem('meat_raw',0,Math.random));
+      addItemToList(player.inventory, makeItem('herb',0,Math.random)); addItemToList(player.inventory, makeItem('herb',0,Math.random));
+      addItemToList(player.inventory, makeItem('potato',0,Math.random)); addItemToList(player.inventory, makeItem('onion',0,Math.random));
       player.knownRecipes.push('cook_meat','stew','cook_veg_soup');
       player.knownTechniques.push('searingladle','quickbite'); } },
   { id:'tinkerer', name:'Tinkerer', desc:'A gadgeteer who fights with a belt full of bombs, mines, and other things that go bang.',
     apply: () => { player.dex+=3; player.int+=2; player.con+=1; player.gold+=70;
       player.equipment.hand=makeItem('wrench',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
-      player.inventory.push(makeItem('firebomb',0,Math.random)); player.inventory.push(makeItem('frostbomb',0,Math.random));
-      player.inventory.push(makeItem('sulfur',0,Math.random)); player.inventory.push(makeItem('sulfur',0,Math.random));
-      player.inventory.push(makeItem('saltpeter',0,Math.random)); player.inventory.push(makeItem('saltpeter',0,Math.random));
-      player.inventory.push(makeItem('iron_ingot',0,Math.random));
+      addItemToList(player.inventory, makeItem('firebomb',0,Math.random)); addItemToList(player.inventory, makeItem('frostbomb',0,Math.random));
+      addItemToList(player.inventory, makeItem('sulfur',0,Math.random)); addItemToList(player.inventory, makeItem('sulfur',0,Math.random));
+      addItemToList(player.inventory, makeItem('saltpeter',0,Math.random)); addItemToList(player.inventory, makeItem('saltpeter',0,Math.random));
+      addItemToList(player.inventory, makeItem('iron_ingot',0,Math.random));
       player.knownRecipes.push('craft_landmine','craft_firebomb','craft_frostbomb');
       player.knownTechniques.push('wrenchbash','quickrig'); } },
   { id:'herbalist', name:'Herbalist', desc:'A field botanist who brews toxins and tonics on the fly, poisoning foes as readily as mending wounds.',
     apply: () => { player.wil+=3; player.int+=2; player.con+=1; player.gold+=65;
       player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
-      player.inventory.push(makeItem('herb',0,Math.random)); player.inventory.push(makeItem('herb',0,Math.random));
-      player.inventory.push(makeItem('herb',0,Math.random)); player.inventory.push(makeItem('herb',0,Math.random));
+      addItemToList(player.inventory, makeItem('herb',0,Math.random)); addItemToList(player.inventory, makeItem('herb',0,Math.random));
+      addItemToList(player.inventory, makeItem('herb',0,Math.random)); addItemToList(player.inventory, makeItem('herb',0,Math.random));
       player.knownRecipes.push('brew_heal_potion','antidote');
       player.knownSpells.push('toxicspores','quickpoultice'); } },
   // ---- fringe: cybernetics & eldritch mutation ----
@@ -16598,7 +16624,7 @@ function finishCustomCreation() {
   // enough to justify it (with a small buffer), same spirit as the Occultist archetype's head start.
   if (maxMutationReq >= 0) player.corruption = Math.min(100, Math.max(player.corruption, maxMutationReq + 10));
   player.gold += d.gold;
-  d.items.forEach(baseId => { player.inventory.push(makeItem(baseId, 0, Math.random)); });
+  d.items.forEach(baseId => { addItemToList(player.inventory, makeItem(baseId, 0, Math.random)); });
   player.scenario = 'custom';
   showStartScreen();
 }
