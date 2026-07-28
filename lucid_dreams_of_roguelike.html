@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.23.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.24.0-alpha</div>
     </div>
   </div>
 
@@ -2148,7 +2148,26 @@ const SPECIES = [
     biomeWeights:{}, flavorAffinity:['tech'],
     affinity:{} },
 ];
-function getSpecies(id) { return SPECIES.find(s => s.id === id) || SPECIES[0]; }
+// ---- monster-only "species" -- Goblins and Trolls aren't playable peoples (not part of SPECIES,
+// so chargen/kingdom population never rolls them), but they get the exact same real racial-trait
+// treatment as Orcs/Constructs/Elves do when applyRacialTraits runs on a monster instance (see the
+// speciesId heuristic in Part A near the faction tables). Pack Tactics is read generically in
+// doAttack below; every other trait reuses fields the combat code already reads off any entity.
+const MONSTER_ONLY_SPECIES = [
+  { id:'goblin', name:'Goblin', peopleLabel:'Goblins', desc:'Small, quick, and rarely alone -- goblins fight far better in a group than as individuals.',
+    statMods:{}, kingdomTraitWeights:{}, biomeWeights:{}, flavorAffinity:[], affinity:{},
+    traits:[
+      { name:'Pack Tactics', desc:'Hits noticeably harder while fighting alongside an ally.', apply:(p)=>{ p.packTactics = true; } },
+      { name:'Nimble', desc:'A little harder to hit in a fight.', apply:(p)=>{ p.dodgeChance = (p.dodgeChance||0) + 0.06; } },
+    ] },
+  { id:'troll', name:'Troll', peopleLabel:'Trolls', desc:'Huge, dim, and disturbingly hard to keep down -- wounds that would fell anything else start closing almost as soon as they are made.',
+    statMods:{}, kingdomTraitWeights:{}, biomeWeights:{}, flavorAffinity:[], affinity:{},
+    traits:[
+      { name:'Regeneration', desc:'Slowly mends HP every turn, even mid-fight.', apply:(p)=>{ p.regen = (p.regen||0) + 2; } },
+      { name:'Thick Hide', desc:'Naturally tougher skin grants a passive armor bonus.', apply:(p)=>{ p.talentArmor = (p.talentArmor||0) + 2; } },
+    ] },
+];
+function getSpecies(id) { return SPECIES.find(s => s.id === id) || MONSTER_ONLY_SPECIES.find(s => s.id === id) || SPECIES[0]; }
 // Constructs (No Nervous System) receive less benefit from healing magic/potions/food; everyone
 // else is unaffected. Centralized so the main healing sources apply it consistently.
 function healMult() { return player.healingReceivedMult !== undefined ? player.healingReceivedMult : 1; }
@@ -6131,6 +6150,35 @@ function entityFaction(e) {
 // engage genuine wild threats (their job), not settlement politics.
 const NPC_DEFENDER_ROLES = new Set(['guard', 'watchman', 'captain']);
 const NPC_HUNTER_ROLES = new Set(['hunter', 'ranger']);
+// ---- settlement defense memory: when a town's own guards/hunters put down a real threat on
+// their own (not the player), it's remembered as a short-lived local rumor any NPC of that
+// settlement might mention next time you talk to them -- proof the town actually defended itself
+// while you were away, instead of every dead wolf or routed bandit being invisible to the world.
+// See the onDeath hook (near curNPCs/onDeath) and the "Talk" dialogue option for how this gets
+// written and read. ----
+const settlementDefenseMemory = new Map(); // settlement name -> { turn, text }
+const DEFENSE_FLAVOR = {
+  wild: ['drove off a pack of wild beasts prowling the outskirts', 'saw off a dangerous predator that wandered too close', 'fought off a wild animal near the walls'],
+  outlaw: ['routed a band of raiders', 'chased off bandits skulking near the walls', 'put down a raiding party before it could do real harm'],
+  malevolent: ['cut down something restless and undead near the edge of town', 'banished a foul creature that came sniffing around at night', 'fought off a monstrous intrusion'],
+  mechanical: ['disabled a malfunctioning construct', 'shut down a rogue automaton before it caused trouble'],
+};
+function recordSettlementDefense(defenderNpc, slainMonster) {
+  const settlement = defenderNpc.home;
+  if (!settlement) return;
+  const align = factionAlignment(slainMonster.faction);
+  const pool = DEFENSE_FLAVOR[align] || DEFENSE_FLAVOR.wild;
+  const text = `${defenderNpc.roleName || 'One of the town guard'} ${choice(Math.random, pool)}.`;
+  settlementDefenseMemory.set(settlement, { turn: typeof turnCount !== 'undefined' ? turnCount : 0, text });
+}
+// surfaces a recent local defense event as a rumor line, if this NPC's settlement has one that's
+// still fresh (within ~250 turns) -- offered alongside the existing rumor/history rotation.
+function settlementDefenseRumor(npc) {
+  if (!npc.home) return null;
+  const ev = settlementDefenseMemory.get(npc.home);
+  if (!ev || turnCount - ev.turn > 250) return null;
+  return `Did you hear? ${ev.text}`;
+}
 
 // ---- 2) ABILITIES: a monster-side spell/eldritch/cyber/thrown library. Shares the same
 // damage/status vocabulary as the player's own spells (bolt/drain/debuff/heal/buff/summon)
@@ -6177,6 +6225,8 @@ for (const _mid in MONSTER_BASES) {
     if (base.faction === 'orc') base.speciesId = 'orc';
     else if (base.faction === 'construct') base.speciesId = 'construct';
     else if (/dark ?elf/.test(name)) base.speciesId = 'elf';
+    else if (base.faction === 'goblinoid') base.speciesId = 'goblin';
+    else if (base.faction === 'giantkin' && /troll/.test(name)) base.speciesId = 'troll';
   }
 
   if (base.abilities) continue; // already hand-authored (e.g. boss templates) -- don't override
@@ -6225,6 +6275,11 @@ for (const _mid in MONSTER_BASES) {
   if (base.fearless === undefined) base.fearless = !!(base.boss || base.scriptedAI || FEARLESS_ALIGNMENTS.has(align));
   if (base.fleeHpPct === undefined && !base.fearless && base.behavior !== 'flee') base.fleeHpPct = base.predator ? 0.15 : 0.25;
   if (!base.berserkHpPct && !base.boss && base.behavior !== 'flee' && ['orc', 'giantkin'].includes(base.faction)) base.berserkHpPct = 0.3;
+  // -- intelligent: tool-users and organized raiders (orcs, goblins, bandits, cultists, any
+  // caster/thrower) get real squad tactics in Part B (focus the weakest target, flank instead of
+  // queuing single-file, retreat to regroup when cut off from their own kind) instead of just
+  // instinctively closing distance the way an animal or mindless undead does. --
+  if (base.intelligent === undefined) base.intelligent = ['outlaw'].includes(align) || !!base.abilities;
 }
 
 
@@ -6241,7 +6296,7 @@ const MONSTER_EXTRA_FIELDS = [
   'causesFear', 'causesConfuse', 'bossPower', 'corrosive', 'scriptedAI', 'engageLine', 'deathLine', 'lore',
   // ---- Living World AI framework (see Part A above / Part B near monsterAI) ----
   'abilities', 'usesMp', 'usesCharge', 'thrower', 'speciesId', 'predator', 'prey',
-  'fearless', 'fleeHpPct', 'sleeper', 'patrolRadius', 'visionRange',
+  'fearless', 'fleeHpPct', 'sleeper', 'patrolRadius', 'visionRange', 'intelligent',
 ];
 // ---- v3 balance pass: overworld monsters now scale with distance from the origin ----
 // Previously every overworld spawn passed a flat depthScale of 1 no matter how far you'd
@@ -8203,6 +8258,13 @@ function confirmTileTarget(wx, wy) {
     pendingTarget = null; gameState = 'playing';
     resolveThrowAtTile(p.item, wx, wy, p.fromSlot);
     endTurn(); return;
+  }
+  if (p.kind === 'companion_goto') {
+    if (!curWalkable(wx, wy)) { log("They can't reach that spot."); return; }
+    pendingTarget = null; gameState = 'playing';
+    p.npc.orderMode = 'goto'; p.npc.orderPos = { x: wx, y: wy };
+    log(`${p.npc.name} heads off to the marked location.`);
+    return; // giving an order doesn't cost the player a turn, same as any other dialogue action
   }
 }
 // Enter/Space with no click: convenience auto-aim at the nearest hostile in range, for when
@@ -10532,7 +10594,7 @@ function render() {
             (pendingTarget.kind !== 'blink' || (t.walkable && !entityAt(wx,wy)))) {
           ctx.save();
           ctx.globalAlpha = 0.28 + 0.1 * (settings.reduceMotion ? 0 : Math.sin(turnCount * 1.6 + sx + sy));
-          ctx.fillStyle = pendingTarget.kind === 'blink' ? '#5ae0ff' : (pendingTarget.kind === 'throw' ? '#e0a850' : '#e05a5a');
+          ctx.fillStyle = pendingTarget.kind === 'blink' ? '#5ae0ff' : (pendingTarget.kind === 'throw' ? '#e0a850' : (pendingTarget.kind === 'companion_goto' ? '#6ae06a' : '#e05a5a'));
           ctx.fillRect(sx*v.ts, sy*v.ts, v.ts, v.ts);
           ctx.restore();
         }
@@ -10823,6 +10885,10 @@ function onDeath(def, killer) {
     gainXP(def.xp || 1);
     if (def.kind === 'monster') { player.killCounts[def.monsterId] = (player.killCounts[def.monsterId] || 0) + 1; checkBountyQuests(def.monsterId); }
     if (def.kind === 'npc' && !curIsDungeon()) { commitCrime(getRegionKey(def.x, def.y), bountyValueFor(def)); }
+  } else if (killer && killer.kind === 'npc' && def.kind === 'monster' && (NPC_DEFENDER_ROLES.has(killer.roleId) || NPC_HUNTER_ROLES.has(killer.roleId))) {
+    // the town defended itself while you weren't the one swinging the sword -- see the settlement
+    // defense memory system near NPC_DEFENDER_ROLES for how this later surfaces as a rumor.
+    recordSettlementDefense(killer, def);
   }
   // ---- splitting: oozes/slimes divide into smaller copies of themselves when killed ----
   if (def.splitInto && def.kind === 'monster') {
@@ -10856,14 +10922,44 @@ function curNPCs() {
   arr.push(...player.companions.filter(n => n.alive));
   return arr;
 }
+// ---- Living World AI framework: companion orders. A following companion (spouse, or any future
+// hired follower) now takes real orders instead of just mirroring "attack nearest thing" forever --
+// see openOrdersMenu for the dialogue UI. `n.stance` gates whether/what they'll fight on their own
+// initiative; `n.orderMode`/`n.orderPos` gates where they stand when they're not fighting.
 function companionFollowAI(n) {
-  const target = pickHostileTarget(n, 8);
+  const stance = n.stance || 'aggressive';
+  let target = null;
+  if (stance !== 'passive') {
+    target = pickHostileTarget(n, 8);
+    if (target && stance === 'defensive') {
+      // defensive: only actually engage things threatening the player specifically, or that
+      // struck this companion directly -- won't go looking for a fight on its own initiative.
+      const defendingPlayer = chebyshev(target.x, target.y, player.x, player.y) <= 3;
+      const struckMe = n.grudgeAgainst instanceof Set && n.grudgeAgainst.has(target);
+      if (!defendingPlayer && !struckMe) target = null;
+    }
+  }
   n.target = target;
   if (target) {
     const d = chebyshev(n.x, n.y, target.x, target.y);
     if (d <= 1) { doAttack(n, target); return; }
-    if (d <= 6) { stepToward(n, target.x, target.y); return; }
+    if (d <= 8) { stepToward(n, target.x, target.y); return; }
+  } else if (stance === 'passive') {
+    // even a non-combatant companion still gets out of the way of danger
+    const threat = pickHostileTarget(n, 6);
+    if (threat) { stepAway(n, threat.x, threat.y); return; }
   }
+
+  if (n.orderMode === 'stay') {
+    if (n.orderPos && chebyshev(n.x, n.y, n.orderPos.x, n.orderPos.y) > 1) stepToward(n, n.orderPos.x, n.orderPos.y);
+    return;
+  }
+  if (n.orderMode === 'goto') {
+    if (!n.orderPos) { n.orderMode = 'follow'; }
+    else if (chebyshev(n.x, n.y, n.orderPos.x, n.orderPos.y) <= 1) { n.orderMode = 'stay'; log(`${n.name} arrives and holds position.`); return; }
+    else { stepToward(n, n.orderPos.x, n.orderPos.y); return; }
+  }
+  // default: follow
   const dPlayer = chebyshev(n.x, n.y, player.x, player.y);
   if (dPlayer > 2) stepToward(n, player.x, player.y);
 }
@@ -10956,6 +11052,7 @@ function scaleCompanionToPlayer(npc) {
 function toggleSpouseFollow(npc) {
   if (npc.following) {
     npc.following = false;
+    npc.orderMode = null; npc.orderPos = null; npc.target = null;
     player.companions = player.companions.filter(c => c !== npc);
     const homeX = npc.homeArea ? npc.homeArea.x0 + 1 : npc.x;
     const homeY = npc.homeArea ? npc.homeArea.y0 + 1 : npc.y;
@@ -10967,6 +11064,7 @@ function toggleSpouseFollow(npc) {
     const c = getChunk(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
     c.npcs = c.npcs.filter(n => n !== npc);
     npc.following = true;
+    npc.stance = npc.stance || 'aggressive'; npc.orderMode = 'follow'; npc.orderPos = null;
     npc.x = player.x; npc.y = player.y;
     scaleCompanionToPlayer(npc);
     player.companions.push(npc);
@@ -11006,6 +11104,34 @@ function tryForChild(npc) {
   closeModal();
 }
 
+// ---- Living World AI framework: companion orders UI. Reuses the same dialogueOptions/renderModal
+// pattern as the rest of the NPC dialogue system, and the same tile-targeting reticle the game
+// already uses for Blink/thrown items/spells for the "go to a location" order. See
+// companionFollowAI above for how orderMode/orderPos/stance actually get acted on each turn. ----
+function openOrdersMenu(npc) {
+  Sound.play('uiOpen');
+  const opts = [];
+  let n = 0;
+  const nextKey = () => String.fromCharCode(97 + (n++));
+  const mode = npc.orderMode || 'follow', stance = npc.stance || 'aggressive';
+  opts.push({ key: nextKey(), label: mode === 'follow' ? 'Follow me (current)' : 'Follow me', action: () => { npc.orderMode = 'follow'; npc.orderPos = null; log(`${npc.name} will follow you.`); openOrdersMenu(npc); } });
+  opts.push({ key: nextKey(), label: mode === 'stay' ? 'Stay here (current)' : 'Stay here', action: () => { npc.orderMode = 'stay'; npc.orderPos = { x: npc.x, y: npc.y }; log(`${npc.name} will hold this position.`); openOrdersMenu(npc); } });
+  opts.push({ key: nextKey(), label: 'Go to a location...', action: () => { closeModal(); beginCompanionGotoTargeting(npc); } });
+  opts.push({ key: nextKey(), label: stance === 'aggressive' ? 'Be aggressive (current)' : 'Be aggressive', action: () => { npc.stance = 'aggressive'; log(`${npc.name} will fight anything hostile on sight.`); openOrdersMenu(npc); } });
+  opts.push({ key: nextKey(), label: stance === 'defensive' ? 'Fight defensively (current)' : 'Fight defensively', action: () => { npc.stance = 'defensive'; log(`${npc.name} will only fight to protect you or themselves.`); openOrdersMenu(npc); } });
+  opts.push({ key: nextKey(), label: stance === 'passive' ? 'Stay passive (current)' : 'Stay passive', action: () => { npc.stance = 'passive'; log(`${npc.name} will avoid fighting entirely.`); openOrdersMenu(npc); } });
+  opts.push({ key: nextKey(), label: 'Back', action: () => openDialogue(npc) });
+  dialogueOptions = opts;
+  gameState = 'dialogue'; dialogueNPC = npc;
+  renderModal(`Orders for ${npc.name}`,
+    `<div class="npcline dim">Movement: ${mode} · Stance: ${stance}</div>` +
+    opts.map(o => `<div class="modal-opt" onclick="simulateKey('${o.key}')">[${o.key}] ${o.label}</div>`).join(''),
+    'Letter/click to choose, Esc to leave.');
+}
+function beginCompanionGotoTargeting(npc) {
+  beginTileTargeting('companion_goto', { npc, range: 30 });
+  log(`Choose where to send ${npc.name} (click a tile). Esc to cancel.`);
+}
 // ---- dialogue v5: crime hook, spouse follow toggle, family view, married flavor ----
 function openDialogue(npc) {
   Sound.play('uiOpen');
@@ -11021,8 +11147,11 @@ function openDialogue(npc) {
     const lastTurn = (npc.lastTalkTurn === undefined || npc.lastTalkTurn === null) ? -9999 : npc.lastTalkTurn;
     const canGain = (turnCount - lastTurn) > cooldown;
     let line;
+    const defenseRumor = settlementDefenseRumor(npc);
     if (isSpouse) {
       line = choice(Math.random, MARRIED_LINES);
+    } else if (defenseRumor && Math.random() < 0.4) {
+      line = defenseRumor;
     } else {
       // First time talking to this NPC (or haven't talked in a long while): proactively share
       // a quest hint in NPC voice if their role supports it. After that, fall back to the normal
@@ -11065,6 +11194,7 @@ function openDialogue(npc) {
     opts.push({ key: nextKey(), label: 'Rest at home', action: () => restAtHome(npc) });
     opts.push({ key: nextKey(), label: 'Try for a child', action: () => tryForChild(npc) });
     opts.push({ key: nextKey(), label: npc.following ? 'Ask to wait at home' : 'Ask to join your travels', action: () => toggleSpouseFollow(npc) });
+    if (npc.following) opts.push({ key: nextKey(), label: 'Give orders', action: () => openOrdersMenu(npc) });
     opts.push({ key: nextKey(), label: 'View family', action: () => openFamily() });
   }
   opts.push({ key: nextKey(), label: 'Attack', action: () => {
@@ -12267,7 +12397,7 @@ function getArmorOf(e) {
     }
     return a;
   }
-  return (e.armor || 0) + (e.buffArmorBonus || 0);
+  return (e.armor || 0) + (e.buffArmorBonus || 0) + (e.talentArmor || 0);
 }
 function doAttack(att, def) {
   const isPlayer = att === player;
@@ -12290,6 +12420,9 @@ function doAttack(att, def) {
   // a self-buffed non-player attacker (Overclock, etc -- see the AI framework's ability library)
   // hits harder for the duration of its buff, same idea as the player's own strength buffs.
   if (!isPlayer && att.buffAtkMult) dmg *= att.buffAtkMult;
+  // Goblin racial trait (Pack Tactics): hits harder while an ally is fighting alongside it, same
+  // spirit as the player's own flanking-style talents.
+  if (!isPlayer && att.packTactics && countNearbyAllies(att, 2) > 0) dmg = Math.round(dmg * 1.25);
   if (isPlayer) dmg += Math.floor(player.level / 5);
   if (isPlayer && weapon) dmg = Math.round(dmg * abilityPenaltyFactor(weaponStrDeficit()));
   if (isPlayer && weapon && weapon.broken) dmg = Math.round(dmg * 0.35);
@@ -12519,21 +12652,40 @@ function gatherPotentialTargets(e) {
 }
 // picks (and remembers) the nearest thing `e` is hostile toward and can currently see. Sticks
 // with the current target for a bit past the raw vision range so a fight doesn't reset itself
-// every time the two combatants briefly lose exact line of sight around a corner.
+// every time the two combatants briefly lose exact line of sight around a corner. Intelligent
+// attackers (see the `intelligent` heuristic in Part A) weigh in the target's remaining HP% too,
+// so an orc raiding party focuses down whoever's already hurt instead of just whoever's closest.
 function pickHostileTarget(e, visionRange) {
   if (e.target && e.target.alive && e.target.hp > 0 && isHostileTo(e, e.target)) {
     if (chebyshev(e.x, e.y, e.target.x, e.target.y) <= visionRange + 3) return e.target;
   }
-  let best = null, bestD = Infinity;
+  let best = null, bestScore = Infinity;
   for (const cand of gatherPotentialTargets(e)) {
     if (cand === e || !cand.alive || cand.hp <= 0) continue;
     if (!isHostileTo(e, cand)) continue;
     const d = chebyshev(e.x, e.y, cand.x, cand.y);
-    if (d > visionRange || d >= bestD) continue;
+    if (d > visionRange) continue;
     if (!hasLOS(e.x, e.y, cand.x, cand.y)) continue;
-    bestD = d; best = cand;
+    const hpPct = cand.maxHp ? cand.hp / cand.maxHp : 1;
+    const score = e.intelligent ? (d + hpPct * 5) : d; // weakness-weighted for tool-using attackers, pure distance otherwise
+    if (score < bestScore) { bestScore = score; best = cand; }
   }
   return best;
+}
+// same-template allies near `m` -- used for squad cohesion checks (retreat-to-regroup, swarm bonus).
+function countNearbyAllies(m, radius) {
+  let n = 0;
+  for (const o of curMonsters()) { if (o.alive && o !== m && o.monsterId === m.monsterId && chebyshev(o.x, o.y, m.x, m.y) <= radius) n++; }
+  return n;
+}
+// flanking: an intelligent attacker moving in on a target that an ally is already engaging heads
+// for a *different* open tile next to the target instead of queuing up behind them, so a raiding
+// party actually surrounds you instead of forming a single-file line at your front.
+function pickApproachSpot(m, target) {
+  const alreadyAdjacent = gatherPotentialTargets(m).some(o => o !== m && o.alive &&
+    rawFactionDisposition(entityFaction(o), entityFaction(m)) === 'allied' && chebyshev(o.x, o.y, target.x, target.y) <= 1);
+  if (alreadyAdjacent) { const spot = findOpenAdjacent(target.x, target.y); if (spot) return spot; }
+  return { x: target.x, y: target.y };
 }
 // broadcasts a fresh target to nearby same-side allies so a pack/garrison joins a fight together
 // instead of trickling in one at a time -- wolves hunt in packs, guards call for backup.
@@ -12713,6 +12865,17 @@ function runFleeState(m) {
   if (!threat) { m.aiState = 'return'; return; }
   const dist = chebyshev(m.x, m.y, threat.x, threat.y);
   if (dist >= 8 || m.hp >= m.maxHp * ((m.fleeHpPct || 0.2) + 0.15)) { m.aiState = 'return'; m.fleeFrom = null; m.target = null; m.engaged = false; return; }
+  // intelligent creatures retreat toward the nearest ally to regroup rather than fleeing blind,
+  // as long as that ally is actually reachable and doing so isn't just running back at the threat.
+  if (m.intelligent) {
+    let ally = null, allyD = Infinity;
+    for (const o of curMonsters()) {
+      if (!o.alive || o === m || o.monsterId !== m.monsterId) continue;
+      const d = chebyshev(m.x, m.y, o.x, o.y);
+      if (d < allyD) { allyD = d; ally = o; }
+    }
+    if (ally && allyD <= 10 && chebyshev(ally.x, ally.y, threat.x, threat.y) > dist) { stepToward(m, ally.x, ally.y); return; }
+  }
   stepAway(m, threat.x, threat.y);
 }
 function runIdleState(m, mode) {
@@ -12734,9 +12897,14 @@ function runCombatState(m, vision) {
   const seesTarget = !invisibleFromMe && dist <= vision && hasLOS(m.x, m.y, target.x, target.y);
   if (!seesTarget && dist > vision + 4) { loseTarget(m); return; }
 
-  // morale: panics and runs once badly hurt, unless fearless (undead/constructs/bosses/etc)
-  if (!m.fearless && m.fleeHpPct && m.hp <= m.maxHp * m.fleeHpPct) {
-    m.aiState = 'flee'; m.fleeFrom = target; log(`${m.name} panics and tries to flee!`);
+  // morale: panics and runs once badly hurt, unless fearless (undead/constructs/bosses/etc). Cut
+  // off from the rest of its own squad, an intelligent attacker falls back earlier to regroup
+  // instead of fighting on alone at a disadvantage.
+  const isolated = m.intelligent && countNearbyAllies(m, 6) === 0;
+  const fleeThreshold = m.maxHp * ((m.fleeHpPct || 0) + (isolated ? 0.15 : 0));
+  if (!m.fearless && m.fleeHpPct && m.hp <= fleeThreshold) {
+    m.aiState = 'flee'; m.fleeFrom = target;
+    log(isolated ? `${m.name} is cut off and falls back to regroup!` : `${m.name} panics and tries to flee!`);
     runFleeState(m); return;
   }
 
@@ -12865,6 +13033,7 @@ function runCombatState(m, vision) {
   }
   if (dist <= 1) attackMulti(m, target);
   else if (m.multiTile) { stepTowardMulti(m, target.x, target.y, m.multiTile); if (chebyshev(m.x, m.y, target.x, target.y) <= 1) attackMulti(m, target); }
+  else if (m.intelligent) { const spot = pickApproachSpot(m, target); stepToward(m, spot.x, spot.y); }
   else stepToward(m, target.x, target.y);
 }
 
@@ -15740,6 +15909,18 @@ function updateSidebar() {
 // identically on demand -- dead monsters stay dead, looted containers stay looted, and burned
 // ground stays burned, without needing to write out the whole procedural world every time.
 const SAVE_KEY = 'lucid_dreams_of_roguelike_save_v2';
+// ---- Living World AI framework: entities now hold live references to each other (m.target,
+// m.fleeFrom, a grudgeAgainst Set) for combat/AI purposes. Those are transient turn-to-turn state
+// -- see resetStaleAIRef, called on load -- and can easily form reference cycles once two entities
+// are fighting each other (A.target = B, B.target = A), which crashes a plain JSON.stringify with
+// "Converting circular structure to JSON". This replacer drops exactly those transient fields so
+// saving never touches the cycle in the first place; nothing meaningful is lost since they'd be
+// cleared on load anyway.
+function saveDataReplacer(key, value) {
+  if (key === 'target' || key === 'fleeFrom') return undefined;
+  if (value instanceof Set) return undefined;
+  return value;
+}
 function getSaveData() {
   const dirtyChunks = [];
   for (const [key, c] of worldChunks) if (c.dirty) dirtyChunks.push([key, c]);
@@ -15747,7 +15928,7 @@ function getSaveData() {
   for (const [key, c] of dimensionChunks) if (c.dirty) dirtyDimChunks.push([key, c]);
   return {
     version: 2, seed: SEED, turnCount, zoomIndex,
-    player: JSON.parse(JSON.stringify(player)),
+    player: JSON.parse(JSON.stringify(player, saveDataReplacer)),
     kingdomRelationScores: Object.fromEntries(kingdomRelationScores),
     uidCounter, containerUidCounter, procBookUidCounter,
     worldChunks: dirtyChunks,
@@ -15766,7 +15947,7 @@ function saveGame(isAuto) {
     // moment the player dies, and this guard makes sure nothing (a stray autosave tick, a
     // straggling turn from an ally/companion, etc.) can accidentally recreate it afterward.
     if (player.alive === false || player.hp <= 0 || gameState === 'gameover') { if (!isAuto) log("Can't save now."); return false; }
-    localStorage.setItem(SAVE_KEY, JSON.stringify(getSaveData()));
+    localStorage.setItem(SAVE_KEY, JSON.stringify(getSaveData(), saveDataReplacer));
     log(isAuto ? 'Autosaved.' : 'Game saved.');
     return true;
   } catch (e) { if (!isAuto) log('Could not save: ' + e.message); return false; }
