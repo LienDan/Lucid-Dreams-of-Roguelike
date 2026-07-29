@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.24.2-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.25.0-alpha</div>
     </div>
   </div>
 
@@ -775,7 +775,10 @@ function weightedChoice(rng, entries) {
 
 // ---- Biomes ----
 const BIOMES = {
-  ocean:  { name: 'Ocean', walkable: false, glyph: '~', color: '#1c4b6b', bg: '#0a1a26', encounter: [] },
+  ocean:  { name: 'Ocean', walkable: false, glyph: '~', color: '#1c4b6b', bg: '#0a1a26',
+    encounter: [['reef_shark',6],['giant_eel',5],['drowned_sailor',4],['tide_reaver',3],['siren',3],['current_stalker',2],['kraken_spawn',1],['tideglass_horror',1]] },
+  lake:   { name: 'Lake', walkable: false, glyph: '~', color: '#3a7ab0', bg: '#0e2436',
+    encounter: [['giant_catfish',6],['crocodile',4],['giant_eel',4],['drowned_sailor',2],['siren',1]] },
   beach:  { name: 'Beach', walkable: true, glyph: '.', color: '#c9b877', bg: '#3a3320', encounter: [['crab',5],['gull',3]] },
   plains: { name: 'Plains', walkable: true, glyph: '.', color: '#7fa84f', bg: '#1c2412', encounter: [['rabbit',6],['deer',4],['boar',3],['wolf',2]] },
   forest: { name: 'Forest', walkable: true, glyph: '.', color: '#3f7a3f', bg: '#101d10', encounter: [['deer',4],['wolf',4],['boar',3],['spider',3],['bandit',1]] },
@@ -1116,7 +1119,7 @@ const MONSTER_BASES = {
   vulture: { name:'Vulture', glyph:'v', color:'#8a6a3d', hp:7, str:5, dex:9, atk:[1,3], armor:0, xp:5, behavior:'aggressive', biomes:['desert'] },
   yeti:    { name:'Yeti', glyph:'Y', color:'#dfe6ee', hp:30, str:15, dex:6, atk:[4,10], armor:2, xp:20, behavior:'aggressive', biomes:['tundra'] },
   frostling:{name:'Frostling', glyph:'f', color:'#7fd0e0', hp:9, str:6, dex:8, atk:[1,4], armor:0, xp:6, behavior:'aggressive', biomes:['tundra'], frost:2 },
-  crocodile:{name:'Crocodile', glyph:'c', color:'#4a6a3a', hp:20, str:11, dex:6, atk:[3,7], armor:3, xp:13, behavior:'aggressive', biomes:['swamp'] },
+  crocodile:{name:'Crocodile', glyph:'c', color:'#4a6a3a', hp:20, str:11, dex:6, atk:[3,7], armor:3, xp:13, behavior:'aggressive', biomes:['swamp'], aquatic:true },
   leech:   { name:'Giant Leech', glyph:'l', color:'#5a2a2a', hp:6, str:4, dex:7, atk:[1,3], armor:0, xp:4, behavior:'aggressive', biomes:['swamp'], lifesteal:true },
   snake:   { name:'Snake', glyph:'n', color:'#5ac95a', hp:6, str:4, dex:11, atk:[1,3], armor:0, xp:5, behavior:'aggressive', biomes:['swamp','desert'], poison:2 },
   'bog-zombie':{name:'Bog Zombie', glyph:'z', color:'#5c6b35', hp:18, str:9, dex:3, atk:[2,6], armor:1, xp:11, behavior:'aggressive', biomes:['swamp'] },
@@ -3943,6 +3946,27 @@ const OVERWORLD_BOSSES = [
     deathLine:"...huh. Guess something can end it after all.",
     lore:"Every predator in this world, from the alpha direwolves to the things without names that hunt at the edge of the map, is descended from something. Umbroth is the something. It doesn't have a kingdom, a dungeon, or a reason -- it just noticed, a very long time ago, that killing things it wasn't hungry for felt like the only interesting thing left to do.",
     desc:'A wolf-shaped absence the size of a horse, scarred hide the color of dried blood, utterly silent even at a dead run.' },
+  // ---- Deep-ocean superbosses: the aquatic counterpart to the land/mountain bosses above.
+  // `aquatic:true` is the flag maybeSpawnOverworldBoss() checks to allow placement on an
+  // otherwise-unwalkable ocean water tile instead of requiring dry land, and it's also what
+  // makes canSwim()/isPassableFor() let them move and fight freely in open water. Gated to
+  // only appear in chunks that are mostly open ocean (see isDeepOceanChunk in
+  // maybeSpawnOverworldBoss) so these read as "something huge in the middle of the sea," not
+  // a random puddle ambush.
+  { id:'the_kraken', name:'The Kraken', glyph:'K', color:'#0a2a3a', hp:280, str:26, dex:9, atk:[11,22], armor:6, xp:460, boss:true, bossTier:'rare', faction:'aquatic', aquatic:true,
+    behavior:'aggressive', biomes:['ocean'], multiattack:2,
+    desc:'Tentacled dark beneath the waves, older than the charts that fail to mark where it lives.' },
+  { id:'megalodon', name:'The Megalodon', glyph:'&', color:'#3a5a6a', hp:200, str:24, dex:14, atk:[10,19], armor:4, xp:360, boss:true, bossTier:'uncommon', faction:'aquatic', aquatic:true,
+    behavior:'aggressive', biomes:['ocean'],
+    desc:'A shark the length of a longship, its passing felt as a wave before it is ever seen.' },
+  { id:'sea_serpent', name:'Coilfang, the Endless Serpent', glyph:'~', color:'#1a6a5a', hp:230, str:20, dex:16, atk:[9,18], armor:5, xp:390, boss:true, bossTier:'uncommon', faction:'aquatic', aquatic:true,
+    behavior:'aggressive', biomes:['ocean'], multiattack:2, causesFear:true,
+    desc:"A serpentine coil breaks the surface, and keeps breaking it, far longer than anything that length should be able to stay hidden underneath." },
+  // Lake counterpart to the ocean superbosses above -- smaller scale to match a lake's smaller
+  // footprint, but still a genuine "don't go in the deep part" encounter.
+  { id:'loch_devourer', name:'The Loch Devourer', glyph:'e', color:'#2a5a3a', hp:150, str:18, dex:9, atk:[7,14], armor:3, xp:220, boss:true, bossTier:'uncommon', faction:'aquatic', aquatic:true,
+    behavior:'aggressive', biomes:['lake'],
+    desc:'Something old and eel-like coils beneath a lake too calm to explain how it stays hidden.' },
 ];
 // pre-register every overworld boss into MONSTER_BASES so dungeon boss-pool selection (which can
 // legitimately pick these too — a Dragon's Lair dungeon spawning the Ancient Wyrm makes sense) always
@@ -3955,7 +3979,7 @@ OVERWORLD_BOSSES.forEach(b => {
     breathWeapon: b.breathWeapon || null, faction: b.faction || 'beast',
     scriptedAI: b.scriptedAI || null, engageLine: b.engageLine || null, deathLine: b.deathLine || null,
     lore: b.lore || null, causesConfuse: b.causesConfuse || false, multiattack: b.multiattack || null,
-    guaranteedDropTemplate: b.guaranteedDropTemplate || null,
+    guaranteedDropTemplate: b.guaranteedDropTemplate || null, aquatic: b.aquatic || false,
   };
 });
 
@@ -5897,6 +5921,12 @@ MONSTER_BASES.giant_eel = { name:'Giant Eel', glyph:'~', color:'#3a6a7a', hp:14,
 MONSTER_BASES.drowned_sailor = { name:'Drowned Sailor', glyph:'z', color:'#4a6a6a', hp:17, str:9, dex:5, atk:[2,5], armor:1, xp:11, behavior:'aggressive', dtier:1, faction:'aquatic', aquatic:true };
 MONSTER_BASES.siren = { name:'Siren', glyph:'m', color:'#5aa0c0', hp:20, str:8, dex:12, atk:[2,6], armor:0, xp:22, behavior:'ranged', dtier:2, faction:'aquatic', aquatic:true, causesFear:true };
 MONSTER_BASES.kraken_spawn = { name:'Kraken Spawn', glyph:'K', color:'#1a4a5a', hp:44, str:15, dex:8, atk:[4,9], armor:2, xp:40, behavior:'aggressive', dtier:3, faction:'aquatic', aquatic:true, multiattack:2 };
+// ---- overworld open-water flavor: common shallow predator plus a mid-tier raider, filling
+// out the ocean biome's encounter table (see BIOMES.ocean) so swimming across open water isn't
+// just empty blue tiles. Both share the existing 'aquatic' faction/monster machinery. ----
+MONSTER_BASES.reef_shark = { name:'Reef Shark', glyph:'s', color:'#4a7a8a', hp:16, str:8, dex:15, atk:[2,6], armor:0, xp:10, behavior:'aggressive', dtier:1, faction:'aquatic', aquatic:true };
+MONSTER_BASES.tide_reaver = { name:'Tide Reaver', glyph:'p', color:'#2a5a6a', hp:26, str:10, dex:11, atk:[3,7], armor:1, xp:18, behavior:'aggressive', dtier:2, faction:'aquatic', aquatic:true, loot:[{id:'gold',chance:0.4,min:2,max:6}] };
+MONSTER_BASES.giant_catfish = { name:'Giant Catfish', glyph:'f', color:'#5a6a4a', hp:20, str:9, dex:6, atk:[2,6], armor:1, xp:12, behavior:'ambush', ambushRange:1, dtier:1, faction:'aquatic', aquatic:true };
 
 // ---- ooze (sewer, flooded_cave) ----
 MONSTER_BASES.acid_slime = { name:'Acid Slime', glyph:'j', color:'#8ac93a', hp:14, str:6, dex:2, atk:[1,4], armor:0, xp:7, behavior:'aggressive', dtier:1, faction:'ooze', splitInto:'slime_small', splitCount:2, armorPierce:1, corrosive:true };
@@ -5967,6 +5997,81 @@ const POI_TYPES = [
   { id:'folding_stone', name:'Folding Stone', weight:2, foldingStone:true, lookExtra:'A frame of standing stones, arranged in an order that hurts slightly to look directly at.', glyph:'#', color:'#b090ff' },
 ];
 
+// ---- water-tile structures: data-driven like POI_TYPES above, but placed directly on
+// individual open-water tiles (ocean or lake) rather than on one walkable tile per chunk.
+// Structures stay on non-walkable water tiles -- the player can still stand there while
+// swimming, exactly like the existing 'shipwreck' POI or a 'dock' feature -- so no new movement
+// code was needed, just placement. Each entry is intentionally generic (glyph/color/lookExtra,
+// optional chestTier, optional guardMonsters, optional `biomes` gate) so adding another
+// boat/wreck/reef later -- for ocean, lake, or both -- is a one-line data addition, not new
+// code. Omitting `biomes` means "any open-water tile." See scatterWaterStructures() below for
+// how these are rolled, and TILE_FEATURE_DESCRIPTIONS for the /look flavor text keyed by id.
+const OCEAN_STRUCTURES = [
+  { id:'fishing_boat', name:'Fishing Boat', weight:8, glyph:'b', color:'#a0834a',
+    lookExtra:'A small fishing boat, bobbing gently, nets still coiled on its deck.' },
+  { id:'derelict_raft', name:'Derelict Raft', weight:7, glyph:'=', color:'#8a6a3d',
+    lookExtra:'A crude raft, lashed together and long since abandoned to the current.' },
+  { id:'sailing_ship', name:'Sailing Ship', weight:5, chestTier:2, glyph:'w', color:'#7a8a9a', biomes:['ocean'],
+    lookExtra:'A merchant sailing ship, sails slack, still afloat but clearly adrift.' },
+  { id:'pirate_ship', name:'Pirate Ship', weight:3, chestTier:2, guardMonsters:[{id:'tide_reaver', count:[1,2]}], biomes:['ocean'],
+    glyph:'W', color:'#8a2a2a', lookExtra:'A black-hulled ship flying a tattered flag -- whoever crewed it may still be aboard.' },
+  { id:'shipwreck_hull', name:'Broken Hull', weight:9, chestTier:1, glyph:'=', color:'#5a6a8a', biomes:['ocean'],
+    lookExtra:"The broken-backed hull of some ship, half-submerged, its cargo hold cracked open." },
+  { id:'sea_stack', name:'Sea Stack', weight:6, glyph:'^', color:'#7a7a7a',
+    lookExtra:'A jagged spire of rock rising straight out of the water, gulls wheeling around its top.' },
+  { id:'floating_debris', name:'Floating Debris', weight:9, glyph:'.', color:'#6a5a4a',
+    lookExtra:'Splintered planks and barrels, all that is left of something that used to float properly.' },
+  { id:'anchor_buoy', name:'Anchor Buoy', weight:6, glyph:'o', color:'#c9a03a', biomes:['ocean'],
+    lookExtra:'A weathered buoy, straining gently against its anchor chain.' },
+  { id:'coral_reef', name:'Coral Reef', weight:7, glyph:'"', color:'#e07aa0', biomes:['ocean'],
+    lookExtra:'Bright coral crowds just beneath the surface here, alive with small darting shapes.' },
+  { id:'sunken_lighthouse', name:'Sunken Lighthouse', weight:2, chestTier:1, glyph:'I', color:'#c0b090', biomes:['ocean'],
+    lookExtra:"The top of a lighthouse, all that still breaks the surface of whatever swallowed the rest of it." },
+  { id:'capsized_rowboat', name:'Capsized Rowboat', weight:8, glyph:'b', color:'#7a6a4a', biomes:['lake'],
+    lookExtra:'An overturned rowboat, oars still tucked underneath it, drifting slowly with the current.' },
+  { id:'old_dock_ruins', name:'Old Dock Ruins', weight:4, chestTier:1, glyph:'=', color:'#6a5a3a', biomes:['lake'],
+    lookExtra:'The rotted posts of a dock nobody has maintained in a very long time.' },
+];
+// Rolls 0-4 structures per ocean/lake-touching chunk onto individual open-water tiles,
+// scaling with how much water the chunk actually has. Runs unconditionally (cheap no-op if the
+// chunk has no ocean or lake tiles), independent of the settlement/POI/dungeon-entrance gating
+// above, since ocean/lake chunks never receive those anyway.
+function scatterWaterStructures(chunk, cx, cy, rng) {
+  const waterTiles = [];
+  for (let ly = 1; ly < CH - 1; ly++) for (let lx = 1; lx < CH - 1; lx++) {
+    const t = chunk.tiles[ly][lx];
+    if ((t.biome === 'ocean' || t.biome === 'lake') && !t.feature && !t.building) waterTiles.push({ lx, ly, biome: t.biome });
+  }
+  if (!waterTiles.length) return;
+  const maxRoll = waterTiles.length > 200 ? 4 : waterTiles.length > 60 ? 3 : waterTiles.length > 15 ? 1 : 0;
+  const count = Math.min(waterTiles.length, randInt(rng, 0, maxRoll));
+  for (let i = 0; i < count; i++) {
+    const idx = randInt(rng, 0, waterTiles.length - 1);
+    const spot = waterTiles.splice(idx, 1)[0];
+    const t = chunk.tiles[spot.ly][spot.lx];
+    const candidates = OCEAN_STRUCTURES.filter(s => !s.biomes || s.biomes.includes(spot.biome));
+    if (!candidates.length) continue;
+    const structure = weightedChoice(rng, candidates.map(s => [s, s.weight]));
+    t.feature = structure.id; t.glyph = structure.glyph; t.color = structure.color;
+    if (structure.chestTier !== undefined) {
+      const chest = Object.assign({}, ITEM_BASES.find(b => b.id === 'chest'), { uid: 'i' + Math.random().toString(36).slice(2, 9), tier: structure.chestTier });
+      t.items.push(chest);
+    }
+    if (structure.guardMonsters) {
+      for (const spec of structure.guardMonsters) {
+        const n = randInt(rng, spec.count[0], spec.count[1]);
+        for (let g = 0; g < n; g++) {
+          const ox = spot.lx + randInt(rng, -2, 2), oy = spot.ly + randInt(rng, -2, 2);
+          if (ox < 0 || oy < 0 || ox >= CH || oy >= CH) continue;
+          const ot = chunk.tiles[oy][ox];
+          if (ot.biome !== 'ocean' && ot.biome !== 'lake' && !ot.walkable) continue;
+          chunk.monsters.push(makeMonster(spec.id, cx * CH + ox, cy * CH + oy, overworldDangerScale(cx, cy), rng));
+        }
+      }
+    }
+  }
+}
+
 // ===================== WORLD GENERATION =====================
 const CH = 24; // chunk size in tiles
 const worldChunks = new Map();
@@ -6023,7 +6128,7 @@ function maybeRepopulateChunk(chunk, cx, cy) {
   for (let i = 0; i < count; i++) {
     const lx = randInt(Math.random, 1, CH - 2), ly = randInt(Math.random, 1, CH - 2);
     const t = chunk.tiles[ly][lx];
-    if (!t.walkable || entityAt(cx * CH + lx, cy * CH + ly)) continue;
+    if ((!t.walkable && t.biome !== 'ocean' && t.biome !== 'lake') || entityAt(cx * CH + lx, cy * CH + ly)) continue;
     const b = BIOMES[t.biome] || (curIsDimension() && DIMENSIONS[player.dimensionId] && DIMENSIONS[player.dimensionId].biomes[t.biome]);
     if (!b || !b.encounter || !b.encounter.length) continue;
     const mid = weightedChoice(Math.random, b.encounter);
@@ -6982,7 +7087,7 @@ function scatterDocks(chunk, rng) {
   for (let tries = 0; tries < 10; tries++) {
     const lx = randInt(rng, 1, CH-2), ly = randInt(rng, 1, CH-2);
     const t = chunk.tiles[ly][lx];
-    if (t.walkable && t.building === null && (t.biome === 'beach' || t.biome === 'ocean')) { t.feature = 'dock'; t.glyph = '='; t.color = '#8a6a3d'; break; }
+    if (t.walkable && t.building === null && (t.biome === 'beach' || t.biome === 'ocean' || t.biome === 'lake')) { t.feature = 'dock'; t.glyph = '='; t.color = '#8a6a3d'; break; }
   }
 }
 function scatterOrePiles(chunk, rng) {
@@ -7046,12 +7151,25 @@ function placePOI(chunk, cx, cy, rng) {
 // ---- overworld bosses: rare, tough, biome-appropriate wildlife-tier encounters ----
 function maybeSpawnOverworldBoss(chunk, cx, cy, centerBiome, rng) {
   if (rng() > 0.006) return false; // roughly 1 in ~165 eligible chunks
-  const eligible = OVERWORLD_BOSSES.filter(b => b.biomes.includes(centerBiome));
+  // Land bosses are still gated by centerBiome as before. Aquatic superbosses (Kraken,
+  // Megalodon, the Loch Devourer, etc.) are gated by how much of the *chunk* is actually that
+  // water biome instead -- a carved lake sits inside a chunk whose centerBiome is 'plains' or
+  // similar, so centerBiome alone would never match it. Lakes need a much lower density
+  // threshold than oceans since they're deliberately smaller water bodies.
+  const waterDensity = { ocean: 0, lake: 0 };
+  for (let ly = 0; ly < CH; ly++) for (let lx = 0; lx < CH; lx++) {
+    const b = chunk.tiles[ly][lx].biome;
+    if (b === 'ocean' || b === 'lake') waterDensity[b]++;
+  }
+  waterDensity.ocean /= (CH * CH); waterDensity.lake /= (CH * CH);
+  const WATER_BOSS_THRESHOLD = { ocean: 0.6, lake: 0.15 };
+  let eligible = OVERWORLD_BOSSES.filter(b => b.biomes.includes(centerBiome) && !b.aquatic);
+  eligible = eligible.concat(OVERWORLD_BOSSES.filter(b => b.aquatic && b.biomes.some(bi => waterDensity[bi] >= (WATER_BOSS_THRESHOLD[bi] || 1))));
   if (!eligible.length) return false;
   const bossDef = choice(rng, eligible);
   const lx = randInt(rng, 3, CH-4), ly = randInt(rng, 3, CH-4);
   const t = chunk.tiles[ly][lx];
-  if (!t.walkable) return false;
+  if (!t.walkable && !(bossDef.aquatic && (t.biome === 'ocean' || t.biome === 'lake'))) return false;
   const m = makeMonster('rabbit', 0, 0, 1, rng); // placeholder to reuse makeMonster's uid/shape, overwritten below
   const bScale = overworldDangerScale(cx, cy);
   Object.assign(m, {
@@ -7063,6 +7181,7 @@ function maybeSpawnOverworldBoss(chunk, cx, cy, centerBiome, rng) {
     wanderRadius: 14, scriptedAI: bossDef.scriptedAI || null, engageLine: bossDef.engageLine || null,
     deathLine: bossDef.deathLine || null, lore: bossDef.lore || null, berserkHpPct: bossDef.berserkHpPct || null,
     causesConfuse: bossDef.causesConfuse || false, multiattack: bossDef.multiattack || null,
+    aquatic: bossDef.aquatic || false, faction: bossDef.faction || 'beast', causesFear: bossDef.causesFear || false,
   });
   // A fresh copy with its own uid each spawn -- guaranteedDropTemplate must never be shared by
   // reference across multiple wandering spawns of the same boss, or picking it up in one place
@@ -7378,7 +7497,7 @@ function blocksSight(x, y) {
   if (!t) return true;
   if (t.smokeTurns > 0) return true;
   // water and chasms are see-through/see-over -- they shouldn't cast shadows or hide what's beyond them
-  if (t.feature === 'water' || t.feature === 'chasm' || t.biome === 'ocean') return false;
+  if (t.feature === 'water' || t.feature === 'chasm' || t.biome === 'ocean' || t.biome === 'lake') return false;
   return !t.walkable;
 }
 
@@ -7390,7 +7509,7 @@ function blocksSight(x, y) {
 // when you change dungeon level or leave/enter a dungeon, so nothing is silently tracked/processed for
 // an area you can no longer see or interact with.
 let activeFxTiles = []; // [{ t, x, y }]
-function isWaterTile(t) { return !!(t && (t.feature === 'water' || t.biome === 'ocean')); }
+function isWaterTile(t) { return !!(t && (t.feature === 'water' || t.biome === 'ocean' || t.biome === 'lake')); }
 // ---- shared tile-transform helpers: water and chasm conversion happen from several places
 // (pond generation, chasm generation, bridge collapse, ice thaw) and used to repeat the same
 // five-field literal at every call site. Consolidated here so there's one place to adjust the
@@ -7811,7 +7930,7 @@ function applyBuff(stat, power, turns) { player.buffs[stat] = { power, turns }; 
 function isPlayerInWater() {
   if (curIsDungeon()) return false;
   const t = curTileAt(player.x, player.y);
-  return !!(t && (t.feature === 'water' || t.biome === 'ocean'));
+  return !!(t && (t.feature === 'water' || t.biome === 'ocean' || t.biome === 'lake'));
 }
 // ---- v4 balance pass: Charisma drives ally/summon/companion strength ----
 // Previously every summoned creature and recruited companion scaled off player.level alone
@@ -8640,7 +8759,7 @@ function placePlayerAtStart() {
       const ang = (a/8) * Math.PI * 2;
       const x = Math.round(Math.cos(ang) * r), y = Math.round(Math.sin(ang) * r);
       const t = getTile(x, y);
-      if (t.walkable && t.biome !== 'ocean') { player.x = x; player.y = y; return; }
+      if (t.walkable && t.biome !== 'ocean' && t.biome !== 'lake') { player.x = x; player.y = y; return; }
     }
   }
   player.x = 0; player.y = 0;
@@ -11580,6 +11699,16 @@ const TILE_FEATURE_DESCRIPTIONS = {
   launch_cradle: 'A dead husk of scaffolding, curved like it once cradled something built to leave the ground entirely.',
   folding_stone: 'A frame of standing stones, arranged in an order that hurts slightly to look directly at.',
   hazard: 'The ground here looks unstable or dangerous — best tread carefully, or find another way around.',
+  fishing_boat: 'A small fishing boat, bobbing gently, nets still coiled on its deck.',
+  derelict_raft: 'A crude raft, lashed together and long since abandoned to the current.',
+  sailing_ship: 'A merchant sailing ship, sails slack, still afloat but clearly adrift.',
+  pirate_ship: 'A black-hulled ship flying a tattered flag — whoever crewed it may still be aboard.',
+  shipwreck_hull: 'The broken-backed hull of some ship, half-submerged, its cargo hold cracked open.',
+  sea_stack: 'A jagged spire of rock rising straight out of the water, gulls wheeling around its top.',
+  floating_debris: 'Splintered planks and barrels, all that is left of something that used to float properly.',
+  anchor_buoy: 'A weathered buoy, straining gently against its anchor chain.',
+  coral_reef: 'Bright coral crowds just beneath the surface here, alive with small darting shapes.',
+  sunken_lighthouse: 'The top of a lighthouse, all that still breaks the surface of whatever swallowed the rest of it.',
 };
 // A handful of tile features are dynamic per-tile (their exact flavor lives on the specific POI
 // instance, not the shared dictionary above) -- these get looked up by matching world coordinates
@@ -13135,6 +13264,36 @@ function monsterAI(m) {
 }
 
 // ---- chunk generation v6: wires in overworld boss spawning ----
+// ---- inland lakes: carves a self-contained, roughly-elliptical lake into a small fraction of
+// otherwise-land chunks. Deliberately chunk-local (doesn't try to span multiple chunks like the
+// ocean does) so it can reuse the same simple "roll odds, carve a blob" approach as the dungeon
+// generator's placeLake() without needing any cross-chunk bookkeeping. Only ever called from the
+// "this chunk isn't a settlement/POI/dungeon-entrance" branch of generateChunk(), so a lake can
+// never overwrite a town or a dungeon mouth. Converts walkable land tiles to the 'lake' biome in
+// place (mutates the tiles array chunk.tiles already points to).
+function maybeCarveLake(tiles, cx, cy, centerBiome) {
+  if (!['plains', 'forest', 'denseforest', 'tundra', 'swamp'].includes(centerBiome)) return false;
+  const lakeHash = coordHash(cx, cy, SEED + 314159);
+  if (lakeHash > 0.045) return false; // ~4.5% of eligible land chunks get a lake
+  const lrng = mulberry32((cx * 55511 + cy * 90121 + SEED + 8675309) | 0);
+  const ccx = randInt(lrng, 7, CH - 8), ccy = randInt(lrng, 7, CH - 8);
+  const rx = 3 + lrng() * 3, ry = 3 + lrng() * 3;
+  let carved = false;
+  for (let ly = 0; ly < CH; ly++) {
+    for (let lx = 0; lx < CH; lx++) {
+      const t = tiles[ly][lx];
+      if (!t.walkable) continue; // never carve over trees, rock, existing water, etc.
+      const dx = (lx - ccx) / rx, dy = (ly - ccy) / ry;
+      const jitter = (coordHash(cx * CH + lx, cy * CH + ly, SEED + 271828) - 0.5) * 0.5;
+      if (dx * dx + dy * dy + jitter < 1) {
+        t.biome = 'lake'; t.walkable = false; t.feature = null;
+        t.glyph = BIOMES.lake.glyph; t.color = BIOMES.lake.color; t.bg = BIOMES.lake.bg;
+        carved = true;
+      }
+    }
+  }
+  return carved;
+}
 function generateChunk(cx, cy) {
   const tiles = [];
   for (let ly = 0; ly < CH; ly++) {
@@ -13180,17 +13339,19 @@ function generateChunk(cx, cy) {
   }
 
   if (!chunk.settlement && !chunk.poi && !chunk.dungeonEntrance) {
+    maybeCarveLake(tiles, cx, cy, centerBiome);
     const spawnedBoss = maybeSpawnOverworldBoss(chunk, cx, cy, centerBiome, rng);
     const spawnCount = randInt(rng, 0, 3);
     for (let i = 0; i < spawnCount; i++) {
       const lx = randInt(rng, 1, CH - 2), ly = randInt(rng, 1, CH - 2);
       const t = tiles[ly][lx];
-      if (!t.walkable) continue;
+      if (!t.walkable && t.biome !== 'ocean' && t.biome !== 'lake') continue;
       const b = BIOMES[t.biome];
       if (!b.encounter.length) continue;
       const mid = weightedChoice(rng, b.encounter);
       chunk.monsters.push(makeMonster(mid, cx * CH + lx, cy * CH + ly, overworldDangerScale(cx, cy), rng));
     }
+    scatterWaterStructures(chunk, cx, cy, rng);
     const itemChance = rng();
     if (itemChance < 0.10) {
       const lx = randInt(rng, 1, CH - 2), ly = randInt(rng, 1, CH - 2);
@@ -14659,7 +14820,7 @@ function movePlayer(dx, dy) {
     return;
   }
   const t = curTileAt(nx, ny);
-  const isWaterTile = t && (t.feature === 'water' || t.biome === 'ocean');
+  const isWaterTile = t && (t.feature === 'water' || t.biome === 'ocean' || t.biome === 'lake');
   if (!curWalkable(nx, ny)) {
     if (t && DESTRUCTIBLE_FEATURES[t.feature]) {
       attackDestructibleFeature(t, nx, ny);
@@ -14827,7 +14988,7 @@ function endTurn() {
   processTerrainEffects();
   if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
   const curT = curTileAt(player.x, player.y);
-  const playerInWater = curT && (curT.feature === 'water' || curT.biome === 'ocean') && !curIsDungeon();
+  const playerInWater = curT && (curT.feature === 'water' || curT.biome === 'ocean' || curT.biome === 'lake') && !curIsDungeon();
   if (!playerInWater) {
     const staminaRegen = Math.max(1, (player.staminaRegenBonus ? 6 : 3) - (player.staminaRegenPenalty || 0));
     // wearing armor heavier than your STR supports means you're spending some of every turn's
@@ -17012,7 +17173,10 @@ const GUIDE_SECTIONS = [
     capstones that make crafting nearly free and food a real substitute for going into melee at all.</div>` },
   { id:'water', label:'Water & Travel', html: () => `
     <div class="modal-opt">Swimming costs Stamina; running out causes damage until you reach shore. A Wooden Raft,
-    the Flight spell, Micro-Thrusters cybernetic, or the Waterborn talent all let you cross freely.</div>` },
+    the Flight spell, Micro-Thrusters cybernetic, or the Waterborn talent all let you cross freely.</div>
+    <div class="modal-opt">Open ocean is no longer empty — sharks, eels, sirens, and drowned raiders swim it, boats and
+    shipwrecks (some guarded, some worth looting) drift on it, and out in the deepest water a rare few — the
+    Kraken, the Megalodon, Coilfang the Endless Serpent — are worth watching for, and worth avoiding until you're ready.</div>` },
   { id:'relationships', label:'Relationships', html: () => `
     <div class="modal-opt">t talks to an adjacent NPC — Trade, Learn, Ask for work, Pay for healing, Give a gift, and
     (80+ affection) Propose Marriage. Affection builds honestly: Talk only helps once per cooldown, gifts have
