@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.25.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.26.0-alpha</div>
     </div>
   </div>
 
@@ -1879,8 +1879,10 @@ function bountyValueFor(npc) { return ROLE_BOUNTY_VALUE[npc.roleId] || 10; }
 // ---- starting scenarios ----
 const START_SCENARIOS = [
   { id: 'wanderer', name: 'Wanderer', desc: 'Begin alone in the wilds near the world\'s heart, with nothing but your wits.' },
+  { id: 'capital', name: 'Capital Born', desc: 'Begin within a sprawling, multi-district kingdom capital -- rare, massive, and grand.' },
   { id: 'city', name: 'City Dweller', desc: 'Begin within (or just outside) a great walled city, full of trainers and trade.' },
   { id: 'town', name: 'Town Settler', desc: 'Begin near a modest town — a balance of safety and opportunity.' },
+  { id: 'village', name: 'Village Raised', desc: 'Begin near a small village — a handful of neighbors and not much else.' },
   { id: 'hamlet', name: 'Hamlet Born', desc: 'Begin in a tiny, quiet hamlet far from danger... and far from help.' },
   { id: 'shipwreck', name: 'Shipwreck Survivor', desc: 'Wake up half-drowned on a beach, most of your belongings lost to the sea.' },
   { id: 'forest', name: 'Forest Hermit', desc: 'Begin deep in a forest, alone, self-reliant, and far from any settlement.' },
@@ -3882,20 +3884,46 @@ const CREATION_ABILITY_CATS = [
 
 // ---- settlement flavors: layered on top of the existing hamlet/village/town/city size tiers ----
 // (adds variety of purpose/decoration without re-engineering the tested size/layout system)
+// ---- SETTLEMENT OVERHAUL v1: every flavor now also carries a `layoutStyle` --
+// 'grid' (regimented lots -- garrisons, holds, estates: a settlement that SHOULD look uniform),
+// 'organic' (loose, jittered scatter -- farms, camps, villages: what most settlements should
+// look like), or 'radial' (rings around a central plaza -- temples, colleges, capitals). Only a
+// third of flavors keep the old strict grid now; the rest read as actually lived-in rather than
+// a barracks. See layoutBuildingsGrid/Organic/Radial and placeBuildingDoor below. `decor` names
+// which extra scatterDecorations() pass(es) to run for that flavor (several dozen new exterior
+// features live there now: farms/pens/wells/docks/stalls/etc. -- see DECOR_SETS).
 const SETTLEMENT_FLAVORS = {
-  standard:  { name:'', weight:30, preferredBiomes:null, rolePool:null },
-  farming:   { name:'Farming ', weight:12, preferredBiomes:['plains'], rolePool:['farmer','farmer','farmer','elder','child','merchant','miller'] },
-  fishing:   { name:'Fishing ', weight:8,  preferredBiomes:['beach'], rolePool:['fisherman','fisherman','merchant','elder','child','sailor'] },
-  mining:    { name:'Mining ', weight:8,  preferredBiomes:['mountain','tundra'], rolePool:['miner','miner','blacksmith','guard','merchant'] },
-  military:  { name:'Garrison ', weight:6, preferredBiomes:null, rolePool:['guard','guard','watchman','captain','blacksmith'] },
-  monastery: { name:'Monastery of ', weight:5, preferredBiomes:null, rolePool:['priest','priest','scholar','elder','alchemist'] },
-  trading:   { name:'Trading Post: ', weight:8, preferredBiomes:null, rolePool:['merchant','merchant','merchant','innkeeper','guard'] },
-  nomad:     { name:'Nomad Camp of ', weight:6, preferredBiomes:['desert','plains'], rolePool:['hunter','ranger','elder','child','merchant'], tents:true },
-  elven:     { name:'Enclave of ', weight:5, preferredBiomes:['forest','denseforest'], rolePool:['ranger','ranger','scholar','hunter','alchemist'], noWalls:true },
-  dwarven:   { name:'Hold of ', weight:5, preferredBiomes:['mountain'], rolePool:['miner','blacksmith','blacksmith','guard','merchant'] },
-  pirate:    { name:'Cove of ', weight:4, preferredBiomes:['beach'], rolePool:['merchant','sailor','guard'], hostileMix:['bandit'] },
-  cult:      { name:'Hidden Enclave of ', weight:2, preferredBiomes:null, rolePool:['necromancer_trainer','cultist_npc','elder'], hostileMix:['cultist'], rare:true },
-  tech:      { name:'Scrapworks: ', weight:4, preferredBiomes:null, rolePool:['cybersmith','blacksmith','merchant','guard'] },
+  standard:  { name:'', weight:22, preferredBiomes:null, rolePool:null, layoutStyle:'organic' },
+  farming:   { name:'Farming ', weight:12, preferredBiomes:['plains'], rolePool:['farmer','farmer','farmer','elder','child','merchant','miller','shepherd'], layoutStyle:'organic', decor:['farm'] },
+  fishing:   { name:'Fishing ', weight:8,  preferredBiomes:['beach'], rolePool:['fisherman','fisherman','merchant','elder','child','sailor','dockhand'], layoutStyle:'organic', decor:['dock'] },
+  mining:    { name:'Mining ', weight:8,  preferredBiomes:['mountain','tundra'], rolePool:['miner','miner','blacksmith','guard','merchant'], layoutStyle:'grid', decor:['mining'] },
+  military:  { name:'Garrison ', weight:6, preferredBiomes:null, rolePool:['guard','guard','watchman','captain','blacksmith'], layoutStyle:'grid', decor:['military'] },
+  monastery: { name:'Monastery of ', weight:5, preferredBiomes:null, rolePool:['priest','priest','scholar','elder','alchemist'], layoutStyle:'radial', decor:['sacred'] },
+  trading:   { name:'Trading Post: ', weight:8, preferredBiomes:null, rolePool:['merchant','merchant','merchant','innkeeper','guard','tavernkeeper'], layoutStyle:'organic', decor:['market'] },
+  nomad:     { name:'Nomad Camp of ', weight:6, preferredBiomes:['desert','plains'], rolePool:['hunter','ranger','elder','child','merchant'], tents:true, layoutStyle:'organic', decor:['camp'] },
+  elven:     { name:'Enclave of ', weight:5, preferredBiomes:['forest','denseforest'], rolePool:['ranger','ranger','scholar','hunter','alchemist'], noWalls:true, layoutStyle:'organic', decor:['grove'] },
+  dwarven:   { name:'Hold of ', weight:5, preferredBiomes:['mountain'], rolePool:['miner','blacksmith','blacksmith','guard','merchant'], layoutStyle:'grid', decor:['mining'] },
+  pirate:    { name:'Cove of ', weight:4, preferredBiomes:['beach'], rolePool:['merchant','sailor','guard'], hostileMix:['bandit'], layoutStyle:'organic', decor:['dock'] },
+  cult:      { name:'Hidden Enclave of ', weight:2, preferredBiomes:null, rolePool:['necromancer_trainer','cultist_npc','elder'], hostileMix:['cultist'], rare:true, layoutStyle:'radial', decor:['sacred'] },
+  tech:      { name:'Scrapworks: ', weight:4, preferredBiomes:null, rolePool:['cybersmith','blacksmith','merchant','guard'], layoutStyle:'grid', decor:['mining'] },
+  // ---- new flavors added by the Settlement Overhaul (roughly doubles the previous roster) ----
+  lumber:    { name:'Lumber Camp: ', weight:6, preferredBiomes:['forest','denseforest'], rolePool:['lumberjack','lumberjack','carpenter','elder','merchant'], layoutStyle:'organic', decor:['lumber'] },
+  brewery:   { name:'Brewery of ', weight:5, preferredBiomes:['plains','forest'], rolePool:['brewer','brewer','farmer','innkeeper','tavernkeeper','merchant','vintner','cooper'], layoutStyle:'organic', decor:['farm','market'] },
+  harbor:    { name:'Harbor of ', weight:6, preferredBiomes:['beach'], rolePool:['sailor','sailor','merchant','merchant','guard','dockhand','dockhand','shipwright','ropemaker'], layoutStyle:'grid', decor:['dock','market'] },
+  university:{ name:'College of ', weight:4, preferredBiomes:null, rolePool:['scholar','scholar','priest','alchemist','curator','elder','cartographer','scribe'], layoutStyle:'radial', decor:['sacred'] },
+  spa:       { name:'Hot Springs of ', weight:3, preferredBiomes:['mountain','tundra'], rolePool:['healer','innkeeper','merchant','alchemist','tavernkeeper'], layoutStyle:'organic', decor:['garden'] },
+  caravan:   { name:'Caravan Stop: ', weight:6, preferredBiomes:['desert','plains'], rolePool:['merchant','merchant','guard','sailor','dockhand'], tents:true, layoutStyle:'organic', decor:['camp','market'] },
+  gladiator: { name:'Fighting Pits of ', weight:3, preferredBiomes:null, rolePool:['gladiator','gladiator','trainer','guard','merchant','dealer'], layoutStyle:'grid', decor:['arena'] },
+  orchard:   { name:'Orchard of ', weight:6, preferredBiomes:['plains','forest'], rolePool:['farmer','farmer','brewer','merchant','child','elder','vintner','beekeeper'], layoutStyle:'organic', decor:['farm'] },
+  herbalist: { name:'Herbalist Grove of ', weight:4, preferredBiomes:['forest','denseforest'], rolePool:['alchemist','alchemist','ranger','elder','healer'], noWalls:true, layoutStyle:'organic', decor:['grove','garden'] },
+  refugee:   { name:'Refugee Camp of ', weight:3, preferredBiomes:null, rolePool:['beggar','beggar','elder','child','guard','farmer'], tents:true, layoutStyle:'organic', decor:['camp'] },
+  noble_estate:{ name:'Estate of ', weight:2, preferredBiomes:['plains'], rolePool:['noble','noble','guard','guard','stablehand','beggar','jeweler','herald','seamstress'], layoutStyle:'grid', decor:['garden'], rare:true },
+  temple:    { name:'Grand Temple of ', weight:3, preferredBiomes:null, rolePool:['priest','priest','priest','scholar','curator','gravedigger','undertaker'], layoutStyle:'radial', decor:['sacred'] },
+  whaling:   { name:'Whaling Station: ', weight:3, preferredBiomes:['beach'], rolePool:['sailor','sailor','merchant','blacksmith','dockhand'], layoutStyle:'organic', decor:['dock'] },
+  festival:  { name:'Festival Grounds of ', weight:2, preferredBiomes:['plains'], rolePool:['bard','bard','merchant','dealer','tavernkeeper','companion'], layoutStyle:'organic', decor:['market','arena'], rare:true },
+  frontier:  { name:'Frontier Outpost: ', weight:5, preferredBiomes:null, rolePool:['guard','hunter','ranger','blacksmith','merchant','tanner','furrier'], layoutStyle:'grid', decor:['military'] },
+  archive:   { name:'Archive of ', weight:2, preferredBiomes:null, rolePool:['scholar','scholar','curator','priest'], layoutStyle:'radial', decor:['sacred'], rare:true },
+  floating_market:{ name:'Floating Market of ', weight:4, preferredBiomes:['beach'], rolePool:['merchant','merchant','sailor','fisherman','dockhand'], layoutStyle:'organic', decor:['dock','market'] },
 };
 
 // new roles used by settlement flavors above (in addition to the existing ROLES list)
@@ -3905,7 +3933,68 @@ ROLES.push(
   { id:'cybersmith', name:'Cybersmith', color:'#4ae0d0', hp:14, str:6, dex:7, atk:[1,4], armor:1 },
   { id:'cultist_npc', name:'Cult Adept', color:'#6a2a8a', hp:14, str:6, dex:7, atk:[2,5], armor:0 },
 );
+
+// ---- Settlement Overhaul v1: new building-type roles. These exist to give settlements actual
+// functional variety beyond "house with a shopkeeper in it" -- a tavern, a storage house, a
+// gambling hall, a museum, an adventurers' guild, and (handled tastefully, see paidCompanionship
+// below -- purely a rest/rumor service, nothing explicit) a discreet lodging house. Hooked up to
+// real interactions in openDialogue(). ----
+ROLES.push(
+  { id:'tavernkeeper', name:'Tavernkeeper', color:'#c98a3a', hp:14, str:6, dex:6, atk:[1,3], armor:0 },
+  { id:'companion', name:'Companion', color:'#c96ac0', hp:10, str:4, dex:8, atk:[1,2], armor:0 },
+  { id:'curator', name:'Curator', color:'#8a9ac9', hp:10, str:4, dex:5, atk:[1,2], armor:0 },
+  { id:'storagekeeper', name:'Storagekeeper', color:'#8a7a5a', hp:12, str:6, dex:5, atk:[1,3], armor:0 },
+  { id:'dealer', name:'Dealer', color:'#e0a04a', hp:12, str:5, dex:8, atk:[1,3], armor:0 },
+  { id:'guildclerk', name:'Guild Clerk', color:'#4a9ac9', hp:12, str:5, dex:6, atk:[1,3], armor:0 },
+  { id:'lumberjack', name:'Lumberjack', color:'#7a9a4a', hp:16, str:11, dex:6, atk:[2,6], armor:0 },
+  { id:'carpenter', name:'Carpenter', color:'#a07a4a', hp:12, str:8, dex:6, atk:[1,4], armor:0 },
+  { id:'brewer', name:'Brewer', color:'#c9a06a', hp:12, str:6, dex:5, atk:[1,3], armor:0 },
+  { id:'gladiator', name:'Gladiator', color:'#c93a3a', hp:26, str:13, dex:10, atk:[3,7], armor:2 },
+  { id:'dockhand', name:'Dockhand', color:'#5a8ac9', hp:14, str:8, dex:6, atk:[1,4], armor:0 },
+  { id:'healer', name:'Healer', color:'#5ae0a0', hp:10, str:4, dex:5, atk:[1,2], armor:0, healer:true },
+);
 // note: SHOP_ROLES.add('cybersmith') happens in world6.js, since SHOP_ROLES isn't defined until world2.js
+
+// ---- NPC/Profession Overhaul: a broad batch of ordinary trades and townsfolk roles -- "what
+// real people would actually build/do in these scenarios" beyond just shopkeepers and guards.
+// Mostly flavor/decoration professions (they populate houses and streets, give settlements a
+// lived-in economy, and are marriageable/giftable/attackable like any other NPC) rather than each
+// getting a bespoke new mechanic -- the goal here is breadth and realism, not another dozen menus.
+ROLES.push(
+  { id:'cobbler', name:'Cobbler', color:'#8a6a3a', hp:10, str:5, dex:6, atk:[1,2], armor:0 },
+  { id:'potter', name:'Potter', color:'#c9a06a', hp:10, str:5, dex:6, atk:[1,2], armor:0 },
+  { id:'weaver', name:'Weaver', color:'#a05a9a', hp:10, str:4, dex:7, atk:[1,2], armor:0 },
+  { id:'glassblower', name:'Glassblower', color:'#5ac9d0', hp:10, str:5, dex:6, atk:[1,2], armor:0 },
+  { id:'jeweler', name:'Jeweler', color:'#e0c34a', hp:10, str:4, dex:7, atk:[1,2], armor:0 },
+  { id:'cooper', name:'Cooper', color:'#8a6a3a', hp:12, str:8, dex:6, atk:[1,4], armor:0 },
+  { id:'mason', name:'Mason', color:'#9a9a9a', hp:16, str:11, dex:5, atk:[2,5], armor:1 },
+  { id:'roofer', name:'Roofer', color:'#8a7a5a', hp:12, str:8, dex:6, atk:[1,3], armor:0 },
+  { id:'midwife', name:'Midwife', color:'#e0a0c9', hp:10, str:4, dex:6, atk:[1,2], armor:0 },
+  { id:'undertaker', name:'Undertaker', color:'#5a5a6a', hp:12, str:7, dex:5, atk:[1,3], armor:0 },
+  { id:'gravedigger', name:'Gravedigger', color:'#6a6a5a', hp:14, str:9, dex:5, atk:[1,4], armor:0 },
+  { id:'barber', name:'Barber', color:'#c9a06a', hp:10, str:4, dex:7, atk:[1,2], armor:0 },
+  { id:'scribe', name:'Scribe', color:'#8a9ac9', hp:8, str:3, dex:6, atk:[1,2], armor:0 },
+  { id:'cartographer', name:'Cartographer', color:'#4a9ac9', hp:9, str:4, dex:6, atk:[1,2], armor:0 },
+  { id:'locksmith', name:'Locksmith', color:'#9a8a6a', hp:12, str:6, dex:8, atk:[1,3], armor:0 },
+  { id:'tanner', name:'Tanner', color:'#8a6a4a', hp:12, str:8, dex:5, atk:[1,3], armor:0 },
+  { id:'dyer', name:'Dyer', color:'#c94a9a', hp:10, str:5, dex:6, atk:[1,2], armor:0 },
+  { id:'beekeeper', name:'Beekeeper', color:'#e0c34a', hp:10, str:5, dex:5, atk:[1,2], armor:0 },
+  { id:'shepherd', name:'Shepherd', color:'#c9c9a0', hp:12, str:6, dex:5, atk:[1,3], armor:0 },
+  { id:'vintner', name:'Vintner', color:'#8a2a4a', hp:10, str:5, dex:5, atk:[1,2], armor:0 },
+  { id:'cheesemonger', name:'Cheesemonger', color:'#e0c34a', hp:10, str:5, dex:5, atk:[1,2], armor:0 },
+  { id:'candlemaker', name:'Candlemaker', color:'#e0a04a', hp:10, str:5, dex:5, atk:[1,2], armor:0 },
+  { id:'mercenary', name:'Mercenary', color:'#c93a3a', hp:22, str:12, dex:9, atk:[3,6], armor:2 },
+  { id:'courier', name:'Courier', color:'#4a9ac9', hp:12, str:6, dex:9, atk:[1,3], armor:0 },
+  { id:'apothecary_assistant', name:"Apothecary's Assistant", color:'#5ae0a0', hp:9, str:4, dex:6, atk:[1,2], armor:0 },
+  { id:'shipwright', name:'Shipwright', color:'#5a8ac9', hp:14, str:9, dex:6, atk:[1,4], armor:0 },
+  { id:'ropemaker', name:'Ropemaker', color:'#a08a5a', hp:11, str:7, dex:6, atk:[1,3], armor:0 },
+  { id:'furrier', name:'Furrier', color:'#8a6a4a', hp:10, str:5, dex:6, atk:[1,2], armor:0 },
+  { id:'blacksmith_apprentice', name:"Blacksmith's Apprentice", color:'#9a8a6a', hp:12, str:8, dex:5, atk:[1,4], armor:0 },
+  { id:'herald', name:'Herald', color:'#c9a06a', hp:10, str:5, dex:6, atk:[1,3], armor:0 },
+  { id:'jester', name:'Jester', color:'#c94ac9', hp:9, str:3, dex:8, atk:[1,2], armor:0 },
+  { id:'seamstress', name:'Seamstress', color:'#a05a9a', hp:9, str:3, dex:7, atk:[1,2], armor:0 },
+  { id:'wheelwright', name:'Wheelwright', color:'#8a6a3a', hp:13, str:8, dex:6, atk:[1,4], armor:0 },
+);
 
 // ---- overworld bosses: rare, roaming, unique named encounters ----
 const OVERWORLD_BOSSES = [
@@ -6523,25 +6612,110 @@ function makeCorpse(monster) {
 }
 
 function drawWallRing(chunk, gateSide) {
+  // legacy single-chunk entry point: walls all four sides, gate on the south (bottom) edge
+  drawWallRingSides(chunk, { top: true, bottom: true, left: true, right: true }, gateSide === 'south' ? 'bottom' : gateSide);
+}
+// ---- Multi-chunk settlements: only the side(s) of a given cell that sit on the *outer* edge of
+// the whole settlement footprint get a wall+moat; sides facing an adjacent cell are left
+// completely open, which is what actually forms the wide avenue between districts (each cell's
+// generous margin on that side, plus its neighbor's matching margin, adds up to real street
+// width) -- see buildSettlementCell.
+function drawWallRingSides(chunk, sides, gateSide) {
   const t = chunk.tiles;
   for (let i = 1; i < CH - 1; i++) {
-    // wall ring at inset 1
-    setWallIfClear(t, i, 1); setWallIfClear(t, i, CH - 2);
-    setWallIfClear(t, 1, i); setWallIfClear(t, CH - 2, i);
-    // moat ring at edge (inset 0)
-    setMoatIfClear(t, i, 0); setMoatIfClear(t, i, CH - 1);
-    setMoatIfClear(t, 0, i); setMoatIfClear(t, CH - 1, i);
+    if (sides.top) { setWallIfClear(t, i, 1); setMoatIfClear(t, i, 0); }
+    if (sides.bottom) { setWallIfClear(t, i, CH - 2); setMoatIfClear(t, i, CH - 1); }
+    if (sides.left) { setWallIfClear(t, 1, i); setMoatIfClear(t, 0, i); }
+    if (sides.right) { setWallIfClear(t, CH - 2, i); setMoatIfClear(t, CH - 1, i); }
   }
-  const mid = Math.floor(CH / 2);
-  const gw = 2;
-  for (let g = -gw; g <= gw; g++) {
-    if (gateSide === 'south') { openGate(t, mid + g, 1); openGate(t, mid + g, 0); }
-    else { openGate(t, 1, mid + g); openGate(t, 0, mid + g); }
+  const mid = Math.floor(CH / 2), gw = 2;
+  const actualGateSide = (gateSide && sides[gateSide]) ? gateSide : ['bottom','top','left','right'].find(s => sides[s]);
+  if (actualGateSide) {
+    for (let g = -gw; g <= gw; g++) {
+      if (actualGateSide === 'bottom') { openGate(t, mid + g, CH - 2); openGate(t, mid + g, CH - 1); }
+      else if (actualGateSide === 'top') { openGate(t, mid + g, 1); openGate(t, mid + g, 0); }
+      else if (actualGateSide === 'left') { openGate(t, 1, mid + g); openGate(t, 0, mid + g); }
+      else { openGate(t, CH - 2, mid + g); openGate(t, CH - 1, mid + g); }
+    }
   }
   function setWallIfClear(t, x, y) { if (!t[y][x].building) { t[y][x] = { glyph:'#', color:'#8a7a5a', bg:'#1c150c', walkable:false, feature:'wall', items:[], building:null, biome:t[y][x].biome }; } }
   function setMoatIfClear(t, x, y) { if (!t[y][x].building) { t[y][x] = { glyph:'~', color:'#2a4a6a', bg:'#0a141c', walkable:false, feature:'water', items:[], building:null, biome:t[y][x].biome }; } }
   function openGate(t, x, y) { t[y][x] = { glyph:'=', color:'#c9a06a', bg:'#241f16', walkable:true, feature:'gate', items:[], building:null, biome:t[y][x].biome }; }
 }
+
+// ---- Settlement Overhaul bugfix: the old road system just painted a short 6-tile cross from a
+// single point (the gate or the settlement center) in each cardinal direction, stopping the
+// instant it hit ANY wall -- which had no idea where a building's actual door was, so a road could
+// easily dead-end against a building's blank wall instead of reaching its entrance. Roads now grow
+// as a real network: starting from the gate/plaza, each building's door connects via the actual
+// shortest walkable path (a BFS through open ground, never through building interiors) to whatever
+// road already exists -- closer buildings connect first, so later ones naturally branch off the
+// growing network rather than every single building tracing its own line back to the gate.
+function growRoadNetwork(chunk, doorList, rootX, rootY) {
+  const isRoadTile = (t) => t.feature === 'road' || t.feature === 'gate';
+  const markRoad = (x, y) => {
+    const t = chunk.tiles[y][x];
+    if (t.walkable && t.building === null && t.feature !== 'door' && t.feature !== 'gate') { t.feature = 'road'; t.glyph = ':'; t.color = '#b09a6a'; }
+  };
+  // The seed point (gate or settlement center) can land on a building or wall, especially with
+  // grid layouts -- if so, hunt outward for the nearest open, non-building tile instead of
+  // silently seeding nothing (which previously meant NO road tiles anywhere in the whole
+  // settlement, since every door's search had nothing to connect to).
+  let seedX = rootX, seedY = rootY;
+  const isOpenSeed = (x, y) => x >= 0 && y >= 0 && x < CH && y < CH && chunk.tiles[y][x].walkable && chunk.tiles[y][x].building === null;
+  if (!isOpenSeed(seedX, seedY)) {
+    outer: for (let r = 1; r < CH; r++) {
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const nx = rootX + dx, ny = rootY + dy;
+        if (isOpenSeed(nx, ny)) { seedX = nx; seedY = ny; break outer; }
+      }
+    }
+  }
+  if (isOpenSeed(seedX, seedY)) markRoad(seedX, seedY);
+  const doorStepDelta = (side) => side === 'bottom' ? [0, 1] : side === 'top' ? [0, -1] : side === 'left' ? [-1, 0] : [1, 0];
+  const sorted = doorList.slice().sort((a, b) =>
+    (Math.abs(a.x - rootX) + Math.abs(a.y - rootY)) - (Math.abs(b.x - rootX) + Math.abs(b.y - rootY)));
+  for (const d of sorted) {
+    const [dx0, dy0] = doorStepDelta(d.side);
+    const sx = d.x + dx0, sy = d.y + dy0;
+    if (sx < 0 || sy < 0 || sx >= CH || sy >= CH) continue;
+    if (!chunk.tiles[sy][sx].walkable) continue;
+    const path = bfsToExistingRoad(chunk, sx, sy);
+    if (path) path.forEach(([x, y]) => markRoad(x, y));
+  }
+}
+function bfsToExistingRoad(chunk, sx, sy) {
+  if (isRoadOrGate(chunk, sx, sy)) return [[sx, sy]];
+  const key = (x, y) => x * CH + y;
+  const visited = new Set([key(sx, sy)]);
+  const prev = new Map();
+  const queue = [[sx, sy]];
+  let qi = 0;
+  let found = null;
+  while (qi < queue.length) {
+    const [x, y] = queue[qi++];
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= CH || ny >= CH) continue;
+      const k = key(nx, ny);
+      if (visited.has(k)) continue;
+      const nt = chunk.tiles[ny][nx];
+      if (!nt.walkable || nt.building !== null) continue;
+      visited.add(k);
+      prev.set(k, [x, y]);
+      if (isRoadOrGate(chunk, nx, ny)) { found = [nx, ny]; qi = queue.length; break; }
+      queue.push([nx, ny]);
+    }
+  }
+  if (!found) return null;
+  const path = [];
+  let cur = found;
+  while (cur && !(cur[0] === sx && cur[1] === sy)) { path.push(cur); cur = prev.get(key(cur[0], cur[1])); }
+  path.push([sx, sy]);
+  return path;
+}
+function isRoadOrGate(chunk, x, y) { const t = chunk.tiles[y][x]; return t.feature === 'road' || t.feature === 'gate'; }
 
 function paintRoad(chunk, gx, gy) {
   const t = chunk.tiles;
@@ -6560,14 +6734,25 @@ function paintRoad(chunk, gx, gy) {
 
 
 const ROLE_POOLS = {
-  hamlet: ['farmer','farmer','farmer','elder','child'],
-  village: ['merchant','blacksmith','innkeeper','farmer','guard','elder','child','trainer'],
-  town: ['merchant','blacksmith','innkeeper','trainer','priest','ranger','baker','tailor','farmer','guard','guard','watchman','elder','child','hunter','alchemist'],
-  city: ['merchant','merchant','blacksmith','innkeeper','innkeeper','trainer','necromancer_trainer','priest','noble','noble','captain','guard','guard','guard','watchman','watchman','alchemist','bard','tailor','baker','chef','fisherman','stablehand','beggar','elder'],
+  hamlet: ['farmer','farmer','farmer','elder','child','shepherd'],
+  village: ['merchant','blacksmith','innkeeper','farmer','guard','elder','child','trainer','tavernkeeper','cobbler','weaver','potter'],
+  town: ['merchant','blacksmith','innkeeper','trainer','priest','ranger','baker','tailor','farmer','guard','guard','watchman','elder','child','hunter','alchemist','tavernkeeper','storagekeeper','guildclerk',
+    'cobbler','weaver','potter','mason','barber','scribe','locksmith','tanner','beekeeper','shepherd','dyer'],
+  city: ['merchant','merchant','blacksmith','innkeeper','innkeeper','trainer','necromancer_trainer','priest','noble','noble','captain','guard','guard','guard','watchman','watchman','alchemist','bard','tailor','baker','chef','fisherman','stablehand','beggar','elder',
+    'tavernkeeper','tavernkeeper','companion','curator','storagekeeper','dealer','guildclerk',
+    'jeweler','glassblower','cooper','roofer','midwife','undertaker','gravedigger','cartographer','candlemaker','mercenary','courier','apothecary_assistant','shipwright','ropemaker','furrier','blacksmith_apprentice','herald','jester','seamstress','wheelwright','vintner','cheesemonger','mason','locksmith'],
+  // ---- Settlement Overhaul: capital tier -- a true kingdom-capital roster. Every building type
+  // in the game can show up here, with extra weight on the "grand" civic buildings (nobles,
+  // guild, museum, casino, temple staff) that make a capital feel like the seat of a kingdom
+  // rather than an oversized town.
+  capital: ['merchant','merchant','merchant','blacksmith','blacksmith','innkeeper','innkeeper','innkeeper','trainer','necromancer_trainer','priest','priest','noble','noble','noble','captain','captain',
+    'guard','guard','guard','guard','watchman','watchman','watchman','alchemist','bard','bard','tailor','baker','chef','chef','fisherman','stablehand','beggar','elder','scholar',
+    'tavernkeeper','tavernkeeper','tavernkeeper','companion','curator','curator','storagekeeper','dealer','dealer','guildclerk','guildclerk','carpenter','brewer',
+    'jeweler','glassblower','cooper','roofer','midwife','undertaker','gravedigger','cartographer','candlemaker','mercenary','mercenary','courier','apothecary_assistant','shipwright','ropemaker','furrier','blacksmith_apprentice','herald','herald','jester','seamstress','wheelwright','vintner','cheesemonger','mason','locksmith','barber','scribe','dyer','beekeeper'],
 };
-const SHOP_ROLES = new Set(['merchant','blacksmith','innkeeper','alchemist','tailor','chef','baker']);
+const SHOP_ROLES = new Set(['merchant','blacksmith','innkeeper','alchemist','tailor','chef','baker','tavernkeeper','guildclerk','cobbler','weaver','potter','jeweler','glassblower','cooper','seamstress','furrier','candlemaker','cheesemonger','vintner','beekeeper','tanner','ropemaker','wheelwright','shipwright']);
 const TRAINER_ROLES = new Set(['trainer','necromancer_trainer']);
-const QUEST_GIVER_ROLES = new Set(['elder','innkeeper','guard','captain','watchman','noble','ranger']);
+const QUEST_GIVER_ROLES = new Set(['elder','innkeeper','guard','captain','watchman','noble','ranger','guildclerk','tavernkeeper','herald','courier']);
 
 
 // ---- makeNPC v2: adds healer/quest-giver/trainer(recipe) data by role ----
@@ -6587,6 +6772,20 @@ const DW2 = 50, DH2 = 30;
 
 
 // ===================== WORLD GENERATION v3 (appearance + shop fixes) =====================
+// ===================== NPC PROFESSION TIERS (part of the NPC overhaul) =====================
+// Every NPC now rolls a skill tier at creation: most are ordinary journeymen, just over half are
+// still-learning novices, and a rare few are masters of their trade. This is what makes "a novice
+// chef makes so-so food, a master chef's cooking is genuinely worth the trip" real rather than
+// flavor text -- it changes actual prices, spell/recipe rosters, and combat stats.
+const NPC_TIERS = [
+  { id: 'novice', label: 'Novice', weight: 55, statMult: 0.85, priceMult: 0.75 },
+  { id: 'journeyman', label: '', weight: 35, statMult: 1.0, priceMult: 1.0 }, // unmarked -- "journeyman" is the ordinary, unremarked-upon default, same as most real trades
+  { id: 'master', label: 'Master', weight: 10, statMult: 1.25, priceMult: 1.35 },
+];
+function pickNPCTier(rng) { return weightedChoice(rng, NPC_TIERS.map(t => [t.id, t.weight])); }
+function npcTierInfo(npc) { return NPC_TIERS.find(t => t.id === npc.tier) || NPC_TIERS[1]; }
+function npcTierPriceMult(npc) { return npcTierInfo(npc).priceMult; }
+
 function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
   const role = ROLES.find(r => r.id === roleId) || ROLES[0];
   const species = getSpecies(speciesId || randomSpeciesWeighted(rng));
@@ -6603,7 +6802,7 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
     str: Math.max(1, role.str + (sm.str||0)), dex: Math.max(1, role.dex + (sm.dex||0)), atk: role.atk.slice(),
     armor: role.armor,
     color: role.color, glyph: '@', affection: 0, alive: true, home: settlementName,
-    rumor: choice(rng, RUMORS), wanderCenter: { x, y }, hostile: false, healer: !!role.healer,
+    rumor: pickNpcRumor(rng, roleId), wanderCenter: { x, y }, hostile: false, healer: !!role.healer,
     spouse: null, canGiveQuest: QUEST_GIVER_ROLES.has(roleId) && rng() < 0.6,
     gender: appearance.gender, appearance: appearance.sentence, giftCount: 0, lastTalkTurn: -9999,
     // ---- Living World AI framework: settlement-aligned by default, patrols a loose area around
@@ -6612,6 +6811,18 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
     faction: 'settlement', aiState: 'patrol', homeX: x, homeY: y,
     patrolRadius: NPC_DEFENDER_ROLES.has(roleId) ? 6 : 4, target: null,
   };
+  // ---- NPC profession tier: scales combat stats and (for the roles it applies to, below) shop
+  // prices, healing/room costs, trainer spell counts, and craftsperson recipe rosters.
+  npc.tier = pickNPCTier(rng);
+  const tierInfo = npcTierInfo(npc);
+  if (tierInfo.label) npc.roleName = `${tierInfo.label} ${role.name}`;
+  if (tierInfo.statMult !== 1) {
+    npc.maxHp = Math.max(1, Math.round(npc.maxHp * tierInfo.statMult)); npc.hp = npc.maxHp;
+    npc.str = Math.max(1, Math.round(npc.str * tierInfo.statMult));
+    npc.dex = Math.max(1, Math.round(npc.dex * tierInfo.statMult));
+    npc.armor = Math.max(0, Math.round(npc.armor * tierInfo.statMult));
+    npc.atk = [Math.max(1, Math.round(npc.atk[0] * tierInfo.statMult)), Math.max(1, Math.round(npc.atk[1] * tierInfo.statMult))];
+  }
   // Now the real racial abilities too -- same trait hooks the player gets (poison/fire/fear
   // resistance, dodge, crit, low-HP damage bonus, free swimming, trap avoidance, etc.), so a
   // Thalassi guard genuinely swims freely and a Construct courier genuinely shrugs off poison,
@@ -6625,7 +6836,9 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
       ? SPELLS.filter(s => s.school === 'Necromancy' || s.id === 'drain')
       : SPELLS.filter(s => s.school !== 'Necromancy');
     const poolCopy = spellPool.slice();
-    const n = randInt(rng, 3, 5);
+    // NPC overhaul: a novice trainer only knows a couple of spells, a master knows a wide roster
+    const spellCountRange = npc.tier === 'novice' ? [2,3] : npc.tier === 'master' ? [5,8] : [3,5];
+    const n = randInt(rng, spellCountRange[0], spellCountRange[1]);
     for (let i = 0; i < n && poolCopy.length; i++) { const s = poolCopy.splice(Math.floor(rng()*poolCopy.length), 1)[0]; if (s) npc.teachSpells.push(s.id); }
   }
   if (roleId === 'chef' || roleId === 'blacksmith' || roleId === 'alchemist' || roleId === 'tailor') {
@@ -6636,6 +6849,8 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
       if (roleId === 'tailor') return r.id === 'craft_gloves' || r.id === 'craft_boneamulet';
       return false;
     }).map(r => r.id);
+    // NPC overhaul: a still-learning novice craftsperson hasn't picked up everything yet
+    if (npc.tier === 'novice' && npc.teachRecipes.length > 1) npc.teachRecipes = npc.teachRecipes.slice(0, Math.ceil(npc.teachRecipes.length / 2));
   }
   if (roleId === 'fisherman') { npc.teachRecipes = ['craft_raft']; }
   return npc;
@@ -6645,10 +6860,11 @@ function generateShopInventory(roleId, rng) {
   const items = [];
   let pool;
   if (roleId === 'blacksmith') pool = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor') && !b.setId && !b.isUnique && !b.craftOnly);
-  else if (roleId === 'innkeeper' || roleId === 'baker' || roleId === 'chef') pool = ITEM_BASES.filter(b => b.type === 'consumable' && b.id !== 'antidote' && !b.craftOnly);
+  else if (roleId === 'innkeeper' || roleId === 'baker' || roleId === 'chef' || roleId === 'tavernkeeper' || roleId === 'vintner' || roleId === 'cheesemonger' || roleId === 'beekeeper') pool = ITEM_BASES.filter(b => b.type === 'consumable' && b.id !== 'antidote' && !b.craftOnly);
   else if (roleId === 'alchemist') pool = ITEM_BASES.filter(b => b.type === 'consumable' && !b.craftOnly);
   else if (roleId === 'tailor') pool = ITEM_BASES.filter(b => b.type === 'armor' && ['cloak','gloves','amulet','circlet','sandals','robe'].includes(b.id));
   else if (roleId === 'fisherman') pool = ITEM_BASES.filter(b => ['meat_cooked','stew','holy_water'].includes(b.id));
+  else if (roleId === 'guildclerk') pool = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor' || b.type === 'consumable') && !b.setId && !b.isUnique && !b.craftOnly);
   else pool = ITEM_BASES.filter(b => b.type !== 'misc' && b.type !== 'material' && b.type !== 'chest' && b.type !== 'corpse' && !b.setId && !b.isUnique && !b.craftOnly);
   const n = randInt(rng, 5, 9);
   for (let i = 0; i < n; i++) {
@@ -6667,10 +6883,94 @@ function generateShopInventory(roleId, rng) {
 function pickSettlementTier(rng, cx, cy) {
   const distFromOrigin = Math.sqrt(cx * cx + cy * cy);
   const roll = rng();
+  // Settlement Overhaul: 'capital' is a genuinely rare fifth tier -- far rarer than a rare
+  // dungeon, and only ever far from the starting area, so stumbling onto one feels like a real
+  // discovery rather than "just a bigger city."
+  if (roll > 0.998 && distFromOrigin > 35) return 'capital';
   if (roll > 0.965 && distFromOrigin > 12) return 'city';
   if (roll > 0.55) return 'town';
   if (roll > 0.20) return 'village';
   return 'hamlet';
+}
+
+// ===================== MULTI-CHUNK SETTLEMENTS (Settlement Overhaul v3) =====================
+// City and capital tiers used to be crammed into a single 24x24 map chunk, which is what forced
+// them into small buildings and cramped grid-like layouts -- there just isn't room in one chunk
+// for wide roads, a real mix of building sizes, and open space all at once. Real cities and
+// capitals now span multiple adjacent map chunks instead: a "footprint" of NxN chunks, each one
+// generated as its own semi-independent district (its own building layout, its own NPCs), sharing
+// one name/kingdom/identity and connected by genuinely wide avenues at the seams between chunks.
+//
+// This is deliberately NOT built on a shared mutable cache. Every function below is a pure
+// function of chunk coordinates (the same philosophy the rest of world-gen already uses) -- any
+// chunk, generated in any order, can independently and deterministically work out whether it's
+// part of a bigger settlement, and if so, which one, which cell of it, and what that cell should
+// contain. No "has this settlement been built yet" bookkeeping to get wrong.
+const SETTLEMENT_FOOTPRINT = { city: 2, capital: 3 }; // chunks per side; anything absent (hamlet/village/town) is 1
+
+// Cheap single-point biome lookup, used only for the anchor dry-run check below (checking a
+// candidate anchor's center biome without generating that chunk's entire 24x24 tile grid).
+function biomeAtPoint(wx, wy) {
+  const elev = fbm(wx, wy, 70, SEED + 1, 3);
+  const moist = fbm(wx, wy, 55, SEED + 500, 2);
+  const temp = fbm(wx, wy, 90, SEED + 900, 2);
+  return classifyBiome(elev, moist, temp);
+}
+
+// Dry-run version of generateChunk's settlement roll: "if chunk (cx,cy) were generated right now,
+// would it become a settlement, and what tier?" Uses the exact same hash/rng formulas as the real
+// generateChunk/buildSettlement so the two can never disagree. Returns null if this chunk
+// wouldn't be a settlement anchor at all.
+function getAnchorSettlementInfo(cx, cy) {
+  if (cx === 0 && cy === 0) return null; // never right at the origin (matches generateChunk)
+  const sHash = coordHash(cx, cy, SEED + 12345);
+  if (sHash >= 0.11) return null;
+  const centerWx = cx * CH + Math.floor(CH / 2), centerWy = cy * CH + Math.floor(CH / 2);
+  const centerBiome = biomeAtPoint(centerWx, centerWy);
+  if (!['plains', 'forest', 'desert', 'tundra', 'swamp'].includes(centerBiome)) return null;
+  const rng = mulberry32((cx * 5171 + cy * 7919 + SEED + 777) | 0); // same seed formula as buildSettlement
+  const tier = pickSettlementTier(rng, cx, cy);
+  return { tier, footprint: SETTLEMENT_FOOTPRINT[tier] || 1, centerBiome };
+}
+
+// For chunk (cx,cy): is it part of a multi-chunk settlement anchored somewhere else nearby (or
+// anchored on itself)? Scans candidate anchor positions in a fixed, deterministic order so
+// (astronomically rare) overlapping claims always resolve the same way. Returns null if this
+// chunk isn't part of any multi-chunk footprint -- in which case it's handled by the ordinary
+// single-chunk path (hamlet/village/town/dungeon/POI/wilderness), unchanged.
+function findSettlementMembershipRaw(cx, cy) {
+  const maxFootprint = 3;
+  for (let j = 0; j < maxFootprint; j++) {
+    for (let k = 0; k < maxFootprint; k++) {
+      const acx = cx - k, acy = cy - j;
+      const info = getAnchorSettlementInfo(acx, acy);
+      if (!info || info.footprint <= 1) continue;
+      if (k < info.footprint && j < info.footprint) {
+        return { anchorCx: acx, anchorCy: acy, tier: info.tier, footprint: info.footprint, ox: k, oy: j, centerBiome: info.centerBiome };
+      }
+    }
+  }
+  return null;
+}
+// Two independent city/capital anchors landing close enough for their footprints to overlap is
+// rare, but with a large enough world it *will* eventually happen -- and left unvalidated, it
+// produces a settlement inconsistently split between two different names/identities depending on
+// which cell you're standing in (a real bug caught by the multi-chunk stress test). An anchor is
+// only actually used if every single cell within its claimed footprint would independently agree,
+// via the same scan, that this is their closest anchor too. If any cell in the footprint would
+// rather belong to a different anchor, the whole claim is voided and this chunk falls back to an
+// ordinary single-chunk roll -- invisible in practice (two settlements just couldn't both fit),
+// rather than a visibly broken stitched settlement.
+function findSettlementMembership(cx, cy) {
+  const candidate = findSettlementMembershipRaw(cx, cy);
+  if (!candidate) return null;
+  for (let dy = 0; dy < candidate.footprint; dy++) {
+    for (let dx = 0; dx < candidate.footprint; dx++) {
+      const other = findSettlementMembershipRaw(candidate.anchorCx + dx, candidate.anchorCy + dy);
+      if (!other || other.anchorCx !== candidate.anchorCx || other.anchorCy !== candidate.anchorCy) return null;
+    }
+  }
+  return candidate;
 }
 
 function scatterDecorations(chunk, placed, tier, rng) {
@@ -6804,7 +7104,7 @@ function distributeSizes(span, n) {
   for (let i = 0; i < n; i++) sizes.push(base + (i < rem ? 1 : 0));
   return sizes;
 }
-function layoutBuildingsGrid(rng, margin, targetCount, sizeRange) {
+function layoutBuildingsGrid(rng, margin, targetCount, sizeRange, avoid) {
   const span = CH - margin * 2;
   const minB = sizeRange[0];
   let cols = Math.max(1, Math.ceil(Math.sqrt(targetCount)));
@@ -6826,9 +7126,8 @@ function layoutBuildingsGrid(rng, margin, targetCount, sizeRange) {
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) cellList.push({ r, c });
   for (let i = cellList.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [cellList[i], cellList[j]] = [cellList[j], cellList[i]]; }
 
-  const count = Math.min(targetCount, cellList.length);
   const placed = [];
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < cellList.length && placed.length < targetCount; i++) {
     const { r, c } = cellList[i];
     const lotW = colSizes[c], lotH = rowSizes[r];
     // building leaves at least a 1-tile gap on every side of its lot
@@ -6838,9 +7137,268 @@ function layoutBuildingsGrid(rng, margin, targetCount, sizeRange) {
     const baseX = colOffsets[c], baseY = rowOffsets[r];
     const x = baseX + Math.floor((lotW - w) / 2);
     const y = baseY + Math.floor((lotH - h) / 2);
-    if (x >= margin && y >= margin && x + w <= CH - margin && y + h <= CH - margin) placed.push({ x, y, w, h });
+    if (x < margin || y < margin || x + w > CH - margin || y + h > CH - margin) continue;
+    const rect = { x, y, w, h };
+    if (avoid && avoid.some(o => rectsOverlapWithGap(rect, o, 1))) continue;
+    placed.push(rect);
   }
   return placed;
+}
+
+// ---- Settlement Overhaul: organic layout -- a jittered grid rather than pure random rejection
+// sampling. (An earlier version used pure rejection sampling -- drop a building at a random spot,
+// retry on overlap -- which looked fine for a village's small target count but reliably "jammed"
+// far short of the true packing limit for a city/capital's higher targets, e.g. a "City" ending
+// up with 7-8 buildings instead of 16-20. Random sequential placement just can't reliably find
+// the remaining legal slots once the space gets crowded.) This instead divides the buildable area
+// into a grid of minimum-size-plus-gap cells, shuffles which cells get used (so it's an uneven,
+// gappy scatter, not a filled block), and jitters each used building's exact size and position
+// within its cell -- organic-*looking*, but with grid-like guaranteed yield.
+// ---- Settlement Overhaul v2: genuinely organic placement -- true random scatter with rejection
+// sampling (drop a building at a random spot, retry on overlap), producing an uneven, naturally
+// clustered footprint. An earlier version of this function used a "jittered grid" (pre-divide the
+// space into cells, jitter slightly within each) to guarantee a higher yield for city-scale target
+// counts -- but that made organic settlements look almost indistinguishable from a grid, which
+// defeated the entire point. Now that city/capital have moved to the multi-chunk settlement system
+// below (with real room to spare), this only needs to serve hamlet/village/town's modest target
+// counts, which true rejection sampling handles just fine.
+function layoutBuildingsOrganic(rng, margin, targetCount, sizeRange, avoid) {
+  const span = CH - margin * 2;
+  const placed = [];
+  const already = avoid || [];
+  const maxAttempts = Math.max(300, targetCount * 80);
+  let attempts = 0;
+  while (placed.length < targetCount && attempts < maxAttempts) {
+    attempts++;
+    const w = randInt(rng, sizeRange[0], sizeRange[1]);
+    const h = randInt(rng, sizeRange[0], sizeRange[1]);
+    if (span - w < 0 || span - h < 0) continue;
+    const x = margin + randInt(rng, 0, span - w);
+    const y = margin + randInt(rng, 0, span - h);
+    const rect = { x, y, w, h };
+    if (already.some(o => rectsOverlapWithGap(rect, o, 1)) || placed.some(o => rectsOverlapWithGap(rect, o, 1))) continue;
+    placed.push(rect);
+  }
+  return placed;
+}
+
+// General-purpose top-up: deterministically scans the buildable area at the smallest allowed
+// building size and greedily places one wherever it still fits without violating the 1-tile gap
+// rule. Rarely needed now that targets are modest for the tiers that still use organic/radial, but
+// kept as a safety net for an unlucky roll.
+function layoutBuildingsScanFill(margin, targetCount, sizeRange, avoid) {
+  const placed = [];
+  const already = avoid || [];
+  const w = sizeRange[0], h = sizeRange[0];
+  for (let y = margin; y + h <= CH - margin && placed.length < targetCount; y++) {
+    for (let x = margin; x + w <= CH - margin && placed.length < targetCount; x++) {
+      const rect = { x, y, w, h };
+      if (already.some(o => rectsOverlapWithGap(rect, o, 1)) || placed.some(o => rectsOverlapWithGap(rect, o, 1))) continue;
+      placed.push(rect);
+    }
+  }
+  return placed;
+}
+
+// ---- Settlement Overhaul v2: genuinely radial placement -- true concentric rings around a
+// center point, with each ring's building capacity computed from its actual circumference (rather
+// than a guessed constant), so rings fill reliably without excessive overlap-driven rejection. A
+// small amount of angle jitter per building keeps it from reading as a perfect bullseye.
+function layoutBuildingsRadial(rng, margin, targetCount, sizeRange, avoid) {
+  const centerX = CH / 2, centerY = CH / 2;
+  const placed = [];
+  const already = avoid || [];
+  const pitch = sizeRange[0] + 1;
+  let radius = pitch;
+  let attempts = 0;
+  const maxAttempts = Math.max(400, targetCount * 60);
+  while (placed.length < targetCount && attempts < maxAttempts && radius < CH) {
+    const circumference = 2 * Math.PI * radius;
+    const capacity = Math.max(3, Math.floor(circumference / pitch));
+    const angleOffset = rng() * Math.PI * 2;
+    for (let i = 0; i < capacity && placed.length < targetCount && attempts < maxAttempts; i++) {
+      attempts++;
+      const angle = angleOffset + (i / capacity) * Math.PI * 2 + (rng() - 0.5) * (Math.PI / capacity) * 0.6;
+      const w = randInt(rng, sizeRange[0], sizeRange[1]);
+      const h = randInt(rng, sizeRange[0], sizeRange[1]);
+      const px = Math.round(centerX + Math.cos(angle) * radius), py = Math.round(centerY + Math.sin(angle) * radius);
+      const x = px - Math.floor(w / 2), y = py - Math.floor(h / 2);
+      if (x < margin || y < margin || x + w > CH - margin || y + h > CH - margin) continue;
+      const rect = { x, y, w, h };
+      if (already.some(o => rectsOverlapWithGap(rect, o, 1)) || placed.some(o => rectsOverlapWithGap(rect, o, 1))) continue;
+      placed.push(rect);
+    }
+    radius += pitch + 1;
+  }
+  return placed;
+}
+// Shared overlap test used by both layout samplers: true if two rects come within `gap` tiles of
+// touching (not just literally overlapping), so buildings always keep a walkable gap.
+function rectsOverlapWithGap(a, b, gap) {
+  return !(a.x + a.w + gap <= b.x || b.x + b.w + gap <= a.x || a.y + a.h + gap <= b.y || b.y + b.h + gap <= a.y);
+}
+
+// ---- Settlement Overhaul: door placement -- previously every building's entrance was hard-coded
+// to bottom-center, which read as artificial ("why does every house face the same way"). Doors
+// now open onto any of the four walls, at a varied position along that wall (not just its
+// midpoint), weighted so a plurality still face the settlement's roads/plaza (south-facing is
+// still the most common, matching where paintRoad() actually lays streets) without being
+// universal. Tents get the same treatment, just with the tentwall glyph. ----
+// ===================== BUILDING INTERIOR LAYOUTS =====================
+// Previously every building, regardless of role or size, was just a hollow box -- one room, one
+// door. Most peasant houses genuinely would just be a single room, so plain houses still are
+// about half the time; but a real shop, a noble's manor, or (especially) the settlement's one
+// massive grand building should feel like an actual building with rooms in it, not a shed. Every
+// subdivision here is verified fully reachable from the building's actual entrance door before
+// being kept (see tryLayoutBuildingInterior) -- a candidate layout that would strand a room is
+// rolled back to a plain single room rather than ever shipping an unreachable pocket.
+//
+// Framework note: which roles get which room-count tier is a single lookup
+// (INTERIOR_SHOP_ROLES / pickInteriorRoomTarget) -- adding a new role to the "gets a real interior"
+// category is a one-line change, not a new mechanic.
+const INTERIOR_SHOP_ROLES = new Set([...SHOP_ROLES, 'priest', 'scholar', 'trainer', 'necromancer_trainer', 'curator', 'guildclerk', 'dealer', 'companion']);
+function pickInteriorRoomTarget(roleId, rect, rng, isGrand) {
+  const minDim = Math.min(rect.w, rect.h);
+  if (isGrand) return minDim >= 7 ? 4 : (minDim >= 5 ? 2 : 1);
+  if (roleId === 'house') return minDim < 5 ? 1 : (rng() < 0.5 ? 2 : 1);
+  if (INTERIOR_SHOP_ROLES.has(roleId) || roleId === 'noble') {
+    if (minDim < 5) return 1;
+    return rng() < 0.75 ? (minDim >= 7 && rng() < 0.4 ? 4 : 2) : 1;
+  }
+  return 1; // everything else (farmer, hunter, and other non-shop/non-house roles) stays a simple box
+}
+function setInteriorWall(chunk, x, y) {
+  const bIdx = chunk.tiles[y][x].building;
+  chunk.tiles[y][x] = { glyph: '#', color: '#7a6a4a', bg: '#1c150c', walkable: false, feature: 'wall', items: [], building: bIdx };
+}
+// One dividing wall with a single doorway gap, splitting the building into two rooms along
+// whichever axis has room to spare (or a random pick if both do).
+function addSingleDividingWall(chunk, rect, rng) {
+  const canVert = rect.w >= 5, canHoriz = rect.h >= 5;
+  if (!canVert && !canHoriz) return false;
+  const axis = canVert && canHoriz ? (rng() < 0.5 ? 'v' : 'h') : (canVert ? 'v' : 'h');
+  if (axis === 'v') {
+    const wallX = rect.x + 2 + randInt(rng, 0, rect.w - 5); // leaves >=1 column of room on each side
+    const doorY = randInt(rng, rect.y + 1, rect.y + rect.h - 2);
+    for (let y = rect.y + 1; y < rect.y + rect.h - 1; y++) { if (y !== doorY) setInteriorWall(chunk, wallX, y); }
+  } else {
+    const wallY = rect.y + 2 + randInt(rng, 0, rect.h - 5);
+    const doorX = randInt(rng, rect.x + 1, rect.x + rect.w - 2);
+    for (let x = rect.x + 1; x < rect.x + rect.w - 1; x++) { if (x !== doorX) setInteriorWall(chunk, x, wallY); }
+  }
+  return true;
+}
+// A proper 2x2 room grid for anything big enough to support it (the grand building, a large
+// manor). The vertical dividing wall gets TWO doorway gaps (one in the top half, one in the
+// bottom half), connecting TL-TR and BL-BR; the horizontal wall gets exactly ONE gap on either
+// side, linking the two halves into a single connected tree spanning all four rooms -- a
+// deterministic connectivity guarantee, not left to chance (and still re-verified afterward
+// regardless, since the building's actual entrance door could interact with this in an
+// unanticipated way).
+function addQuadrantWalls(chunk, rect, rng) {
+  if (rect.w < 7 || rect.h < 7) return addSingleDividingWall(chunk, rect, rng);
+  const wallX = rect.x + Math.floor(rect.w / 2), wallY = rect.y + Math.floor(rect.h / 2);
+  const gapTop = randInt(rng, rect.y + 1, wallY - 1), gapBottom = randInt(rng, wallY + 1, rect.y + rect.h - 2);
+  for (let y = rect.y + 1; y < rect.y + rect.h - 1; y++) { if (y !== gapTop && y !== gapBottom && y !== wallY) setInteriorWall(chunk, wallX, y); }
+  const gapLeftSide = rng() < 0.5;
+  const gapX = gapLeftSide ? randInt(rng, rect.x + 1, wallX - 1) : randInt(rng, wallX + 1, rect.x + rect.w - 2);
+  for (let x = rect.x + 1; x < rect.x + rect.w - 1; x++) { if (x !== gapX && x !== wallX) setInteriorWall(chunk, x, wallY); }
+  return true;
+}
+// BFS from the entrance door through the building's own footprint -- used both to verify a
+// candidate subdivision doesn't strand any floor tile, and afterward to find a genuinely reachable
+// NPC spawn spot (rather than assuming the old fixed top-left corner is still open).
+function findReachableInteriorTiles(chunk, rect, doorPos) {
+  const seen = new Set([doorPos.x + ',' + doorPos.y]);
+  const queue = [[doorPos.x, doorPos.y]];
+  let qi = 0;
+  while (qi < queue.length) {
+    const [x, y] = queue[qi++];
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < rect.x || ny < rect.y || nx >= rect.x + rect.w || ny >= rect.y + rect.h) continue;
+      const key = nx + ',' + ny;
+      if (seen.has(key)) continue;
+      if (!chunk.tiles[ny][nx].walkable) continue;
+      seen.add(key);
+      queue.push([nx, ny]);
+    }
+  }
+  return seen;
+}
+// Main entry, called right after a building's door is placed: attempts a room subdivision,
+// verifies it with a full reachability check, and rolls back to a plain single room if the
+// candidate would strand anything. Returns the set of reachable interior tiles either way (used
+// afterward to pick a genuinely valid NPC spawn spot instead of assuming a fixed corner).
+function tryLayoutBuildingInterior(chunk, rect, doorPos, roleId, rng, isGrand) {
+  const roomTarget = pickInteriorRoomTarget(roleId, rect, rng, isGrand);
+  if (roomTarget > 1) {
+    const snapshot = [];
+    for (let y = rect.y + 1; y < rect.y + rect.h - 1; y++) for (let x = rect.x + 1; x < rect.x + rect.w - 1; x++) {
+      snapshot.push([x, y, Object.assign({}, chunk.tiles[y][x])]);
+    }
+    // A single attempt can fail purely because the entrance door (chosen independently of the
+    // interior walls) happens to open directly onto the dividing wall's line, sealing the whole
+    // interior off from its own front door -- a different random wall position almost always
+    // avoids that collision, so retry a few times with a fresh layout before settling for a plain
+    // single room. Restores the pre-attempt snapshot between tries so failed attempts never leave
+    // stray walls behind.
+    const maxAttempts = 5;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const applied = roomTarget >= 4 ? addQuadrantWalls(chunk, rect, rng) : addSingleDividingWall(chunk, rect, rng);
+      if (!applied) break; // this building's dimensions just can't support it -- no point retrying
+      const reachable = findReachableInteriorTiles(chunk, rect, doorPos);
+      // Check tiles that are STILL walkable *after* the subdivision (not the pre-subdivision
+      // snapshot) -- a tile the subdivision deliberately turned into a wall is supposed to stop
+      // being walkable, that's not a failure. Only a tile that's still floor but got cut off from
+      // the door is an actual problem.
+      let allReachable = true;
+      outer:
+      for (let y = rect.y + 1; y < rect.y + rect.h - 1; y++) for (let x = rect.x + 1; x < rect.x + rect.w - 1; x++) {
+        if (chunk.tiles[y][x].walkable && !reachable.has(x + ',' + y)) { allReachable = false; break outer; }
+      }
+      if (allReachable) break; // success -- keep this layout
+      snapshot.forEach(([x, y, origTile]) => { chunk.tiles[y][x] = origTile; }); // undo and try again
+    }
+  }
+  return findReachableInteriorTiles(chunk, rect, doorPos);
+}
+
+function placeBuildingDoor(chunk, p, flavor, rng, wallSides) {
+  if (p.w < 3 || p.h < 3) { // degenerate tiny lot: fall back to the old safe bottom-center spot
+    const doorX = p.x + Math.floor(p.w / 2), doorY = p.y + p.h - 1;
+    const dt = chunk.tiles[doorY][doorX];
+    dt.glyph = '+'; dt.color = '#c9a06a'; dt.walkable = true; dt.feature = 'door'; dt.bg = '#241f16';
+    return { x: doorX, y: doorY, side: 'bottom' };
+  }
+  // wallSides can be `true` (legacy shorthand: all four sides walled, the single-chunk case) or
+  // an explicit { top, bottom, left, right } object (multi-chunk cells, where only the sides on
+  // the *outer* edge of the whole settlement footprint are actually walled -- see
+  // buildSettlementCell). `false`/undefined means no walls on any side.
+  const ws = wallSides === true ? { top: true, bottom: true, left: true, right: true } : (wallSides || {});
+  let options = [['bottom', 42], ['left', 20], ['right', 20], ['top', 18]];
+  if (ws.top || ws.bottom || ws.left || ws.right) {
+    // The wall ring sits at column/row 1 and CH-2 (see drawWallRingSides) with a margin=2
+    // buildable region running right up to it -- a building can be placed flush against that wall
+    // with zero gap. Whichever side(s) of THIS building are both flush against it AND actually
+    // walled for this cell get excluded from the door options entirely, rather than widening every
+    // settlement's margin (which cratered building capacity -- see buildSettlement's margin
+    // comment).
+    const leftUnsafe = ws.left && p.x <= 2, rightUnsafe = ws.right && (p.x + p.w) >= CH - 2,
+      topUnsafe = ws.top && p.y <= 2, bottomUnsafe = ws.bottom && (p.y + p.h) >= CH - 2;
+    const filtered = options.filter(([side]) =>
+      !((side === 'left' && leftUnsafe) || (side === 'right' && rightUnsafe) || (side === 'top' && topUnsafe) || (side === 'bottom' && bottomUnsafe)));
+    if (filtered.length) options = filtered; // if literally every side were unsafe (shouldn't happen at these sizes), fall back to the unfiltered list
+  }
+  const side = weightedChoice(rng, options);
+  let doorX, doorY;
+  if (side === 'bottom') { doorX = randInt(rng, p.x + 1, p.x + p.w - 2); doorY = p.y + p.h - 1; }
+  else if (side === 'top') { doorX = randInt(rng, p.x + 1, p.x + p.w - 2); doorY = p.y; }
+  else if (side === 'left') { doorX = p.x; doorY = randInt(rng, p.y + 1, p.y + p.h - 2); }
+  else { doorX = p.x + p.w - 1; doorY = randInt(rng, p.y + 1, p.y + p.h - 2); }
+  const dt = chunk.tiles[doorY][doorX];
+  dt.glyph = '+'; dt.color = '#c9a06a'; dt.walkable = true; dt.feature = 'door'; dt.bg = '#241f16';
+  return { x: doorX, y: doorY, side };
 }
 
 
@@ -6950,21 +7508,121 @@ function pickSettlementFlavor(rng, centerBiome) {
   return weightedChoice(rng, weighted);
 }
 
-function buildSettlement(chunk, cx, cy, seedVal) {
-  const rng = mulberry32((cx * 5171 + cy * 7919 + SEED + 777) | 0);
-  const tier = pickSettlementTier(rng, cx, cy);
-  const centerBiome = chunk.tiles[Math.floor(CH/2)][Math.floor(CH/2)].biome;
+// Pure, deterministic settlement identity -- tier, flavor, name, kingdom, center biome -- derived
+// solely from an anchor chunk's coordinates. Every cell of a multi-chunk settlement calls this
+// independently (no shared cache) and always gets back the identical result, since it's driven by
+// the same seeded rng sequence pickSettlementTier/pickSettlementFlavor already use.
+function getSharedSettlementIdentity(anchorCx, anchorCy) {
+  const rng = mulberry32((anchorCx * 5171 + anchorCy * 7919 + SEED + 777) | 0);
+  const tier = pickSettlementTier(rng, anchorCx, anchorCy);
+  const centerWx = anchorCx * CH + Math.floor(CH / 2), centerWy = anchorCy * CH + Math.floor(CH / 2);
+  const centerBiome = biomeAtPoint(centerWx, centerWy);
   const flavorId = pickSettlementFlavor(rng, centerBiome);
   const flavor = SETTLEMENT_FLAVORS[flavorId];
-  const targets = { hamlet: [2,3], village: [5,7], town: [8,11], city: [16,20] };
+  const kingdom = getKingdom(anchorCx, anchorCy);
+  const baseName = tier === 'capital'
+    ? choice(rng, SURNAMES) + choice(rng, [' Throne',' Crown',' Imperial Seat',' Grand Citadel'])
+    : choice(rng, SURNAMES) + choice(rng, tier === 'city' ? [' City',' Capital',' Citadel',' Metropolis'] : [' Hollow',' Crossing',' Vale',' Reach',' Landing',' Hamlet',' Watch']);
+  const name = (flavor.name || '') + baseName;
+  return { tier, flavorId, flavor, kingdom, name, centerBiome };
+}
+
+// ---- Single-chunk settlement (hamlet/village/town; also a defensive fallback for city/capital
+// in the unlikely event membership detection missed one -- see generateChunk). Rolls its own
+// identity fresh from (cx,cy), same as before the multi-chunk system existed.
+function buildSettlement(chunk, cx, cy, seedVal) {
+  const identity = getSharedSettlementIdentity(cx, cy);
+  const { tier, flavorId, flavor, kingdom, name, centerBiome } = identity;
+  // A freshly, distinctly-salted rng for everything past identity (building layout, roles, NPCs)
+  // -- simpler and less fragile than trying to replay getSharedSettlementIdentity's exact call
+  // sequence to "resume" a shared rng at the right position.
+  const rng = mulberry32((cx * 5171 + cy * 7919 + SEED + 778) | 0);
+  // NOTE on the numbers below: measured empirically (see the settlement test harness) against
+  // what a single 24x24 chunk can actually deliver at each tier's building size -- city and
+  // capital top out around 25 buildings in the space available after walls/margins. As of the
+  // multi-chunk settlement system, city/capital should always be caught by
+  // findSettlementMembership before reaching this function; these two entries remain only as a
+  // safety net so a membership-detection edge case degrades to "a somewhat cramped city" instead
+  // of crashing.
+  const targets = { hamlet: [2,3], village: [5,7], town: [8,11], city: [16,20], capital: [22,25] };
+  const guardCounts = { hamlet:0, village:1, town:3, city:6, capital:14 };
   const [minT, maxT] = targets[tier];
   const targetCount = randInt(rng, minT, maxT);
-  const kingdom = getKingdom(cx, cy);
-  const baseName = choice(rng, SURNAMES) + choice(rng, tier === 'city' ? [' City',' Capital',' Citadel',' Metropolis'] : [' Hollow',' Crossing',' Vale',' Reach',' Landing',' Hamlet',' Watch']);
-  const name = (flavor.name || '') + baseName;
-  const settlement = { name, buildings: [], type: tier.charAt(0).toUpperCase() + tier.slice(1), kingdom: kingdom.name, kingdomHistory: kingdom.history, flavor: flavorId,
-    primarySpecies: kingdom.primarySpecies, secondarySpecies: kingdom.secondarySpecies };
+  const wantsWalls = (tier === 'city' || tier === 'capital') && !flavor.noWalls;
+  buildSettlementCore(chunk, cx, cy, {
+    tier, flavorId, flavor, kingdom, name, centerBiome, rng,
+    margin: 2,
+    wallSides: wantsWalls ? { top: true, bottom: true, left: true, right: true } : null,
+    gateSide: 'bottom',
+    targetCount,
+    houseCountRatio: tier === 'city' ? 0.4 : tier === 'town' ? 0.25 : 0,
+    guardCount: flavor.rolePool && !flavor.rolePool.includes('guard') ? Math.max(0, guardCounts[tier] - 2) : guardCounts[tier],
+    grand: null,
+    settlement: { name, buildings: [], type: tier.charAt(0).toUpperCase() + tier.slice(1), kingdom: kingdom.name, kingdomHistory: kingdom.history, flavor: flavorId,
+      primarySpecies: kingdom.primarySpecies, secondarySpecies: kingdom.secondarySpecies },
+  });
+}
+
+// ---- Multi-chunk settlement district (Settlement Overhaul v3): one cell of a city/capital's
+// footprint. Shares identity with every other cell of the same settlement (via
+// getSharedSettlementIdentity), but generates its own building layout with its own local rng --
+// each district genuinely differs from its neighbors, the way real city districts do. Cells on
+// the outer edge of the whole footprint get a wall; cells facing an adjacent district get a wide,
+// wall-free margin instead, which is what actually forms the avenue between them. One designated
+// cell (the anchor for city's 2x2, the true center for capital's 3x3 -- the cell touching no outer
+// edge at all) gets a single massive building instead of the usual roster: a real palace/grand
+// hall, not just another shop-sized building, sitting in open plaza space on every side.
+function buildSettlementCell(chunk, cx, cy, membership) {
+  const { anchorCx, anchorCy, tier, footprint, ox, oy } = membership;
+  const identity = getSharedSettlementIdentity(anchorCx, anchorCy);
+  const { flavorId, flavor, kingdom, name, centerBiome } = identity;
+  const rng = mulberry32((anchorCx * 5171 + anchorCy * 7919 + SEED + 777 + ox * 104729 + oy * 98317 + 13) | 0);
+
+  const wallSides = { top: oy === 0, bottom: oy === footprint - 1, left: ox === 0, right: ox === footprint - 1 };
+  const isOuterCell = wallSides.top || wallSides.bottom || wallSides.left || wallSides.right;
+  const wantsWalls = !flavor.noWalls;
+  const gateSide = ['bottom','left','right','top'].find(s => wallSides[s]) || null;
+
+  // The grand cell: for a 2x2 city, the anchor (0,0); for a 3x3 capital, the true center (1,1) --
+  // the only cell touching no outer edge at all, so its "wall" sides are all false and it reads as
+  // a fully open central plaza.
+  const isGrandCell = footprint === 2 ? (ox === 0 && oy === 0) : (ox === 1 && oy === 1);
+
+  // Per-cell building-count target: modest per district (town-scale), but there are several
+  // districts (4 for a city, 9 for a capital), which is what actually adds up to a massive
+  // aggregate settlement without any single district feeling crammed.
+  const [minT, maxT] = tier === 'capital' ? [7, 10] : [7, 9];
+  const targetCount = isGrandCell ? Math.max(3, Math.round(randInt(rng, minT, maxT) * 0.5)) : randInt(rng, minT, maxT);
+  const guardCount = tier === 'capital' ? 4 : 3;
+
+  buildSettlementCore(chunk, cx, cy, {
+    tier, flavorId, flavor, kingdom, name, centerBiome, rng,
+    // Wide margin on every side: on outer sides it's a generous defensive clearance inside the
+    // wall; on inner (adjacent-district-facing) sides, this margin plus the neighboring cell's
+    // matching margin is what forms the wide avenue between districts. Simpler than plumbing
+    // independent per-side margins through every layout function, and the extra space is exactly
+    // the point here, not a cost.
+    margin: 3,
+    wallSides: wantsWalls && isOuterCell ? wallSides : null,
+    gateSide,
+    targetCount,
+    houseCountRatio: 0.3,
+    guardCount,
+    grand: isGrandCell ? { roleId: 'noble', w: randInt(rng, 9, 12), h: randInt(rng, 7, 9) } : null,
+    settlement: { name, buildings: [], type: tier.charAt(0).toUpperCase() + tier.slice(1), kingdom: kingdom.name, kingdomHistory: kingdom.history, flavor: flavorId,
+      primarySpecies: kingdom.primarySpecies, secondarySpecies: kingdom.secondarySpecies, footprint, anchorCx, anchorCy, cellOffset: { ox, oy } },
+  });
+}
+
+// ---- The actual settlement-building logic, shared by both the single-chunk and multi-chunk
+// entry points above. Everything here was previously inlined directly in buildSettlement; pulling
+// it out into its own function parameterized by `p` is what let city/capital move to the
+// multi-chunk system without duplicating this whole pipeline (roles, houses, decorations,
+// containers, NPC schedules, guards) a second time.
+function buildSettlementCore(chunk, cx, cy, p) {
+  const { tier, flavorId, flavor, kingdom, name, rng, margin, wallSides, gateSide, targetCount, houseCountRatio, guardCount, grand, settlement } = p;
   chunk.settlement = settlement;
+  const centerBiome = p.centerBiome;
   // Per-settlement species roster: kingdom's dominant peoples get the strongest pull, then the
   // local biome (a mountain hold skews Stonekin regardless of kingdom) and the settlement's own
   // flavor (an Elven Enclave is Sylvan-heavy even in an orc kingdom) layer on top. Humans keep a
@@ -6978,8 +7636,7 @@ function buildSettlement(chunk, cx, cy, seedVal) {
     return [sp.id, Math.max(1, w)];
   });
 
-  const margin = 2;
-  for (let ly = margin; ly < CH - margin; ly++) for (let lx = margin; lx < CH - margin; lx++) {
+  for (let ly = 0; ly < CH; ly++) for (let lx = 0; lx < CH; lx++) {
     const cur = chunk.tiles[ly][lx];
     if (!cur.walkable || !BIOMES[cur.biome].walkable) {
       const safeBiome = BIOMES[cur.biome] && BIOMES[cur.biome].walkable ? cur.biome : 'plains';
@@ -6987,21 +7644,63 @@ function buildSettlement(chunk, cx, cy, seedVal) {
     }
   }
 
-  const placed = layoutBuildingsGrid(rng, margin, targetCount, [4, 6]);
+  // ---- NPC Schedules v2: bigger settlements generate extra plain "house" buildings beyond the
+  // job-holding ones, so a real subset of working NPCs can have an actual separate home to walk to
+  // at night instead of always sleeping above their own shop.
+  const houseCount = Math.round(targetCount * houseCountRatio);
+  const totalToPlace = targetCount + houseCount;
 
-  const pool = (flavor.rolePool || ROLE_POOLS[tier]).slice();
-  const guaranteed = (tier === 'hamlet' || flavor.rolePool) ? [] : ['merchant','blacksmith'];
+  const layoutStyle = flavor.layoutStyle || (tier === 'capital' ? 'radial' : 'grid');
+  const sizeRange = [4, 6];
+
+  // The designated "grand" cell (see buildSettlementCell) gets one massive building placed first,
+  // centered in the cell, before the normal roster fills in around it -- a real palace/grand hall,
+  // not just another shop-sized building, standing in open plaza space.
+  let grandRect = null;
+  if (grand) {
+    const gx = Math.max(margin, Math.floor((CH - grand.w) / 2)), gy = Math.max(margin, Math.floor((CH - grand.h) / 2));
+    if (gx + grand.w <= CH - margin && gy + grand.h <= CH - margin) grandRect = { x: gx, y: gy, w: grand.w, h: grand.h };
+  }
+  const avoidForLayout = grandRect ? [grandRect] : undefined;
+
+  let placed;
+  if (layoutStyle === 'organic') placed = layoutBuildingsOrganic(rng, margin, totalToPlace, sizeRange, avoidForLayout);
+  else if (layoutStyle === 'radial') placed = layoutBuildingsRadial(rng, margin, totalToPlace, sizeRange, avoidForLayout);
+  else placed = layoutBuildingsGrid(rng, margin, totalToPlace, sizeRange, avoidForLayout);
+  // The looser organic/radial samplers reliably jam short of the true packing limit -- top up any
+  // shortfall with a deterministic scan of whatever room is left, rather than quietly shipping a
+  // smaller settlement than what was rolled.
+  if (placed.length < totalToPlace) {
+    const extra = layoutBuildingsScanFill(margin, totalToPlace - placed.length, sizeRange, (avoidForLayout || []).concat(placed));
+    placed = placed.concat(extra);
+  }
+  if (grandRect) placed = [grandRect].concat(placed); // grand building is always index 0
+
+  // Interior Layouts bugfix: which buildings become "houses" (idx >= targetCount) used to just be
+  // whichever ones the layout algorithm happened to place last -- and organic/radial packing
+  // systematically makes later-placed buildings smaller (there's simply less free space left by
+  // the time they're placed), so houses were ending up almost universally the smallest possible
+  // size regardless of what actually got rolled. Pick a genuinely random subset of all placed
+  // buildings to be houses instead, so their size distribution matches the settlement as a whole.
+  const jobEligibleIndices = [];
+  for (let i = grandRect ? 1 : 0; i < placed.length; i++) jobEligibleIndices.push(i);
+  const houseIndexSet = new Set(shuffleArray(rng, jobEligibleIndices.slice()).slice(0, houseCount));
+
+  const pool = (flavor.rolePool || ROLE_POOLS[tier === 'capital' ? 'capital' : tier === 'city' ? 'city' : tier]).slice();
+  const guaranteed = (tier === 'hamlet' || flavor.rolePool) ? [] : (grandRect ? ['noble','merchant','blacksmith'] : ['merchant','blacksmith']);
   // Sample roles without replacement within this settlement -- previously each building rolled
   // independently from the full (intentionally weighted-with-duplicates) pool, so a small
-  // settlement could easily land the same role several times by chance (players reported towns
-  // with 4 merchants, 4 elders, etc). This still refills from the full pool if a settlement has
-  // more buildings than the pool has distinct-enough entries, so variety never runs out.
+  // settlement could easily land the same role several times by chance. This still refills from
+  // the full pool if a settlement has more buildings than the pool has distinct-enough entries.
   let localPool = shuffleArray(rng, pool.slice());
   let lastRoleAssigned = null;
-  placed.forEach((p, idx) => {
-    for (let ly = p.y; ly < p.y + p.h; ly++) {
-      for (let lx = p.x; lx < p.x + p.w; lx++) {
-        const wallEdge = ly === p.y || ly === p.y + p.h - 1 || lx === p.x || lx === p.x + p.w - 1;
+  const houseBuildings = []; // NPC Schedules v2: plain houses, filled in below, matched to eligible working NPCs afterward
+  const doorList = []; // every building's door position+side, for growRoadNetwork below
+  let guaranteedFilled = 0; // separate counter since houses no longer occupy a fixed index range
+  placed.forEach((pRect, idx) => {
+    for (let ly = pRect.y; ly < pRect.y + pRect.h; ly++) {
+      for (let lx = pRect.x; lx < pRect.x + pRect.w; lx++) {
+        const wallEdge = ly === pRect.y || ly === pRect.y + pRect.h - 1 || lx === pRect.x || lx === pRect.x + pRect.w - 1;
         const t = chunk.tiles[ly][lx];
         if (wallEdge) {
           t.glyph = flavor.tents ? "'" : '#'; t.color = flavor.tents ? '#c9a06a' : '#8a7a5a';
@@ -7010,39 +7709,66 @@ function buildSettlement(chunk, cx, cy, seedVal) {
         t.building = idx;
       }
     }
-    const doorX = p.x + Math.floor(p.w / 2);
-    const doorY = p.y + p.h - 1;
-    const dt = chunk.tiles[doorY][doorX];
-    dt.glyph = '+'; dt.color = '#c9a06a'; dt.walkable = true; dt.feature = 'door'; dt.bg = '#241f16';
+    const doorPos = placeBuildingDoor(chunk, pRect, flavor, rng, wallSides);
+    doorList.push(doorPos);
 
+    // NPC Schedules v2: buildings past targetCount (plus the grand building, if any) are plain
+    // houses -- real, walled, enterable, decorated buildings, just without their own job/shop NPC.
+    const isHouse = houseIndexSet.has(idx);
     let roleId;
-    if (idx < guaranteed.length) roleId = guaranteed[idx];
+    if (isHouse) roleId = 'house';
+    else if (grandRect && idx === 0) roleId = grand.roleId;
+    else if (guaranteedFilled < guaranteed.length) { roleId = guaranteed[guaranteedFilled]; guaranteedFilled++; }
     else {
       if (!localPool.length) localPool = shuffleArray(rng, pool.slice());
       roleId = localPool.pop();
-      // avoid an immediate repeat right across a refill boundary (e.g. last pick before refill
-      // and first pick after refill both happening to be 'elder')
+      // avoid an immediate repeat right across a refill boundary
       if (roleId === lastRoleAssigned && localPool.length) {
         const swapIdx = localPool.findIndex(r => r !== lastRoleAssigned);
         if (swapIdx !== -1) { localPool.push(roleId); roleId = localPool.splice(swapIdx, 1)[0]; }
       }
       lastRoleAssigned = roleId;
     }
-    const npc = makeNPC(roleId, chunk.cx * CH + p.x + 1, chunk.cy * CH + p.y + 1, rng, settlement.name, weightedChoice(rng, settlementSpeciesWeights));
+
+    const reachableTiles = tryLayoutBuildingInterior(chunk, pRect, doorPos, roleId, rng, grandRect && idx === 0);
+    // Pick a genuinely reachable interior spot for the NPC anchor point -- the interior layout
+    // system above may have added dividing walls, so the old fixed top-left corner isn't
+    // guaranteed open anymore. Reachable tiles come out of a BFS from the door, so the first
+    // non-door entry is already a nearby, valid spot.
+    let anchorX = pRect.x + 1, anchorY = pRect.y + 1;
+    for (const key of reachableTiles) {
+      const [kx, ky] = key.split(',').map(Number);
+      if (kx === doorPos.x && ky === doorPos.y) continue;
+      anchorX = kx; anchorY = ky; break;
+    }
+
+    if (isHouse) {
+      settlement.buildings.push({ x: pRect.x, y: pRect.y, w: pRect.w, h: pRect.h, role: 'house', npcId: null });
+      placeContainersInBuilding(chunk, pRect, 'house', rng, settlementTierNum(tier));
+      houseBuildings.push({ x0: chunk.cx*CH+pRect.x, y0: chunk.cy*CH+pRect.y, x1: chunk.cx*CH+pRect.x+pRect.w-1, y1: chunk.cy*CH+pRect.y+pRect.h-1 });
+      return;
+    }
+
+    const npc = makeNPC(roleId, chunk.cx * CH + anchorX, chunk.cy * CH + anchorY, rng, settlement.name, weightedChoice(rng, settlementSpeciesWeights));
     npc.homeBuilding = idx;
-    npc.homeArea = { x0: chunk.cx*CH+p.x, y0: chunk.cy*CH+p.y, x1: chunk.cx*CH+p.x+p.w-1, y1: chunk.cy*CH+p.y+p.h-1 };
+    npc.homeArea = { x0: chunk.cx*CH+pRect.x, y0: chunk.cy*CH+pRect.y, x1: chunk.cx*CH+pRect.x+pRect.w-1, y1: chunk.cy*CH+pRect.y+pRect.h-1 };
     chunk.npcs.push(npc);
-    settlement.buildings.push({ x: p.x, y: p.y, w: p.w, h: p.h, role: roleId, npcId: npc.uid });
-    placeContainersInBuilding(chunk, p, roleId, rng, settlementTierNum(tier));
+    settlement.buildings.push({ x: pRect.x, y: pRect.y, w: pRect.w, h: pRect.h, role: roleId, npcId: npc.uid });
+    placeContainersInBuilding(chunk, pRect, roleId, rng, settlementTierNum(tier));
   });
 
-  const guardCounts = { hamlet:0, village:1, town:3, city:6 };
-  let guardCount = guardCounts[tier];
-  if (flavor.rolePool && !flavor.rolePool.includes('guard')) guardCount = Math.max(0, guardCount - 2);
+  // NPC Schedules v2: hand out the houses built above to a shuffled subset of eligible working
+  // NPCs as their actual sleepArea, distinct from their homeArea (workplace).
+  if (houseBuildings.length) {
+    const eligible = shuffleArray(rng, chunk.npcs.filter(n => n.homeBuilding < placed.length && n.homeBuilding !== (grandRect ? 0 : -1) && SEPARATE_HOME_ELIGIBLE_ROLES.has(n.roleId)));
+    const shuffledHouses = shuffleArray(rng, houseBuildings.slice());
+    for (let i = 0; i < eligible.length && i < shuffledHouses.length; i++) eligible[i].sleepArea = shuffledHouses[i];
+  }
+
   for (let i = 0; i < guardCount; i++) {
     let gx, gy, t; let tries = 0;
     do { gx = randInt(rng, margin, CH-margin-1); gy = randInt(rng, margin, CH-margin-1); t = chunk.tiles[gy][gx]; tries++; } while ((!t.walkable || t.building !== null) && tries < 30);
-    const npc = makeNPC(tier === 'city' && i === 0 ? 'captain' : 'guard', chunk.cx * CH + gx, chunk.cy * CH + gy, rng, settlement.name, weightedChoice(rng, settlementSpeciesWeights));
+    const npc = makeNPC((tier === 'city' || tier === 'capital') && i === 0 ? 'captain' : 'guard', chunk.cx * CH + gx, chunk.cy * CH + gy, rng, settlement.name, weightedChoice(rng, settlementSpeciesWeights));
     chunk.npcs.push(npc);
   }
   if (flavor.hostileMix) {
@@ -7055,18 +7781,24 @@ function buildSettlement(chunk, cx, cy, seedVal) {
     }
   }
 
-  if (tier === 'city' && !flavor.noWalls) {
-    drawWallRing(chunk, 'south');
-    paintRoad(chunk, Math.floor(CH/2), 1);
-  } else if ((tier === 'town' || tier === 'village') && !flavor.noWalls) {
-    paintRoad(chunk, Math.floor(CH/2), Math.floor(CH/2));
+  let rootX, rootY;
+  if (wallSides) {
+    drawWallRingSides(chunk, wallSides, gateSide);
+    rootX = wallSides.bottom || wallSides.top ? Math.floor(CH/2) : (wallSides.left ? margin : CH-margin-1);
+    rootY = wallSides.bottom ? CH-2 : wallSides.top ? 1 : Math.floor(CH/2);
+  } else {
+    // multi-chunk cells with no outer wall (interior/plaza cells) root their road network at
+    // their own center, so the district connects visually into the avenues around it
+    rootX = Math.floor(CH/2); rootY = Math.floor(CH/2);
   }
+  growRoadNetwork(chunk, doorList, rootX, rootY);
 
   scatterDecorations(chunk, placed, tier, rng);
   scatterWorldContainers(chunk, placed, tier, rng);
-  if (flavorId === 'farming') scatterFarmingExtras(chunk, rng);
-  if (flavorId === 'fishing') scatterDocks(chunk, rng);
-  if (flavorId === 'mining') scatterOrePiles(chunk, rng);
+  (flavor.decor || []).forEach(tag => scatterFlavorDecor(chunk, rng, tag, tier));
+  // Grand cells get a little extra: garden-style decor scattered around the plaza, since a
+  // palace/grand hall standing in an empty field looks unfinished.
+  if (grand) scatterFlavorDecor(chunk, rng, 'garden', tier);
 }
 
 function scatterFarmingExtras(chunk, rng) {
@@ -7097,6 +7829,48 @@ function scatterOrePiles(chunk, rng) {
     const t = chunk.tiles[ly][lx];
     if (t.walkable && t.building === null && !t.feature) { t.feature = 'orepile'; t.glyph = '*'; t.color = '#9a8a7a'; placed++; }
   }
+}
+
+// ---- Settlement Overhaul: flavor-specific exterior decoration. Previously settlements were
+// "just houses and walls and people" -- this adds several dozen new decorative features across
+// the tags below (farms/docks/mining were the only ones that existed before; everything else
+// here is new), scattered per-flavor via SETTLEMENT_FLAVORS[...].decor. All are walkable so they
+// never block pathing, just dress the settlement up with things real people would actually build.
+function scatterFlavorDecor(chunk, rng, tag, tier) {
+  const scatter = (count, tries, fn) => {
+    let placedN = 0;
+    for (let t = 0; t < tries && placedN < count; t++) {
+      const lx = randInt(rng, 2, CH-3), ly = randInt(rng, 2, CH-3);
+      const tile = chunk.tiles[ly][lx];
+      if (tile.walkable && tile.building === null && !tile.feature) { fn(tile); placedN++; }
+    }
+    return placedN;
+  };
+  const capBonus = tier === 'capital' ? 2 : 0;
+  if (tag === 'farm') scatterFarmingExtras(chunk, rng);
+  else if (tag === 'dock') scatterDocks(chunk, rng);
+  else if (tag === 'mining') { scatterOrePiles(chunk, rng); scatter(1 + capBonus, 12, t => { t.feature = 'minecart'; t.glyph = 'c'; t.color = '#8a7a6a'; }); }
+  else if (tag === 'military') scatter(randInt(rng,2,3) + capBonus, 16, t => {
+    const f = choice(rng, ['trainingdummy','stocks','banner']);
+    t.feature = f; t.glyph = f === 'trainingdummy' ? 'Y' : f === 'stocks' ? 'H' : '|';
+    t.color = f === 'banner' ? '#a83a3a' : '#9a8a6a';
+  });
+  else if (tag === 'sacred') scatter(randInt(rng,1,2) + capBonus, 12, t => { t.feature = 'shrine'; t.glyph = '\u2020'; t.color = '#e0c34a'; });
+  else if (tag === 'market') scatter(randInt(rng,2,4) + capBonus, 18, t => {
+    const f = choice(rng, ['marketstall','cart']);
+    t.feature = f; t.glyph = f === 'marketstall' ? 'n' : 'w'; t.color = '#c9a06a';
+  });
+  else if (tag === 'camp') scatter(randInt(rng,2,3) + capBonus, 16, t => {
+    const f = choice(rng, ['campfire','hitchingpost']);
+    t.feature = f; t.glyph = f === 'campfire' ? '^' : 'h'; t.color = f === 'campfire' ? '#e08a3a' : '#8a7a5a';
+  });
+  else if (tag === 'grove') scatter(randInt(rng,2,4) + capBonus, 16, t => { t.feature = 'tree'; t.glyph = '\u2663'; t.color = '#2a6a2a'; initDestructibleFeature(t); });
+  else if (tag === 'garden') scatter(randInt(rng,2,3) + capBonus, 16, t => {
+    const f = choice(rng, ['gardenbed','fountain']);
+    t.feature = f; t.glyph = f === 'gardenbed' ? '"' : 'o'; t.color = f === 'gardenbed' ? '#5a9a4a' : '#5a8ac9';
+  });
+  else if (tag === 'lumber') scatter(randInt(rng,2,3) + capBonus, 16, t => { t.feature = 'logpile'; t.glyph = '='; t.color = '#8a6a3a'; });
+  else if (tag === 'arena') scatter(randInt(rng,1,2) + capBonus, 12, t => { t.feature = 'fightingring'; t.glyph = 'O'; t.color = '#c93a3a'; });
 }
 
 // ---- generic, data-driven point-of-interest placement (35 types) ----
@@ -7197,6 +7971,46 @@ function maybeSpawnOverworldBoss(chunk, cx, cy, centerBiome, rng) {
 let canvas, ctx;
 let player, gameState, dialogueNPC, dialogueOptions, tradeMode, tradePage, invSelected;
 let turnCount = 0;
+
+// ===================== DAY/NIGHT CYCLE (Phase 2 of the settlement/NPC overhaul) =====================
+// A full day/night cycle is DAY_LENGTH turns. Derived entirely from turnCount, so it needs no new
+// save field and can't drift out of sync with an existing save. This is deliberately the
+// foundation Phase 3 (NPC schedules -- who's asleep, who's at work, when shops are open) will be
+// built on top of; on its own it drives: reduced vision at night outdoors, a status-panel clock,
+// a subtle night tint on the map, and inn/companion rest actually advancing time to morning
+// instead of just refilling HP/MP for free.
+const DAY_LENGTH = 240; // turns per full day/night cycle (~10 turns per in-game hour)
+function turnsForHour(h) { return Math.round((h / 24) * DAY_LENGTH); }
+function getTimeInfo() {
+  const t = ((turnCount % DAY_LENGTH) + DAY_LENGTH) % DAY_LENGTH;
+  const day = Math.floor(turnCount / DAY_LENGTH) + 1;
+  const hour = Math.floor((t / DAY_LENGTH) * 24);
+  const minute = Math.floor((((t / DAY_LENGTH) * 24) % 1) * 60);
+  let phase;
+  if (hour >= 5 && hour < 7) phase = 'dawn';
+  else if (hour >= 7 && hour < 18) phase = 'day';
+  else if (hour >= 18 && hour < 20) phase = 'dusk';
+  else phase = 'night';
+  return { day, hour, minute, phase };
+}
+function isNight() { const p = getTimeInfo().phase; return p === 'night' || p === 'dusk'; }
+function formatTimeInfo() {
+  const ti = getTimeInfo();
+  const h12 = ((ti.hour % 12) || 12);
+  const ampm = ti.hour < 12 ? 'AM' : 'PM';
+  const mm = String(ti.minute).padStart(2, '0');
+  const phaseLabel = { dawn: 'Dawn', day: 'Day', dusk: 'Dusk', night: 'Night' }[ti.phase];
+  return `Day ${ti.day}, ${h12}:${mm} ${ampm} (${phaseLabel})`;
+}
+// Used by inn rooms / the companion service: fast-forwards the clock to 7 AM the following day.
+// Simplification, noted honestly: this jumps turnCount directly rather than simulating every
+// intervening turn, so periodic systems keyed to turnCount (regen ticks, autosave, bounty decay)
+// don't fire during the skipped turns -- the same trade-off most "wait until morning" systems in
+// other games make. Restores HP/MP to full, same as before.
+function advanceTimeToMorning() {
+  const nextDay = Math.floor(turnCount / DAY_LENGTH) + 1;
+  turnCount = nextDay * DAY_LENGTH + turnsForHour(7);
+}
 let logMessages = [];
 // ---- v3: death log/death screen support -- tracks what most recently hurt the player so a
 // non-combat death (poison, fire, falling, drowning, a trap) still gets an accurate cause on the
@@ -7439,8 +8253,13 @@ const ROLE_CONTAINER_PROFILES = {
   baker: ['barrel','sack'], chef: ['barrel','sack'], tailor: ['cabinet','crate'],
   alchemist: ['cabinet','desk'], noble: ['cabinet','vault','desk'], bard: ['desk','cabinet'],
   fisherman: ['barrel','crate'], stablehand: ['sack','crate'], beggar: ['sack'],
+  tavernkeeper: ['barrel','crate'], companion: ['cabinet','desk'], curator: ['cabinet','desk'],
+  storagekeeper: ['chest','vault'], dealer: ['crate','cabinet'], guildclerk: ['weaponrack','desk'],
+  lumberjack: ['crate','sack'], carpenter: ['crate'], brewer: ['barrel','crate'],
+  gladiator: ['weaponrack','sack'], dockhand: ['crate','barrel'], healer: ['cabinet','desk'],
+  house: ['chest','cabinet'],
 };
-function settlementTierNum(tier) { return { hamlet:0, village:1, town:2, city:3 }[tier] || 0; }
+function settlementTierNum(tier) { return { hamlet:0, village:1, town:2, city:3, capital:4 }[tier] || 0; }
 // Called once per building, right after it's laid out and its NPC assigned -- places 1-2
 // role-appropriate containers on open interior floor tiles (never on the door or the NPC's own
 // spawn tile), rolls their contents, and (via maybeStockBookContainer, defined in the LORE &
@@ -7452,6 +8271,8 @@ function placeContainersInBuilding(chunk, p, roleId, rng, tierNum) {
   const openSpots = [];
   for (let ly = p.y + 1; ly < p.y + p.h - 1; ly++) for (let lx = p.x + 1; lx < p.x + p.w - 1; lx++) {
     if ((lx === doorX && ly === doorY) || (lx === npcX && ly === npcY)) continue;
+    const t = chunk.tiles[ly][lx];
+    if (!t.walkable || t.feature === 'wall' || t.feature === 'tentwall') continue; // Interior Layouts: skip any subdivided-room dividing wall tiles
     openSpots.push({ x: lx, y: ly });
   }
   if (!openSpots.length) return;
@@ -8170,6 +8991,25 @@ function stepAway(e, tx, ty) {
   }
   return false;
 }
+// ---- NPC Schedules: called for civilian NPCs before their normal wander(). Returns true if it
+// handled the NPC's movement this turn (asleep, or walking home), meaning npcAI should skip its
+// normal wander() call. A deliberate simplification, noted honestly: NPCs have one "home" area
+// (the building they were placed in at settlement generation, which for most roles doubles as
+// their shop/workplace -- living above the shop, a real and common arrangement) rather than
+// separate home/workplace buildings; a full separate-residence system is a larger future project.
+function npcScheduleStep(n) {
+  if (!n.homeArea || NIGHT_ACTIVE_ROLES.has(n.roleId)) { n.asleep = false; return false; }
+  if (!isNight()) { n.asleep = false; return false; }
+  // NPC Schedules v2: a genuine separate home (see houseBuildings matching in buildSettlement) --
+  // falls back to sleeping above the workplace if this NPC wasn't matched to one.
+  const sleepArea = n.sleepArea || n.homeArea;
+  const inside = n.x >= sleepArea.x0 && n.x <= sleepArea.x1 && n.y >= sleepArea.y0 && n.y <= sleepArea.y1;
+  if (inside) { n.asleep = true; return true; }
+  n.asleep = false;
+  const hx = Math.floor((sleepArea.x0 + sleepArea.x1) / 2), hy = Math.floor((sleepArea.y0 + sleepArea.y1) / 2);
+  stepToward(n, hx, hy);
+  return true;
+}
 function wander(e) {
   if (Math.random() > 0.3) return;
   const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
@@ -8508,7 +9348,7 @@ function repairAtBlacksmith(npc) {
 }
 function renderTrade() {
   const npc = dialogueNPC;
-  const repMult = repPriceMult(getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).key) * tradeSpeciesPriceMult(npc);
+  const repMult = repPriceMult(getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).key) * tradeSpeciesPriceMult(npc) * npcTierPriceMult(npc) * relationshipPriceMult(npc);
   const list = tradeMode === 'buy' ? npc.shop : player.inventory.filter(i => i.type !== 'misc');
   let html = `<div class="npcline">Your gold: ${player.gold} | [Tab] switch ${tradeMode === 'buy' ? 'to sell' : 'to buy'}</div>`;
   if (npc.roleId === 'blacksmith' || npc.roleId === 'cybersmith') html += `<div class="npcline dim">[R] Repair all equipped gear</div>`;
@@ -8532,7 +9372,7 @@ function renderTrade() {
 function tradeTransact(letter) {
   const npc = dialogueNPC;
   const idx = (tradePage || 0) * PAGE_SIZE + (letter.charCodeAt(0) - 97);
-  const repMult = repPriceMult(getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).key) * tradeSpeciesPriceMult(npc);
+  const repMult = repPriceMult(getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).key) * tradeSpeciesPriceMult(npc) * npcTierPriceMult(npc) * relationshipPriceMult(npc);
   if (tradeMode === 'buy') {
     const it = npc.shop[idx];
     if (!it) return;
@@ -8729,10 +9569,13 @@ function renderLog() {
 // drawn as visible or examinable this turn.
 function currentVisRadius() {
   let radius = curIsDungeon() ? 8 : 10;
+  // Day/Night Cycle: outdoors, vision shrinks at night/dusk unless the player has some form of
+  // night vision. Dungeons are already dark regardless of surface time, so unaffected.
+  if (!curIsDungeon() && isNight() && !(getBuff('nightvision') > 0) && !player.permaNightVision) radius -= 4;
   radius += player.visionBonus || 0;
   if (curIsDungeon() && player.permaNightVision) radius += 3;
   if (getBuff('nightvision') > 0) radius += 5;
-  return radius;
+  return Math.max(3, radius);
 }
 function markSeen() {
   const inDungeon = curIsDungeon();
@@ -10215,6 +11058,48 @@ function renderCraft() {
 // ---- relationships / marriage ----
 
 
+// ===================== RELATIONSHIP OVERHAUL =====================
+// Previously affection was just a bare number with three vague thresholds shown as flavor text
+// ("They like you"), and never moved without direct player action. This gives it real named tiers,
+// an actual mechanical benefit for reaching them (better trade prices, not just marriage
+// eligibility), and lets neglected relationships fade -- friendships need upkeep, same as a
+// real one would, rather than a number that only ever goes up.
+function relationshipTier(npc) {
+  const aff = npc.affection || 0;
+  if (aff < 0) return { label: 'Wary', index: -1 };
+  if (aff < 20) return { label: 'Stranger', index: 0 };
+  if (aff < 40) return { label: 'Acquaintance', index: 1 };
+  if (aff < 60) return { label: 'Friend', index: 2 };
+  if (aff < 80) return { label: 'Close Friend', index: 3 };
+  return { label: 'Beloved', index: 4 };
+}
+// Friend+ gets a real discount when trading (and a better price when selling to them, same
+// direction as the tier/species/reputation multipliers this stacks with) -- so building an actual
+// friendship with a shopkeeper is worth something beyond eventually being marriage-eligible.
+function relationshipPriceMult(npc) {
+  const idx = relationshipTier(npc).index;
+  return idx >= 3 ? 0.85 : idx >= 2 ? 0.93 : 1.0;
+}
+// A relationship left untouched for a long while (roughly 10 in-game days -- see DAY_LENGTH)
+// starts softening back toward neutral, a point at a time per day beyond that grace period.
+// Applied lazily whenever the player next opens dialogue with the NPC, rather than a per-turn
+// tick over every NPC that has ever been generated (which would be a real performance cost across
+// a whole persistent world). Spouses are exempt -- a marriage doesn't idly decay from a few
+// quiet days apart.
+function applyAffectionDecay(npc) {
+  if (player.spouse && player.spouse.uid === npc.uid) return;
+  if (npc.lastTalkTurn === undefined || npc.lastTalkTurn === null || npc.lastTalkTurn < 0) return;
+  const DECAY_GRACE_TURNS = DAY_LENGTH * 10;
+  const sinceTalk = turnCount - npc.lastTalkTurn;
+  if (sinceTalk <= DECAY_GRACE_TURNS) return;
+  const marker = (npc.lastDecayTurn === undefined || npc.lastDecayTurn === null) ? npc.lastTalkTurn : npc.lastDecayTurn;
+  const decayUnits = Math.floor((turnCount - marker) / DAY_LENGTH);
+  if (decayUnits <= 0) return;
+  const aff = npc.affection || 0;
+  if (aff !== 0) npc.affection = aff - Math.sign(aff) * Math.min(Math.abs(aff), decayUnits);
+  npc.lastDecayTurn = turnCount;
+}
+
 function proposeMarriage(npc) {
   if (player.spouse) { log('You are already married.'); return; }
   if (npc.spouse) { log(`${npc.name} is already spoken for.`); return; }
@@ -10227,20 +11112,100 @@ function proposeMarriage(npc) {
 }
 function restAtHome(npc) {
   player.hp = player.maxHp; player.mp = player.maxMp;
-  log(`You rest at home with ${npc.name} and feel fully restored.`);
+  advanceTimeToMorning();
+  log(`You rest at home with ${npc.name} and feel fully restored. It's now ${formatTimeInfo()}.`);
   if (Math.random() < 0.3) { const g = randInt(Math.random, 5, 20); player.gold += g; log(`${npc.name} shares ${g} gold from the household savings.`); }
   updateSidebar();
   closeModal();
 }
 
 function payForHealing(npc) {
-  const cost = Math.round((player.maxHp - player.hp) * 0.6) + Math.round((player.maxMp - player.mp) * 0.3) + 3;
+  const cost = Math.round((Math.round((player.maxHp - player.hp) * 0.6) + Math.round((player.maxMp - player.mp) * 0.3) + 3) * npcTierPriceMult(npc));
   if (player.hp >= player.maxHp && player.mp >= player.maxMp) { log('You are already at full strength.'); return; }
   if (player.gold < cost) { log(`${npc.name} says: "That'll cost ${cost} gold, dear. Come back when you can pay."`); return; }
   player.gold -= cost; player.hp = player.maxHp; player.mp = player.maxMp;
   log(`${npc.name} heals your wounds for ${cost} gold.`);
   updateSidebar();
   closeModal();
+}
+
+// ---- Settlement Overhaul: inn rooms actually do something now (previously innkeepers only
+// ran a shop) -- pay a flat fee for a full rest, same as a healer visit but themed as a room.
+function payForRoom(npc) {
+  const cost = Math.round(randInt(Math.random, 8, 18) * npcTierPriceMult(npc));
+  if (player.hp >= player.maxHp && player.mp >= player.maxMp) {
+    log(`${npc.name} says: "You look well-rested already, but the room's yours if you want it."`);
+  }
+  if (player.gold < cost) { log(`${npc.name} says: "A room's ${cost} gold, friend. Come back when you can pay."`); return; }
+  player.gold -= cost; player.hp = player.maxHp; player.mp = player.maxMp;
+  advanceTimeToMorning();
+  log(`You rent a room for the night and wake up fully rested. (-${cost}g) It's now ${formatTimeInfo()}.`);
+  updateSidebar();
+  closeModal();
+}
+
+// ---- Settlement Overhaul: the 'companion' building-type role. Kept deliberately tasteful and
+// non-explicit by design -- this is purely a paid rest/conversation service (mechanically
+// identical to an inn room), never romantic or sexual content. Flavor text stays limited to
+// quiet conversation and a good night's rest.
+function payForCompanionship(npc) {
+  const cost = Math.round(randInt(Math.random, 15, 30) * npcTierPriceMult(npc));
+  if (player.gold < cost) { log(`${npc.name} says: "That'll be ${cost} gold for the evening."`); return; }
+  player.gold -= cost; player.hp = player.maxHp; player.mp = player.maxMp;
+  advanceTimeToMorning();
+  const lines = [
+    'You spend a quiet evening away from the road, trading stories over cheap wine. You feel thoroughly rested.',
+    'You while away the night in good company, laughing at nothing in particular. You feel refreshed.',
+    "A warm room, better conversation than you've had in weeks, and a real bed. You feel like yourself again.",
+  ];
+  log(`${choice(Math.random, lines)} (-${cost}g) It's now ${formatTimeInfo()}.`);
+  updateSidebar();
+  closeModal();
+}
+
+// ---- Settlement Overhaul: museum curators offer a small paid glimpse into local history,
+// tying into the existing kingdom lore system rather than inventing disconnected flavor text.
+function viewMuseumExhibit(npc) {
+  const cost = 3;
+  if (player.gold < cost) { log(`${npc.name} says: "A small viewing fee of ${cost} gold, if you please."`); return; }
+  player.gold -= cost;
+  const k = getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
+  const lines = [
+    `${npc.name} walks you past a case of tarnished coins. "Recovered from a collapsed vault, three generations back."`,
+    `${npc.name} gestures to a cracked shield mounted on the wall, then to a placard about the kingdom's past: "${k.history}"`,
+    `${npc.name} points out a faded map behind glass. "Older than the kingdom itself, or so we tell visitors."`,
+  ];
+  log(choice(Math.random, lines));
+  updateSidebar();
+  closeModal();
+}
+
+// ---- Settlement Overhaul: personal storage house -- a simple persistent stash the player can
+// access from any storagekeeper, reusing the existing generic container UI (openContainer) so it
+// gets full drag-in/take-out support for free.
+function getPlayerStash() {
+  if (!player.personalStash) player.personalStash = { name: 'Storage Vault', contents: [], capacity: 40, locked: false, opened: false };
+  return player.personalStash;
+}
+
+// ---- Settlement Overhaul: gambling hall -- simple even-money wager against the house, slightly
+// house-favored. Re-opens the dialogue afterward so the player can keep betting without having
+// to re-approach the NPC each time.
+function gambleAt(npc, amount) {
+  if (player.gold < amount) { log(`You don't have ${amount} gold to wager.`); return; }
+  player.gold -= amount;
+  const win = Math.random() < 0.46;
+  if (win) {
+    const payout = amount * 2;
+    player.gold += payout;
+    log(`${npc.name} slides ${payout} gold across the table. "Lucky night." (+${payout - amount}g)`);
+    Sound.play('gold');
+  } else {
+    log(`${npc.name} rakes in your ${amount} gold with a practiced hand. "House wins." (-${amount}g)`);
+    Sound.play('miss');
+  }
+  updateSidebar();
+  openDialogue(npc);
 }
 
 // ---- direction / compass helpers ----
@@ -10271,7 +11236,83 @@ const NPC_QUEST_HINT_OPENERS = [
   "Keep your voice down, but there's been talk.",
   "My uncle's a guard. He hears things. Last thing he told me --",
 ];
-const QUEST_HINT_ROLES = new Set(['elder','guard','watchman','captain','innkeeper','merchant','ranger','hunter','bard','blacksmith','trainer']);
+const QUEST_HINT_ROLES = new Set(['elder','guard','watchman','captain','innkeeper','merchant','ranger','hunter','bard','blacksmith','trainer','tavernkeeper','guildclerk','curator']);
+// ---- NPC Schedules (built on the Day/Night Cycle): most civilian roles are night-economy
+// professions or simply don't sleep on a fixed schedule (guards patrol, an innkeeper's guests
+// arrive anytime); everyone else here heads home and sleeps once night falls. See
+// npcScheduleStep() and openDialogue()'s asleep check.
+const NIGHT_ACTIVE_ROLES = new Set(['guard','watchman','captain','innkeeper','tavernkeeper','dealer','companion','guildclerk']);
+// ---- NPC Schedules v2: which working roles get an actual separate home, distinct from their
+// workplace, when the settlement has room to spare (see the houseCount logic in buildSettlement).
+// Deliberately excludes NIGHT_ACTIVE_ROLES (they plausibly live above their own workplace) and
+// sticks to roles where "goes home after their shift" reads as normal, not roles like farmer/
+// hunter/elder/child who are already fine living wherever they were placed.
+const SEPARATE_HOME_ELIGIBLE_ROLES = new Set(['merchant','blacksmith','alchemist','tailor','chef','baker','cobbler','weaver','potter',
+  'jeweler','glassblower','cooper','seamstress','furrier','noble','priest','scholar','curator','trainer','necromancer_trainer','mason','locksmith']);
+
+// ---- NPC/Profession Overhaul: every NPC used to get a fully generic rumor line regardless of
+// role (a farmer and a jeweler could say the exact same thing) -- this gives each profession real,
+// specific things to say about their own trade, so talking to people actually reflects who they
+// are, per the original ask that NPCs "know or talk about what they're supposed to." Mixed with
+// the general RUMORS pool (see pickNpcRumor) rather than replacing it entirely, so there's still
+// world-lore variety and not every conversation is a trade advertisement.
+const ROLE_FLAVOR_LINES = {
+  cobbler: ["Bring me your worn soles and I'll make them new again.", "Good boots aren't cheap to make right, but they'll outlast three pairs of the cheap kind."],
+  potter: ["Everything you see was mud not long ago. There's something to that, I think.", "Crack a pot testing it and you've lost a day's clay. I test carefully."],
+  weaver: ["The loom never stops for anyone. Cloth doesn't weave itself.", "Wool from the hills, dyed proper, holds its color for years. Cheap dye fades by autumn."],
+  glassblower: ["One wrong breath and the whole piece shatters. Keeps you humble, this work.", "Sand and fire and patience -- that's the whole trade, really."],
+  jeweler: ["Everyone wants gold until they see what silver can do in the right setting.", "I can tell a real gem from paste before it's even in good light. Comes with the years."],
+  cooper: ["A barrel that leaks is worse than no barrel at all. Mine don't leak.", "Staves, hoops, and a steady hand. It's simpler than people think, and harder than it looks."],
+  mason: ["Stone remembers who cut it true and who didn't. Mine will still be standing long after I'm not.", "Give me good granite over soft sandstone any day. It's the difference between a wall and a warning."],
+  roofer: ["Thatch or shingle, it's all the same fight against the rain in the end.", "Fell off a roof once. Once. Learned to tie off properly after that."],
+  midwife: ["I've seen more of this settlement's future than anyone, before it could even open its eyes.", "Every birth's different. Anyone who tells you otherwise hasn't done this long."],
+  undertaker: ["Everyone comes to me eventually. No offense meant by it.", "I treat them with more care once they're gone than most did while they were here."],
+  gravedigger: ["Ground's harder in winter. Digging's the easy part most seasons.", "You'd be surprised how much you learn about a settlement from who visits which graves."],
+  barber: ["Sit still and I'll not nick you. Mostly.", "People tell a barber things they wouldn't tell a priest. Can't say why."],
+  scribe: ["Ink's dear, parchment's dearer, and everyone wants their letter written for free.", "I've copied enough contracts to know which ones are worth reading twice."],
+  cartographer: ["Half the map is guesswork past the last real survey. I mark it honestly, at least.", "Every road I haven't walked myself, I mark with a question in my own notes."],
+  locksmith: ["Any lock can be picked. My job's making it not worth the time.", "I know every lock in this settlement, which is either reassuring or worrying, depending who's asking."],
+  tanner: ["Smell's the worst part of the trade. You get used to it. Mostly.", "Good leather takes weeks, not days. Anyone selling you fast leather is selling you bad leather."],
+  dyer: ["Get the mordant wrong and the color's gone by the first wash. Get it right and it lasts a lifetime.", "Blue's the hardest color to hold true. Ask any dyer and they'll tell you the same."],
+  beekeeper: ["Respect the bees and they'll feed a whole household. Rush them and you'll know it.", "Honey this year's lighter than last. Depends what's blooming, same as always."],
+  shepherd: ["Lost two to wolves last winter. You never really stop counting after that.", "Quiet work, mostly. Just you, the hills, and the flock."],
+  vintner: ["Good wine takes years. Bad wine takes an afternoon and everyone can taste the difference.", "This year's vintage will be worth talking about. Ask me again in three years."],
+  cheesemonger: ["Age it right and it's worth ten times the price. Rush it and you've wasted good milk.", "I could tell you which cheese pairs with which trouble, if you had any."],
+  candlemaker: ["Tallow's cheap and smells like it. Beeswax costs more and burns clean. You get what you pay for.", "Every house in this settlement burns something I made, one way or another."],
+  mercenary: ["Coin up front. That's not distrust, that's just how this trade works.", "I've fought for worse causes than yours, probably. Ask around."],
+  courier: ["Rain or not, the letter goes out. That's the job.", "I've walked every road worth walking between here and three settlements over."],
+  apothecary_assistant: ["I grind, I measure, I don't ask what it's for. Safer that way.", "The real alchemist taught me which herbs to fear. That's most of the job, honestly."],
+  shipwright: ["A hull's only as honest as the wood underneath the paint.", "I can tell you which of these boats I'd trust past the harbor mouth, and which I wouldn't."],
+  ropemaker: ["Every knot's a promise the rope will hold. I take that seriously.", "Hemp's stronger than it looks. So's a well-made rope, generally."],
+  furrier: ["A good pelt in winter is worth more than most people's whole wardrobe.", "I can tell you where an animal lived by the thickness of its coat."],
+  blacksmith_apprentice: ["Still learning the forge. The master doesn't let me touch the good steel yet.", "Burned myself twice this week. Getting better at it, though -- slowly."],
+  herald: ["Hear ye -- well, when there's actual news. Mostly it's just me clearing my throat for nothing.", "I announce what the crown wants announced. Draw your own conclusions about the rest."],
+  jester: ["Someone has to laugh at the nobles to their face. Might as well be paid for it.", "Best joke I know, I can't tell in front of the guard captain. Wish me luck finding a new one."],
+  seamstress: ["A hem that lasts a season is fine work. A hem that lasts a decade is a seamstress worth paying for.", "Everyone wants silk. Not everyone can afford what silk actually costs."],
+  wheelwright: ["A wheel that's true will outlast the cart under it. A bad one will strand you in the worst weather.", "Spokes, felloes, hub -- get any one wrong and the whole wheel fights you."],
+  lumberjack: ["Whole morning to fell one good oak, and worth every swing.", "Forest doesn't miss what we take, long as we don't get greedy about it."],
+  carpenter: ["Good joinery doesn't need nails. That's the whole art of it.", "I built half the doors in this settlement. I know which ones stick in the rain."],
+  brewer: ["Patience is the only real ingredient people forget about.", "Ale this batch turned out better than I planned. Can't always say that."],
+  gladiator: ["The pit doesn't care about your name, only whether you're still standing after.", "I've walked out of that ring more times than I had any right to."],
+  dockhand: ["Load it wrong and the whole ship lists before it's out of harbor.", "My back's paid for every plank on this dock, one crate at a time."],
+  healer: ["Herbs and a steady hand get you further than people expect.", "I've patched up worse than you're carrying. Sit still and let me look."],
+  tavernkeeper: ["Ale, a story, and a warm fire -- that's most of what people actually come here for.", "I hear more news over this bar than the herald ever announces properly."],
+  companion: ["A quiet evening and someone to talk to. That's all it ever really is.", "People come here for company more than anything else. Might surprise you."],
+  curator: ["Every piece in here has a story, if you've got the time to hear it.", "Half these relics are older than the settlement itself. Treat them gently."],
+  storagekeeper: ["Your things are safe with me. I keep better records than most moneylenders.", "Never lost a client's belongings yet, and I intend to keep it that way."],
+  dealer: ["The house always has an edge. Doesn't mean you can't get lucky tonight.", "Fortune favors the bold, or so I tell everyone right before they lose their coin."],
+  guildclerk: ["Board's up front if you're looking for work. Read the fine print, though.", "I've placed more adventurers than I can count. Most come back. Not all."],
+  miller: ["Grind it too fine and you waste half the grain as dust. There's a knack to it.", "The whole settlement eats because this wheel keeps turning."],
+  sailor: ["Spent more nights on deck than in a proper bed. Wouldn't trade it, mostly.", "The sea doesn't care how good a sailor you think you are."],
+  cybersmith: ["Half machine, half magic, and I can't always tell you which half is doing the work.", "Bring me the part, not the whole story of how you broke it. Saves us both time."],
+  cultist_npc: ["You wouldn't understand what we're building here. Best you keep walking.", "The old ways aren't as dead as the priests would like everyone to think."],
+};
+function pickNpcRumor(rng, roleId) {
+  const lines = ROLE_FLAVOR_LINES[roleId];
+  if (lines && rng() < 0.65) return choice(rng, lines);
+  return choice(rng, RUMORS);
+}
+
 const QUEST_HINT_CRYPTIC_ROLES = new Set(['priest','necromancer_trainer']);
 // Volunteered on first contact -- the NPC brings it up unprompted, in the voice of someone
 // passing along gossip they overheard. Learning the hint this way is what actually unlocks it
@@ -10839,6 +11880,19 @@ function render() {
     ctx.restore();
   }
 
+  // Day/Night Cycle: a subtle dark overlay outdoors at night/dusk. Deliberately mild -- vision
+  // radius already shrinks (see currentVisRadius), this is just the visual read on top of that.
+  if (!curIsDungeon()) {
+    const ti = getTimeInfo();
+    const tint = ti.phase === 'night' ? 0.38 : ti.phase === 'dusk' ? 0.18 : ti.phase === 'dawn' ? 0.08 : 0;
+    if (tint > 0) {
+      ctx.save();
+      ctx.fillStyle = `rgba(6,10,30,${tint})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
+  }
+
   updateSidebar();
 }
 
@@ -11125,6 +12179,23 @@ function companionFollowAI(n) {
 // set that only reacts to you. Hunters/rangers do the same but only for genuine wild game (their
 // actual job), and civilians who notice something hostile fighting nearby get scared and run,
 // rather than standing around like furniture while a wolf tears through the market square. ----
+// ---- Living World: is this world position close enough and in line-of-sight of the player right
+// now? Reuses the same visRadius+LOS test the game already applies to monsters/allies elsewhere,
+// so ambient NPC-to-NPC lines only ever log when the player could plausibly have seen it happen.
+function npcVisibleToPlayer(wx, wy) {
+  if (curIsDungeon() || curIsDimension()) return false;
+  return chebyshev(wx, wy, player.x, player.y) <= currentVisRadius() && hasLOS(player.x, player.y, wx, wy);
+}
+const AMBIENT_NPC_LINES = [
+  '{a} nods to {b} in passing.',
+  '{a} and {b} trade a quick word about the weather.',
+  '{a} waves to {b} from across the street.',
+  '{a} stops to share a bit of gossip with {b}.',
+  '{a} and {b} exchange a tired look and keep walking.',
+  '{a} asks {b} how business has been.',
+  '{a} and {b} haggle briefly over something out of earshot.',
+  '{a} laughs at something {b} said.',
+];
 function npcAI(n) {
   if (n.statusPoison) processEntityStatus(n);
   if (!n.alive || n.hp <= 0) return;
@@ -11169,6 +12240,19 @@ function npcAI(n) {
   // civilians: something hostile nearby means it's time to run, not carry on shopping
   const threat = pickHostileTarget(n, 6);
   if (threat) { stepAway(n, threat.x, threat.y); return; }
+  if (npcScheduleStep(n)) return;
+  // ---- Living World: ambient NPC-to-NPC interaction. Purely flavor (no mechanical effect,
+  // doesn't touch affection) -- two awake civilians who happen to end up adjacent occasionally
+  // exchange a small line, logged only when the player is actually close enough to witness it, so
+  // NPCs read as having lives with each other and not only with the player. The uid comparison
+  // ensures a given pair triggers this at most once per turn (not once from each NPC's own AI
+  // step), and the low chance keeps a busy street from spamming the log.
+  if (!n.asleep && Math.random() < 0.03) {
+    const neighbor = curNPCs().find(o => o !== n && o.alive && !o.hostile && !o.asleep && chebyshev(o.x, o.y, n.x, n.y) === 1);
+    if (neighbor && String(n.uid) < String(neighbor.uid) && npcVisibleToPlayer(n.x, n.y)) {
+      log(choice(Math.random, AMBIENT_NPC_LINES).replace('{a}', n.name).replace('{b}', neighbor.name));
+    }
+  }
   if (n.aiState === 'patrol') { runIdleState(n, 'patrol'); return; }
   wander(n);
 }
@@ -11294,10 +12378,30 @@ function openDialogue(npc) {
   gameState = 'dialogue';
   dialogueNPC = npc;
   markLocationDirty(npc.x, npc.y);
+  // ---- NPC Schedules: a sleeping NPC doesn't run their shop/training/quest board until morning
+  // (or until woken) -- talking, waking, and attacking still work.
+  if (npc.asleep && !(player.spouse && player.spouse.uid === npc.uid)) {
+    const sleepOpts = [
+      { key: 'a', label: 'Wake them', action: () => { npc.asleep = false; log(`${npc.name} stirs awake, bleary-eyed.`); openDialogue(npc); } },
+      { key: 'b', label: 'Attack', action: () => {
+        const wasHostile = npc.hostile;
+        npc.hostile = true; closeModal(); doAttack(player, npc);
+        if (!wasHostile && !curIsDungeon()) commitCrime(getRegionKey(npc.x, npc.y), 5);
+        endTurn();
+      }},
+      { key: 'c', label: 'Leave', action: () => closeModal() },
+    ];
+    dialogueOptions = sleepOpts;
+    renderModal(`${npc.name}, ${npc.roleName} of ${npc.home || 'the wilds'}`,
+      `<div class="npcline">${npc.name} is fast asleep for the night.</div>`,
+      'Letter/click to choose, Esc to leave.');
+    return;
+  }
   const opts = [];
   let n = 0;
   const nextKey = () => String.fromCharCode(97 + (n++));
   const isSpouse = player.spouse && player.spouse.uid === npc.uid;
+  applyAffectionDecay(npc);
   opts.push({ key: nextKey(), label: isSpouse ? 'Chat' : 'Talk', action: () => {
     const cooldown = Math.max(5, Math.round(30 * (1 - (player.affectionBonus || 0))));
     const lastTurn = (npc.lastTalkTurn === undefined || npc.lastTalkTurn === null) ? -9999 : npc.lastTalkTurn;
@@ -11344,6 +12448,14 @@ function openDialogue(npc) {
   if ((npc.teachSpells && npc.teachSpells.length) || (npc.teachRecipes && npc.teachRecipes.length)) opts.push({ key: nextKey(), label: 'Learn', action: () => openTrain(npc) });
   if (npc.canGiveQuest && !player.quests.some(q => q.giverId === npc.uid && !q.done)) opts.push({ key: nextKey(), label: 'Ask for work', action: () => offerRadiantQuests(npc) });
   if (npc.healer) opts.push({ key: nextKey(), label: 'Pay for healing', action: () => payForHealing(npc) });
+  // ---- Settlement Overhaul: functional building-type interactions ----
+  if (npc.roleId === 'innkeeper') opts.push({ key: nextKey(), label: 'Rent a room and rest', action: () => payForRoom(npc) });
+  if (npc.roleId === 'companion') opts.push({ key: nextKey(), label: 'Pay for a quiet evening', action: () => payForCompanionship(npc) });
+  if (npc.roleId === 'curator') opts.push({ key: nextKey(), label: 'View the exhibits', action: () => viewMuseumExhibit(npc) });
+  if (npc.roleId === 'storagekeeper') opts.push({ key: nextKey(), label: 'Access your storage', action: () => openContainer(getPlayerStash()) });
+  if (npc.roleId === 'dealer') {
+    [10, 25, 50].forEach(amt => opts.push({ key: nextKey(), label: `Wager ${amt}g`, action: () => gambleAt(npc, amt) }));
+  }
   opts.push({ key: nextKey(), label: 'Give gift', action: () => openGiftPicker(npc) });
   if (!npc.spouse && !player.spouse && (npc.affection || 0) >= 80 && !NON_MARRIAGEABLE.has(npc.roleId)) opts.push({ key: nextKey(), label: 'Propose marriage', action: () => proposeMarriage(npc) });
   if (isSpouse) {
@@ -11361,8 +12473,8 @@ function openDialogue(npc) {
   }});
   opts.push({ key: nextKey(), label: 'Leave', action: () => closeModal() });
   dialogueOptions = opts;
-  const aff = npc.affection || 0;
-  const affWord = aff >= 80 ? 'They adore you.' : aff >= 40 ? 'They like you.' : aff < 0 ? 'They are wary of you.' : '';
+  const tier = relationshipTier(npc);
+  const affWord = (player.spouse && player.spouse.uid === npc.uid) ? '' : `Relationship: ${tier.label}.`;
   renderModal(`${npc.name}, ${npc.roleName} of ${npc.home || 'the wilds'}`,
     `<div class="npcline">${npc.appearance || ''}</div><div class="npcline">A ${npc.trait} ${getSpecies(npc.species).name} ${npc.roleName.toLowerCase()}. ${affWord}</div>` +
     opts.map(o => `<div class="modal-opt" onclick="simulateKey('${o.key}')">[${o.key}] ${o.label}</div>`).join(''),
@@ -11381,17 +12493,49 @@ function placePlayerNearBiome(biomeId) {
   }
   return false;
 }
-function placePlayerNearSettlementTier(tier) {
-  for (let r = 0; r <= 40; r++) {
-    for (let cx = -r; cx <= r; cx++) for (let cy = -r; cy <= r; cy++) {
-      if (Math.max(Math.abs(cx), Math.abs(cy)) !== r) continue;
-      const c = getChunk(cx, cy);
-      if (c.settlement && c.settlement.type.toLowerCase() === tier) {
-        for (let ly = 1; ly < CH-1; ly++) for (let lx = 1; lx < CH-1; lx++) {
-          const t = c.tiles[ly][lx];
-          if (t.walkable && t.building === null) { player.x = cx*CH+lx; player.y = cy*CH+ly; return true; }
-        }
+// Coordinates of just the ring at distance r (Chebyshev) from the origin -- O(r) per ring instead
+// of re-scanning the whole (2r+1)^2 square at every radius, which is what made a wide-radius
+// search (capital can require r>35) impractically slow.
+function ringCoords(r) {
+  if (r === 0) return [[0, 0]];
+  const coords = [];
+  for (let x = -r; x <= r; x++) { coords.push([x, -r]); coords.push([x, r]); }
+  for (let y = -r + 1; y <= r - 1; y++) { coords.push([-r, y]); coords.push([r, y]); }
+  return coords;
+}
+// Fast settlement-tier locator for the debug/scenario start-position picker: uses the same
+// dry-run checks world-gen itself uses (no actual chunk generation) to walk outward ring by ring
+// until it finds a matching tier, then generates only that one target chunk (or anchor, for
+// multi-chunk city/capital).
+function findNearestSettlementTier(tier, maxRadius) {
+  for (let r = 0; r <= maxRadius; r++) {
+    for (const [cx, cy] of ringCoords(r)) {
+      if (tier === 'city' || tier === 'capital') {
+        const info = getAnchorSettlementInfo(cx, cy);
+        if (info && info.tier === tier) return { cx, cy, footprint: info.footprint };
+      } else {
+        if (cx === 0 && cy === 0) continue;
+        const sHash = coordHash(cx, cy, SEED + 12345);
+        if (sHash >= 0.11) continue;
+        const centerWx = cx * CH + Math.floor(CH / 2), centerWy = cy * CH + Math.floor(CH / 2);
+        const centerBiome = biomeAtPoint(centerWx, centerWy);
+        if (!['plains', 'forest', 'desert', 'tundra', 'swamp'].includes(centerBiome)) continue;
+        const identity = getSharedSettlementIdentity(cx, cy);
+        if (identity.tier === tier) return { cx, cy, footprint: 1 };
       }
+    }
+  }
+  return null;
+}
+function placePlayerNearSettlementTier(tier) {
+  const maxRadius = tier === 'capital' ? 250 : tier === 'city' ? 150 : 60;
+  const found = findNearestSettlementTier(tier, maxRadius);
+  if (!found) return false;
+  const c = getChunk(found.cx, found.cy);
+  if (c.settlement) {
+    for (let ly = 1; ly < CH - 1; ly++) for (let lx = 1; lx < CH - 1; lx++) {
+      const t = c.tiles[ly][lx];
+      if (t.walkable && t.building === null) { player.x = found.cx * CH + lx; player.y = found.cy * CH + ly; return true; }
     }
   }
   return false;
@@ -11401,8 +12545,10 @@ function placePlayerForScenario(id) {
   if (id === 'shipwreck') { if (placePlayerNearBiome('beach')) return; }
   else if (id === 'forest') { if (placePlayerNearBiome('forest') || placePlayerNearBiome('denseforest')) return; }
   else if (id === 'hamlet') { if (placePlayerNearSettlementTier('hamlet')) return; }
+  else if (id === 'village') { if (placePlayerNearSettlementTier('village')) return; }
   else if (id === 'town') { if (placePlayerNearSettlementTier('town')) return; }
   else if (id === 'city') { if (placePlayerNearSettlementTier('city')) return; }
+  else if (id === 'capital') { if (placePlayerNearSettlementTier('capital')) return; }
   placePlayerAtStart();
 }
 function showStartScreen() {
@@ -11709,6 +12855,19 @@ const TILE_FEATURE_DESCRIPTIONS = {
   anchor_buoy: 'A weathered buoy, straining gently against its anchor chain.',
   coral_reef: 'Bright coral crowds just beneath the surface here, alive with small darting shapes.',
   sunken_lighthouse: 'The top of a lighthouse, all that still breaks the surface of whatever swallowed the rest of it.',
+  // ---- Settlement Overhaul: new exterior decoration features ----
+  minecart: 'A rusty mine cart, half full of ore chunks.',
+  trainingdummy: 'A straw-stuffed training dummy, scarred with cut marks.',
+  stocks: 'A set of wooden stocks. Empty, for now.',
+  banner: "A tattered banner, snapping in the wind. You can't quite make out whose colors.",
+  marketstall: 'A market stall, awning faded from the sun, wares packed away for the night.',
+  cart: 'A merchant cart, wheels caked in road dust.',
+  campfire: 'A campfire, embers still glowing.',
+  hitchingpost: 'A weathered hitching post, worn smooth by reins.',
+  gardenbed: 'A neat garden bed, carefully tended.',
+  fountain: 'A stone fountain, water trickling quietly.',
+  logpile: 'A stacked pile of felled logs, waiting to be milled.',
+  fightingring: 'A packed-dirt fighting ring, ringed with worn benches.',
 };
 // A handful of tile features are dynamic per-tile (their exact flavor lives on the specific POI
 // instance, not the shared dictionary above) -- these get looked up by matching world coordinates
@@ -11724,6 +12883,7 @@ function poiAt(wx, wy) {
 // Short, human name for the role an NPC-inhabited building serves -- used so standing inside one
 // tells you what kind of building it is, not just "bare floor".
 function buildingRoleLabel(roleId) {
+  if (roleId === 'house') return 'Home';
   const role = ROLES.find(r => r.id === roleId);
   return role ? role.name : null;
 }
@@ -12538,6 +13698,7 @@ function newPlayer() {
     invFilter: 'all', invPage: 0, bounties: {}, scenario: null, waypoints: [], discoveredKingdoms: [],
     quickslots: [null, null, null, null],
     knownSettlements: [], knownDungeons: [], customNames: {},
+    personalStash: null, // Settlement Overhaul: lazily created by getPlayerStash() on first storage-house visit
   };
 }
 // derives max HP from CON and max MP from INT; called exactly once, right after an archetype or a
@@ -13318,22 +14479,31 @@ function generateChunk(cx, cy) {
     tiles.push(row);
   }
   const chunk = { cx, cy, tiles, npcs: [], monsters: [], settlement: null, dungeonEntrance: null, poi: null, dirty: false, lastVisitedTurn: undefined };
-
-  const sHash = coordHash(cx, cy, SEED + 12345);
   const centerBiome = tiles[Math.floor(CH/2)][Math.floor(CH/2)].biome;
-  const goodBiome = ['plains', 'forest', 'desert', 'tundra', 'swamp'].includes(centerBiome);
-  const rng = mulberry32((cx * 928371 + cy * 12841 + SEED) | 0);
 
-  if (sHash < 0.11 && goodBiome && (Math.abs(cx) + Math.abs(cy) > 0)) {
-    buildSettlement(chunk, cx, cy, sHash);
+  // ---- Multi-chunk settlements (Settlement Overhaul v3): check first whether this chunk is part
+  // of a city/capital's footprint (anchored here or on a nearby chunk) -- if so, it's generated as
+  // a district of that shared settlement instead of rolling its own independent content. See
+  // findSettlementMembership.
+  const membership = findSettlementMembership(cx, cy);
+  const rng = mulberry32((cx * 928371 + cy * 12841 + SEED) | 0);
+  if (membership) {
+    buildSettlementCell(chunk, cx, cy, membership);
   } else {
-    const dHash = coordHash(cx, cy, SEED + 98765);
-    if (dHash < 0.15 && centerBiome !== 'ocean') {
-      placeDungeonEntrance(chunk, cx, cy, dHash);
+    const sHash = coordHash(cx, cy, SEED + 12345);
+    const goodBiome = ['plains', 'forest', 'desert', 'tundra', 'swamp'].includes(centerBiome);
+
+    if (sHash < 0.11 && goodBiome && (Math.abs(cx) + Math.abs(cy) > 0)) {
+      buildSettlement(chunk, cx, cy, sHash);
     } else {
-      const pHash = coordHash(cx, cy, SEED + 555111);
-      if (pHash < 0.06 && centerBiome !== 'ocean' && centerBiome !== 'mountain') {
-        placePOI(chunk, cx, cy, rng);
+      const dHash = coordHash(cx, cy, SEED + 98765);
+      if (dHash < 0.15 && centerBiome !== 'ocean') {
+        placeDungeonEntrance(chunk, cx, cy, dHash);
+      } else {
+        const pHash = coordHash(cx, cy, SEED + 555111);
+        if (pHash < 0.06 && centerBiome !== 'ocean' && centerBiome !== 'mountain') {
+          placePOI(chunk, cx, cy, rng);
+        }
       }
     }
   }
@@ -16075,7 +17245,7 @@ function updateSidebar() {
     const k = getKingdom(Math.floor(player.x/CH), Math.floor(player.y/CH));
     base = `${place} — ${k.name}`;
   }
-  document.getElementById('loc-text').textContent = base;
+  document.getElementById('loc-text').textContent = base + (curIsDungeon() || curIsDimension() ? '' : ` · ${formatTimeInfo()}`);
   document.getElementById('pos-text').textContent = `(${player.x}, ${player.y}) · zoom ${zoomIndex+1}/${ZOOM_LEVELS.length}${settings.showTurnCounter ? ` · Turn ${turnCount}` : ''}`;
 
   const questCount = player.quests.filter(q => !q.done).length;
@@ -16442,6 +17612,7 @@ function showTitleScreen() {
   html += `<div class="title-menu-opt" onclick="simulateKey('d')"><b>[d]</b> Guide &amp; Controls</div>`;
   if (save) html += `<div class="title-menu-opt" onclick="simulateKey('e')"><b>[e]</b> Delete Save</div>`;
   if (getHallOfLegends().length) html += `<div class="title-menu-opt" onclick="simulateKey('f')"><b>[f]</b> Hall of Legends</div>`;
+  html += `<div class="title-menu-opt" onclick="simulateKey('g')"><b>[g]</b> View Source (GitHub)</div>`;
   document.getElementById('title-menu').innerHTML = html;
   spawnTitleEmbers();
 }
@@ -16465,6 +17636,7 @@ function titleScreenChoice(letter) {
   if (letter === 'd') { openHelp(); return; }
   if (letter === 'e' && hasSaveGame()) { confirmDeleteSave(); return; }
   if (letter === 'f' && getHallOfLegends().length) { showHallOfLegends(); return; }
+  if (letter === 'g') { window.open('https://github.com/LienDan/Lucid-Dreams-of-Roguelike', '_blank', 'noopener'); return; }
 }
 function showHallOfLegends() {
   gameState = 'halloflegends';
@@ -17181,7 +18353,29 @@ const GUIDE_SECTIONS = [
     <div class="modal-opt">t talks to an adjacent NPC — Trade, Learn, Ask for work, Pay for healing, Give a gift, and
     (80+ affection) Propose Marriage. Affection builds honestly: Talk only helps once per cooldown, gifts have
     diminishing returns, quests give a real boost. A traveling spouse fights at your side and can be sent home anytime;
-    View Family shows your children.</div>` },
+    View Family shows your children.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Relationship Overhaul (new).</b> Affection now has real named
+    tiers shown right in dialogue -- Wary, Stranger, Acquaintance, Friend, Close Friend, Beloved (80+, marriage-eligible)
+    -- instead of a single vague "they like you." Reaching Friend or better now actually does something beyond
+    marriage eligibility too: a real trade discount (better prices buying AND selling), stacking with the
+    reputation/species/tier price multipliers. And relationships aren't a number that only ever goes up anymore --
+    go roughly ten in-game days without talking to someone and the bond starts quietly softening back toward neutral,
+    a point per additional day of silence. Spouses are exempt; a marriage doesn't decay from a few quiet days apart.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>NPC Schedules (new).</b> Most NPCs now actually sleep at night --
+    once night falls, everyone except night-economy roles (guards, watchmen, captains, innkeepers, tavernkeepers,
+    dealers, companions, and guild clerks) heads back home and turns in. Approach a sleeping NPC and you can wake
+    them, but their shop/training/quest board waits for morning. In bigger towns, cities, and the rare capital,
+    working NPCs eligible for it (merchants, crafters, nobles, clergy, and similar -- see SEPARATE_HOME_ELIGIBLE_ROLES)
+    now get an actual separate house to walk home to at night, distinct from their shop; everyone else still lives
+    above their own workplace, same as many real trades historically did.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Profession Tiers (new).</b> Every NPC rolls a skill tier when
+    they're generated: Novice (~55% of NPCs, weaker stats, cheaper prices, a smaller spell/recipe roster if they
+    teach), unmarked Journeyman (~35%, the ordinary baseline), or Master (~10%, noticeably tougher, pricier, and far
+    more capable — a Master trainer knows several times as many spells as a Novice, a Master craftsperson knows their
+    full recipe list where a Novice only knows half). Worth seeking out a settlement's Master blacksmith or healer if
+    you can find one. There are now ${ROLES.length}+ distinct NPC roles and jobs across all settlements, from
+    blacksmiths and priests down to cobblers, coopers, cartographers, midwives, and gravediggers -- most exist purely
+    to make a settlement feel like a real, working economy rather than a backdrop.</div>` },
   { id:'reputation', label:'Reputation', html: () => `
     <div class="modal-opt">Crime is regional. Assaulting/killing a peaceful NPC raises a bounty and alerts guards in
     that settlement; high enough bounty makes guards attack on sight there. Bounties decay slowly over time.</div>` },
@@ -17341,14 +18535,53 @@ const GUIDE_SECTIONS = [
     <div class="modal-opt" style="margin-top:6px"><b>Rarity variants:</b></div>
     ${generateDungeonVariantGuideHTML()}` },
   { id:'world', label:'World', html: () => `
-    <div class="modal-opt">Settlements range from hamlets to rare walled cities, in over a dozen flavors — farming
-    villages, fishing towns, mining settlements, garrisons, monasteries, trading posts, nomad camps, elven enclaves,
-    dwarven holds, pirate coves, hidden cults, and cyberpunk "Scrapworks" enclaves — each with fitting decorations and
-    NPCs. Each settlement belongs to a kingdom with generated history, announced the first time you enter its territory
+    <div class="modal-opt"><b>Settlement Overhaul.</b> Settlements now come in ${Object.keys(SETTLEMENT_FLAVORS).length}
+    flavors (up from 13) across five size tiers — hamlet, village, town, city, and a new, extremely rare <b>capital</b>
+    tier (denser and more consistent than a city, laid out around a grand central plaza; a true capital spanning
+    several map tiles is a bigger future project, noted honestly rather than faked). New flavors include lumber camps,
+    breweries, harbor towns, university colleges, hot-spring spas, caravan stops, fighting pits, orchards, herbalist
+    groves, refugee camps, noble estates, grand temples, whaling stations, festival grounds, frontier outposts,
+    archives, and floating markets, alongside the original farming villages, fishing towns, mining settlements,
+    garrisons, monasteries, trading posts, nomad camps, elven enclaves, dwarven holds, pirate coves, hidden cults, and
+    cyberpunk "Scrapworks."</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Settlements no longer all look like a grid of identical boxes.</b>
+    Each flavor now has its own layout style: <b>grid</b> (regimented rows — garrisons, mining holds, noble estates:
+    places that plausibly *should* look uniform), <b>organic</b> (true random scatter, retried on overlap — farms,
+    camps, most villages), or <b>radial</b> (genuine concentric rings around a center point — temples, colleges). An
+    earlier pass at this used a "jittered grid" to guarantee higher building counts, which defeated the whole point by
+    making organic/radial settlements look almost indistinguishable from a grid -- reverted back to true scatter/rings
+    once city and capital (the tiers that actually needed the higher counts) moved to the system below instead. Doors
+    also no longer sit exclusively at the bottom-center of every building; they now open onto any of the four walls,
+    at a varied point along that wall.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Cities and capitals now span multiple map chunks (new).</b> A
+    city is a 2x2 grid of chunks, a capital a 3x3 grid -- real districts, not one chunk crammed with tiny buildings.
+    Each district has its own building layout and its own local flavor, all sharing one name/kingdom/identity. Chunks
+    on the outer edge of the whole footprint get a wall; chunks facing an adjacent district are left completely open,
+    which is what actually forms a genuinely wide avenue between them (each district's own margin, plus its
+    neighbor's matching margin, adds up to real street width). One district per settlement -- the anchor corner of a
+    city, the true center of a capital -- is dedicated to a single massive building (a real palace or grand hall, 8-12
+    tiles across, several times any ordinary building) standing in open plaza space instead of the usual roster of
+    shops and houses.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>New building types with real functions,</b> not just a
+    shopkeeper behind a counter: <b>Taverns</b> (drinks and gossip), <b>Inns</b> now let you actually rent a room and
+    rest for a flat fee, a <b>Storage House</b> lets you stash items in a persistent personal vault from any
+    Storagekeeper, a <b>Gambling Hall</b> lets you wager gold against the house, a <b>Museum</b>'s Curator will walk
+    you through a few exhibits (tied into that kingdom's actual history) for a small fee, and a discreet lodging house
+    (Companion role) offers a paid rest-and-conversation service — kept tasteful and non-explicit by design, never
+    romantic or sexual content. Settlements are also newly dressed with several dozen exterior decorations depending
+    on flavor — training dummies and stocks, market stalls and carts, campfires and hitching posts, garden beds and
+    fountains, log piles, a packed-dirt fighting ring, mine carts, and more — on top of the existing farms, docks, and
+    ore piles.</div>
+    <div class="modal-opt" style="margin-top:6px">Each settlement belongs to a kingdom with generated history, announced the first time you enter its territory
     and always shown on your status panel. Beyond settlements: over 30 kinds of camps, ruins, shipwrecks, shrines, and
     stranger sites litter the wilds. Rare, powerful overworld bosses (an ancient dragon, a yeti king, an elder treant,
     and more) roam fitting biomes — tread carefully.</div>
-    <div class="modal-opt" style="margin-top:6px"><b>The surface world gets more dangerous the further you wander.</b>
+    <div class="modal-opt" style="margin-top:6px"><b>Day/Night Cycle (new).</b> A full day is ${DAY_LENGTH} turns, shown on your status line as
+    "Day X, H:MM AM/PM (phase)". Outdoors, vision shrinks at night and dusk unless you have some form of night vision,
+    and the map gets a subtle dark tint. Renting an inn room, paying for a quiet evening with a Companion, or resting
+    at home with a spouse now all actually advance the clock to 7 AM the next day (as well as fully healing you), so
+    sleeping means something instead of being a free instant heal. This is also the foundation the next update (NPC
+    schedules — who's asleep, who's working, when shops are actually open) will be built on.</div>
     Overworld monsters (and overworld bosses) scale their stats up with distance from your starting area, the same
     curve settlement size already follows — right around where you begin, everything is exactly base-strength; wander
     far enough and even a "common" spawn hits noticeably harder. Loot found loose on the ground out there stays modest
