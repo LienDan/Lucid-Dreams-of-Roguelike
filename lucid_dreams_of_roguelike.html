@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.26.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.27.0-alpha</div>
     </div>
   </div>
 
@@ -787,6 +787,11 @@ const BIOMES = {
   tundra: { name: 'Tundra', walkable: true, glyph: '.', color: '#c8dbe0', bg: '#182226', encounter: [['wolf',4],['yeti',1],['bear',2],['frostling',2]] },
   swamp:  { name: 'Swamp', walkable: true, glyph: '.', color: '#5c6b35', bg: '#141a0c', encounter: [['crocodile',4],['leech',4],['bog-zombie',2],['snake',3]] },
   mountain: { name: 'Mountain', walkable: false, glyph: '^', color: '#8a8a8a', bg: '#1c1c1c', encounter: [] },
+  // Paved settlement floor -- see Settlement Overhaul: cities/capitals used to default to whatever
+  // wild biome they generated on top of (almost always grass), everywhere, which read as strange
+  // for a dense city. Used only as a settlement floor override (buildSettlementCore), never
+  // procedurally generated in the wilderness.
+  cobblestone: { name: 'Cobblestone', walkable: true, glyph: '.', color: '#8f887a', bg: '#252220', encounter: [] },
 };
 
 function classifyBiome(elev, moist, temp) {
@@ -3892,38 +3897,48 @@ const CREATION_ABILITY_CATS = [
 // a barracks. See layoutBuildingsGrid/Organic/Radial and placeBuildingDoor below. `decor` names
 // which extra scatterDecorations() pass(es) to run for that flavor (several dozen new exterior
 // features live there now: farms/pens/wells/docks/stalls/etc. -- see DECOR_SETS).
+// ---- Settlement Boundary Overhaul: every settlement's outer boundary used to be an unconditional
+// square/rectangle (even flavors using 'organic'/'radial' *building placement* still sat inside a
+// square wall). `boundaryShape` below is the shape of the settlement's actual perimeter (wall or
+// clearing edge): 'square' (legacy behavior, unchanged), 'circular' (true disk), 'blob' (irregular
+// amoeba-like closed curve, several radius harmonics), 'coastal' (three walled sides, the fourth
+// left open onto the water since a shoreline is its own boundary), or 'mountainside' (three walled
+// sides, the fourth a natural jagged rock face instead of wall/water). See pickBoundaryShape,
+// computeBoundaryMask and drawShapedBoundary. Flavors with no strong shape identity omit
+// boundaryShape entirely and get a randomized mix (mostly square, some circular/blob) per
+// individual settlement instance for variety -- see pickBoundaryShape's fallback branch.
 const SETTLEMENT_FLAVORS = {
   standard:  { name:'', weight:22, preferredBiomes:null, rolePool:null, layoutStyle:'organic' },
-  farming:   { name:'Farming ', weight:12, preferredBiomes:['plains'], rolePool:['farmer','farmer','farmer','elder','child','merchant','miller','shepherd'], layoutStyle:'organic', decor:['farm'] },
-  fishing:   { name:'Fishing ', weight:8,  preferredBiomes:['beach'], rolePool:['fisherman','fisherman','merchant','elder','child','sailor','dockhand'], layoutStyle:'organic', decor:['dock'] },
-  mining:    { name:'Mining ', weight:8,  preferredBiomes:['mountain','tundra'], rolePool:['miner','miner','blacksmith','guard','merchant'], layoutStyle:'grid', decor:['mining'] },
-  military:  { name:'Garrison ', weight:6, preferredBiomes:null, rolePool:['guard','guard','watchman','captain','blacksmith'], layoutStyle:'grid', decor:['military'] },
-  monastery: { name:'Monastery of ', weight:5, preferredBiomes:null, rolePool:['priest','priest','scholar','elder','alchemist'], layoutStyle:'radial', decor:['sacred'] },
+  farming:   { name:'Farming ', weight:12, preferredBiomes:['plains'], rolePool:['farmer','farmer','farmer','elder','child','merchant','miller','shepherd'], layoutStyle:'organic', decor:['farm'], boundaryShape:'blob' },
+  fishing:   { name:'Fishing ', weight:8,  preferredBiomes:['beach'], rolePool:['fisherman','fisherman','merchant','elder','child','sailor','dockhand'], layoutStyle:'organic', decor:['dock'], boundaryShape:'coastal' },
+  mining:    { name:'Mining ', weight:8,  preferredBiomes:['mountain','tundra'], rolePool:['miner','miner','blacksmith','guard','merchant'], layoutStyle:'grid', decor:['mining'], boundaryShape:'mountainside' },
+  military:  { name:'Garrison ', weight:6, preferredBiomes:null, rolePool:['guard','guard','watchman','captain','blacksmith'], layoutStyle:'grid', decor:['military'], boundaryShape:'square' },
+  monastery: { name:'Monastery of ', weight:5, preferredBiomes:null, rolePool:['priest','priest','scholar','elder','alchemist'], layoutStyle:'radial', decor:['sacred'], boundaryShape:'circular' },
   trading:   { name:'Trading Post: ', weight:8, preferredBiomes:null, rolePool:['merchant','merchant','merchant','innkeeper','guard','tavernkeeper'], layoutStyle:'organic', decor:['market'] },
-  nomad:     { name:'Nomad Camp of ', weight:6, preferredBiomes:['desert','plains'], rolePool:['hunter','ranger','elder','child','merchant'], tents:true, layoutStyle:'organic', decor:['camp'] },
-  elven:     { name:'Enclave of ', weight:5, preferredBiomes:['forest','denseforest'], rolePool:['ranger','ranger','scholar','hunter','alchemist'], noWalls:true, layoutStyle:'organic', decor:['grove'] },
-  dwarven:   { name:'Hold of ', weight:5, preferredBiomes:['mountain'], rolePool:['miner','blacksmith','blacksmith','guard','merchant'], layoutStyle:'grid', decor:['mining'] },
-  pirate:    { name:'Cove of ', weight:4, preferredBiomes:['beach'], rolePool:['merchant','sailor','guard'], hostileMix:['bandit'], layoutStyle:'organic', decor:['dock'] },
-  cult:      { name:'Hidden Enclave of ', weight:2, preferredBiomes:null, rolePool:['necromancer_trainer','cultist_npc','elder'], hostileMix:['cultist'], rare:true, layoutStyle:'radial', decor:['sacred'] },
-  tech:      { name:'Scrapworks: ', weight:4, preferredBiomes:null, rolePool:['cybersmith','blacksmith','merchant','guard'], layoutStyle:'grid', decor:['mining'] },
+  nomad:     { name:'Nomad Camp of ', weight:6, preferredBiomes:['desert','plains'], rolePool:['hunter','ranger','elder','child','merchant'], tents:true, layoutStyle:'organic', decor:['camp'], boundaryShape:'blob' },
+  elven:     { name:'Enclave of ', weight:5, preferredBiomes:['forest','denseforest'], rolePool:['ranger','ranger','scholar','hunter','alchemist'], noWalls:true, layoutStyle:'organic', decor:['grove'], boundaryShape:'circular' },
+  dwarven:   { name:'Hold of ', weight:5, preferredBiomes:['mountain'], rolePool:['miner','blacksmith','blacksmith','guard','merchant'], layoutStyle:'grid', decor:['mining'], boundaryShape:'mountainside' },
+  pirate:    { name:'Cove of ', weight:4, preferredBiomes:['beach'], rolePool:['merchant','sailor','guard'], hostileMix:['bandit'], layoutStyle:'organic', decor:['dock'], boundaryShape:'coastal' },
+  cult:      { name:'Hidden Enclave of ', weight:2, preferredBiomes:null, rolePool:['necromancer_trainer','cultist_npc','elder'], hostileMix:['cultist'], rare:true, layoutStyle:'radial', decor:['sacred'], boundaryShape:'circular' },
+  tech:      { name:'Scrapworks: ', weight:4, preferredBiomes:null, rolePool:['cybersmith','blacksmith','merchant','guard'], layoutStyle:'grid', decor:['mining'], boundaryShape:'square' },
   // ---- new flavors added by the Settlement Overhaul (roughly doubles the previous roster) ----
-  lumber:    { name:'Lumber Camp: ', weight:6, preferredBiomes:['forest','denseforest'], rolePool:['lumberjack','lumberjack','carpenter','elder','merchant'], layoutStyle:'organic', decor:['lumber'] },
+  lumber:    { name:'Lumber Camp: ', weight:6, preferredBiomes:['forest','denseforest'], rolePool:['lumberjack','lumberjack','carpenter','elder','merchant'], layoutStyle:'organic', decor:['lumber'], boundaryShape:'blob' },
   brewery:   { name:'Brewery of ', weight:5, preferredBiomes:['plains','forest'], rolePool:['brewer','brewer','farmer','innkeeper','tavernkeeper','merchant','vintner','cooper'], layoutStyle:'organic', decor:['farm','market'] },
-  harbor:    { name:'Harbor of ', weight:6, preferredBiomes:['beach'], rolePool:['sailor','sailor','merchant','merchant','guard','dockhand','dockhand','shipwright','ropemaker'], layoutStyle:'grid', decor:['dock','market'] },
-  university:{ name:'College of ', weight:4, preferredBiomes:null, rolePool:['scholar','scholar','priest','alchemist','curator','elder','cartographer','scribe'], layoutStyle:'radial', decor:['sacred'] },
-  spa:       { name:'Hot Springs of ', weight:3, preferredBiomes:['mountain','tundra'], rolePool:['healer','innkeeper','merchant','alchemist','tavernkeeper'], layoutStyle:'organic', decor:['garden'] },
-  caravan:   { name:'Caravan Stop: ', weight:6, preferredBiomes:['desert','plains'], rolePool:['merchant','merchant','guard','sailor','dockhand'], tents:true, layoutStyle:'organic', decor:['camp','market'] },
-  gladiator: { name:'Fighting Pits of ', weight:3, preferredBiomes:null, rolePool:['gladiator','gladiator','trainer','guard','merchant','dealer'], layoutStyle:'grid', decor:['arena'] },
-  orchard:   { name:'Orchard of ', weight:6, preferredBiomes:['plains','forest'], rolePool:['farmer','farmer','brewer','merchant','child','elder','vintner','beekeeper'], layoutStyle:'organic', decor:['farm'] },
-  herbalist: { name:'Herbalist Grove of ', weight:4, preferredBiomes:['forest','denseforest'], rolePool:['alchemist','alchemist','ranger','elder','healer'], noWalls:true, layoutStyle:'organic', decor:['grove','garden'] },
-  refugee:   { name:'Refugee Camp of ', weight:3, preferredBiomes:null, rolePool:['beggar','beggar','elder','child','guard','farmer'], tents:true, layoutStyle:'organic', decor:['camp'] },
-  noble_estate:{ name:'Estate of ', weight:2, preferredBiomes:['plains'], rolePool:['noble','noble','guard','guard','stablehand','beggar','jeweler','herald','seamstress'], layoutStyle:'grid', decor:['garden'], rare:true },
-  temple:    { name:'Grand Temple of ', weight:3, preferredBiomes:null, rolePool:['priest','priest','priest','scholar','curator','gravedigger','undertaker'], layoutStyle:'radial', decor:['sacred'] },
-  whaling:   { name:'Whaling Station: ', weight:3, preferredBiomes:['beach'], rolePool:['sailor','sailor','merchant','blacksmith','dockhand'], layoutStyle:'organic', decor:['dock'] },
+  harbor:    { name:'Harbor of ', weight:6, preferredBiomes:['beach'], rolePool:['sailor','sailor','merchant','merchant','guard','dockhand','dockhand','shipwright','ropemaker'], layoutStyle:'grid', decor:['dock','market'], boundaryShape:'coastal' },
+  university:{ name:'College of ', weight:4, preferredBiomes:null, rolePool:['scholar','scholar','priest','alchemist','curator','elder','cartographer','scribe'], layoutStyle:'radial', decor:['sacred'], boundaryShape:'circular' },
+  spa:       { name:'Hot Springs of ', weight:3, preferredBiomes:['mountain','tundra'], rolePool:['healer','innkeeper','merchant','alchemist','tavernkeeper'], layoutStyle:'organic', decor:['garden'], boundaryShape:'blob' },
+  caravan:   { name:'Caravan Stop: ', weight:6, preferredBiomes:['desert','plains'], rolePool:['merchant','merchant','guard','sailor','dockhand'], tents:true, layoutStyle:'organic', decor:['camp','market'], boundaryShape:'blob' },
+  gladiator: { name:'Fighting Pits of ', weight:3, preferredBiomes:null, rolePool:['gladiator','gladiator','trainer','guard','merchant','dealer'], layoutStyle:'grid', decor:['arena'], boundaryShape:'square' },
+  orchard:   { name:'Orchard of ', weight:6, preferredBiomes:['plains','forest'], rolePool:['farmer','farmer','brewer','merchant','child','elder','vintner','beekeeper'], layoutStyle:'organic', decor:['farm'], boundaryShape:'blob' },
+  herbalist: { name:'Herbalist Grove of ', weight:4, preferredBiomes:['forest','denseforest'], rolePool:['alchemist','alchemist','ranger','elder','healer'], noWalls:true, layoutStyle:'organic', decor:['grove','garden'], boundaryShape:'blob' },
+  refugee:   { name:'Refugee Camp of ', weight:3, preferredBiomes:null, rolePool:['beggar','beggar','elder','child','guard','farmer'], tents:true, layoutStyle:'organic', decor:['camp'], boundaryShape:'blob' },
+  noble_estate:{ name:'Estate of ', weight:2, preferredBiomes:['plains'], rolePool:['noble','noble','guard','guard','stablehand','beggar','jeweler','herald','seamstress'], layoutStyle:'grid', decor:['garden'], rare:true, boundaryShape:'square' },
+  temple:    { name:'Grand Temple of ', weight:3, preferredBiomes:null, rolePool:['priest','priest','priest','scholar','curator','gravedigger','undertaker'], layoutStyle:'radial', decor:['sacred'], boundaryShape:'circular' },
+  whaling:   { name:'Whaling Station: ', weight:3, preferredBiomes:['beach'], rolePool:['sailor','sailor','merchant','blacksmith','dockhand'], layoutStyle:'organic', decor:['dock'], boundaryShape:'coastal' },
   festival:  { name:'Festival Grounds of ', weight:2, preferredBiomes:['plains'], rolePool:['bard','bard','merchant','dealer','tavernkeeper','companion'], layoutStyle:'organic', decor:['market','arena'], rare:true },
   frontier:  { name:'Frontier Outpost: ', weight:5, preferredBiomes:null, rolePool:['guard','hunter','ranger','blacksmith','merchant','tanner','furrier'], layoutStyle:'grid', decor:['military'] },
-  archive:   { name:'Archive of ', weight:2, preferredBiomes:null, rolePool:['scholar','scholar','curator','priest'], layoutStyle:'radial', decor:['sacred'], rare:true },
-  floating_market:{ name:'Floating Market of ', weight:4, preferredBiomes:['beach'], rolePool:['merchant','merchant','sailor','fisherman','dockhand'], layoutStyle:'organic', decor:['dock','market'] },
+  archive:   { name:'Archive of ', weight:2, preferredBiomes:null, rolePool:['scholar','scholar','curator','priest'], layoutStyle:'radial', decor:['sacred'], rare:true, boundaryShape:'circular' },
+  floating_market:{ name:'Floating Market of ', weight:4, preferredBiomes:['beach'], rolePool:['merchant','merchant','sailor','fisherman','dockhand'], layoutStyle:'organic', decor:['dock','market'], boundaryShape:'coastal' },
 };
 
 // new roles used by settlement flavors above (in addition to the existing ROLES list)
@@ -6643,6 +6658,223 @@ function drawWallRingSides(chunk, sides, gateSide) {
   function openGate(t, x, y) { t[y][x] = { glyph:'=', color:'#c9a06a', bg:'#241f16', walkable:true, feature:'gate', items:[], building:null, biome:t[y][x].biome }; }
 }
 
+// ======================= SETTLEMENT BOUNDARY OVERHAUL =======================
+// Previously every settlement's actual outer boundary (as opposed to its *building* layout, which
+// already had grid/organic/radial variety) was an unconditional square/rectangle -- an "organic"
+// village still sat inside a perfectly square wall-line. This section adds real boundary shapes:
+// circular, blob (irregular closed curve), coastal (open to the water on one side), and
+// mountainside (a natural jagged rock face on one side instead of wall or water). See
+// SETTLEMENT_FLAVORS[...].boundaryShape for which flavor gets which, and pickBoundaryShape for the
+// randomized fallback used by flavors with no strong shape identity.
+//
+// Scoping note (documented honestly, same as the rest of this codebase's comments): this only
+// applies to single-chunk settlements (hamlet/village/town, via buildSettlement). Multi-chunk
+// city/capital districts (buildSettlementCell) keep the exact prior square wallSides system
+// untouched -- a circular/blob boundary that has to tile seamlessly across several independently-
+// generated chunks and still form clean avenues between districts is real, unaddressed future
+// scope, not something safe to retrofit here without risking the multi-chunk correctness work
+// already tested (see HANDOFF notes on findSettlementMembership).
+
+// Reserves a rectangle just inside a gate so building placement can never seal it off. This isn't
+// specific to the boundary-shape work -- it's a general fix: nothing previously reserved the
+// approach corridor just past a gate's wall tile, so a building could (rarely, ~0.1% of walled
+// settlements measured against 8000 generated at a fixed seed) land flush against it and cut the
+// settlement off from its own front door. Giving village/town real walls surfaces the same latent
+// bug far more often (any wall means an exposed gate), which is what caught it -- fixed here for
+// every wall-having settlement, not just the new shapes (see buildSettlementCore).
+function gateCorridorRect(side, margin, width, depth) {
+  const mid = Math.floor(CH / 2), half = Math.floor(width / 2);
+  if (side === 'bottom') return { x: mid - half, y: CH - margin - depth, w: width, h: depth };
+  if (side === 'top') return { x: mid - half, y: margin, w: width, h: depth };
+  if (side === 'left') return { x: margin, y: mid - half, w: depth, h: width };
+  return { x: CH - margin - depth, y: mid - half, w: depth, h: width }; // right
+}
+
+// Picks which shape a given settlement's boundary takes. Flavors with a strong identity (see
+// SETTLEMENT_FLAVORS) lock this; flavors without one get a randomized mix so "standard"/"trading"/
+// etc settlements don't all look identical either. coastal/mountainside only make sense next to
+// their matching biome -- preferredBiomes is a *weighting*, not a hard guarantee, so if one of
+// these flavors ends up somewhere its biome didn't apply, fall back to 'blob' rather than drawing
+// a shoreline or cliff face with no beach/mountain anywhere nearby.
+function pickBoundaryShape(flavor, rng, centerBiome) {
+  let shape = flavor.boundaryShape;
+  if (!shape) {
+    const roll = rng();
+    shape = roll < 0.55 ? 'square' : (roll < 0.8 ? 'circular' : 'blob');
+  }
+  if (shape === 'coastal' && centerBiome !== 'beach' && centerBiome !== 'ocean') shape = 'blob';
+  if (shape === 'mountainside' && centerBiome !== 'mountain' && centerBiome !== 'tundra') shape = 'blob';
+  return shape;
+}
+
+// Computes the settlement's boundary shape ONCE, consuming rng only here, so the `inside(x,y)`
+// mask used to constrain building placement and the wall actually drawn afterward (`drawWall`)
+// are guaranteed to agree with each other -- they share the exact same random shape parameters
+// instead of each independently rolling their own and risking a mismatch (buildings poking past
+// where the wall ends up, or a wall enclosing empty space the buildings never used).
+// `inside` is already eroded ~2 tiles in from where the wall/cliff line will actually be drawn, the
+// same fix the door-placement bug used (buildings never end up flush against the boundary).
+function computeBoundaryMask(shape, margin, rng, gateSide) {
+  const cx = CH / 2, cy = CH / 2;
+  // Reaches the same edge-to-edge extent the square wall already uses (drawWallRingSides draws at
+  // column/row 1..CH-2, outside the margin box entirely) rather than also subtracting margin on
+  // top of that -- subtracting both was needlessly shrinking every circular/blob settlement's
+  // interior well below what a square settlement of the same footprint gets, which was the
+  // dominant cause of a real regression caught in playtesting (village/town house counts dropping
+  // well below their pre-boundary-shape averages).
+  const baseR = CH / 2 - 1;
+  const boxInside = (x, y) => x >= margin && y >= margin && x < CH - margin && y < CH - margin;
+  if (shape === 'circular' || shape === 'blob') {
+    let rAt;
+    if (shape === 'circular') rAt = () => baseR;
+    else {
+      // Two sine harmonics at random amplitude/frequency/phase -- an irregular, asymmetric,
+      // still-closed curve (an amoeba/blob), never a perfect circle and never self-intersecting.
+      // Kept deliberately mild: the old amplitude range let pinch points narrow to ~64% of baseR,
+      // and since building placement checks every tile's own local radius (not a smoothed
+      // average), that pinching cost far more usable interior than the shape's visual irregularity
+      // alone would suggest -- a real, measured regression in village/town house counts, not just
+      // a minor area trade-off.
+      const amp1 = baseR * (0.06 + rng() * 0.05), amp2 = baseR * (0.03 + rng() * 0.04);
+      const k1 = 2 + Math.floor(rng() * 2), k2 = 4 + Math.floor(rng() * 3);
+      const ph1 = rng() * Math.PI * 2, ph2 = rng() * Math.PI * 2;
+      rAt = (theta) => baseR + amp1 * Math.sin(k1 * theta + ph1) + amp2 * Math.sin(k2 * theta + ph2);
+    }
+    // A per-angle-only erosion ("this tile's own ray has some clearance") missed a real case in
+    // testing: at a blob's sharper pinch points the wall along a *neighboring* angle can cut
+    // closer than the tile's own ray suggests, so a building could still end up flush against (or
+    // blocking) the actual rasterized wall. Instead, rasterize the wall ring at the same angular
+    // resolution the real draw uses, then dilate that footprint by a small buffer -- `inside` now
+    // checks against the actual discretized wall, not just an analytic approximation of it, so it
+    // can't disagree with what drawShapedRingWall (below) actually draws. Kept deliberately tight
+    // (see the disk-radius threshold below) -- circular/blob villages have measurably less interior
+    // to work with than a square village even before this buffer, so over-eroding here was a real
+    // regression (fewer houses than before the boundary-shape work), not just a minor visual nit.
+    const steps = Math.max(180, Math.round(baseR * 12));
+    const blockedDist = []; // per-row array of blocked-x Sets would be slower to query; use a flat grid instead
+    const clearGrid = new Array(CH); for (let y = 0; y < CH; y++) clearGrid[y] = new Array(CH).fill(true);
+    for (let i = 0; i < steps; i++) {
+      const theta = (i / steps) * Math.PI * 2;
+      const r = rAt(theta);
+      for (const rr of [r, r + 1]) {
+        const bx = Math.round(cx + Math.cos(theta) * rr), by = Math.round(cy + Math.sin(theta) * rr);
+        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+          if (dx * dx + dy * dy > 2.4) continue; // ~radius-1.5 disk -- enough clearance against the actual rasterized wall/moat cells without eating more of a small settlement's interior than needed
+          const nx = bx + dx, ny = by + dy;
+          if (nx >= 0 && ny >= 0 && nx < CH && ny < CH) clearGrid[ny][nx] = false;
+        }
+      }
+    }
+    const gateAngle = gateSide === 'top' ? -Math.PI / 2 : gateSide === 'left' ? Math.PI : gateSide === 'right' ? 0 : Math.PI / 2;
+    const gr = rAt(gateAngle);
+    const gx = Math.round(cx + Math.cos(gateAngle) * gr), gy = Math.round(cy + Math.sin(gateAngle) * gr);
+    const inx = Math.round(cx + Math.cos(gateAngle) * (gr - 2)), iny = Math.round(cy + Math.sin(gateAngle) * (gr - 2));
+    return {
+      shape, baseR, rAt,
+      inside: (x, y) => {
+        if (x < 0 || y < 0 || x >= CH || y >= CH || !clearGrid[y][x]) return false;
+        const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+        return Math.hypot(dx, dy) < rAt(Math.atan2(dy, dx));
+      },
+      gateCorridor: { x: Math.min(gx, inx) - 2, y: Math.min(gy, iny) - 2, w: Math.abs(gx - inx) + 4, h: Math.abs(gy - iny) + 4 },
+      drawWall: (chunk, gs, material) => drawShapedRingWall(chunk, rAt, cx, cy, gs, material),
+    };
+  }
+  if (shape === 'coastal' || shape === 'mountainside') {
+    const sides = ['top', 'bottom', 'left', 'right'];
+    const openSide = sides[Math.floor(rng() * 4)];
+    const wallSidesPreview = { top: openSide !== 'top', bottom: openSide !== 'bottom', left: openSide !== 'left', right: openSide !== 'right' };
+    const actualGateSide = wallSidesPreview[gateSide] ? gateSide : sides.find(s => wallSidesPreview[s]);
+    return {
+      shape, openSide, inside: boxInside,
+      gateCorridor: gateCorridorRect(actualGateSide, margin, 6, 3),
+      drawWall: (chunk, gs, material) => drawOpenSidedBoundary(chunk, shape, openSide, gs, margin, rng, material),
+    };
+  }
+  // square (default/fallback): identical behavior to the original unconditional wall ring.
+  return {
+    shape: 'square', inside: boxInside,
+    gateCorridor: gateCorridorRect(gateSide || 'bottom', margin, 6, 3),
+    drawWall: (chunk, gs) => {
+      drawWallRingSides(chunk, { top: true, bottom: true, left: true, right: true }, gs);
+      return { rootX: Math.floor(CH / 2), rootY: gs === 'top' ? 1 : CH - 2 };
+    },
+  };
+}
+
+// Traces a genuine ring wall (circle or irregular blob curve, per rAt) by stepping through angles
+// finely enough (6 steps per unit radius) to leave no gaps on the discrete grid, opening a gate
+// where the ring crosses the requested gate direction. Returns a good BFS seed for
+// growRoadNetwork (just outside the gate, on the approach side).
+function drawShapedRingWall(chunk, rAt, cx, cy, gateSide, material) {
+  const t = chunk.tiles;
+  const wallColor = material === 'palisade' ? '#a0834f' : '#8a7a5a';
+  const wallGlyph = material === 'palisade' ? '|' : '#';
+  const inBounds = (x, y) => x >= 0 && y >= 0 && x < CH && y < CH;
+  const setWall = (x, y) => { if (inBounds(x, y) && !t[y][x].building) t[y][x] = { glyph: wallGlyph, color: wallColor, bg: '#1c150c', walkable: false, feature: 'wall', items: [], building: null, biome: t[y][x].biome }; };
+  const setMoat = (x, y) => { if (inBounds(x, y) && !t[y][x].building && material !== 'palisade') t[y][x] = { glyph: '~', color: '#2a4a6a', bg: '#0a141c', walkable: false, feature: 'water', items: [], building: null, biome: t[y][x].biome }; };
+  const openGate = (x, y) => { if (inBounds(x, y)) t[y][x] = { glyph: '=', color: '#c9a06a', bg: '#241f16', walkable: true, feature: 'gate', items: [], building: null, biome: t[y][x].biome }; };
+
+  // screen-space cardinal angles: down(+y)=bottom, up(-y)=top, matching drawWallRingSides' layout
+  const gateAngle = gateSide === 'top' ? -Math.PI / 2 : gateSide === 'left' ? Math.PI : gateSide === 'right' ? 0 : Math.PI / 2;
+  const roughMaxR = Math.max(6, rAt(gateAngle));
+  const steps = Math.max(180, Math.round(roughMaxR * 12));
+  for (let i = 0; i < steps; i++) {
+    const theta = (i / steps) * Math.PI * 2;
+    const r = rAt(theta);
+    const x = Math.round(cx + Math.cos(theta) * r), y = Math.round(cy + Math.sin(theta) * r);
+    let angDiff = Math.abs(theta - gateAngle); if (angDiff > Math.PI) angDiff = Math.PI * 2 - angDiff;
+    if (angDiff < 0.22) {
+      openGate(x, y);
+      openGate(Math.round(cx + Math.cos(theta) * (r + 1)), Math.round(cy + Math.sin(theta) * (r + 1)));
+      continue;
+    }
+    setWall(x, y);
+    setMoat(Math.round(cx + Math.cos(theta) * (r + 1)), Math.round(cy + Math.sin(theta) * (r + 1)));
+  }
+  const gr = rAt(gateAngle);
+  return { rootX: Math.round(cx + Math.cos(gateAngle) * gr), rootY: Math.round(cy + Math.sin(gateAngle) * gr) };
+}
+
+// coastal: three sides get a straight wall exactly like the old square ring; the fourth (the
+// shore) is left completely open -- the water itself is the boundary, nothing to build there.
+// mountainside: same three walled sides, but the fourth is lined with a jagged, gap-toothed
+// natural rock face instead of either a built wall or open water -- no moat, no gate needed there
+// since the irregular gaps already read as a scrambly-but-passable mountain approach.
+// Which side is the shore/cliff is randomized per settlement (picked once, in computeBoundaryMask,
+// not re-rolled here) rather than tied to real adjacent-chunk terrain: the settlement's own chunk
+// gets fully cleared/flattened before this runs (see buildSettlementCore's terrain-clearing pass),
+// so there's no actual water/rock direction left in this chunk to detect and orient toward. An
+// honest, documented scoping choice, not a fully geography-aware coastline.
+function drawOpenSidedBoundary(chunk, shape, openSide, gateSide, margin, rng, material) {
+  const sides = ['top', 'bottom', 'left', 'right'];
+  const wallSides = { top: openSide !== 'top', bottom: openSide !== 'bottom', left: openSide !== 'left', right: openSide !== 'right' };
+  drawWallRingSides(chunk, wallSides, gateSide); // drawWallRingSides itself falls back off `gateSide` if that side has no wall
+  if (shape === 'mountainside') {
+    const t = chunk.tiles;
+    const setWall = (x, y) => { if (x >= 0 && y >= 0 && x < CH && y < CH && !t[y][x].building) t[y][x] = { glyph: '^', color: '#7a6a5a', bg: '#1c150c', walkable: false, feature: 'wall', items: [], building: null, biome: t[y][x].biome }; };
+    // Jitter only OUTWARD (toward the chunk edge), never inward past the standard wall column
+    // (CH-2 / 1) -- placeBuildingDoor's wall-adjacency exclusion (see rightUnsafe/leftUnsafe/etc)
+    // only knows to keep doors clear of that standard column, so a rock that jittered inward past
+    // it could still seal off a door judged "safe" against the normal wall line (caught in
+    // testing -- see HANDOFF/guide). Outward jitter keeps the same irregular, gap-toothed look
+    // without that mismatch.
+    for (let i = 1; i < CH - 1; i++) {
+      if (rng() < 0.3) continue; // irregular gaps -- a rock face isn't a perfectly unbroken line
+      const jit = Math.floor(rng() * 2);
+      if (openSide === 'top') setWall(i, 1 - jit);
+      else if (openSide === 'bottom') setWall(i, CH - 2 + jit);
+      else if (openSide === 'left') setWall(1 - jit, i);
+      else setWall(CH - 2 + jit, i);
+    }
+  }
+  const mid = Math.floor(CH / 2);
+  const actualGateSide = wallSides[gateSide] ? gateSide : sides.find(s => wallSides[s]);
+  const rootX = (actualGateSide === 'bottom' || actualGateSide === 'top') ? mid : (actualGateSide === 'left' ? margin : CH - margin - 1);
+  const rootY = actualGateSide === 'bottom' ? CH - 2 : actualGateSide === 'top' ? 1 : mid;
+  return { rootX, rootY };
+}
+
 // ---- Settlement Overhaul bugfix: the old road system just painted a short 6-tile cross from a
 // single point (the gate or the settlement center) in each cardinal direction, stopping the
 // instant it hit ANY wall -- which had no idea where a building's actual door was, so a road could
@@ -6973,6 +7205,39 @@ function findSettlementMembership(cx, cy) {
   return candidate;
 }
 
+// Scatters a handful of small organic grass patches (parks) back into a paved city/capital floor
+// -- see buildSettlementCore's paveFloors. Runs after buildings/walls/roads/gates are all placed,
+// so a patch only ever grows across plain leftover paved floor (walkable, no building, no
+// feature), never overwriting a road, gate, wall, or door.
+function scatterCityParks(chunk, rng, margin) {
+  const t = chunk.tiles;
+  const isPlainPaved = (x, y) => x >= margin && y >= margin && x < CH - margin && y < CH - margin
+    && t[y][x].walkable && t[y][x].building === null && !t[y][x].feature && t[y][x].biome === 'cobblestone';
+  const patchCount = randInt(rng, 2, 5);
+  for (let p = 0; p < patchCount; p++) {
+    let sx, sy, tries = 0;
+    do { sx = randInt(rng, margin, CH - margin - 1); sy = randInt(rng, margin, CH - margin - 1); tries++; }
+    while (!isPlainPaved(sx, sy) && tries < 30);
+    if (!isPlainPaved(sx, sy)) continue;
+    const targetSize = randInt(rng, 4, 10);
+    const frontier = [[sx, sy]];
+    const claimed = new Set([sx + ',' + sy]);
+    while (claimed.size < targetSize && frontier.length) {
+      const idx = randInt(rng, 0, frontier.length - 1);
+      const [cx2, cy2] = frontier[idx];
+      const [dx, dy] = choice(rng, [[1,0],[-1,0],[0,1],[0,-1]]);
+      const nx = cx2 + dx, ny = cy2 + dy, key = nx + ',' + ny;
+      if (!claimed.has(key) && isPlainPaved(nx, ny)) { claimed.add(key); frontier.push([nx, ny]); }
+      else frontier.splice(idx, 1);
+    }
+    claimed.forEach(key => {
+      const [x, y] = key.split(',').map(Number);
+      t[y][x] = makeTile('plains');
+      if (rng() < 0.15) { t[y][x].feature = 'tree'; t[y][x].walkable = false; t[y][x].glyph = '♣'; t[y][x].color = '#3f7a3f'; initDestructibleFeature(t[y][x]); }
+    });
+  }
+}
+
 function scatterDecorations(chunk, placed, tier, rng) {
   // furniture + occasional chest inside buildings
   placed.forEach((p, idx) => {
@@ -7104,7 +7369,15 @@ function distributeSizes(span, n) {
   for (let i = 0; i < n; i++) sizes.push(base + (i < rem ? 1 : 0));
   return sizes;
 }
-function layoutBuildingsGrid(rng, margin, targetCount, sizeRange, avoid) {
+// rectFullyInside: every tile of `rect` (not just its corners) passes `insideFn` -- cheap at these
+// building sizes (4-6 tiles) and the only way to guarantee a building never pokes past a curved
+// (circular/blob) boundary, since those aren't convex enough for a corners-only check to be safe.
+function rectFullyInside(rect, insideFn) {
+  if (!insideFn) return true;
+  for (let y = rect.y; y < rect.y + rect.h; y++) for (let x = rect.x; x < rect.x + rect.w; x++) if (!insideFn(x, y)) return false;
+  return true;
+}
+function layoutBuildingsGrid(rng, margin, targetCount, sizeRange, avoid, insideFn) {
   const span = CH - margin * 2;
   const minB = sizeRange[0];
   let cols = Math.max(1, Math.ceil(Math.sqrt(targetCount)));
@@ -7140,6 +7413,7 @@ function layoutBuildingsGrid(rng, margin, targetCount, sizeRange, avoid) {
     if (x < margin || y < margin || x + w > CH - margin || y + h > CH - margin) continue;
     const rect = { x, y, w, h };
     if (avoid && avoid.some(o => rectsOverlapWithGap(rect, o, 1))) continue;
+    if (!rectFullyInside(rect, insideFn)) continue;
     placed.push(rect);
   }
   return placed;
@@ -7162,7 +7436,7 @@ function layoutBuildingsGrid(rng, margin, targetCount, sizeRange, avoid) {
 // defeated the entire point. Now that city/capital have moved to the multi-chunk settlement system
 // below (with real room to spare), this only needs to serve hamlet/village/town's modest target
 // counts, which true rejection sampling handles just fine.
-function layoutBuildingsOrganic(rng, margin, targetCount, sizeRange, avoid) {
+function layoutBuildingsOrganic(rng, margin, targetCount, sizeRange, avoid, insideFn) {
   const span = CH - margin * 2;
   const placed = [];
   const already = avoid || [];
@@ -7177,6 +7451,7 @@ function layoutBuildingsOrganic(rng, margin, targetCount, sizeRange, avoid) {
     const y = margin + randInt(rng, 0, span - h);
     const rect = { x, y, w, h };
     if (already.some(o => rectsOverlapWithGap(rect, o, 1)) || placed.some(o => rectsOverlapWithGap(rect, o, 1))) continue;
+    if (!rectFullyInside(rect, insideFn)) continue;
     placed.push(rect);
   }
   return placed;
@@ -7186,7 +7461,7 @@ function layoutBuildingsOrganic(rng, margin, targetCount, sizeRange, avoid) {
 // building size and greedily places one wherever it still fits without violating the 1-tile gap
 // rule. Rarely needed now that targets are modest for the tiers that still use organic/radial, but
 // kept as a safety net for an unlucky roll.
-function layoutBuildingsScanFill(margin, targetCount, sizeRange, avoid) {
+function layoutBuildingsScanFill(margin, targetCount, sizeRange, avoid, insideFn) {
   const placed = [];
   const already = avoid || [];
   const w = sizeRange[0], h = sizeRange[0];
@@ -7194,6 +7469,7 @@ function layoutBuildingsScanFill(margin, targetCount, sizeRange, avoid) {
     for (let x = margin; x + w <= CH - margin && placed.length < targetCount; x++) {
       const rect = { x, y, w, h };
       if (already.some(o => rectsOverlapWithGap(rect, o, 1)) || placed.some(o => rectsOverlapWithGap(rect, o, 1))) continue;
+      if (!rectFullyInside(rect, insideFn)) continue;
       placed.push(rect);
     }
   }
@@ -7204,7 +7480,7 @@ function layoutBuildingsScanFill(margin, targetCount, sizeRange, avoid) {
 // center point, with each ring's building capacity computed from its actual circumference (rather
 // than a guessed constant), so rings fill reliably without excessive overlap-driven rejection. A
 // small amount of angle jitter per building keeps it from reading as a perfect bullseye.
-function layoutBuildingsRadial(rng, margin, targetCount, sizeRange, avoid) {
+function layoutBuildingsRadial(rng, margin, targetCount, sizeRange, avoid, insideFn) {
   const centerX = CH / 2, centerY = CH / 2;
   const placed = [];
   const already = avoid || [];
@@ -7226,6 +7502,7 @@ function layoutBuildingsRadial(rng, margin, targetCount, sizeRange, avoid) {
       if (x < margin || y < margin || x + w > CH - margin || y + h > CH - margin) continue;
       const rect = { x, y, w, h };
       if (already.some(o => rectsOverlapWithGap(rect, o, 1)) || placed.some(o => rectsOverlapWithGap(rect, o, 1))) continue;
+      if (!rectFullyInside(rect, insideFn)) continue;
       placed.push(rect);
     }
     radius += pitch + 1;
@@ -7548,11 +7825,22 @@ function buildSettlement(chunk, cx, cy, seedVal) {
   const guardCounts = { hamlet:0, village:1, town:3, city:6, capital:14 };
   const [minT, maxT] = targets[tier];
   const targetCount = randInt(rng, minT, maxT);
-  const wantsWalls = (tier === 'city' || tier === 'capital') && !flavor.noWalls;
+  // ---- Settlement Boundary Overhaul: hamlets stay boundary-less (too small for a real wall,
+  // matches real life); village/town get an actual boundary at increasing likelihood (a wooden
+  // palisade, not full stone -- they're not fortresses); city/capital's single-chunk fallback path
+  // keeps its previous always-walled-in-stone behavior (see buildSettlement's own comment above on
+  // why this path is now just a rare membership-detection safety net). Shape is independent of
+  // whether a wall actually gets drawn -- see buildSettlementCore/computeBoundaryMask: even a
+  // noWalls flavor like an Elven Enclave still gets its buildings confined to the shape (a real
+  // circular grove clearing), just without an actual wall line drawn around it.
+  const boundaryShape = pickBoundaryShape(flavor, rng, centerBiome);
+  const tierWallChance = { hamlet: 0, village: 0.55, town: 0.85, city: 1, capital: 1 }[tier];
+  const wallMaterial = flavor.noWalls ? null : (rng() < tierWallChance ? ((tier === 'city' || tier === 'capital') ? 'stone' : 'palisade') : null);
   buildSettlementCore(chunk, cx, cy, {
     tier, flavorId, flavor, kingdom, name, centerBiome, rng,
     margin: 2,
-    wallSides: wantsWalls ? { top: true, bottom: true, left: true, right: true } : null,
+    wallSides: null, // single-chunk path always goes through boundaryShape/wallMaterial now
+    boundaryShape, wallMaterial,
     gateSide: 'bottom',
     targetCount,
     houseCountRatio: tier === 'city' ? 0.4 : tier === 'town' ? 0.25 : 0,
@@ -7623,6 +7911,31 @@ function buildSettlementCore(chunk, cx, cy, p) {
   const { tier, flavorId, flavor, kingdom, name, rng, margin, wallSides, gateSide, targetCount, houseCountRatio, guardCount, grand, settlement } = p;
   chunk.settlement = settlement;
   const centerBiome = p.centerBiome;
+  // ---- Settlement Boundary Overhaul: p.boundaryShape is only set by the single-chunk
+  // buildSettlement path (multi-chunk buildSettlementCell keeps the old wallSides-object system
+  // untouched, see the scoping note on computeBoundaryMask). Computed up front, before any
+  // buildings are placed, so both the layout functions below (via boundaryMask.inside) and
+  // placeBuildingDoor's wall-adjacency exclusion (via doorWallSides) agree with the same shape --
+  // and so the actual wall (boundaryMask.drawWall, called later) draws exactly what building
+  // placement already respected.
+  const boundaryMask = p.boundaryShape ? computeBoundaryMask(p.boundaryShape, margin, rng, gateSide) : null;
+  let doorWallSides = null;
+  if (boundaryMask && p.wallMaterial) {
+    if (boundaryMask.shape === 'square') doorWallSides = { top: true, bottom: true, left: true, right: true };
+    else if (boundaryMask.shape === 'coastal') {
+      // the open side is genuinely open ground (no moat, no obstruction) -- only the 3 actually
+      // walled sides need the exclusion.
+      const os = boundaryMask.openSide;
+      doorWallSides = { top: os !== 'top', bottom: os !== 'bottom', left: os !== 'left', right: os !== 'right' };
+    } else if (boundaryMask.shape === 'mountainside') {
+      // unlike coastal, the "open" side isn't actually open -- it gets a jagged rock face (see
+      // drawOpenSidedBoundary), which is a real obstruction a door's approach tile can still get
+      // blocked by. Needs the same exclusion as every other side, not none.
+      doorWallSides = { top: true, bottom: true, left: true, right: true };
+    }
+    // circular/blob: no fixed-column wall to worry about -- the eroded mask already keeps every
+    // building a couple tiles clear of wherever the curved wall ends up, so no exclusion needed.
+  }
   // Per-settlement species roster: kingdom's dominant peoples get the strongest pull, then the
   // local biome (a mountain hold skews Stonekin regardless of kingdom) and the settlement's own
   // flavor (an Elven Enclave is Sylvan-heavy even in an orc kingdom) layer on top. Humans keep a
@@ -7643,6 +7956,19 @@ function buildSettlementCore(chunk, cx, cy, p) {
       chunk.tiles[ly][lx] = makeTile(safeBiome);
     }
   }
+  // Settlement Overhaul: city/capital floors are paved by default (most of a real city is street,
+  // not lawn) instead of defaulting to whatever wild biome the chunk happened to generate on top
+  // of. Deliberately scoped to city/capital only -- a paved hamlet/village doesn't make sense, and
+  // town is left as-is too (a paved village-scale town read as over-corrected in testing; the
+  // grass-floor look genuinely suits everything below city scale). Deliberate grass patches (parks)
+  // get scattered back in below, after buildings/walls/roads exist, so they never end up paved
+  // over by a building or sitting under a wall.
+  const paveFloors = (tier === 'city' || tier === 'capital');
+  if (paveFloors) {
+    for (let ly = 0; ly < CH; ly++) for (let lx = 0; lx < CH; lx++) {
+      if (chunk.tiles[ly][lx].walkable) chunk.tiles[ly][lx] = makeTile('cobblestone');
+    }
+  }
 
   // ---- NPC Schedules v2: bigger settlements generate extra plain "house" buildings beyond the
   // job-holding ones, so a real subset of working NPCs can have an actual separate home to walk to
@@ -7661,17 +7987,35 @@ function buildSettlementCore(chunk, cx, cy, p) {
     const gx = Math.max(margin, Math.floor((CH - grand.w) / 2)), gy = Math.max(margin, Math.floor((CH - grand.h) / 2));
     if (gx + grand.w <= CH - margin && gy + grand.h <= CH - margin) grandRect = { x: gx, y: gy, w: grand.w, h: grand.h };
   }
-  const avoidForLayout = grandRect ? [grandRect] : undefined;
+  // See gateCorridorRect's comment: reserve the approach just inside the gate from building
+  // placement, whichever wall system produced it (new shaped boundary, or the legacy multi-chunk/
+  // city-capital-single-chunk-fallback wallSides object).
+  let gateCorridor = null;
+  if (boundaryMask && p.wallMaterial) gateCorridor = boundaryMask.gateCorridor;
+  else if (wallSides) {
+    const sides = ['bottom', 'top', 'left', 'right'];
+    const actualGateSide = (gateSide && wallSides[gateSide]) ? gateSide : sides.find(s => wallSides[s]);
+    if (actualGateSide) gateCorridor = gateCorridorRect(actualGateSide, margin, 6, 3);
+  }
+  const avoidForLayout = [grandRect, gateCorridor].filter(Boolean);
+  // Only actually constrain building placement to the shape when there's a wall that will be
+  // drawn to match it, or the flavor deliberately wants a shaped clearing even without a wall
+  // (elven/herbalist's noWalls -- see SETTLEMENT_FLAVORS). A village/town that simply rolled "no
+  // wall this time" (see wallMaterial's chance roll in buildSettlement) has no wall to justify
+  // losing interior space to a circular/blob shape nothing will ever outline -- this was a real
+  // regression caught via user playtesting: village/town house counts dropped well below their
+  // old averages once every settlement started picking up a shape unconditionally.
+  const insideFn = (boundaryMask && (p.wallMaterial || flavor.noWalls)) ? boundaryMask.inside : null;
 
   let placed;
-  if (layoutStyle === 'organic') placed = layoutBuildingsOrganic(rng, margin, totalToPlace, sizeRange, avoidForLayout);
-  else if (layoutStyle === 'radial') placed = layoutBuildingsRadial(rng, margin, totalToPlace, sizeRange, avoidForLayout);
-  else placed = layoutBuildingsGrid(rng, margin, totalToPlace, sizeRange, avoidForLayout);
+  if (layoutStyle === 'organic') placed = layoutBuildingsOrganic(rng, margin, totalToPlace, sizeRange, avoidForLayout, insideFn);
+  else if (layoutStyle === 'radial') placed = layoutBuildingsRadial(rng, margin, totalToPlace, sizeRange, avoidForLayout, insideFn);
+  else placed = layoutBuildingsGrid(rng, margin, totalToPlace, sizeRange, avoidForLayout, insideFn);
   // The looser organic/radial samplers reliably jam short of the true packing limit -- top up any
   // shortfall with a deterministic scan of whatever room is left, rather than quietly shipping a
   // smaller settlement than what was rolled.
   if (placed.length < totalToPlace) {
-    const extra = layoutBuildingsScanFill(margin, totalToPlace - placed.length, sizeRange, (avoidForLayout || []).concat(placed));
+    const extra = layoutBuildingsScanFill(margin, totalToPlace - placed.length, sizeRange, (avoidForLayout || []).concat(placed), insideFn);
     placed = placed.concat(extra);
   }
   if (grandRect) placed = [grandRect].concat(placed); // grand building is always index 0
@@ -7709,7 +8053,7 @@ function buildSettlementCore(chunk, cx, cy, p) {
         t.building = idx;
       }
     }
-    const doorPos = placeBuildingDoor(chunk, pRect, flavor, rng, wallSides);
+    const doorPos = placeBuildingDoor(chunk, pRect, flavor, rng, boundaryMask ? doorWallSides : wallSides);
     doorList.push(doorPos);
 
     // NPC Schedules v2: buildings past targetCount (plus the grand building, if any) are plain
@@ -7765,9 +8109,14 @@ function buildSettlementCore(chunk, cx, cy, p) {
     for (let i = 0; i < eligible.length && i < shuffledHouses.length; i++) eligible[i].sleepArea = shuffledHouses[i];
   }
 
+  // Guards/hostiles pick a spot inside the shaped boundary when one exists -- otherwise a circular
+  // or blob settlement's guards could wind up standing in the empty wilderness corners outside its
+  // own wall (still technically inside the chunk's plain margin box, just not inside the actual
+  // settlement), which reads as broken ("why is the guard just standing out in the field").
+  const spawnInside = (x, y) => !insideFn || insideFn(x, y);
   for (let i = 0; i < guardCount; i++) {
     let gx, gy, t; let tries = 0;
-    do { gx = randInt(rng, margin, CH-margin-1); gy = randInt(rng, margin, CH-margin-1); t = chunk.tiles[gy][gx]; tries++; } while ((!t.walkable || t.building !== null) && tries < 30);
+    do { gx = randInt(rng, margin, CH-margin-1); gy = randInt(rng, margin, CH-margin-1); t = chunk.tiles[gy][gx]; tries++; } while ((!t.walkable || t.building !== null || !spawnInside(gx, gy)) && tries < 40);
     const npc = makeNPC((tier === 'city' || tier === 'capital') && i === 0 ? 'captain' : 'guard', chunk.cx * CH + gx, chunk.cy * CH + gy, rng, settlement.name, weightedChoice(rng, settlementSpeciesWeights));
     chunk.npcs.push(npc);
   }
@@ -7775,23 +8124,30 @@ function buildSettlementCore(chunk, cx, cy, p) {
     const hostileCount = randInt(rng, 1, 2);
     for (let i = 0; i < hostileCount; i++) {
       let gx, gy, t; let tries = 0;
-      do { gx = randInt(rng, margin, CH-margin-1); gy = randInt(rng, margin, CH-margin-1); t = chunk.tiles[gy][gx]; tries++; } while ((!t.walkable || t.building !== null) && tries < 30);
+      do { gx = randInt(rng, margin, CH-margin-1); gy = randInt(rng, margin, CH-margin-1); t = chunk.tiles[gy][gx]; tries++; } while ((!t.walkable || t.building !== null || !spawnInside(gx, gy)) && tries < 40);
       const m = makeMonster(choice(rng, flavor.hostileMix), chunk.cx*CH+gx, chunk.cy*CH+gy, overworldDangerScale(chunk.cx, chunk.cy), rng);
       chunk.monsters.push(m);
     }
   }
 
   let rootX, rootY;
-  if (wallSides) {
+  if (boundaryMask && p.wallMaterial) {
+    ({ rootX, rootY } = boundaryMask.drawWall(chunk, gateSide, p.wallMaterial));
+  } else if (wallSides) {
     drawWallRingSides(chunk, wallSides, gateSide);
     rootX = wallSides.bottom || wallSides.top ? Math.floor(CH/2) : (wallSides.left ? margin : CH-margin-1);
     rootY = wallSides.bottom ? CH-2 : wallSides.top ? 1 : Math.floor(CH/2);
   } else {
-    // multi-chunk cells with no outer wall (interior/plaza cells) root their road network at
-    // their own center, so the district connects visually into the avenues around it
+    // no wall drawn at all (multi-chunk interior/plaza cell, a noWalls flavor, or a hamlet/village
+    // that rolled no boundary this time) -- root the road network at the settlement's own center
+    // so it still connects visually into whatever open space surrounds it.
     rootX = Math.floor(CH/2); rootY = Math.floor(CH/2);
   }
   growRoadNetwork(chunk, doorList, rootX, rootY);
+
+  // Deliberate grass patches (parks) on top of a paved city/capital -- placed after buildings,
+  // walls, and roads exist so a patch never ends up silently paved-over or sitting under a wall.
+  if (paveFloors) scatterCityParks(chunk, rng, margin);
 
   scatterDecorations(chunk, placed, tier, rng);
   scatterWorldContainers(chunk, placed, tier, rng);
@@ -7979,7 +8335,7 @@ let turnCount = 0;
 // built on top of; on its own it drives: reduced vision at night outdoors, a status-panel clock,
 // a subtle night tint on the map, and inn/companion rest actually advancing time to morning
 // instead of just refilling HP/MP for free.
-const DAY_LENGTH = 240; // turns per full day/night cycle (~10 turns per in-game hour)
+const DAY_LENGTH = 1440; // turns per full day/night cycle (1 turn ~= 1 in-game minute)
 function turnsForHour(h) { return Math.round((h / 24) * DAY_LENGTH); }
 function getTimeInfo() {
   const t = ((turnCount % DAY_LENGTH) + DAY_LENGTH) % DAY_LENGTH;
@@ -7994,6 +8350,18 @@ function getTimeInfo() {
   return { day, hour, minute, phase };
 }
 function isNight() { const p = getTimeInfo().phase; return p === 'night' || p === 'dusk'; }
+// Continuous 0 (full day) -> 1 (full night) factor, replacing the old hard per-phase jump (vision
+// used to snap -4 the instant dusk began; the dark-overlay tint snapped between 4 fixed values at
+// each phase boundary). Ramps smoothly across the whole 2-hour dawn/dusk window instead, so both
+// vision radius and the screen tint change gradually turn-by-turn rather than all at once.
+function nightFactor() {
+  const ti = getTimeInfo();
+  const hourFrac = ti.hour + ti.minute / 60;
+  if (hourFrac >= 7 && hourFrac < 18) return 0;
+  if (hourFrac >= 18 && hourFrac < 20) return (hourFrac - 18) / 2;
+  if (hourFrac >= 5 && hourFrac < 7) return 1 - (hourFrac - 5) / 2;
+  return 1;
+}
 function formatTimeInfo() {
   const ti = getTimeInfo();
   const h12 = ((ti.hour % 12) || 12);
@@ -8022,6 +8390,27 @@ function log(msg) {
   logMessages.push(msg);
   if (logMessages.length > 200) logMessages.shift();
   renderLog();
+}
+// realLog: an alias to the true log() implementation, captured here so functions that only ever
+// act on non-player entities (monster/NPC combat and death, off-screen of the player) can locally
+// shadow the `log` identifier with a visibility-gated version -- `const log = visible ? realLog :
+// () => {};` at the top of a function -- without having to touch every individual log() call
+// inside it. See posVisibleToPlayer and the Message Log Overhaul (world-event visibility gating).
+const realLog = log;
+// Message Log Overhaul: is this world position close enough, and in the player's current line of
+// sight, for the player to plausibly see or hear something happening there right now? Same
+// distance+LOS test the game already applies to monster vision (currentVisRadius/hasLOS), reused
+// here so "can the player perceive this" and "can this monster see the player" are the same
+// question asked from the other direction, rather than two separately-tuned notions of range.
+// Deliberately does NOT special-case dungeon/dimension mode the way the older, narrower
+// npcVisibleToPlayer does (see AMBIENT_NPC_LINES) -- every caller of this function is always
+// checking an entity that's already active in the player's own current coordinate space (monsters/
+// NPCs are only ever AI-ticked from the player's current chunk neighborhood or dungeon level in
+// the first place, see curMonsters/curNPCs), so there's no cross-mode coordinate mismatch to guard
+// against here the way there is for two arbitrary overworld NPCs checked while the player might be
+// down in a dungeon.
+function posVisibleToPlayer(wx, wy) {
+  return chebyshev(wx, wy, player.x, player.y) <= currentVisRadius() && hasLOS(player.x, player.y, wx, wy);
 }
 
 // ---------------- accessors abstracting overworld/dungeon ----------------
@@ -9568,10 +9957,11 @@ function renderLog() {
 // perk) would silently affect what got marked "explored" without matching what was actually
 // drawn as visible or examinable this turn.
 function currentVisRadius() {
-  let radius = curIsDungeon() ? 8 : 10;
-  // Day/Night Cycle: outdoors, vision shrinks at night/dusk unless the player has some form of
-  // night vision. Dungeons are already dark regardless of surface time, so unaffected.
-  if (!curIsDungeon() && isNight() && !(getBuff('nightvision') > 0) && !player.permaNightVision) radius -= 4;
+  let radius = curIsDungeon() ? 8 : 12;
+  // Day/Night Cycle: outdoors, vision shrinks gradually across dawn/dusk (see nightFactor) rather
+  // than snapping instantly at the dusk/night boundary, unless the player has some form of night
+  // vision. Dungeons are already dark regardless of surface time, so unaffected.
+  if (!curIsDungeon() && !(getBuff('nightvision') > 0) && !player.permaNightVision) radius -= Math.round(5 * nightFactor());
   radius += player.visionBonus || 0;
   if (curIsDungeon() && player.permaNightVision) radius += 3;
   if (getBuff('nightvision') > 0) radius += 5;
@@ -11882,9 +12272,10 @@ function render() {
 
   // Day/Night Cycle: a subtle dark overlay outdoors at night/dusk. Deliberately mild -- vision
   // radius already shrinks (see currentVisRadius), this is just the visual read on top of that.
+  // Continuous with nightFactor() rather than 4 fixed buckets, so it darkens/lightens gradually
+  // turn-by-turn across dawn/dusk instead of snapping at each phase boundary.
   if (!curIsDungeon()) {
-    const ti = getTimeInfo();
-    const tint = ti.phase === 'night' ? 0.38 : ti.phase === 'dusk' ? 0.18 : ti.phase === 'dawn' ? 0.08 : 0;
+    const tint = 0.38 * nightFactor();
     if (tint > 0) {
       ctx.save();
       ctx.fillStyle = `rgba(6,10,30,${tint})`;
@@ -12078,6 +12469,10 @@ function onDeath(def, killer) {
   }
   def.alive = false; def.hp = 0;
   Sound.play(def.kind === 'npc' ? 'npcDeath' : 'monsterDeath');
+  // Message Log Overhaul: the player's own death is handled above (always shown, obviously) --
+  // this is specifically the "every death in the world" complaint: an NPC or monster dying
+  // somewhere the player couldn't see or hear it happen used to get logged unconditionally too.
+  const log = posVisibleToPlayer(def.x, def.y) ? realLog : () => {};
   log(`${def.name} dies!`);
   if (def.deathLine) log(`${def.name}: "${def.deathLine}"`);
   if (def.monsterId === 'archdemon_malphegor') unlockAbyssalWastes(def);
@@ -13728,6 +14123,14 @@ function getArmorOf(e) {
 }
 function doAttack(att, def) {
   const isPlayer = att === player;
+  // Message Log Overhaul: the player is always a participant in their own fights (isPlayer or
+  // def===player short-circuits true below), so this only actually filters monster-vs-NPC or
+  // monster-vs-monster combat happening somewhere the player can't see or hear it -- previously
+  // every hit/miss/status-effect line from every active fight in the loaded area got logged
+  // regardless of distance (curMonsters/curNPCs simulate up to a full 3x3 chunk neighborhood, well
+  // beyond vision range). See posVisibleToPlayer.
+  const spectatorVisible = isPlayer || def === player || posVisibleToPlayer(att.x, att.y) || posVisibleToPlayer(def.x, def.y);
+  const log = spectatorVisible ? realLog : () => {};
   const weapon = isPlayer ? player.equipment.hand : null;
   const dmgRange = weapon ? weapon.dmg : (att.atk || [1, 3]);
   const attName = isPlayer ? 'You' : att.name;
@@ -13864,6 +14267,9 @@ function processEntityStatus(e) {
 function performBreathWeapon(m, target) {
   target = target || player;
   const targetIsPlayer = target === player;
+  // Message Log Overhaul: see doAttack's comment -- always visible if the player is the target,
+  // otherwise gated on whether the player could see this happening to some other NPC/monster.
+  const log = (targetIsPlayer || posVisibleToPlayer(m.x, m.y) || posVisibleToPlayer(target.x, target.y)) ? realLog : () => {};
   let dmg = randInt(Math.random, Math.round(m.atk[0]*1.3), Math.round(m.atk[1]*1.6));
   if (targetIsPlayer) {
     if (m.breathWeapon === 'fire' && getBuff('resistfire') > 0) dmg = Math.round(dmg * 0.4);
@@ -14153,6 +14559,8 @@ function tryMonsterCast(m, target, dist) {
 // alertNearbyAllies waking them directly when a pack-mate engages; every other state re-scans
 // for a fresh hostile target each turn and drops straight into 'combat' the moment it finds one.
 function updateAIState(m, vision) {
+  // Message Log Overhaul: see runCombatState's comment -- monster-only function, gate on m's position.
+  const log = posVisibleToPlayer(m.x, m.y) ? realLog : () => {};
   if (m.aiState === 'dormant') {
     const target = pickHostileTarget(m, 3);
     if (target) { m.aiState = 'combat'; m.target = target; m.engaged = true; log(`${m.name} stirs awake!`); alertNearbyAllies(m, target, 5); }
@@ -14217,6 +14625,9 @@ function runIdleState(m, mode) {
 // kiter/ranged+ammo/charger+stamina/swarm/breath weapons/multiattack) still works exactly as
 // before, it's just no longer hardcoded to a single hardcoded opponent.
 function runCombatState(m, vision) {
+  // Message Log Overhaul: this only ever runs for a monster (never the player), so gate on the
+  // monster's own position -- see posVisibleToPlayer / doAttack's comment for the general reasoning.
+  const log = posVisibleToPlayer(m.x, m.y) ? realLog : () => {};
   const target = m.target;
   if (!target || !target.alive || target.hp <= 0) { loseTarget(m); return; }
   const invisibleFromMe = target === player && getBuff('invis') > 0 && chebyshev(m.x, m.y, target.x, target.y) > 1;
@@ -14365,6 +14776,8 @@ function runCombatState(m, vision) {
 }
 
 function monsterAI(m) {
+  // Message Log Overhaul: see runCombatState's comment -- monster-only function, gate on m's position.
+  const log = posVisibleToPlayer(m.x, m.y) ? realLog : () => {};
   if (m.statusPoison || m.regen || m.statusSlow) processEntityStatus(m);
   if (!m.alive || m.hp <= 0) return;
   regenEntityAIPools(m);
@@ -17782,7 +18195,9 @@ function clearWorldRegistries() {
 function resetWorldState() {
   clearWorldRegistries();
   SEED = Math.floor(Math.random() * 1e9);
-  turnCount = 0;
+  // Spawn at 7 AM (start of the 'day' phase, sun already up) rather than turn 0 = midnight --
+  // waking into pitch darkness on a fresh spawn didn't make narrative sense (see guide/feedback).
+  turnCount = turnsForHour(7);
 }
 function archetypeChoice(letter) {
   if (letter === '<') { showSpeciesPicker(); return; }
@@ -18553,6 +18968,57 @@ const GUIDE_SECTIONS = [
     once city and capital (the tiers that actually needed the higher counts) moved to the system below instead. Doors
     also no longer sit exclusively at the bottom-center of every building; they now open onto any of the four walls,
     at a varied point along that wall.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Settlement boundaries are no longer always a square (new).</b>
+    A settlement's actual outer edge -- not just its building layout -- now takes one of five shapes: the original
+    <b>square</b>; a true <b>circular</b> wall (monasteries, temples, colleges, archives, elven enclaves, hidden
+    cults); an irregular <b>blob</b> boundary, a closed but asymmetric amoeba-like curve (farms, orchards, lumber
+    camps, nomad and caravan camps, refugee camps, hot springs); <b>coastal</b>, walled on three sides with the
+    fourth left completely open onto the water (fishing towns, harbors, pirate coves, whaling stations, floating
+    markets); and <b>mountainside</b>, walled on three sides with the fourth a natural jagged rock face instead of a
+    built wall (mining towns, dwarven holds). Flavors without a strong shape identity get a randomized mix (mostly
+    square, some circular/blob) so even two "standard" villages don't look identical. Villages and towns can now
+    have an actual boundary too -- a wooden palisade, not full stone -- where previously only cities and capitals
+    ever got a wall at all; hamlets stay open (too small for a real wall to make sense). Scoped honestly: this only
+    covers single-chunk settlements (hamlet/village/town). Multi-chunk city/capital districts (see below) keep their
+    existing square wallSides system -- a circular/blob boundary that has to tile seamlessly across several
+    independently-generated chunks and still form clean avenues between districts is real, unaddressed future scope,
+    not something safe to retrofit without risking the multi-chunk correctness work already tested.</div>
+    <div class="modal-opt" style="margin-top:6px">This surfaced (and fixed) a real, if narrow, pre-existing bug:
+    nothing previously reserved the approach corridor just inside a gate, so a building could occasionally
+    (rarely, well under 0.1% of walled settlements) land flush against it and seal the settlement off from its own
+    front door. Giving village/town real walls made that far more visible, since any wall means an exposed gate --
+    every wall-having settlement now reserves that corridor from building placement, not just the new shapes.
+    Verified by generating and pathfinding-checking tens of thousands of settlements across multiple world seeds
+    (single-chunk and multi-chunk both) with zero reachability failures.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Follow-up fix: village/town house counts had dropped hard.</b>
+    Playtesting caught it directly -- villages/towns that used to have a realistic house count were down to two or
+    three. Three compounding causes, all fixed: (1) the circular/blob shape's buildable area was being shrunk twice
+    (once for margin, once again for the shape itself) instead of reaching the same edge-to-edge extent the square
+    wall already uses; (2) blob's random wobble could pinch down to ~64% of its radius at some angles, and since
+    building placement checks each tile's own local radius, that cost far more usable interior than the shape's
+    visual irregularity alone justified; (3) the shape was constraining building placement even for settlements that
+    happened to roll no wall at all that time, when there was no wall to justify losing space to a shape nothing
+    would ever outline. Village is back within its original target range; town is close, with square/coastal/
+    mountainside towns hitting target and circular/blob towns -- inherently smaller than a square footprint of the
+    same size, same as a circular room has less floor area than a square one -- landing a bit under it. Considered
+    making village/town multi-chunk (like city/capital) instead, but the single-chunk fix recovered the target
+    density without the much larger footprint-stitching risk that would add.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Message log now respects what you can perceive (new).</b> Combat,
+    deaths, and AI flavor events happening somewhere out of your vision range or line of sight no longer spam your
+    log -- a wolf fighting a caravan guard three chunks away used to narrate itself to you in full just because it was
+    simulated, even though you couldn't see or hear it happen. Anything you're directly part of (your own hits, your
+    own death, an NPC drawing a weapon on you specifically) still always logs. This is framework-shaped, not a pile of
+    special cases: a single visibility+line-of-sight check, reused everywhere world-event logging needed
+    gating.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Cities and capitals are paved (new).</b> Their floors default to
+    cobblestone instead of whatever wild biome the chunk happened to generate on top of (almost always grass, which
+    read as odd for a dense city). A handful of small organic grass patches -- real parks, some with a tree or two --
+    get scattered back in after every building, wall, and road already exists, so a patch never ends up silently
+    paved over or sitting under a wall. Hamlets and villages are untouched (grass genuinely suits them); town was
+    tried and reverted -- paved felt over-corrected at that scale, grass reads right there too.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Still square (documented, not forgotten):</b> a settlement's
+    interior road grid, and multi-chunk city/capital wall lines, both stay rectangular for now -- true curved streets
+    and a tileable multi-chunk boundary shape are real future work, not silently dropped.</div>
     <div class="modal-opt" style="margin-top:6px"><b>Cities and capitals now span multiple map chunks (new).</b> A
     city is a 2x2 grid of chunks, a capital a 3x3 grid -- real districts, not one chunk crammed with tiny buildings.
     Each district has its own building layout and its own local flavor, all sharing one name/kingdom/identity. Chunks
@@ -18576,12 +19042,15 @@ const GUIDE_SECTIONS = [
     and always shown on your status panel. Beyond settlements: over 30 kinds of camps, ruins, shipwrecks, shrines, and
     stranger sites litter the wilds. Rare, powerful overworld bosses (an ancient dragon, a yeti king, an elder treant,
     and more) roam fitting biomes — tread carefully.</div>
-    <div class="modal-opt" style="margin-top:6px"><b>Day/Night Cycle (new).</b> A full day is ${DAY_LENGTH} turns, shown on your status line as
-    "Day X, H:MM AM/PM (phase)". Outdoors, vision shrinks at night and dusk unless you have some form of night vision,
-    and the map gets a subtle dark tint. Renting an inn room, paying for a quiet evening with a Companion, or resting
-    at home with a spouse now all actually advance the clock to 7 AM the next day (as well as fully healing you), so
-    sleeping means something instead of being a free instant heal. This is also the foundation the next update (NPC
-    schedules — who's asleep, who's working, when shops are actually open) will be built on.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Day/Night Cycle.</b> A full day is ${DAY_LENGTH} turns (~1 turn per
+    in-game minute), shown on your status line as "Day X, H:MM AM/PM (phase)". New games now start at 7 AM with the sun
+    already up, instead of at midnight. Outdoor vision (base ${'12'} tiles by day, up from the original 10) shrinks
+    gradually across the whole dawn/dusk window rather than snapping the instant night falls, and the map's dark tint
+    fades in and out the same way, unless you have some form of night vision. Renting an inn room, paying for a quiet
+    evening with a Companion, or resting at home with a spouse now all actually advance the clock to 7 AM the next day
+    (as well as fully healing you), so sleeping means something instead of being a free instant heal. This is also the
+    foundation the next update (NPC schedules — who's asleep, who's working, when shops are actually open) will be
+    built on.</div>
     Overworld monsters (and overworld bosses) scale their stats up with distance from your starting area, the same
     curve settlement size already follows — right around where you begin, everything is exactly base-strength; wander
     far enough and even a "common" spawn hits noticeably harder. Loot found loose on the ground out there stays modest
