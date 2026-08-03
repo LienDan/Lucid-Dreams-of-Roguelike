@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.27.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.27.1-alpha</div>
     </div>
   </div>
 
@@ -7105,6 +7105,7 @@ function generateShopInventory(roleId, rng) {
   }
   if (roleId === 'fisherman') items.unshift(makeItem('raft', 0, rng));
   if (roleId === 'merchant' && rng() < 0.5) items.push(makeItem('compass', 0, rng));
+  if ((roleId === 'merchant' || roleId === 'guildclerk') && rng() < 0.6) items.push(makeItem('lockpick', 0, rng));
   if (roleId === 'blacksmith' || roleId === 'cybersmith') { items.push(makeItem('repair_kit', 0, rng)); if (rng() < 0.4) items.push(makeItem('masters_repair_kit', 0, rng)); }
   return items;
 }
@@ -8089,7 +8090,7 @@ function buildSettlementCore(chunk, cx, cy, p) {
     if (isHouse) {
       settlement.buildings.push({ x: pRect.x, y: pRect.y, w: pRect.w, h: pRect.h, role: 'house', npcId: null });
       placeContainersInBuilding(chunk, pRect, 'house', rng, settlementTierNum(tier));
-      houseBuildings.push({ x0: chunk.cx*CH+pRect.x, y0: chunk.cy*CH+pRect.y, x1: chunk.cx*CH+pRect.x+pRect.w-1, y1: chunk.cy*CH+pRect.y+pRect.h-1 });
+      houseBuildings.push({ x0: chunk.cx*CH+pRect.x, y0: chunk.cy*CH+pRect.y, x1: chunk.cx*CH+pRect.x+pRect.w-1, y1: chunk.cy*CH+pRect.y+pRect.h-1, doorX: doorPos.x, doorY: doorPos.y });
       return;
     }
 
@@ -8106,7 +8107,22 @@ function buildSettlementCore(chunk, cx, cy, p) {
   if (houseBuildings.length) {
     const eligible = shuffleArray(rng, chunk.npcs.filter(n => n.homeBuilding < placed.length && n.homeBuilding !== (grandRect ? 0 : -1) && SEPARATE_HOME_ELIGIBLE_ROLES.has(n.roleId)));
     const shuffledHouses = shuffleArray(rng, houseBuildings.slice());
-    for (let i = 0; i < eligible.length && i < shuffledHouses.length; i++) eligible[i].sleepArea = shuffledHouses[i];
+    for (let i = 0; i < eligible.length && i < shuffledHouses.length; i++) {
+      const npc = eligible[i], house = shuffledHouses[i];
+      npc.sleepArea = house;
+      // House Doors & Lockpicking: only a subset of real, separately-tracked homes get an actual
+      // lockable door (matching "most houses have doors, some are locked, not all houses" from
+      // feedback) -- the rest stay simple always-open doors like every other building. The tile's
+      // own `walkable` stays true either way (the resident needs to be able to walk through their
+      // own front door via the same generic pathing everything else uses -- no special-casing
+      // their AI to bypass a lock); "is this currently locked to a stranger" is instead computed
+      // live off whether the resident is actually home right now (see isHouseDoorLocked), and
+      // enforced only against the player's own movement attempt in movePlayer.
+      if (rng() < 0.4) {
+        const dt = chunk.tiles[house.doorY] && chunk.tiles[house.doorY][house.doorX];
+        if (dt && dt.feature === 'door') { dt.lockCapable = true; dt.homeOwnerUid = npc.uid; }
+      }
+    }
   }
 
   // Guards/hostiles pick a spot inside the shaped boundary when one exists -- otherwise a circular
@@ -8591,6 +8607,7 @@ function rollContainerLoot(rng, kind, tier) {
         if (superIds.length) addItemToList(items, makeItem(choice(rng, superIds), tier, rng));
       }
       const g = makeItem('gold', 0, rng); g.amount = randInt(rng, 8, 24) * (tier + 1); addItemToList(items, g);
+      if (rng() < 0.12) addItemToList(items, makeItem('lockpick', 0, rng));
       break;
     }
     case 'weaponrack': {
@@ -9797,6 +9814,59 @@ function closeModal() {
 // both sides and no gold changing hands. See the IN-WORLD CONTAINERS section above for the data
 // model this operates on. ----
 let containerTarget = null, containerMode = 'take', containerPage = 0;
+// ======================= LOCKS & LOCKPICKING =======================
+// One shared mechanic, used everywhere something can be locked (house doors, dungeon vault doors,
+// chests/trunks/vaults) rather than three separately-tuned systems. A "lockable" thing here is
+// just whatever object/tile already has its own `locked` state -- attemptPickLock/attemptForceOpen
+// don't know or care what kind of thing they're opening; the caller passes a difficulty, a name
+// for messages, and an onSuccess callback that flips that thing's own state. Adding a new lockable
+// thing later is "call one of these two functions with the right callback," not a new parallel
+// mechanic.
+//
+// Difficulty is a rough 8 (a flimsy house latch) to 18 (a serious vault) scale.
+function lockPickChance(difficulty) {
+  const skill = effDex(player) + (player.level || 1) * 0.5;
+  return Math.max(0.05, Math.min(0.92, 0.5 + (skill - difficulty) * 0.045));
+}
+function lockForceChance(difficulty) {
+  const skill = effStr(player) * 1.2;
+  return Math.max(0.05, Math.min(0.85, 0.35 + (skill - difficulty) * 0.035));
+}
+// name: how to refer to the thing in log messages, e.g. "the door", "the iron-bound chest".
+function attemptPickLock(name, difficulty, onSuccess) {
+  const pick = player.inventory.find(i => i.id === 'lockpick');
+  if (!pick) { log(`You don't have anything to pick ${name}'s lock with.`); return; }
+  if (Math.random() < lockPickChance(difficulty)) {
+    log(`You work the lockpick and ${name}'s lock gives with a click.`);
+    Sound.play('door');
+    onSuccess();
+  } else {
+    log(`You fumble the lockpick -- ${name}'s lock doesn't budge.`);
+    // A failed attempt has a real but modest chance to snap the pick -- keeps a lockpick set a
+    // genuine, if durable, consumable rather than an unlimited free skeleton key.
+    if (Math.random() < 0.15) {
+      player.inventory = player.inventory.filter(i => i.uid !== pick.uid);
+      log('Your lockpick snaps in the mechanism.');
+    }
+  }
+  endTurn();
+}
+// opts.crimeRegion: forcing something open is loud and obvious (unlike a quiet failed pick
+// attempt), so it always counts as a witnessed crime if the caller says this location cares.
+function attemptForceOpen(name, difficulty, onSuccess, opts) {
+  opts = opts || {};
+  if (Math.random() < lockForceChance(difficulty)) {
+    log(`You throw your weight against ${name} and it gives way with a crack!`);
+    Sound.play('bump');
+    onSuccess();
+  } else {
+    log(`You slam against ${name}, but it holds.`);
+    Sound.play('bump');
+  }
+  if (opts.crimeRegion) commitCrime(opts.crimeRegion, opts.crimeAmount || 8);
+  endTurn();
+}
+
 function openContainer(container) {
   Sound.play('uiOpen');
   gameState = 'container'; containerTarget = container; containerMode = 'take'; containerPage = 0;
@@ -11280,7 +11350,15 @@ function pickUp() {
   const items = allHere.filter(i => i.type !== 'corpse');
   const hasCorpse = allHere.some(i => i.type === 'corpse');
   const options = [];
-  containers.forEach(c => options.push({ label: `Open ${c.name}`, action: () => openContainer(c) }));
+  containers.forEach(c => {
+    if (c.locked) {
+      const difficulty = c.kind === 'vault' ? 16 : 11;
+      options.push({ label: `Pick the lock on the ${c.name.toLowerCase()}`, action: () => attemptPickLock(`the ${c.name.toLowerCase()}`, difficulty, () => { c.locked = false; openContainer(c); }) });
+      options.push({ label: `Force the ${c.name.toLowerCase()} open`, action: () => attemptForceOpen(`the ${c.name.toLowerCase()}`, difficulty, () => { c.locked = false; openContainer(c); }) });
+    } else {
+      options.push({ label: `Open ${c.name}`, action: () => openContainer(c) });
+    }
+  });
   items.forEach(it => {
     const qtyTag = it.amount > 1 ? ` x${it.amount}` : '';
     options.push({ label: `Pick up ${it.name}${qtyTag}`, action: () => { pickUpSpecificItem(it); updateSidebar(); endTurn(); } });
@@ -12526,6 +12604,21 @@ function curNPCs() {
   }
   arr.push(...player.companions.filter(n => n.alive));
   return arr;
+}
+function findNpcByUid(uid) { return curNPCs().find(n => n.uid === uid) || null; }
+// House Doors & Lockpicking: whether a lock-capable door (see the sleepArea-assignment pass in
+// buildSettlementCore) is currently locked to the player. Live-checked off the resident's actual
+// position rather than a static flag, so it naturally tracks their schedule: unlocked while
+// they're actually home (whether awake or asleep -- they're there to know who's coming and going),
+// locked while they're out. If the resident can't be found at all (dead, or their home chunk isn't
+// currently loaded), defaults to locked -- still pickable/forceable, just never a free walk-in.
+function isHouseDoorLocked(t) {
+  if (!t.lockCapable) return false;
+  const npc = findNpcByUid(t.homeOwnerUid);
+  if (!npc || !npc.alive) return true;
+  const area = npc.sleepArea;
+  if (!area) return true;
+  return !(npc.x >= area.x0 && npc.x <= area.x1 && npc.y >= area.y0 && npc.y <= area.y1);
 }
 // ---- Living World AI framework: companion orders. A following companion (spouse, or any future
 // hired follower) now takes real orders instead of just mirroring "attack nearest thing" forever --
@@ -14207,6 +14300,10 @@ function doAttack(att, def) {
   if (settings.showDamageNumbers) spawnFloatingText(def.x, def.y, String(dmg), crit ? '#ffdd55' : (def === player ? '#ff6a5a' : '#ffffff'));
   if (def === player) Sound.play('playerHurt'); else if (isPlayer) Sound.play(crit ? 'critHit' : 'hit'); else Sound.play('enemyHit');
   log(`${attName} hit${isPlayer ? '' : 's'} ${defName} for ${dmg}${crit ? ' (critical!)' : ''}${antiUndeadProc ? ' (super effective!)' : ''}.`);
+  // Living World bugfix: see pickFleeThreat's comment -- a prey/passive creature has no path to
+  // notice a threat via the normal hostility check, so being attacked needs its own explicit
+  // reaction here rather than waiting for a next AI tick that would never come.
+  if (def.kind === 'monster' && def.behavior === 'flee' && def.hp > 0 && def.aiState !== 'flee') { def.aiState = 'flee'; def.fleeFrom = att; }
   if (weapon && weapon.lifesteal) att.hp = Math.min(att.maxHp, att.hp + Math.round(dmg * weapon.lifesteal));
   if (!isPlayer && att.lifesteal) att.hp = Math.min(att.maxHp, att.hp + Math.round(dmg * 0.5));
   if (isPlayer && player.lifestealBonus) att.hp = Math.min(att.maxHp, att.hp + Math.round(dmg * player.lifestealBonus));
@@ -14558,6 +14655,27 @@ function tryMonsterCast(m, target, dist) {
 // dormant creatures only ever wake from a genuinely close threat (an ambush) or from
 // alertNearbyAllies waking them directly when a pack-mate engages; every other state re-scans
 // for a fresh hostile target each turn and drops straight into 'combat' the moment it finds one.
+// ---- Living World bugfix: prey/passive creatures (behavior:'flee', e.g. rabbits/deer) previously
+// had no way to ever actually flee. isHostileTo deliberately returns false when a flee-behavior
+// monster is the aggressor ("prey/passive creatures never start a fight"), which is correct -- but
+// that also meant pickHostileTarget could never return the player *as a threat to flee from*
+// either, since that's the same hostility check. A rabbit sitting in 'patrol'/'wander' state would
+// let the player walk right up and attack it with zero reaction, even though the flee state
+// machine (runFleeState) worked fine once triggered -- there was just never anything to trigger
+// it. This is the trigger: unlike pickHostileTarget, a flee threat doesn't require mutual combat
+// hostility, just "is something dangerous nearby" -- the player always counts, and so does an
+// actual predator (see the predator/prey relation in isHostileTo, e.g. a wolf near a rabbit).
+function pickFleeThreat(e, visionRange) {
+  if (player.alive && chebyshev(e.x, e.y, player.x, player.y) <= visionRange && hasLOS(e.x, e.y, player.x, player.y)) return player;
+  for (const cand of gatherPotentialTargets(e)) {
+    if (cand === e || !cand.alive || cand.hp <= 0 || cand === player) continue;
+    if (!(cand.predator && e.prey)) continue;
+    if (chebyshev(e.x, e.y, cand.x, cand.y) > visionRange) continue;
+    if (!hasLOS(e.x, e.y, cand.x, cand.y)) continue;
+    return cand;
+  }
+  return null;
+}
 function updateAIState(m, vision) {
   // Message Log Overhaul: see runCombatState's comment -- monster-only function, gate on m's position.
   const log = posVisibleToPlayer(m.x, m.y) ? realLog : () => {};
@@ -14567,6 +14685,10 @@ function updateAIState(m, vision) {
     return;
   }
   if (m.aiState === 'combat') return; // handled entirely by runCombatState's own target-loss logic
+  if (m.behavior === 'flee' && m.aiState !== 'flee' && m.aiState !== 'return') {
+    const threat = pickFleeThreat(m, vision);
+    if (threat) { m.aiState = 'flee'; m.fleeFrom = threat; log(`${m.name} bolts!`); return; }
+  }
   const target = pickHostileTarget(m, vision);
   if (target) {
     if (m.aiState !== 'alert') log(`${m.name} notices ${target === player ? 'you' : target.name}!`);
@@ -16404,6 +16526,19 @@ function movePlayer(dx, dy) {
   }
   const t = curTileAt(nx, ny);
   const isWaterTile = t && (t.feature === 'water' || t.biome === 'ocean' || t.biome === 'lake');
+  // House Doors & Lockpicking: a lock-capable house door that's currently locked blocks the player
+  // specifically, even though the tile itself stays walkable=true (so the resident's own pathing,
+  // and everything else that just checks walkability, is unaffected -- see isHouseDoorLocked).
+  if (t && t.feature === 'door' && t.lockCapable && isHouseDoorLocked(t)) {
+    const difficulty = 10;
+    const region = getRegionKey(nx, ny);
+    presentChoice('The door is locked.', [
+      { label: 'Pick the lock', action: () => attemptPickLock('the door', difficulty, () => { t.lockCapable = false; }) },
+      { label: 'Force it open (a crime if seen)', action: () => attemptForceOpen('the door', difficulty, () => { t.lockCapable = false; }, { crimeRegion: region, crimeAmount: 10 }) },
+      { label: 'Leave it -- come back when they\'re home', action: () => {} },
+    ]);
+    return;
+  }
   if (!curWalkable(nx, ny)) {
     if (t && DESTRUCTIBLE_FEATURES[t.feature]) {
       attackDestructibleFeature(t, nx, ny);
@@ -16418,8 +16553,16 @@ function movePlayer(dx, dy) {
         log('The vault key turns with a heavy click. The door swings open.');
         endTurn(); return;
       }
-      Sound.play('bump');
-      log('The door is locked tight. It needs a specific key.');
+      // A reinforced, purpose-built vault door -- meant to mostly require the matching key (the
+      // whole point of the vault puzzle), but still deliberately hard-difficulty pick/force
+      // options exist via the same shared framework as every other lock, rather than making this
+      // one door a hardcoded special case with no lockpicking path at all.
+      const openVault = () => { t.walkable = true; t.feature = 'floor'; t.glyph = "'"; t.color = '#8a6a3a'; };
+      presentChoice("The door is locked tight.", [
+        { label: 'Pick the lock (very difficult)', action: () => attemptPickLock('the vault door', 20, openVault) },
+        { label: 'Force it open (very difficult)', action: () => attemptForceOpen('the vault door', 20, openVault) },
+        { label: 'Leave it -- it needs a specific key', action: () => {} },
+      ]);
       return;
     }
     if (t && t.feature === 'leverdoor') {
@@ -16536,6 +16679,33 @@ function movePlayer(dx, dy) {
 }
 
 // ---- turn processing v6: Charge regeneration ----
+// ---- Living World bugfix: monsters/NPCs are stored in whatever chunk's .monsters/.npcs array
+// they were originally spawned into, but nothing ever moved that entry when the entity itself
+// wandered into a *different* chunk -- curMonsters()/curNPCs() (used for both rendering AND AI
+// ticking) look entities up by CURRENT chunk-neighborhood membership, keyed off their storage
+// chunk, not their actual x/y. A monster chasing the player across a chunk boundary could end up
+// stored in a chunk that's fallen outside the player's 3x3 window even though its real position
+// is still well within sight -- it would vanish from view AND stop being AI-ticked (frozen in
+// place) until the player's window happened to include its storage chunk again. Caught via user
+// playtesting (a boar disappearing/reappearing tied to crossing into a different biome region,
+// which just happened to roughly line up with a chunk boundary in that case) -- reconciles each
+// entity's actual storage location to match its current position once per turn, right after it
+// moves.
+function reconcileEntityChunk(e, arrayKey) {
+  if (curIsDungeon() || curIsDimension()) return; // dungeon levels/dimension chunks store their own single list, not per-overworld-chunk -- no migration needed there
+  const cx = Math.floor(e.x / CH), cy = Math.floor(e.y / CH);
+  const newKey = chunkKey(cx, cy);
+  if (e.homeChunkKey === newKey) return;
+  let oldChunk = e.homeChunkKey ? worldChunks.get(e.homeChunkKey) : null;
+  if (!oldChunk) {
+    // First time this runs on an entity that predates this field (e.g. loaded from an older
+    // save) -- find whichever currently-loaded chunk's array actually holds it by reference.
+    for (const c of worldChunks.values()) { if (c[arrayKey] && c[arrayKey].includes(e)) { oldChunk = c; break; } }
+  }
+  if (oldChunk) oldChunk[arrayKey] = oldChunk[arrayKey].filter(x => x !== e);
+  getChunk(cx, cy)[arrayKey].push(e);
+  e.homeChunkKey = newKey;
+}
 function endTurn() {
   turnCount++;
   markPlayerAreaDirty();
@@ -16598,9 +16768,9 @@ function endTurn() {
   checkFastTravelDiscovery();
 
   for (const a of curAllies().slice()) { if (!player.alive || player.hp <= 0) break; allyAI(a); }
-  for (const m of curMonsters().slice()) { if (!player.alive || player.hp <= 0) break; if (m.alive) monsterAI(m); }
+  for (const m of curMonsters().slice()) { if (!player.alive || player.hp <= 0) break; if (m.alive) { monsterAI(m); reconcileEntityChunk(m, 'monsters'); } }
   if (!player.alive || player.hp <= 0) { gameOver(); return; }
-  for (const n of curNPCs().slice()) { if (n.alive) npcAI(n); }
+  for (const n of curNPCs().slice()) { if (n.alive) { npcAI(n); reconcileEntityChunk(n, 'npcs'); } }
   if (!player.alive || player.hp <= 0) { gameOver(); return; }
   markSeen();
   render();
@@ -18556,9 +18726,32 @@ const GUIDE_SECTIONS = [
     <div class="modal-opt"><b>V</b> opens Fast Travel to any settlement/dungeon/waypoint you've visited — free at a
     waystone (in town, on a waypoint, or a dungeon exit-waystone), or via a Recall Stone/Teleport spell/Warp Relay
     Implant/The Ninth Door mutation from anywhere. <b>m</b> plants a Waystone Shard as a named waypoint. <b>G</b>/<b>H</b> auto-walk to
-    danger/home respectively. <b>X</b> auto-explores.</div>` },
+    danger/home respectively. <b>X</b> auto-explores.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Locked doors & lockpicking (new).</b> Some houses (not all) have a
+    real lockable door -- tied to whether the resident is actually home, not a fixed flag, so it naturally follows
+    their daily schedule without needing a whole separate "lock/unlock" action in their AI. Bump a locked door for
+    options: pick the lock (needs a Lockpick Set -- sold by merchants/guild clerks, occasionally found in chests; a
+    failed attempt has a small chance to snap it, success doesn't consume it), force it open (no tool needed, but
+    louder -- it's a witnessed crime if anyone's watching), or leave and come back when they're home. The same
+    mechanic applies to locked chests/vaults/trunks (previously the "locked" flag on containers was set but never
+    actually enforced) and, at a deliberately much harder difficulty, dungeon vault doors as an alternate path to
+    the specific key they're built around.</div>` },
   { id:'combat', label:'Combat', html: () => `
     <div class="modal-opt">Melee: walk into a hostile. Ranged weapons: equip in Hand, press <b>f</b> to fire at range.</div>
+    <div class="modal-opt"><b>Prey creatures now actually flee (bugfix).</b> Rabbits, deer, gulls, foxes, elk, hawks and
+    the like are tagged as passive/flee-behavior so they never start a fight -- but that same check also meant they had
+    no way to ever *notice* a threat worth running from either, so they'd just stand there and take hits with zero
+    reaction. Fixed with its own separate threat check (not the fight-hostility one): the player always counts as a
+    threat at their normal vision range, and an actual predator nearby (a wolf near a rabbit) does too. They also now
+    react immediately if you land a hit on them before they'd noticed you, instead of only ever reacting on their own
+    next turn. Applies to every flee-behavior creature at once, not just rabbits specifically.</div>
+    <div class="modal-opt"><b>Wandering monsters/NPCs no longer randomly vanish (bugfix).</b> A monster or NPC is
+    stored in whichever map chunk it originally spawned in; nothing ever moved that record when the creature itself
+    wandered into a different chunk while chasing/patrolling. That could make a monster vanish from view (and freeze
+    in place, un-AI-ticked) the moment the player's surroundings no longer included its *original* spawn chunk, even
+    though the creature's actual current position was still right there and in plain sight -- then reappear, exactly
+    where it had frozen, once the player's surroundings happened to include that old chunk again. Now reconciled every
+    turn right after a creature moves.</div>
     <div class="modal-opt">Hit chance scales with relative DEX; damage = weapon/technique dice + STR bonus − target Armor,
     with a critical chance that doubles damage.</div>
     <div class="modal-opt">Offensive and debuff spells/techniques/cybernetics/mutations now open <b>free-aim targeting</b>
