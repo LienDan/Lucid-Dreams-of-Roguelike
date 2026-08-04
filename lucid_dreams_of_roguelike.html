@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.27.1-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.27.2-alpha</div>
     </div>
   </div>
 
@@ -3908,37 +3908,37 @@ const CREATION_ABILITY_CATS = [
 // boundaryShape entirely and get a randomized mix (mostly square, some circular/blob) per
 // individual settlement instance for variety -- see pickBoundaryShape's fallback branch.
 const SETTLEMENT_FLAVORS = {
-  standard:  { name:'', weight:22, preferredBiomes:null, rolePool:null, layoutStyle:'organic' },
+  standard:  { name:'', weight:22, preferredBiomes:null, rolePool:['farmer','merchant','guard','scholar','tinker','ratcatcher','chimneysweep','towncrier','butcher'], layoutStyle:'organic' },
   farming:   { name:'Farming ', weight:12, preferredBiomes:['plains'], rolePool:['farmer','farmer','farmer','elder','child','merchant','miller','shepherd'], layoutStyle:'organic', decor:['farm'], boundaryShape:'blob' },
-  fishing:   { name:'Fishing ', weight:8,  preferredBiomes:['beach'], rolePool:['fisherman','fisherman','merchant','elder','child','sailor','dockhand'], layoutStyle:'organic', decor:['dock'], boundaryShape:'coastal' },
-  mining:    { name:'Mining ', weight:8,  preferredBiomes:['mountain','tundra'], rolePool:['miner','miner','blacksmith','guard','merchant'], layoutStyle:'grid', decor:['mining'], boundaryShape:'mountainside' },
-  military:  { name:'Garrison ', weight:6, preferredBiomes:null, rolePool:['guard','guard','watchman','captain','blacksmith'], layoutStyle:'grid', decor:['military'], boundaryShape:'square' },
-  monastery: { name:'Monastery of ', weight:5, preferredBiomes:null, rolePool:['priest','priest','scholar','elder','alchemist'], layoutStyle:'radial', decor:['sacred'], boundaryShape:'circular' },
-  trading:   { name:'Trading Post: ', weight:8, preferredBiomes:null, rolePool:['merchant','merchant','merchant','innkeeper','guard','tavernkeeper'], layoutStyle:'organic', decor:['market'] },
-  nomad:     { name:'Nomad Camp of ', weight:6, preferredBiomes:['desert','plains'], rolePool:['hunter','ranger','elder','child','merchant'], tents:true, layoutStyle:'organic', decor:['camp'], boundaryShape:'blob' },
+  fishing:   { name:'Fishing ', weight:8,  preferredBiomes:['beach'], rolePool:['fisherman','fisherman','merchant','elder','child','sailor','dockhand','fishmonger','pearldiver'], layoutStyle:'organic', decor:['dock'], boundaryShape:'coastal' },
+  mining:    { name:'Mining ', weight:8,  preferredBiomes:['mountain','tundra'], rolePool:['miner','miner','blacksmith','guard','merchant','tracker','bountyhunter'], layoutStyle:'grid', decor:['mining'], boundaryShape:'mountainside' },
+  military:  { name:'Garrison ', weight:6, preferredBiomes:null, rolePool:['guard','guard','watchman','captain','blacksmith','armorer','fletcher','squire','standardbearer','quartermaster','jailor'], layoutStyle:'grid', decor:['military'], boundaryShape:'square' },
+  monastery: { name:'Monastery of ', weight:5, preferredBiomes:null, rolePool:['priest','priest','scholar','elder','alchemist','monk','oracle','archivist'], layoutStyle:'radial', decor:['sacred'], boundaryShape:'circular' },
+  trading:   { name:'Trading Post: ', weight:8, preferredBiomes:null, rolePool:['merchant','merchant','merchant','innkeeper','guard','tavernkeeper','tinker','fence','courier','tollkeeper'], layoutStyle:'organic', decor:['market'] },
+  nomad:     { name:'Nomad Camp of ', weight:6, preferredBiomes:['desert','plains'], rolePool:['hunter','ranger','elder','child','merchant','trapper','beasttamer','tracker'], tents:true, layoutStyle:'organic', decor:['camp'], boundaryShape:'blob' },
   elven:     { name:'Enclave of ', weight:5, preferredBiomes:['forest','denseforest'], rolePool:['ranger','ranger','scholar','hunter','alchemist'], noWalls:true, layoutStyle:'organic', decor:['grove'], boundaryShape:'circular' },
   dwarven:   { name:'Hold of ', weight:5, preferredBiomes:['mountain'], rolePool:['miner','blacksmith','blacksmith','guard','merchant'], layoutStyle:'grid', decor:['mining'], boundaryShape:'mountainside' },
-  pirate:    { name:'Cove of ', weight:4, preferredBiomes:['beach'], rolePool:['merchant','sailor','guard'], hostileMix:['bandit'], layoutStyle:'organic', decor:['dock'], boundaryShape:'coastal' },
-  cult:      { name:'Hidden Enclave of ', weight:2, preferredBiomes:null, rolePool:['necromancer_trainer','cultist_npc','elder'], hostileMix:['cultist'], rare:true, layoutStyle:'radial', decor:['sacred'], boundaryShape:'circular' },
+  pirate:    { name:'Cove of ', weight:4, preferredBiomes:['beach'], rolePool:['merchant','sailor','guard','smuggler','fence','distiller'], hostileMix:['bandit'], layoutStyle:'organic', decor:['dock'], boundaryShape:'coastal' },
+  cult:      { name:'Hidden Enclave of ', weight:2, preferredBiomes:null, rolePool:['necromancer_trainer','cultist_npc','elder','oracle','smuggler'], hostileMix:['cultist'], rare:true, layoutStyle:'radial', decor:['sacred'], boundaryShape:'circular' },
   tech:      { name:'Scrapworks: ', weight:4, preferredBiomes:null, rolePool:['cybersmith','blacksmith','merchant','guard'], layoutStyle:'grid', decor:['mining'], boundaryShape:'square' },
   // ---- new flavors added by the Settlement Overhaul (roughly doubles the previous roster) ----
   lumber:    { name:'Lumber Camp: ', weight:6, preferredBiomes:['forest','denseforest'], rolePool:['lumberjack','lumberjack','carpenter','elder','merchant'], layoutStyle:'organic', decor:['lumber'], boundaryShape:'blob' },
-  brewery:   { name:'Brewery of ', weight:5, preferredBiomes:['plains','forest'], rolePool:['brewer','brewer','farmer','innkeeper','tavernkeeper','merchant','vintner','cooper'], layoutStyle:'organic', decor:['farm','market'] },
-  harbor:    { name:'Harbor of ', weight:6, preferredBiomes:['beach'], rolePool:['sailor','sailor','merchant','merchant','guard','dockhand','dockhand','shipwright','ropemaker'], layoutStyle:'grid', decor:['dock','market'], boundaryShape:'coastal' },
-  university:{ name:'College of ', weight:4, preferredBiomes:null, rolePool:['scholar','scholar','priest','alchemist','curator','elder','cartographer','scribe'], layoutStyle:'radial', decor:['sacred'], boundaryShape:'circular' },
+  brewery:   { name:'Brewery of ', weight:5, preferredBiomes:['plains','forest'], rolePool:['brewer','brewer','farmer','innkeeper','tavernkeeper','merchant','vintner','cooper','distiller','confectioner'], layoutStyle:'organic', decor:['farm','market'] },
+  harbor:    { name:'Harbor of ', weight:6, preferredBiomes:['beach'], rolePool:['sailor','sailor','merchant','merchant','guard','dockhand','dockhand','shipwright','ropemaker','harbormaster','customsofficer','lighthousekeeper','ferryman'], layoutStyle:'grid', decor:['dock','market'], boundaryShape:'coastal' },
+  university:{ name:'College of ', weight:4, preferredBiomes:null, rolePool:['scholar','scholar','priest','alchemist','curator','elder','cartographer','scribe','archivist','oracle'], layoutStyle:'radial', decor:['sacred'], boundaryShape:'circular' },
   spa:       { name:'Hot Springs of ', weight:3, preferredBiomes:['mountain','tundra'], rolePool:['healer','innkeeper','merchant','alchemist','tavernkeeper'], layoutStyle:'organic', decor:['garden'], boundaryShape:'blob' },
-  caravan:   { name:'Caravan Stop: ', weight:6, preferredBiomes:['desert','plains'], rolePool:['merchant','merchant','guard','sailor','dockhand'], tents:true, layoutStyle:'organic', decor:['camp','market'], boundaryShape:'blob' },
-  gladiator: { name:'Fighting Pits of ', weight:3, preferredBiomes:null, rolePool:['gladiator','gladiator','trainer','guard','merchant','dealer'], layoutStyle:'grid', decor:['arena'], boundaryShape:'square' },
+  caravan:   { name:'Caravan Stop: ', weight:6, preferredBiomes:['desert','plains'], rolePool:['merchant','merchant','guard','sailor','dockhand','tollkeeper','farrier','courier'], tents:true, layoutStyle:'organic', decor:['camp','market'], boundaryShape:'blob' },
+  gladiator: { name:'Fighting Pits of ', weight:3, preferredBiomes:null, rolePool:['gladiator','gladiator','trainer','guard','merchant','dealer','duelist','executioner'], layoutStyle:'grid', decor:['arena'], boundaryShape:'square' },
   orchard:   { name:'Orchard of ', weight:6, preferredBiomes:['plains','forest'], rolePool:['farmer','farmer','brewer','merchant','child','elder','vintner','beekeeper'], layoutStyle:'organic', decor:['farm'], boundaryShape:'blob' },
   herbalist: { name:'Herbalist Grove of ', weight:4, preferredBiomes:['forest','denseforest'], rolePool:['alchemist','alchemist','ranger','elder','healer'], noWalls:true, layoutStyle:'organic', decor:['grove','garden'], boundaryShape:'blob' },
-  refugee:   { name:'Refugee Camp of ', weight:3, preferredBiomes:null, rolePool:['beggar','beggar','elder','child','guard','farmer'], tents:true, layoutStyle:'organic', decor:['camp'], boundaryShape:'blob' },
-  noble_estate:{ name:'Estate of ', weight:2, preferredBiomes:['plains'], rolePool:['noble','noble','guard','guard','stablehand','beggar','jeweler','herald','seamstress'], layoutStyle:'grid', decor:['garden'], rare:true, boundaryShape:'square' },
-  temple:    { name:'Grand Temple of ', weight:3, preferredBiomes:null, rolePool:['priest','priest','priest','scholar','curator','gravedigger','undertaker'], layoutStyle:'radial', decor:['sacred'], boundaryShape:'circular' },
-  whaling:   { name:'Whaling Station: ', weight:3, preferredBiomes:['beach'], rolePool:['sailor','sailor','merchant','blacksmith','dockhand'], layoutStyle:'organic', decor:['dock'], boundaryShape:'coastal' },
-  festival:  { name:'Festival Grounds of ', weight:2, preferredBiomes:['plains'], rolePool:['bard','bard','merchant','dealer','tavernkeeper','companion'], layoutStyle:'organic', decor:['market','arena'], rare:true },
-  frontier:  { name:'Frontier Outpost: ', weight:5, preferredBiomes:null, rolePool:['guard','hunter','ranger','blacksmith','merchant','tanner','furrier'], layoutStyle:'grid', decor:['military'] },
-  archive:   { name:'Archive of ', weight:2, preferredBiomes:null, rolePool:['scholar','scholar','curator','priest'], layoutStyle:'radial', decor:['sacred'], rare:true, boundaryShape:'circular' },
-  floating_market:{ name:'Floating Market of ', weight:4, preferredBiomes:['beach'], rolePool:['merchant','merchant','sailor','fisherman','dockhand'], layoutStyle:'organic', decor:['dock','market'], boundaryShape:'coastal' },
+  refugee:   { name:'Refugee Camp of ', weight:3, preferredBiomes:null, rolePool:['beggar','beggar','elder','child','guard','farmer','ratcatcher','fence'], tents:true, layoutStyle:'organic', decor:['camp'], boundaryShape:'blob' },
+  noble_estate:{ name:'Estate of ', weight:2, preferredBiomes:['plains'], rolePool:['noble','noble','guard','guard','stablehand','beggar','jeweler','herald','seamstress','silversmith','squire','standardbearer','farrier'], layoutStyle:'grid', decor:['garden'], rare:true, boundaryShape:'square' },
+  temple:    { name:'Grand Temple of ', weight:3, preferredBiomes:null, rolePool:['priest','priest','priest','scholar','curator','gravedigger','undertaker','monk','oracle','pilgrim'], layoutStyle:'radial', decor:['sacred'], boundaryShape:'circular' },
+  whaling:   { name:'Whaling Station: ', weight:3, preferredBiomes:['beach'], rolePool:['sailor','sailor','merchant','blacksmith','dockhand','harbormaster','lighthousekeeper'], layoutStyle:'organic', decor:['dock'], boundaryShape:'coastal' },
+  festival:  { name:'Festival Grounds of ', weight:2, preferredBiomes:['plains'], rolePool:['bard','bard','merchant','dealer','tavernkeeper','companion','acrobat','fireeater','puppeteer','towncrier'], layoutStyle:'organic', decor:['market','arena'], rare:true },
+  frontier:  { name:'Frontier Outpost: ', weight:5, preferredBiomes:null, rolePool:['guard','hunter','ranger','blacksmith','merchant','tanner','furrier','tracker','bountyhunter','trapper','farrier'], layoutStyle:'grid', decor:['military'] },
+  archive:   { name:'Archive of ', weight:2, preferredBiomes:null, rolePool:['scholar','scholar','curator','priest','archivist','archivist'], layoutStyle:'radial', decor:['sacred'], rare:true, boundaryShape:'circular' },
+  floating_market:{ name:'Floating Market of ', weight:4, preferredBiomes:['beach'], rolePool:['merchant','merchant','sailor','fisherman','dockhand','fishmonger','ferryman','fence'], layoutStyle:'organic', decor:['dock','market'], boundaryShape:'coastal' },
 };
 
 // new roles used by settlement flavors above (in addition to the existing ROLES list)
@@ -4009,6 +4009,50 @@ ROLES.push(
   { id:'jester', name:'Jester', color:'#c94ac9', hp:9, str:3, dex:8, atk:[1,2], armor:0 },
   { id:'seamstress', name:'Seamstress', color:'#a05a9a', hp:9, str:3, dex:7, atk:[1,2], armor:0 },
   { id:'wheelwright', name:'Wheelwright', color:'#8a6a3a', hp:13, str:8, dex:6, atk:[1,4], armor:0 },
+);
+
+// ---- NPC/Profession Overhaul part 2: pushes the roster past the original "100+" ask (was ~75).
+// Same philosophy as the batch above -- breadth and a believable economy over bespoke mechanics
+// per role, with a handful of new SHOP_ROLES/INTERIOR_SHOP_ROLES additions (see below) for the
+// ones who'd realistically run an actual stall/shop, and rolePool wiring into the flavors they fit
+// (see SETTLEMENT_FLAVORS) so they actually show up in the right kind of settlement rather than
+// just existing in the abstract.
+ROLES.push(
+  { id:'tinker', name:'Tinker', color:'#9a8a6a', hp:10, str:5, dex:7, atk:[1,2], armor:0 },
+  { id:'ratcatcher', name:'Rat Catcher', color:'#7a6a5a', hp:8, str:4, dex:9, atk:[1,2], armor:0 },
+  { id:'chimneysweep', name:'Chimney Sweep', color:'#3a3a3a', hp:8, str:4, dex:8, atk:[1,2], armor:0 },
+  { id:'tollkeeper', name:'Toll Keeper', color:'#8a7a5a', hp:12, str:6, dex:5, atk:[1,3], armor:1 },
+  { id:'ferryman', name:'Ferryman', color:'#5a8ac9', hp:12, str:7, dex:6, atk:[1,3], armor:0 },
+  { id:'silversmith', name:'Silversmith', color:'#c9c9d0', hp:9, str:5, dex:7, atk:[1,3], armor:0 },
+  { id:'armorer', name:'Armorer', color:'#9a9aa0', hp:16, str:12, dex:6, atk:[2,5], armor:2 },
+  { id:'fletcher', name:'Fletcher', color:'#8a9a5a', hp:10, str:6, dex:9, atk:[1,3], armor:0 },
+  { id:'trapper', name:'Trapper', color:'#6a7a4a', hp:12, str:7, dex:9, atk:[1,3], armor:0 },
+  { id:'beasttamer', name:'Beast Tamer', color:'#c98a4a', hp:12, str:6, dex:8, atk:[1,3], armor:0 },
+  { id:'towncrier', name:'Town Crier', color:'#c9a06a', hp:8, str:4, dex:6, atk:[1,2], armor:0 },
+  { id:'executioner', name:'Executioner', color:'#3a1a1a', hp:20, str:14, dex:8, atk:[3,7], armor:2 },
+  { id:'jailor', name:'Jailor', color:'#5a5a5a', hp:18, str:11, dex:7, atk:[2,5], armor:2 },
+  { id:'smuggler', name:'Smuggler', color:'#4a4a5a', hp:10, str:6, dex:10, atk:[1,3], armor:0 },
+  { id:'fence', name:'Fence', color:'#7a6a8a', hp:10, str:5, dex:8, atk:[1,2], armor:0 },
+  { id:'duelist', name:'Duelist', color:'#c93a5a', hp:16, str:9, dex:14, atk:[2,5], armor:1 },
+  { id:'squire', name:'Squire', color:'#6a8ac9', hp:14, str:8, dex:7, atk:[1,4], armor:1 },
+  { id:'standardbearer', name:'Standard Bearer', color:'#c9a06a', hp:14, str:8, dex:6, atk:[1,4], armor:2 },
+  { id:'quartermaster', name:'Quartermaster', color:'#6a8a5a', hp:12, str:7, dex:6, atk:[1,3], armor:1 },
+  { id:'distiller', name:'Distiller', color:'#a06a2a', hp:10, str:6, dex:5, atk:[1,3], armor:0 },
+  { id:'pearldiver', name:'Pearl Diver', color:'#5ac9c0', hp:10, str:6, dex:8, atk:[1,2], armor:0 },
+  { id:'lighthousekeeper', name:'Lighthouse Keeper', color:'#e0c34a', hp:10, str:5, dex:5, atk:[1,2], armor:0 },
+  { id:'harbormaster', name:'Harbormaster', color:'#4a9ac9', hp:12, str:6, dex:6, atk:[1,3], armor:0 },
+  { id:'customsofficer', name:'Customs Officer', color:'#6a8ac9', hp:12, str:6, dex:6, atk:[1,3], armor:1 },
+  { id:'bountyhunter', name:'Bounty Hunter', color:'#8a4a3a', hp:18, str:10, dex:12, atk:[2,5], armor:2 },
+  { id:'tracker', name:'Tracker', color:'#6a7a4a', hp:14, str:7, dex:11, atk:[2,4], armor:0 },
+  { id:'oracle', name:'Oracle', color:'#c9a0e0', hp:8, str:3, dex:5, atk:[1,2], armor:0 },
+  { id:'monk', name:'Monk', color:'#c9a06a', hp:16, str:9, dex:11, atk:[2,5], armor:0 },
+  { id:'archivist', name:'Archivist', color:'#8a9ac9', hp:8, str:3, dex:5, atk:[1,2], armor:0 },
+  { id:'acrobat', name:'Acrobat', color:'#c94a9a', hp:10, str:5, dex:13, atk:[1,3], armor:0 },
+  { id:'fireeater', name:'Fire Eater', color:'#e0603a', hp:9, str:4, dex:9, atk:[1,2], armor:0 },
+  { id:'farrier', name:'Farrier', color:'#8a6a3a', hp:14, str:10, dex:6, atk:[2,4], armor:0 },
+  { id:'confectioner', name:'Confectioner', color:'#e0a0c9', hp:9, str:4, dex:6, atk:[1,2], armor:0 },
+  { id:'butcher', name:'Butcher', color:'#c9503a', hp:14, str:10, dex:6, atk:[2,4], armor:0 },
+  { id:'fishmonger', name:'Fishmonger', color:'#5a8ac9', hp:10, str:6, dex:6, atk:[1,3], armor:0 },
 );
 
 // ---- overworld bosses: rare, roaming, unique named encounters ----
@@ -6982,7 +7026,9 @@ const ROLE_POOLS = {
     'tavernkeeper','tavernkeeper','tavernkeeper','companion','curator','curator','storagekeeper','dealer','dealer','guildclerk','guildclerk','carpenter','brewer',
     'jeweler','glassblower','cooper','roofer','midwife','undertaker','gravedigger','cartographer','candlemaker','mercenary','mercenary','courier','apothecary_assistant','shipwright','ropemaker','furrier','blacksmith_apprentice','herald','herald','jester','seamstress','wheelwright','vintner','cheesemonger','mason','locksmith','barber','scribe','dyer','beekeeper'],
 };
-const SHOP_ROLES = new Set(['merchant','blacksmith','innkeeper','alchemist','tailor','chef','baker','tavernkeeper','guildclerk','cobbler','weaver','potter','jeweler','glassblower','cooper','seamstress','furrier','candlemaker','cheesemonger','vintner','beekeeper','tanner','ropemaker','wheelwright','shipwright']);
+const SHOP_ROLES = new Set(['merchant','blacksmith','innkeeper','alchemist','tailor','chef','baker','tavernkeeper','guildclerk','cobbler','weaver','potter','jeweler','glassblower','cooper','seamstress','furrier','candlemaker','cheesemonger','vintner','beekeeper','tanner','ropemaker','wheelwright','shipwright',
+  // ---- NPC/Profession Overhaul part 2 ----
+  'silversmith','armorer','fletcher','fence','quartermaster','distiller','confectioner','butcher','fishmonger']);
 const TRAINER_ROLES = new Set(['trainer','necromancer_trainer']);
 const QUEST_GIVER_ROLES = new Set(['elder','innkeeper','guard','captain','watchman','noble','ranger','guildclerk','tavernkeeper','herald','courier']);
 
@@ -7092,11 +7138,14 @@ function generateShopInventory(roleId, rng) {
   const items = [];
   let pool;
   if (roleId === 'blacksmith') pool = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor') && !b.setId && !b.isUnique && !b.craftOnly);
-  else if (roleId === 'innkeeper' || roleId === 'baker' || roleId === 'chef' || roleId === 'tavernkeeper' || roleId === 'vintner' || roleId === 'cheesemonger' || roleId === 'beekeeper') pool = ITEM_BASES.filter(b => b.type === 'consumable' && b.id !== 'antidote' && !b.craftOnly);
+  else if (roleId === 'innkeeper' || roleId === 'baker' || roleId === 'chef' || roleId === 'tavernkeeper' || roleId === 'vintner' || roleId === 'cheesemonger' || roleId === 'beekeeper' || roleId === 'distiller' || roleId === 'confectioner' || roleId === 'butcher') pool = ITEM_BASES.filter(b => b.type === 'consumable' && b.id !== 'antidote' && !b.craftOnly);
   else if (roleId === 'alchemist') pool = ITEM_BASES.filter(b => b.type === 'consumable' && !b.craftOnly);
   else if (roleId === 'tailor') pool = ITEM_BASES.filter(b => b.type === 'armor' && ['cloak','gloves','amulet','circlet','sandals','robe'].includes(b.id));
-  else if (roleId === 'fisherman') pool = ITEM_BASES.filter(b => ['meat_cooked','stew','holy_water'].includes(b.id));
-  else if (roleId === 'guildclerk') pool = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor' || b.type === 'consumable') && !b.setId && !b.isUnique && !b.craftOnly);
+  else if (roleId === 'silversmith') pool = ITEM_BASES.filter(b => b.type === 'armor' && ['ring','amulet','circlet'].includes(b.id));
+  else if (roleId === 'armorer') pool = ITEM_BASES.filter(b => b.type === 'armor' && !['ring','amulet','circlet'].includes(b.id) && !b.setId && !b.isUnique && !b.craftOnly);
+  else if (roleId === 'fletcher') pool = ITEM_BASES.filter(b => b.type === 'weapon' && b.ranged && !b.setId && !b.isUnique && !b.craftOnly);
+  else if (roleId === 'fisherman' || roleId === 'fishmonger') pool = ITEM_BASES.filter(b => ['meat_cooked','stew','holy_water','cooked_fish','honeyed_salmon'].includes(b.id));
+  else if (roleId === 'guildclerk' || roleId === 'fence' || roleId === 'quartermaster') pool = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor' || b.type === 'consumable') && !b.setId && !b.isUnique && !b.craftOnly);
   else pool = ITEM_BASES.filter(b => b.type !== 'misc' && b.type !== 'material' && b.type !== 'chest' && b.type !== 'corpse' && !b.setId && !b.isUnique && !b.craftOnly);
   const n = randInt(rng, 5, 9);
   for (let i = 0; i < n; i++) {
@@ -11774,6 +11823,42 @@ const ROLE_FLAVOR_LINES = {
   sailor: ["Spent more nights on deck than in a proper bed. Wouldn't trade it, mostly.", "The sea doesn't care how good a sailor you think you are."],
   cybersmith: ["Half machine, half magic, and I can't always tell you which half is doing the work.", "Bring me the part, not the whole story of how you broke it. Saves us both time."],
   cultist_npc: ["You wouldn't understand what we're building here. Best you keep walking.", "The old ways aren't as dead as the priests would like everyone to think."],
+  // ---- NPC/Profession Overhaul part 2 ----
+  tinker: ["Anything with a moving part, I can probably fix it. Anything without one, I can probably still fix it.", "Half my tools I built myself. Seemed easier than explaining what I needed to a smith."],
+  ratcatcher: ["Every settlement's got them. I just make sure they stay a manageable problem.", "Terriers do half the work. I mostly just point them at the right walls."],
+  chimneysweep: ["Soot doesn't wash out easy, but a blocked flue burns a house down. Trade-off's worth it.", "Smallest ones of us get sent up the narrowest flues. Wasn't always this height, myself."],
+  tollkeeper: ["Toll's the toll. Doesn't matter who you are or where you're headed.", "Road upkeep doesn't pay for itself. Ask anyone who's tried to travel a road that isn't kept."],
+  ferryman: ["Same crossing, every day, for longer than I care to count.", "Current's stronger than it looks this time of year. Hold on to something."],
+  silversmith: ["Gold gets all the attention. Silver's where the real craft shows.", "A ring's small enough that every mistake shows. Keeps a smith honest."],
+  armorer: ["A blade's only half the fight. What you're wearing when it lands is the other half.", "I've fitted armor to species I didn't know existed before this job. Keeps things interesting."],
+  fletcher: ["A bow's only as good as the hand that strung it, and the arrow's only as good as the fletching.", "Straight shaft, true fletching, balanced head. Skip any one of those and you'll know it mid-flight."],
+  trapper: ["Know the land, know the trails, and the rest takes care of itself.", "Half of trapping is patience. The other half is knowing when you're wrong about where to wait."],
+  beasttamer: ["Every animal's got a temperament. You work with it, not against it.", "Trust takes longer to build than people expect, and about a second to lose."],
+  towncrier: ["Hear ye! Or don't, I suppose, but then don't come complain to me you missed the news.", "I say what I'm told to say. Don't always agree with it, but that's not really the job."],
+  executioner: ["I don't decide who. I just make sure it's quick, whoever it is.", "Folk don't much care for me until they need me. Suits me fine, honestly."],
+  jailor: ["Feed them, keep them breathing, keep them in. That's the whole job.", "Most of them aren't as dangerous as the stories say. Most."],
+  smuggler: ["I don't ask what's in the crate and you don't ask where it's going. Works out for everyone.", "Every road's got a way around the toll, if you know who to talk to."],
+  fence: ["I don't ask where it came from. I ask what it's worth. Different question entirely.", "Everything's got a buyer somewhere. My job's just finding the right one, quietly."],
+  duelist: ["First blood, or to the yield. Depends on the insult, and who's asking.", "I've lost exactly as many duels as I needed to, to learn something each time."],
+  squire: ["One day I'll carry my own colors instead of someone else's. Not today, apparently.", "Polishing armor, minding horses, and hoping to be noticed. That's most of it."],
+  standardbearer: ["Doesn't matter how the battle's going, the standard stays up. That's the job.", "Everyone can see the banner from further than they can hear any order."],
+  quartermaster: ["Ask the captain for glory. Ask me for boots that fit and food that keeps.", "An army marches on its stomach, and neither on empty crates nor my patience."],
+  distiller: ["Ale's for drinking today. What I make is for drinking in ten years, if you can wait that long.", "The still doesn't forgive shortcuts. Neither do I, if I'm honest."],
+  pearldiver: ["Longer you hold your breath, deeper you go, better the find. Simple trade, hard trade.", "Lost a good friend to a bad current once. I still go under every season anyway."],
+  lighthousekeeper: ["Lamp burns every night, storm or clear. Ships out there are trusting it does.", "Solitary work, this. Doesn't suit everyone, but it suits me fine."],
+  harbormaster: ["Every ship that comes through, I log. Keeps the harbor honest, mostly.", "Busy season, quiet season, the tide charts don't care either way."],
+  customsofficer: ["Declare it now or explain it later. Your choice, but only one of those goes well.", "Most cargo's exactly what the manifest says. It's the rest that keeps this job interesting."],
+  bountyhunter: ["Bring 'em back alive if the bounty says so. Otherwise, that's between us and the paperwork.", "I don't take a job I can't finish. Keeps the reputation, and the coin, coming."],
+  tracker: ["A trail's never as cold as people think, if you know what you're reading.", "Broken twig, bent grass, a print half-filled with rain -- the land talks, if you listen."],
+  oracle: ["The future's not fixed. I just see the shape it's leaning toward.", "People come wanting certainty. I can only ever give them a likelihood."],
+  monk: ["Discipline first, strength after. Most get that order backwards.", "Silence teaches more than most conversations do, if you can sit with it long enough."],
+  archivist: ["Every record here tells you what the last one left out, if you cross-reference enough.", "History's not what happened. It's what got written down. Those aren't the same thing."],
+  acrobat: ["Fear of falling's useful right up until it isn't. Then you just have to trust the training.", "Crowd gasps every time, even the ones who've seen the trick before."],
+  fireeater: ["It's less dangerous than it looks. Mostly. I still respect it every single time.", "First rule is you never let the crowd see your hands shake, even once."],
+  farrier: ["A horse thrown wrong at the wrong moment can end a journey, or worse. I don't rush this.", "Every hoof's a little different. Fit the shoe to the horse, not the horse to the shoe."],
+  confectioner: ["Sugar's dear, but nobody haggles over sweets the way they do bread.", "Children remember which stall had the good honey cakes long after they remember the settlement's name."],
+  butcher: ["Nothing goes to waste here. Bone for stock, fat for tallow, the lot.", "Good cut's about the knife work, not the strength behind it. People assume otherwise."],
+  fishmonger: ["Fresh this morning, every bit of it. Ask the fishermen if you don't believe me.", "Smell tells you everything about a catch, if you know what you're smelling for."],
 };
 function pickNpcRumor(rng, roleId) {
   const lines = ROLE_FLAVOR_LINES[roleId];
@@ -14721,7 +14806,14 @@ function runFleeState(m) {
   const threat = (m.fleeFrom && m.fleeFrom.alive) ? m.fleeFrom : ((m.target && m.target.alive) ? m.target : null);
   if (!threat) { m.aiState = 'return'; return; }
   const dist = chebyshev(m.x, m.y, threat.x, threat.y);
-  if (dist >= 8 || m.hp >= m.maxHp * ((m.fleeHpPct || 0.2) + 0.15)) { m.aiState = 'return'; m.fleeFrom = null; m.target = null; m.engaged = false; return; }
+  // Prey/passive creatures (behavior:'flee', see pickFleeThreat) flee purely off proximity, not an
+  // HP-recovery threshold -- they're almost always at full HP the moment this triggers, which
+  // always satisfies the HP check below, so it would cancel the flee before a single step of
+  // movement happened (the log said "bolts!" but the creature never actually moved unless it had
+  // already taken damage -- caught via playtesting). Only the distance check applies to them; the
+  // HP-recovery check stays for the original use case (a hostile creature retreating mid-combat).
+  const hpRecovered = m.behavior === 'flee' ? false : (m.hp >= m.maxHp * ((m.fleeHpPct || 0.2) + 0.15));
+  if (dist >= 8 || hpRecovered) { m.aiState = 'return'; m.fleeFrom = null; m.target = null; m.engaged = false; return; }
   // intelligent creatures retreat toward the nearest ally to regroup rather than fleeing blind,
   // as long as that ally is actually reachable and doing so isn't just running back at the threat.
   if (m.intelligent) {
@@ -19152,6 +19244,16 @@ const GUIDE_SECTIONS = [
     archives, and floating markets, alongside the original farming villages, fishing towns, mining settlements,
     garrisons, monasteries, trading posts, nomad camps, elven enclaves, dwarven holds, pirate coves, hidden cults, and
     cyberpunk "Scrapworks."</div>
+    <div class="modal-opt" style="margin-top:6px"><b>${ROLES.length} NPC professions (new) -- past the original "100+" ask.</b>
+    Was ~75. New additions span trades that were genuinely missing (armorer and fletcher distinct from a general
+    blacksmith, a silversmith for jewelry, a farrier for horseshoeing), settlement-flavor-specific professions
+    (harbormaster/customs officer/lighthouse keeper/pearl diver for coastal towns, oracle/monk/archivist for
+    monasteries and colleges, quartermaster/standard bearer/squire for garrisons, smuggler/fence for pirate coves and
+    hidden cults), and ordinary townsfolk that round out a lived-in settlement (rat catcher, chimney sweep, tinker,
+    town crier, butcher, fishmonger). All wired into the settlement flavors they actually fit (see rolePool on each
+    flavor) rather than spawning in the abstract, and the merchant-type ones among them (armorer, fletcher,
+    silversmith, quartermaster, distiller, confectioner, butcher, fishmonger, and even a black-market fence) run a
+    real shop through the same generic shop system every other merchant role uses.</div>
     <div class="modal-opt" style="margin-top:6px"><b>Settlements no longer all look like a grid of identical boxes.</b>
     Each flavor now has its own layout style: <b>grid</b> (regimented rows — garrisons, mining holds, noble estates:
     places that plausibly *should* look uniform), <b>organic</b> (true random scatter, retried on overlap — farms,
