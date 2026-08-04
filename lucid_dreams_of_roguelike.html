@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.27.2-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.28.0-alpha</div>
     </div>
   </div>
 
@@ -9426,7 +9426,14 @@ function stepToward(e, tx, ty) {
   const opts = [[dx, dy], [dx, 0], [0, dy]].filter(o => o[0] !== 0 || o[1] !== 0);
   for (const [ox, oy] of opts) {
     const nx = e.x + ox, ny = e.y + oy;
-    if (isPassableFor(e, nx, ny) && !entityAt(nx, ny)) { enterTileAsEntity(e, nx, ny); return true; }
+    // Don't let the cheap greedy heuristic immediately undo the entity's own last move -- this is
+    // exactly what caused a real bug where an entity starting inside an enclosed room whose only
+    // exit isn't in the target's raw direction would ping-pong forever between two tiles (greedy
+    // step deeper into the dead-end since the interior is walkable, then the BFS fallback below
+    // correctly backs it out, then greedy immediately walks right back in) instead of ever
+    // actually pathing out through the door. Only the real BFS search is allowed to backtrack.
+    if (e._prevX === nx && e._prevY === ny) continue;
+    if (isPassableFor(e, nx, ny) && !entityAt(nx, ny)) { e._prevX = e.x; e._prevY = e.y; enterTileAsEntity(e, nx, ny); return true; }
   }
   // The direct step is blocked (wall corner, pillar, a bend in the corridor, a tree standing
   // between two entities that both want to close distance) -- fall back to a real path instead
@@ -9434,7 +9441,7 @@ function stepToward(e, tx, ty) {
   // and a guard aggroed on opposite sides of a tree will actually route around it instead of
   // freezing a tile apart forever.
   const step = bfsNextStep(e, tx, ty);
-  if (step && isPassableFor(e, step.x, step.y) && !entityAt(step.x, step.y)) { enterTileAsEntity(e, step.x, step.y); return true; }
+  if (step && isPassableFor(e, step.x, step.y) && !entityAt(step.x, step.y)) { e._prevX = e.x; e._prevY = e.y; enterTileAsEntity(e, step.x, step.y); return true; }
   return false;
 }
 function stepAway(e, tx, ty) {
@@ -9452,6 +9459,52 @@ function stepAway(e, tx, ty) {
 // (the building they were placed in at settlement generation, which for most roles doubles as
 // their shop/workplace -- living above the shop, a real and common arrangement) rather than
 // separate home/workplace buildings; a full separate-residence system is a larger future project.
+// ---- NPC Schedules v3 (Living World): previously the ONLY daytime behavior for a civilian NPC
+// was wander() -- a small bounded random walk near their own spawn point, every day, forever. No
+// sense of actually going anywhere. This gives a genuine (if simple) daily errand: once per
+// in-game day, seeded off the NPC's own uid plus the day number (so it's stable for that whole
+// day and doesn't flicker turn to turn, but genuinely differs day to day -- a farmer who visits
+// the market today might visit a different building tomorrow, or stay near home entirely the day
+// after), a chance of picking another building in their own settlement and actually walking there
+// for a few hours before returning to their normal routine. Not every NPC, not every day --
+// deliberately intermittent (see the chance below) rather than a whole town marching in lockstep.
+function npcDailyErrand(n) {
+  if (curIsDungeon() || curIsDimension()) return false; // schedules are an overworld-settlement concept
+  if (NPC_DEFENDER_ROLES.has(n.roleId) || NPC_HUNTER_ROLES.has(n.roleId)) return false; // guards/hunters keep their own patrol/hunt AI
+  const day = Math.floor(turnCount / DAY_LENGTH);
+  if (n.errandDay !== day) {
+    n.errandDay = day;
+    n.errandTarget = null;
+    const rng = mulberry32((hashString(n.uid) ^ (day * 7919 + 11)) | 0);
+    if (rng() < 0.35) {
+      const chunk = worldChunks.get(chunkKey(Math.floor(n.homeX / CH), Math.floor(n.homeY / CH)));
+      const buildings = chunk && chunk.settlement && chunk.settlement.buildings;
+      if (buildings && buildings.length > 1) {
+        const candidates = buildings.filter((b, i) => i !== n.homeBuilding);
+        if (candidates.length) {
+          const pick = candidates[Math.floor(rng() * candidates.length)];
+          const wx = chunk.cx * CH + pick.x + Math.floor(pick.w / 2), wy = chunk.cy * CH + pick.y + Math.floor(pick.h / 2);
+          const startHour = 9 + Math.floor(rng() * 4);
+          n.errandTarget = { x: wx, y: wy, startHour, endHour: startHour + 3 + Math.floor(rng() * 3) };
+        }
+      }
+    }
+  }
+  if (!n.errandTarget) return false;
+  const ti = getTimeInfo();
+  if (ti.hour < n.errandTarget.startHour || ti.hour >= n.errandTarget.endHour) return false; // outside today's errand window -- normal behavior applies
+  const d = chebyshev(n.x, n.y, n.errandTarget.x, n.errandTarget.y);
+  if (d > 1) { stepToward(n, n.errandTarget.x, n.errandTarget.y); return true; }
+  // arrived -- linger nearby (browsing the market, chatting at the tavern) rather than beelining
+  // back immediately or drifting off toward their old wanderCenter.
+  if (Math.random() < 0.4) {
+    const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+    const [dx, dy] = choice(Math.random, dirs);
+    const nx = n.x + dx, ny = n.y + dy;
+    if (chebyshev(nx, ny, n.errandTarget.x, n.errandTarget.y) <= 1 && isPassableFor(n, nx, ny) && !entityAt(nx, ny)) enterTileAsEntity(n, nx, ny);
+  }
+  return true;
+}
 function npcScheduleStep(n) {
   if (!n.homeArea || NIGHT_ACTIVE_ROLES.has(n.roleId)) { n.asleep = false; return false; }
   if (!isNight()) { n.asleep = false; return false; }
@@ -12703,7 +12756,17 @@ function isHouseDoorLocked(t) {
   if (!npc || !npc.alive) return true;
   const area = npc.sleepArea;
   if (!area) return true;
-  return !(npc.x >= area.x0 && npc.x <= area.x1 && npc.y >= area.y0 && npc.y <= area.y1);
+  const home = npc.x >= area.x0 && npc.x <= area.x1 && npc.y >= area.y0 && npc.y <= area.y1;
+  if (!home) return true;
+  // Even while actually home, a cautious resident sometimes still keeps the door locked (or just
+  // doesn't answer) -- previously unconditionally unlocked whenever they were home, which the user
+  // found made a genuinely locked house too rare (most houses have someone in them most of the
+  // time). Stable for the whole in-game day per resident, seeded off their own uid, so it doesn't
+  // flicker between locked/unlocked tile-check to tile-check -- a given day it's simply one way or
+  // the other, and can go either way again tomorrow.
+  const day = Math.floor(turnCount / DAY_LENGTH);
+  const dailyRoll = mulberry32((hashString(npc.uid) ^ day) | 0)();
+  return dailyRoll < 0.18;
 }
 // ---- Living World AI framework: companion orders. A following companion (spouse, or any future
 // hired follower) now takes real orders instead of just mirroring "attack nearest thing" forever --
@@ -12814,6 +12877,7 @@ function npcAI(n) {
   const threat = pickHostileTarget(n, 6);
   if (threat) { stepAway(n, threat.x, threat.y); return; }
   if (npcScheduleStep(n)) return;
+  if (npcDailyErrand(n)) return;
   // ---- Living World: ambient NPC-to-NPC interaction. Purely flavor (no mechanical effect,
   // doesn't touch affection) -- two awake civilians who happen to end up adjacent occasionally
   // exchange a small line, logged only when the player is actually close enough to witness it, so
@@ -16586,7 +16650,7 @@ function makeMutagen(rng) {
 }
 
 // ---- movement v6: trap triggers, poison gas contact, confusion-aware (all prior v5 behavior retained) ----
-function movePlayer(dx, dy) {
+function movePlayer(dx, dy, forceAttack) {
   if (gameState !== 'playing') return;
   floatingTexts = [];
   const intendedTarget = entityAt(player.x + dx, player.y + dy);
@@ -16609,6 +16673,31 @@ function movePlayer(dx, dy) {
     if (target.kind === 'monster' || (target.kind === 'npc' && target.hostile)) {
       if (player.statusFear > 0) { log("You're too terrified to attack!"); endTurn(); return; }
       doAttack(player, target); endTurn(); return;
+    }
+    // Force-attack: hold Shift while moving into a friendly/neutral NPC to attack them anyway
+    // (matches the same "Attack" path already offered for a sleeping NPC's dialogue, same crime
+    // handling) instead of the normal "swap places" -- gated behind a confirmation prompt so a
+    // stray Shift+direction near a crowd can't silently start a fight.
+    if (forceAttack && target.kind === 'npc') {
+      presentChoice(`Attack ${target.name}?`, [
+        { label: 'Yes, attack', action: () => {
+          const wasHostile = target.hostile;
+          target.hostile = true;
+          doAttack(player, target);
+          if (!wasHostile && !curIsDungeon()) commitCrime(getRegionKey(target.x, target.y), 5);
+          endTurn();
+        } },
+        { label: 'No, never mind', action: () => {} },
+      ]);
+      return;
+    }
+    // Bumping into a SLEEPING NPC previously did the same silent position-swap as bumping into an
+    // awake one -- but swapping places with someone unconscious doesn't make sense, and it meant
+    // the natural first thing a player would try (just walking into them) produced no visible
+    // reaction at all. Open their sleep-aware dialogue (Wake/Attack/Leave) instead.
+    if (target.kind === 'npc' && target.asleep && !(player.spouse && player.spouse.uid === target.uid)) {
+      openDialogue(target);
+      return;
     }
     const tx = target.x, ty = target.y;
     target.x = player.x; target.y = player.y;
@@ -18821,13 +18910,31 @@ const GUIDE_SECTIONS = [
     danger/home respectively. <b>X</b> auto-explores.</div>
     <div class="modal-opt" style="margin-top:6px"><b>Locked doors & lockpicking (new).</b> Some houses (not all) have a
     real lockable door -- tied to whether the resident is actually home, not a fixed flag, so it naturally follows
-    their daily schedule without needing a whole separate "lock/unlock" action in their AI. Bump a locked door for
-    options: pick the lock (needs a Lockpick Set -- sold by merchants/guild clerks, occasionally found in chests; a
-    failed attempt has a small chance to snap it, success doesn't consume it), force it open (no tool needed, but
-    louder -- it's a witnessed crime if anyone's watching), or leave and come back when they're home. The same
-    mechanic applies to locked chests/vaults/trunks (previously the "locked" flag on containers was set but never
-    actually enforced) and, at a deliberately much harder difficulty, dungeon vault doors as an alternate path to
-    the specific key they're built around.</div>` },
+    their daily schedule without needing a whole separate "lock/unlock" action in their AI. Even while home, there's a
+    smaller standing chance (stable for the whole day, so it doesn't flicker) they've still locked up anyway -- a
+    cautious resident, or just not answering. Bump a locked door for options: pick the lock (needs a Lockpick Set --
+    sold by merchants/guild clerks, occasionally found in chests; a failed attempt has a small chance to snap it,
+    success doesn't consume it), force it open (no tool needed, but louder -- it's a witnessed crime if anyone's
+    watching), or leave and come back when they're home. The same mechanic applies to locked chests/vaults/trunks
+    (previously the "locked" flag on containers was set but never actually enforced) and, at a deliberately much
+    harder difficulty, dungeon vault doors as an alternate path to the specific key they're built around.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>NPCs now actually go places (new).</b> Previously the only
+    daytime behavior for a civilian was a small random walk near their own doorstep, forever, every day -- no sense of
+    ever actually going anywhere. On some days (not every NPC, not every day -- deliberately intermittent), an NPC now
+    picks another building in their own settlement and genuinely walks there for a few hours before heading back to
+    their normal routine, then may pick somewhere different tomorrow, or stay near home entirely the day after.
+    Uncovered and fixed a real pathfinding bug while building this: an entity starting inside an enclosed room whose
+    only exit wasn't in their destination's raw direction would ping-pong forever between two tiles instead of ever
+    routing out through the door (the cheap "step directly toward the target" shortcut would happily walk deeper into
+    the dead-end since the interior itself is walkable, then the proper pathfinding would correctly back it out, then
+    the shortcut would immediately walk right back in). This affected any entity using the same core movement
+    function -- monsters chasing, allies following, guards patrolling -- not just the new errand system.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Force-attack any NPC (new).</b> Hold Shift while walking into a
+    friendly or neutral NPC (rather than the normal "swap places") for a confirmation prompt to attack them anyway --
+    same crime/bounty handling as attacking a sleeping NPC. Also fixed: bumping into a sleeping NPC previously did
+    the same silent position-swap as bumping into an awake one, which doesn't make much sense (swapping places with
+    someone unconscious) and meant the natural first thing a player would try -- just walking into them -- produced
+    no visible reaction at all. It now opens their sleep-aware dialogue (Wake/Attack/Leave) instead.</div>` },
   { id:'combat', label:'Combat', html: () => `
     <div class="modal-opt">Melee: walk into a hostile. Ranged weapons: equip in Hand, press <b>f</b> to fire at range.</div>
     <div class="modal-opt"><b>Prey creatures now actually flee (bugfix).</b> Rabbits, deer, gulls, foxes, elk, hawks and
@@ -19481,7 +19588,7 @@ function handleKey(e) {
 
   if (gameState === 'playing') {
     if (key === 'Escape') { openSaveLoadMenu(); return; }
-    if (MOVE_KEYS[key]) { e.preventDefault(); const [dx,dy] = MOVE_KEYS[key]; movePlayer(dx,dy); return; }
+    if (MOVE_KEYS[key]) { e.preventDefault(); const [dx,dy] = MOVE_KEYS[key]; movePlayer(dx,dy,e.shiftKey); return; }
     if (key === '.' || key === '5') { e.preventDefault(); waitTurn(); return; }
     if (/^[1-4]$/.test(key)) { useQuickslot(parseInt(key,10)-1); return; }
     if (key === '+' || key === '=') { setZoom(-1); return; }
