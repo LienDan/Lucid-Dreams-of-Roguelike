@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.29.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.30.0-alpha</div>
     </div>
   </div>
 
@@ -696,8 +696,8 @@ const Sound = (function () {
     lastFootstepAt = t0;
     if (isDungeon) { play('footstepStone'); return; }
     if (!tile) { play('footstepGrass'); return; }
-    if (tile.biome === 'desert' || tile.biome === 'beach') { play('footstepSand'); return; }
-    if (tile.feature === 'road' || tile.feature === 'gate') { play('footstepStone'); return; }
+    if (tile.biome === 'desert' || tile.biome === 'beach' || tile.biome === 'salt_flat' || tile.biome === 'badlands' || tile.biome === 'savanna') { play('footstepSand'); return; }
+    if (tile.feature === 'road' || tile.feature === 'gate' || tile.feature === 'ruined_wall' || tile.feature === 'megaruin_plaza' || tile.biome === 'tech_ruins' || tile.biome === 'ancient_megaruins') { play('footstepStone'); return; }
     play('footstepGrass');
   }
 
@@ -773,37 +773,235 @@ function weightedChoice(rng, entries) {
   return entries[entries.length - 1][0];
 }
 
-// ---- Biomes ----
+// ===================== BIOME FRAMEWORK (World Overhaul) =====================
+// Every biome is one data entry in BIOMES. Beyond the original name/walkable/glyph/color/bg/
+// encounter fields, a biome can now optionally declare:
+//   - family:      which thematic group it belongs to ('normal'|'fantastical'|'eldritch'|'scifi'|'ruins')
+//                  -- purely descriptive/organizational, used by a couple of systems below to
+//                  reason about "is this an exotic place" without hardcoding biome ids.
+//   - effect:      a standing environmental effect applied to the player each turn they stand on
+//                  it (and, for a couple of effect types, to monsters too). See
+//                  applyBiomeEnvironmentalEffect() for the full list of effect `type`s and exactly
+//                  what each one does. This is what makes "a poison swamp actually poisons you".
+//   - structures:  optional array of extra WILDERNESS_STRUCTURE ids that should be weighted toward
+//                  this biome specifically, on top of any structure that already lists this biome
+//                  in its own `biomes` gate (see WILDERNESS_STRUCTURES / scatterBiomeStructures).
+//   - decor:       optional array of {glyph,color,name,chance,destructible} scenery-feature specs
+//                  scattered onto walkable tiles of this biome at chunk-gen time (the biome's
+//                  equivalent of "forest gets trees, desert gets cacti") -- see generateChunk's
+//                  decor pass, which replaces the old hardcoded per-biome if/else chain.
+//   - dangerMult:  optional multiplier applied to overworldDangerScale() for monsters spawned in
+//                  this biome specifically (exotic/eldritch/scifi biomes lean tougher).
+// Adding a new biome is therefore a single new entry here (plus, if it should have unique
+// monsters, a MONSTER_BASES entry or two) -- classifyBiomeFull() below is the only other place
+// that needs to know when a new biome should appear.
 const BIOMES = {
-  ocean:  { name: 'Ocean', walkable: false, glyph: '~', color: '#1c4b6b', bg: '#0a1a26',
+  ocean:  { name: 'Ocean', walkable: false, glyph: '~', color: '#1c4b6b', bg: '#0a1a26', family:'normal',
     encounter: [['reef_shark',6],['giant_eel',5],['drowned_sailor',4],['tide_reaver',3],['siren',3],['current_stalker',2],['kraken_spawn',1],['tideglass_horror',1]] },
-  lake:   { name: 'Lake', walkable: false, glyph: '~', color: '#3a7ab0', bg: '#0e2436',
+  lake:   { name: 'Lake', walkable: false, glyph: '~', color: '#3a7ab0', bg: '#0e2436', family:'normal',
     encounter: [['giant_catfish',6],['crocodile',4],['giant_eel',4],['drowned_sailor',2],['siren',1]] },
-  beach:  { name: 'Beach', walkable: true, glyph: '.', color: '#c9b877', bg: '#3a3320', encounter: [['crab',5],['gull',3]] },
-  plains: { name: 'Plains', walkable: true, glyph: '.', color: '#7fa84f', bg: '#1c2412', encounter: [['rabbit',6],['deer',4],['boar',3],['wolf',2]] },
-  forest: { name: 'Forest', walkable: true, glyph: '.', color: '#3f7a3f', bg: '#101d10', encounter: [['deer',4],['wolf',4],['boar',3],['spider',3],['bandit',1]] },
-  denseforest: { name: 'Dense Forest', walkable: true, glyph: '"', color: '#295c29', bg: '#0c160c', encounter: [['spider',5],['wolf',3],['bear',2],['bandit',2]] },
-  desert: { name: 'Desert', walkable: true, glyph: '.', color: '#cfa85e', bg: '#2e2410', encounter: [['scorpion',5],['jackal',4],['bandit',2],['vulture',3]] },
-  tundra: { name: 'Tundra', walkable: true, glyph: '.', color: '#c8dbe0', bg: '#182226', encounter: [['wolf',4],['yeti',1],['bear',2],['frostling',2]] },
-  swamp:  { name: 'Swamp', walkable: true, glyph: '.', color: '#5c6b35', bg: '#141a0c', encounter: [['crocodile',4],['leech',4],['bog-zombie',2],['snake',3]] },
-  mountain: { name: 'Mountain', walkable: false, glyph: '^', color: '#8a8a8a', bg: '#1c1c1c', encounter: [] },
+  river:  { name: 'River', walkable: false, glyph: '~', color: '#6ec4f0', bg: '#173a54', family:'normal',
+    encounter: [['giant_catfish',5],['giant_eel',4],['crocodile',3]] },
+  beach:  { name: 'Beach', walkable: true, glyph: '.', color: '#c9b877', bg: '#3a3320', family:'normal', encounter: [['crab',5],['gull',3]] },
+  plains: { name: 'Plains', walkable: true, glyph: '.', color: '#7fa84f', bg: '#1c2412', family:'normal', encounter: [['rabbit',6],['deer',4],['boar',3],['wolf',2]],
+    decor:[{feature:'rock', glyph:'*', color:'#8a8a8a', chance:0.015}] },
+  forest: { name: 'Forest', walkable: true, glyph: '.', color: '#3f7a3f', bg: '#101d10', family:'normal', encounter: [['deer',4],['wolf',4],['boar',3],['spider',3],['bandit',1]],
+    decor:[{feature:'tree', glyph:'T', color:'#2e6b2e', chance:0.12, destructible:true}] },
+  denseforest: { name: 'Dense Forest', walkable: true, glyph: '"', color: '#295c29', bg: '#0c160c', family:'normal', encounter: [['spider',5],['wolf',3],['bear',2],['bandit',2]],
+    decor:[{feature:'tree', glyph:'T', color:'#1f4f1f', chance:0.28, destructible:true}] },
+  desert: { name: 'Desert', walkable: true, glyph: '.', color: '#cfa85e', bg: '#2e2410', family:'normal', encounter: [['scorpion',5],['jackal',4],['bandit',2],['vulture',3]],
+    decor:[{feature:'cactus', glyph:'Y', color:'#3f7a3f', chance:0.03, destructible:true}] },
+  tundra: { name: 'Tundra', walkable: true, glyph: '.', color: '#c8dbe0', bg: '#182226', family:'normal', encounter: [['wolf',4],['yeti',1],['bear',2],['frostling',2]] },
+  swamp:  { name: 'Swamp', walkable: true, glyph: '.', color: '#5c6b35', bg: '#141a0c', family:'normal', encounter: [['crocodile',4],['leech',4],['bog-zombie',2],['snake',3]],
+    effect:{type:'poison', chance:0.30, power:2, msg:'Fetid swamp gas seeps up around your feet.'},
+    decor:[{feature:'water', glyph:'~', color:'#2a3a1a', chance:0.10, walkableOverride:false}] },
+  mountain: { name: 'Mountain', walkable: false, glyph: '^', color: '#8a8a8a', bg: '#1c1c1c', family:'normal', encounter: [] },
   // Paved settlement floor -- see Settlement Overhaul: cities/capitals used to default to whatever
   // wild biome they generated on top of (almost always grass), everywhere, which read as strange
   // for a dense city. Used only as a settlement floor override (buildSettlementCore), never
   // procedurally generated in the wilderness.
-  cobblestone: { name: 'Cobblestone', walkable: true, glyph: '.', color: '#8f887a', bg: '#252220', encounter: [] },
+  cobblestone: { name: 'Cobblestone', walkable: true, glyph: '.', color: '#8f887a', bg: '#252220', family:'normal', encounter: [] },
+
+  // ---- expanded "normal" biomes: same mundane family as plains/forest/desert, but filling in
+  // climate niches the original five biomes left flat and repetitive (hot grassland, cold conifer
+  // woods, dense wet jungle, cracked dry mesa, blinding salt pan, wet lowland marsh, cold upland
+  // moor) so crossing the map actually feels like passing through different country. ----
+  savanna: { name: 'Savanna', walkable: true, glyph: '.', color: '#c9b357', bg: '#282410', family:'normal',
+    encounter: [['savanna_lion',3],['jackal',4],['vulture',3],['boar',2]],
+    decor:[{feature:'tree', glyph:'T', color:'#a08a3a', chance:0.02, destructible:true}] },
+  taiga: { name: 'Taiga', walkable: true, glyph: '"', color: '#3a6a5a', bg: '#0e1a16', family:'normal',
+    encounter: [['taiga_lynx',4],['wolf',3],['bear',2],['frostling',2]],
+    decor:[{feature:'tree', glyph:'T', color:'#2a5648', chance:0.20, destructible:true}] },
+  jungle: { name: 'Jungle', walkable: true, glyph: '"', color: '#1f8a4a', bg: '#0a1c10', family:'normal',
+    encounter: [['spider',4],['snake',4],['boar',3],['bandit',2]],
+    effect:{type:'slow', chance:0.18, power:2, msg:'Thick vines and root-tangle snag at your legs.'},
+    decor:[{feature:'tree', glyph:'T', color:'#166a38', chance:0.30, destructible:true}] },
+  badlands: { name: 'Badlands', walkable: true, glyph: '.', color: '#b06a3a', bg: '#231206', family:'normal',
+    encounter: [['scorpion',4],['jackal',3],['vulture',4],['bandit',2]],
+    decor:[{feature:'rock', glyph:'*', color:'#8a5a3a', chance:0.04}] },
+  salt_flat: { name: 'Salt Flat', walkable: true, glyph: '.', color: '#e8e2d0', bg: '#2a2820', family:'normal',
+    encounter: [['scorpion',3],['vulture',3]],
+    effect:{type:'burn', chance:0.10, power:1, msg:'Sun glares off the cracked salt pan, searing your skin.'} },
+  marsh: { name: 'Marsh', walkable: true, glyph: '.', color: '#6a7a45', bg: '#161c0e', family:'normal',
+    encounter: [['crocodile',3],['leech',5],['snake',4],['giant_catfish',2]],
+    effect:{type:'slow', chance:0.25, power:2, msg:'The waterlogged ground pulls at every step.'} },
+  highland_moor: { name: 'Highland Moor', walkable: true, glyph: '.', color: '#7a8a6a', bg: '#161c14', family:'normal',
+    encounter: [['wolf',3],['bear',2],['frostling',2]] },
+
+  // ---- fantastical biomes: overtly magical country, the kind that only exists in a world with
+  // real wizards and real fae in it. Each has a genuine mechanical hook, not just a paint job. ----
+  mushroom_forest: { name:'Mushroom Forest', walkable:true, glyph:'"', color:'#c060a0', bg:'#1a0e1a', family:'fantastical', dangerMult:1.15,
+    encounter:[['spore_stalker',5],['giant_ant',3],['spider',3]],
+    effect:{type:'confuse', chance:0.14, power:2, msg:'A cloud of disorienting spores bursts around you.'},
+    decor:[{feature:'giant_mushroom', glyph:'8', color:'#d070b0', chance:0.10, destructible:true}] },
+  crystal_grove: { name:'Crystal Grove', walkable:true, glyph:'"', color:'#7ac9e0', bg:'#101a24', family:'fantastical', dangerMult:1.1,
+    encounter:[['crystal_wisp',5],['fox',3]],
+    effect:{type:'manaregen', chance:0.5, power:1, msg:null},
+    decor:[{feature:'crystal_spire', glyph:'^', color:'#9ae0f0', chance:0.06, destructible:true}] },
+  faerie_glade: { name:"Faerie Glade", walkable:true, glyph:'"', color:'#c9a0e0', bg:'#180f22', family:'fantastical', dangerMult:1.2,
+    encounter:[['glimmerfae',5],['fox',2],['elk',2]],
+    effect:{type:'wildmagic', chance:0.22, msg:null},
+    decor:[{feature:'faerie_ring', glyph:'o', color:'#e0b0ff', chance:0.03}] },
+  ancient_grove: { name:'Ancient Grove', walkable:true, glyph:'"', color:'#1a5a1a', bg:'#0a160a', family:'fantastical', dangerMult:1.25,
+    encounter:[['treant_elder',2],['wolf',3],['bear',3],['spider',2]],
+    decor:[{feature:'tree', glyph:'T', color:'#0f3a0f', chance:0.35, destructible:true}] },
+
+  // ---- eldritch biomes: wrongness bleeding into the ordinary world. Lingering here has a real
+  // cost -- Corruption -- reusing the same stat the Forbidden Altar/Mutagen system already tracks,
+  // so time spent in a blighted place has the same long-term consequence as courting it on purpose. ----
+  corrupted_blight: { name:'Corrupted Blight', walkable:true, glyph:'"', color:'#5a2a6a', bg:'#120a16', family:'eldritch', dangerMult:1.3,
+    encounter:[['blight_thorn',5],['wolf',2],['spider',2]],
+    effect:{type:'poison', chance:0.25, power:3, corruption:0.4, msg:'Corrupt sap weeps from every twisted stem, and it burns.'},
+    decor:[{feature:'tree', glyph:'T', color:'#3a1a4a', chance:0.16, destructible:true}] },
+  whispering_fen: { name:'Whispering Fen', walkable:true, glyph:'.', color:'#4a4a5a', bg:'#0e0e14', family:'eldritch', dangerMult:1.3,
+    encounter:[['hollow_wailer',4],['bog-zombie',3],['leech',3]],
+    effect:{type:'fear', chance:0.16, power:2, corruption:0.2, msg:'A chorus of half-heard voices murmurs your name.'} },
+  bone_moor: { name:'Bone Moor', walkable:true, glyph:'.', color:'#a89a7a', bg:'#181410', family:'eldritch', dangerMult:1.3,
+    encounter:[['bone_walker',5],['skeleton',3],['ghost',2]],
+    effect:{type:'curse', chance:0.15, power:1, corruption:0.3, msg:'Old bones shift underfoot, and something old takes notice of you.'} },
+  void_scar: { name:'Void Scar', walkable:true, glyph:'%', color:'#8a2ae0', bg:'#0a0416', family:'eldritch', dangerMult:1.6,
+    encounter:[['void_tendril',4],['whispering_shade',3],['mind_flayer',1]],
+    effect:{type:'voidtear', chance:0.10, power:1, corruption:0.8, msg:'Reality hiccups around you, and for a moment you are somewhere else.'},
+    decor:[{feature:'void_rift', glyph:'%', color:'#c060ff', chance:0.05}] },
+
+  // ---- sci-fi biomes: the wreckage/aftermath of some precursor high-technology, out in the
+  // ordinary overworld rather than gated behind a whole separate dimension. ----
+  irradiated_wastes: { name:'Irradiated Wastes', walkable:true, glyph:'.', color:'#a8c93a', bg:'#1c2408', family:'scifi', dangerMult:1.35,
+    encounter:[['rad_scuttler',5],['jackal',2],['vulture',2]],
+    effect:{type:'radiation', chance:0.35, power:2, msg:'Your skin prickles under an unseen wash of radiation.'},
+    decor:[{feature:'toxic_barrel', glyph:'o', color:'#c9e03a', chance:0.03, destructible:true}] },
+  tech_ruins: { name:'Tech Ruins', walkable:true, glyph:'#', color:'#7a8a9a', bg:'#101418', family:'scifi', dangerMult:1.3,
+    encounter:[['rust_sentinel',4],['scrap_scavenger',3],['husk_drone',2]],
+    effect:{type:'corrode', chance:0.10, msg:'Sparking, exposed wiring arcs against your gear.'},
+    decor:[{feature:'ruined_wall', glyph:'#', color:'#5a6a7a', chance:0.14, destructible:true}] },
+  crashed_debris_field: { name:'Crashed Debris Field', walkable:true, glyph:'%', color:'#8a9aa0', bg:'#12161a', family:'scifi', dangerMult:1.25,
+    encounter:[['scrap_scavenger',5],['husk_drone',3],['bandit',2]],
+    decor:[{feature:'scrap_pile', glyph:'*', color:'#6a7a8a', chance:0.10, destructible:true}] },
+  nanite_swarm_zone: { name:'Nanite Swarm Zone', walkable:true, glyph:'.', color:'#4ae0d0', bg:'#0a1a18', family:'scifi', dangerMult:1.4,
+    encounter:[['nanite_drone',6],['rust_sentinel',2]],
+    effect:{type:'corrode', chance:0.30, power:2, msg:'A haze of unseen nanites gnaws at everything you carry.'} },
+
+  // ---- ruins: an ancient, oversized settlement long since fallen, standing wherever it happened
+  // to fall rather than tied to any one climate -- distinct from the game's live settlement system
+  // (never generated *as* a settlement, never has friendly NPCs), just a huge, dangerous ruin to
+  // loot. Deliberately rare and large-patch, see the ruinBelt noise band in classifyBiomeFull(). ----
+  ancient_megaruins: { name:'Ancient Megaruins', walkable:true, glyph:'#', color:'#9a8a7a', bg:'#14100c', family:'ruins', dangerMult:1.5,
+    encounter:[['ruin_guardian',2],['rust_sentinel',3],['bandit',3],['ghost',2]],
+    decor:[{feature:'ruined_wall', glyph:'#', color:'#6a5a4a', chance:0.22, destructible:true}] },
 };
 
+// ---- multi-layer world noise: elevation/moisture/temperature drive the original "normal" biome
+// families exactly as before; `weird` and `region` are new large/medium-scale bands layered on top
+// that decide whether a given patch of world leans fantastical, eldritch, scifi, or an ancient
+// ruin, and `patch` is a small, fast-varying layer that breaks up biome edges so patches of exotic
+// terrain read as organic pockets (sometimes tiny, sometimes sprawling) rather than a uniform belt
+// wrapped around the world. See classifyBiomeFull() for how they combine. Kept as one function so
+// every caller (chunk gen, settlement placement, road/river routing) samples the exact same world. ----
+function worldNoiseSample(wx, wy) {
+  return {
+    elev: fbm(wx, wy, 70, SEED + 1, 4),
+    moist: fbm(wx, wy, 55, SEED + 500, 3),
+    temp: fbm(wx, wy, 90, SEED + 900, 2),
+    weird: fbm(wx, wy, 120, SEED + 2400, 3),
+    region: fbm(wx, wy, 460, SEED + 3100, 2),
+    ruinBelt: fbm(wx, wy, 300, SEED + 7700, 2),
+    patch: fbm(wx, wy, 20, SEED + 5200, 2),
+  };
+}
+
+// Base classification (elevation/moisture/temperature only) -- this is the "mundane" biome a
+// tile would have with no magical/technological/ruined overlay at all. Kept as its own function
+// (same signature as the original) since a few call sites only care about mundane terrain (e.g.
+// settlement placement deliberately never anchors a town on top of exotic terrain).
 function classifyBiome(elev, moist, temp) {
   if (elev < 0.30) return 'ocean';
   if (elev < 0.35) return 'beach';
   if (elev > 0.80) return 'mountain';
-  if (temp < 0.28) return 'tundra';
-  if (moist < 0.28) return 'desert';
+  if (temp < 0.20) return 'tundra';
+  if (temp < 0.32) return moist > 0.55 ? 'taiga' : 'tundra';
+  // NOTE: thresholds below are tuned against the *measured* distribution of elev/moist/temp
+  // (verified by sampling, same as the exotic-family cutoffs above) rather than guessed -- the
+  // original moist<0.16/moist 0.78-0.88 bands for badlands/salt_flat/marsh were narrow enough
+  // that those biomes were nearly unreachable in practice (~0.1% of land each). Widened here to
+  // land in the same rough rarity tier as swamp/desert -- present, findable, still a minority.
+  if (moist < 0.24) return temp > 0.58 ? 'salt_flat' : 'badlands';
+  if (moist < 0.32) return temp > 0.6 ? 'savanna' : 'desert';
   if (moist < 0.48) return 'plains';
-  if (moist < 0.72) return 'forest';
-  if (moist < 0.85) return 'denseforest';
-  return 'swamp';
+  if (moist < 0.65) return temp > 0.6 ? 'savanna' : 'forest';
+  if (moist < 0.75) return temp > 0.62 ? 'jungle' : 'denseforest';
+  if (moist < 0.88) return elev < 0.50 ? 'marsh' : (temp < 0.32 ? 'highland_moor' : 'swamp');
+  return temp > 0.55 ? 'jungle' : 'swamp';
+}
+
+// Full classification: layers the exotic families on top of classifyBiome()'s mundane result.
+// Exotic terrain only ever overrides *walkable land* -- ocean/lake/mountain read the same no
+// matter how weird the region is, so coastlines and mountain ranges never look broken. Each
+// family is gated by both the large-scale `region` band (which family a whole area leans toward)
+// and the smaller `weird`/`patch` bands (how strongly, and how sharply-edged, any given tile
+// commits to it) -- combining a big slow band with faster bands is what produces biomes of every
+// size: a `region` swing covers dozens of chunks (continent-scale), `weird` breaks that into
+// patches a handful of chunks across (regional-scale), and `patch` nibbles the edges down to
+// single-tile irregularity (local-scale) instead of a hard geometric border.
+function classifyBiomeFull(wx, wy) {
+  const n = worldNoiseSample(wx, wy);
+  const mundane = classifyBiome(n.elev, n.moist, n.temp);
+  if (!BIOMES[mundane].walkable) return mundane; // never touch ocean/lake/mountain
+  // Ancient megaruins: rare, large, climate-independent -- can fall anywhere except right on the
+  // coast/mountains (excluded above) or the very edge of the map where players start.
+  // NOTE: thresholds here are tuned against the *actual* observed range of the underlying fbm
+  // noise (verified by sampling), not against a naive assumption that fbm spans a uniform 0-1 --
+  // multi-octave value noise clusters toward the middle, so a literal 0.80 cutoff on a 2-octave
+  // layer was previously unreachable in practice and the biome could never appear. 0.78 sits at
+  // roughly the 97th percentile of this specific noise layer, giving a genuinely rare (~1.4% of
+  // land) but findable landmark instead of a dead entry in BIOMES.
+  if (n.ruinBelt > 0.78 && n.patch > 0.50 && (Math.abs(wx) + Math.abs(wy)) > 60) return 'ancient_megaruins';
+  const exoticStrength = n.weird + (n.patch - 0.5) * 0.35;
+  if (exoticStrength < 0.72) return mundane; // most of the world stays mundane
+  // Which exotic family a region leans toward is chosen by the slow `region` band, so whole
+  // swaths of world commit to one flavor of weird rather than eldritch/fantastical/scifi tiles
+  // being randomly interleaved tile-by-tile. The cutoffs (0.40 / 0.59) are the *measured*
+  // tertiles of this noise layer's real distribution, not a naive 0.33/0.66 split -- the raw
+  // fbm output bunches up around its mean rather than spreading evenly across 0-1, so a linear
+  // three-way split previously starved the fantastical family (~1.8% of land) while scifi got
+  // nearly 3x its fair share; this split gives all three families a genuinely even shot.
+  const family = n.region < 0.40 ? 'fantastical' : n.region < 0.59 ? 'eldritch' : 'scifi';
+  if (family === 'fantastical') {
+    if (n.moist > 0.6) return 'mushroom_forest';
+    if (n.elev > 0.6) return 'crystal_grove';
+    if (n.temp > 0.5) return 'faerie_glade';
+    return 'ancient_grove';
+  }
+  if (family === 'eldritch') {
+    if (exoticStrength > 0.9) return 'void_scar';
+    if (n.moist > 0.55) return 'whispering_fen';
+    if (n.temp < 0.4) return 'bone_moor';
+    return 'corrupted_blight';
+  }
+  // scifi
+  if (n.moist < 0.3) return 'irradiated_wastes';
+  if (exoticStrength > 0.85) return 'nanite_swarm_zone';
+  if (n.patch > 0.55) return 'tech_ruins';
+  return 'crashed_debris_field';
 }
 
 // ---- Items ----
@@ -1143,6 +1341,52 @@ const MONSTER_BASES = {
   orcwarlord:{name:'Orc Warlord', glyph:'O', color:'#2a6a2a', hp:60, str:20, dex:9, atk:[6,14], armor:5, xp:50, behavior:'aggressive', dtier:3, boss:true },
   lich:    { name:'Lich', glyph:'L', color:'#a0e0d0', hp:70, str:14, dex:10, atk:[4,10], armor:4, xp:80, behavior:'ranged', dtier:4, boss:true, frost:4 },
   slime:   { name:'Slime', glyph:'j', color:'#5ac95a', hp:16, str:6, dex:2, atk:[1,4], armor:0, xp:6, behavior:'aggressive', dtier:1, poison:1 },
+  // ---- World Overhaul: overworld-tier monsters for the new biome roster (normal-climate
+  // additions plus one signature creature for each fantastical/eldritch/scifi/ruins biome).
+  // Stats are pitched at the same overworld power band as wolf/bear/crocodile above -- these
+  // spawn from BIOMES[id].encounter exactly like any existing wildlife entry. ----
+  savanna_lion: { name:'Savanna Lion', glyph:'l', color:'#c9a03a', hp:18, str:11, dex:12, atk:[3,7], armor:0, xp:12, behavior:'aggressive',
+    loot:[{id:'pelt',chance:0.6,min:1,max:1},{id:'meat_raw',chance:0.7,min:1,max:2},{id:'fang',chance:0.3,min:1,max:1}] },
+  taiga_lynx:   { name:'Taiga Lynx', glyph:'l', color:'#5a9a8a', hp:11, str:7, dex:13, atk:[2,5], armor:0, xp:7, behavior:'aggressive',
+    loot:[{id:'pelt',chance:0.55,min:1,max:1},{id:'meat_raw',chance:0.5,min:1,max:1}] },
+  spore_stalker:{ name:'Spore Stalker', glyph:'m', color:'#c060a0', hp:16, str:8, dex:8, atk:[2,5], armor:0, xp:11, behavior:'aggressive', poison:2,
+    loot:[{id:'herb',chance:0.5,min:1,max:2}],
+    desc:'A hunched, fungal thing that shudders when it moves, releasing clouds of disorienting spores.' },
+  crystal_wisp: { name:'Crystal Wisp', glyph:'*', color:'#9ae0f0', hp:9, str:4, dex:15, atk:[1,4], armor:1, xp:9, behavior:'ranged',
+    loot:[{id:'silver_ore',chance:0.25,min:1,max:1}],
+    desc:'A shard of living light, drifting between the crystal boughs.' },
+  glimmerfae:   { name:'Glimmerfae', glyph:'f', color:'#e0b0ff', hp:14, str:5, dex:16, atk:[2,5], armor:0, xp:13, behavior:'ranged', causesConfuse:true,
+    desc:'A quick, mercurial thing, delighted by mischief and entirely without malice -- which is somehow worse.' },
+  treant_elder: { name:'Treant Elder', glyph:'T', color:'#0f3a0f', hp:60, str:17, dex:4, atk:[5,11], armor:4, xp:38, behavior:'aggressive', regen:2,
+    loot:[{id:'wood',chance:0.9,min:3,max:5},{id:'herb',chance:0.4,min:1,max:2}],
+    desc:'A tree grown patient and aware over centuries, roused now and unhappy about it.' },
+  blight_thorn: { name:'Blight Thorn', glyph:'t', color:'#5a2a6a', hp:20, str:9, dex:8, atk:[3,6], armor:1, xp:15, behavior:'aggressive', poison:3,
+    loot:[{id:'herb',chance:0.4,min:1,max:2}],
+    desc:'A bramble of corrupted wood and thorn, dragging itself forward on root-legs.' },
+  hollow_wailer:{ name:'Hollow Wailer', glyph:'g', color:'#4a4a5a', hp:15, str:7, dex:10, atk:[2,5], armor:0, xp:14, behavior:'ranged', causesFear:true,
+    loot:[{id:'ectoplasm',chance:0.35,min:1,max:1}],
+    desc:'A shape barely held together by grief, keening a note that makes your own thoughts hard to hold onto.' },
+  bone_walker:  { name:'Bone Walker', glyph:'z', color:'#a89a7a', hp:22, str:10, dex:6, atk:[3,6], armor:3, xp:16, behavior:'aggressive',
+    loot:[{id:'bone',chance:0.7,min:2,max:3}],
+    desc:'Bones that should have stayed buried, moving with a purpose none of them remember.' },
+  void_tendril: { name:'Void Tendril', glyph:'v', color:'#8a2ae0', hp:26, str:11, dex:9, atk:[3,8], armor:1, xp:24, behavior:'aggressive', causesFear:true, causesConfuse:true,
+    loot:[{id:'ectoplasm',chance:0.5,min:1,max:2}],
+    desc:'A limb with no body attached, reaching out of a tear in the world that shouldn\u2019t be there.' },
+  rad_scuttler: { name:'Rad-Scuttler', glyph:'c', color:'#a8c93a', hp:13, str:7, dex:13, atk:[2,5], armor:1, xp:11, behavior:'aggressive', poison:2,
+    loot:[{id:'sulfur',chance:0.3,min:1,max:1}],
+    desc:'A scavenging thing, carapace slick and faintly luminous, thriving where nothing else should.' },
+  rust_sentinel:{ name:'Rust Sentinel', glyph:'R', color:'#7a8a9a', hp:34, str:14, dex:5, atk:[4,8], armor:5, xp:22, behavior:'aggressive',
+    loot:[{id:'circuit_board',chance:0.4,min:1,max:1},{id:'iron_ingot',chance:0.2,min:1,max:1}],
+    desc:'A guardian construct, its directive long since corrupted along with its plating.' },
+  scrap_scavenger:{ name:'Scrap Scavenger', glyph:'p', color:'#8a9aa0', hp:15, str:8, dex:9, atk:[2,5], armor:1, xp:11, behavior:'ranged', dropGold:true,
+    loot:[{id:'circuit_board',chance:0.25,min:1,max:1}],
+    desc:'A wasteland opportunist, armed with whatever still fires.' },
+  nanite_drone: { name:'Nanite Drone', glyph:'n', color:'#4ae0d0', hp:10, str:5, dex:14, atk:[1,4], armor:2, xp:10, behavior:'ranged', corrosive:true,
+    loot:[{id:'nanite_cluster',chance:0.4,min:1,max:1}],
+    desc:'A fist-sized cloud of self-assembling machinery, taking apart anything it lands on.' },
+  ruin_guardian:{ name:'Ruin Guardian', glyph:'G', color:'#9a8a7a', hp:75, str:19, dex:6, atk:[6,13], armor:6, xp:55, behavior:'aggressive', miniboss:true,
+    loot:[{id:'circuit_board',chance:0.5,min:1,max:2},{id:'silver_ore',chance:0.3,min:1,max:1}],
+    desc:'A towering statue-construct, still faithfully guarding a city that has been rubble for a thousand years.' },
 };
 
 // ---- Spells ----
@@ -6278,6 +6522,106 @@ function scatterWaterStructures(chunk, cx, cy, rng) {
   }
 }
 
+// ---- land-tile structures: the OCEAN_STRUCTURES pattern above, generalized to walkable land
+// biomes so every new exotic biome (and several existing ones) gets its own scenery to find, not
+// just POI_TYPES' one-per-chunk roll. Gate with `biomes` (required -- unlike OCEAN_STRUCTURES
+// these are always biome-specific, since "a crashed satellite" makes no sense sitting in a
+// cobblestone town square) and optionally `dtierHint` (folded into a slightly tougher guard-
+// monster scale for structures that should feel like a real find). Same shape as OCEAN_STRUCTURES
+// otherwise (chestTier, guardMonsters, lookExtra), so anyone already familiar with that table can
+// add to this one with no new concepts. Adding a new structure is one entry here; it will start
+// appearing automatically the moment its biome id is generated anywhere in the world. ----
+const WILDERNESS_STRUCTURES = [
+  { id:'giant_mushroom_ring', name:'Mushroom Ring', weight:6, biomes:['mushroom_forest'], glyph:'8', color:'#d070b0',
+    lookExtra:'A ring of mushrooms taller than a person, caps glowing faintly with trapped spore-light.' },
+  { id:'spore_pod_cluster', name:'Spore Pod Cluster', weight:5, biomes:['mushroom_forest'], chestTier:1, glyph:'o', color:'#a0509a',
+    lookExtra:'Bulbous pods, swollen and ready to burst at the slightest touch.' },
+  { id:'sunken_crystal_shrine', name:'Crystal Shrine', weight:4, biomes:['crystal_grove'], buff:true, glyph:'&', color:'#9ae0f0',
+    lookExtra:'A shrine grown entirely from crystal, humming a note just below hearing.' },
+  { id:'faerie_ring_circle', name:"Faerie Ring", weight:4, biomes:['faerie_glade'], buff:true, glyph:'o', color:'#e0b0ff',
+    lookExtra:'Mushrooms in a perfect circle -- everyone knows better than to step inside, and everyone is tempted anyway.' },
+  { id:'ancient_treehome', name:'Hollow Elder Tree', weight:3, biomes:['ancient_grove'], chestTier:2, npcRole:'ranger', glyph:'T', color:'#0f3a0f',
+    lookExtra:'A tree so old its hollow trunk has been someone\u2019s home for generations.' },
+  { id:'blight_altar', name:'Blight Altar', weight:3, biomes:['corrupted_blight'], ritual:true, glyph:'&', color:'#5a2a6a',
+    lookExtra:'An altar grown over with corrupt vine, still faintly warm to the touch.' },
+  { id:'sunken_shrine_bones', name:'Drowned Shrine', weight:4, biomes:['whispering_fen'], chestTier:1, corruptionOnVisit:6, glyph:'&', color:'#4a4a5a',
+    lookExtra:'A half-sunk shrine, the water around it unnaturally still.' },
+  { id:'ossuary_mound', name:'Ossuary Mound', weight:4, biomes:['bone_moor'], chestTier:2, guardMonsters:[{id:'skeleton', count:[1,2]}], glyph:'*', color:'#a89a7a',
+    lookExtra:'Bones piled with deliberate, unsettling care into a mound taller than a house.' },
+  { id:'void_rift_scar', name:'Reality Tear', weight:3, biomes:['void_scar'], corruptionOnVisit:10, glyph:'%', color:'#c060ff',
+    lookExtra:'A jagged gash in the air itself, edges guttering like a dying flame.' },
+  { id:'irradiated_silo', name:'Ruined Silo', weight:4, biomes:['irradiated_wastes'], chestTier:2, lootBias:'material', glyph:'I', color:'#a8c93a',
+    lookExtra:'A cracked containment silo, still ticking faintly on a geiger counter you don\u2019t have.' },
+  { id:'crashed_satellite', name:'Crashed Satellite', weight:3, biomes:['tech_ruins','crashed_debris_field'], chestTier:2, lootBias:'cyber', glyph:'*', color:'#7a8a9a',
+    lookExtra:'A satellite, or something like one, half-buried nose-first in the dirt.' },
+  { id:'server_husk', name:'Server Husk', weight:4, biomes:['tech_ruins'], npcRole:'cybersmith', glyph:'#', color:'#4ae0d0',
+    lookExtra:'Racks of dead machinery, one light somewhere inside still blinking.' },
+  { id:'nanite_hive', name:'Nanite Hive', weight:3, biomes:['nanite_swarm_zone'], guardMonsters:[{id:'nanite_drone', count:[2,3]}], glyph:'*', color:'#4ae0d0',
+    lookExtra:'A knot of self-replicating machinery, constantly rebuilding itself in real time.' },
+  { id:'megaruin_plaza', name:'Ruined Plaza', weight:5, biomes:['ancient_megaruins'], lootItems:3, glyph:'#', color:'#9a8a7a',
+    lookExtra:'The bones of a public square built for a population long gone.' },
+  { id:'megaruin_vault', name:'Sealed Vault', weight:3, biomes:['ancient_megaruins'], chestTier:3, guardMonsters:[{id:'ruin_guardian', count:[1,1]}], glyph:'&', color:'#c9a03a',
+    lookExtra:'A vault door, still sealed, still guarded, still waiting for someone who is never coming back.' },
+];
+// Rolls 0-3 land structures per eligible chunk, weighted toward chunks that actually have an
+// exotic-biome footprint (mundane chunks essentially never roll one, matching how the ocean
+// version only fires on water-heavy chunks). Called from the plain-wilderness branch of
+// generateChunk, after settlement/POI/dungeon-entrance gating, exactly like scatterWaterStructures.
+function scatterBiomeStructures(chunk, cx, cy, rng) {
+  const spots = [];
+  for (let ly = 2; ly < CH - 2; ly++) for (let lx = 2; lx < CH - 2; lx++) {
+    const t = chunk.tiles[ly][lx];
+    if (t.walkable && !t.feature && !t.building) {
+      const candidates = WILDERNESS_STRUCTURES.filter(s => s.biomes.includes(t.biome));
+      if (candidates.length) spots.push({ lx, ly, biome: t.biome, candidates });
+    }
+  }
+  if (!spots.length) return;
+  const maxRoll = spots.length > 80 ? 3 : spots.length > 25 ? 2 : 1;
+  const count = Math.min(spots.length, randInt(rng, 0, maxRoll));
+  for (let i = 0; i < count; i++) {
+    const idx = randInt(rng, 0, spots.length - 1);
+    const spot = spots.splice(idx, 1)[0];
+    const t = chunk.tiles[spot.ly][spot.lx];
+    if (t.feature) continue; // an earlier roll or decor pass may have claimed this tile already
+    const structure = weightedChoice(rng, spot.candidates.map(s => [s, s.weight]));
+    if (structure.buff) { t.feature = 'shrine'; t.glyph = structure.glyph; t.color = structure.color; t.shrineUsed = false; }
+    else if (structure.ritual) { t.feature = 'ritual_altar'; t.glyph = structure.glyph; t.color = structure.color; }
+    else { t.feature = structure.id; t.glyph = structure.glyph; t.color = structure.color; }
+    if (structure.chestTier !== undefined) {
+      const chest = Object.assign({}, ITEM_BASES.find(b => b.id === 'chest'), { uid: 'i' + Math.random().toString(36).slice(2, 9), tier: structure.chestTier, lootBias: structure.lootBias });
+      t.items.push(chest);
+    }
+    if (structure.lootItems) {
+      const baseIds = lootEligibleBaseIds(2, { excludeTypes: ['misc', 'chest', 'corpse'] });
+      for (let n = 0; n < structure.lootItems; n++) {
+        const ox = spot.lx + randInt(rng, -2, 2), oy = spot.ly + randInt(rng, -2, 2);
+        if (ox < 0 || oy < 0 || ox >= CH || oy >= CH || !chunk.tiles[oy][ox].walkable) continue;
+        chunk.tiles[oy][ox].items.push(makeItem(choice(rng, baseIds), 0, rng));
+      }
+    }
+    if (structure.npcRole) {
+      const localKingdom = getKingdom(cx * CH, cy * CH);
+      const npc = makeNPC(structure.npcRole, cx * CH + spot.lx, cy * CH + spot.ly, rng, 'the Wilds', 'human');
+      npc.wanderCenter = { x: npc.x, y: npc.y };
+      chunk.npcs.push(npc);
+    }
+    if (structure.guardMonsters) {
+      for (const spec of structure.guardMonsters) {
+        const n = randInt(rng, spec.count[0], spec.count[1]);
+        for (let g = 0; g < n; g++) {
+          const ox = spot.lx + randInt(rng, -2, 2), oy = spot.ly + randInt(rng, -2, 2);
+          if (ox < 0 || oy < 0 || ox >= CH || oy >= CH) continue;
+          const ot = chunk.tiles[oy][ox];
+          if (!ot.walkable) continue;
+          const dangerMult = (BIOMES[spot.biome] && BIOMES[spot.biome].dangerMult) || 1;
+          chunk.monsters.push(makeMonster(spec.id, cx * CH + ox, cy * CH + oy, overworldDangerScale(cx, cy) * dangerMult, rng));
+        }
+      }
+    }
+  }
+}
+
 // ===================== WORLD GENERATION =====================
 const CH = 24; // chunk size in tiles
 const worldChunks = new Map();
@@ -7264,6 +7608,14 @@ function biomeAtPoint(wx, wy) {
   return classifyBiome(elev, moist, temp);
 }
 
+// Biomes a settlement (village through capital) is allowed to found itself on -- deliberately
+// excludes every "exotic" biome (fantastical/eldritch/scifi/ruins) so towns never spawn inside a
+// corrupted blight or an irradiated waste, and also excludes the more extreme mundane climates
+// (salt flat, badlands) that wouldn't plausibly support ordinary settled life. Shared by every
+// settlement-placement check (generateChunk, getAnchorSettlementInfo, findNearestSettlementTier)
+// so they can never disagree with each other.
+const SETTLEMENT_BIOMES = ['plains', 'forest', 'desert', 'tundra', 'swamp', 'savanna', 'taiga', 'jungle', 'marsh', 'highland_moor'];
+
 // Dry-run version of generateChunk's settlement roll: "if chunk (cx,cy) were generated right now,
 // would it become a settlement, and what tier?" Uses the exact same hash/rng formulas as the real
 // generateChunk/buildSettlement so the two can never disagree. Returns null if this chunk
@@ -7274,7 +7626,7 @@ function getAnchorSettlementInfo(cx, cy) {
   if (sHash >= 0.11) return null;
   const centerWx = cx * CH + Math.floor(CH / 2), centerWy = cy * CH + Math.floor(CH / 2);
   const centerBiome = biomeAtPoint(centerWx, centerWy);
-  if (!['plains', 'forest', 'desert', 'tundra', 'swamp'].includes(centerBiome)) return null;
+  if (!SETTLEMENT_BIOMES.includes(centerBiome)) return null;
   const rng = mulberry32((cx * 5171 + cy * 7919 + SEED + 777) | 0); // same seed formula as buildSettlement
   const tier = pickSettlementTier(rng, cx, cy);
   return { tier, footprint: SETTLEMENT_FOOTPRINT[tier] || 1, centerBiome };
@@ -7439,7 +7791,26 @@ function rollDungeonVariant(rng, distFromOrigin) {
   return DUNGEON_VARIANTS.find(v => v.id === id);
 }
 
-function placeDungeonEntrance(chunk, cx, cy, seedVal) {
+// Which dungeon themes feel at home under which overworld biome -- a soft weighting (not a hard
+// restriction: any theme in the right tier can still appear, just less often) so a swamp is more
+// likely to hide a sewer/crypt than a sun-parched ruin, and the new exotic biomes finally connect
+// to *something* underground instead of a tech-ruins tile sitting on top of a random medieval
+// crypt with no relationship between the two. Extending this for a new biome (or a new dungeon
+// theme) is a one-line addition here, nothing else needs to change.
+const BIOME_DUNGEON_AFFINITY = {
+  swamp: ['sewer', 'crypt'], marsh: ['sewer', 'crypt'], jungle: ['cave', 'ruins'],
+  forest: ['cave', 'abandonedhouse'], denseforest: ['cave'], ancient_grove: ['cave', 'ruins'],
+  desert: ['ruins', 'tower'], badlands: ['ruins', 'fortress'], salt_flat: ['ruins'],
+  savanna: ['ruins', 'abandonedhouse'], tundra: ['cave', 'fortress'], taiga: ['cave', 'fortress'],
+  highland_moor: ['fortress', 'castle'], mushroom_forest: ['cave', 'crypt'],
+  crystal_grove: ['cave', 'tower'], faerie_glade: ['ruins', 'labyrinth'],
+  corrupted_blight: ['crypt', 'ruinedlibrary'], whispering_fen: ['crypt', 'sewer'],
+  bone_moor: ['crypt', 'ruinedlibrary'], void_scar: ['labyrinth', 'tower'],
+  irradiated_wastes: ['ruins', 'sewer'], tech_ruins: ['ruins', 'tower', 'labyrinth'],
+  crashed_debris_field: ['ruins'], nanite_swarm_zone: ['labyrinth', 'sewer'],
+  ancient_megaruins: ['fortress', 'tower', 'labyrinth'],
+};
+function placeDungeonEntrance(chunk, cx, cy, seedVal, centerBiome) {
   const rng = mulberry32((cx * 3331 + cy * 9091 + SEED + 4242) | 0);
   const lx = randInt(rng, 3, CH - 4), ly = randInt(rng, 3, CH - 4);
   const t = chunk.tiles[ly][lx];
@@ -7453,7 +7824,9 @@ function placeDungeonEntrance(chunk, cx, cy, seedVal) {
   else if (distFromOrigin < 10) tierWeights = tierWeights.map(([k,v]) => [k, k === 'rare' ? v * 0.35 : v]);
   const tier = weightedChoice(rng, tierWeights);
   const themesOfTier = Object.entries(DUNGEON_THEMES).filter(([,meta]) => meta.tier === tier).map(([id]) => id);
-  const theme = choice(rng, themesOfTier.length ? themesOfTier : Object.keys(DUNGEON_THEMES));
+  const pool = themesOfTier.length ? themesOfTier : Object.keys(DUNGEON_THEMES);
+  const preferred = BIOME_DUNGEON_AFFINITY[centerBiome] || [];
+  const theme = weightedChoice(rng, pool.map(id => [id, preferred.includes(id) ? 4 : 1]));
   const meta = DUNGEON_THEMES[theme];
   const [dMin, dMax] = meta.depthRange;
   const maxDepth = Math.max(dMin, Math.min(dMax, dMin + Math.floor(distFromOrigin / 4) + randInt(rng,0,2)));
@@ -7820,6 +8193,39 @@ const DESTRUCTIBLE_FEATURES = {
     flammable: false,
     fireResult:  { feature: 'scorched', glyph: ',', color: '#4a3a2a' },
     meleeResult: { feature: 'scorched', glyph: ',', color: '#4a3a2a' }
+  },
+  // ---- World Overhaul: destructible decor for the new exotic biomes, following the exact same
+  // shape as tree/cactus above -- register a biome's decor feature here (and only here) to make
+  // it actually choppable/burnable instead of the `destructible:true` decor flag being inert. ----
+  giant_mushroom: {
+    hpRange: [12, 20], chopVerb: 'hack into', fallVerb: 'The giant mushroom bursts in a cloud of spores!',
+    flammable: true, fireDmgRange: [1, 3], fireCatchChance: 0.1,
+    fireResult:  { feature: 'scorched', glyph: ',', color: '#4a3a2a' },
+    meleeResult: { feature: 'stump', glyph: '\u2229', color: '#7a4a6a' }
+  },
+  crystal_spire: {
+    hpRange: [20, 32], chopVerb: 'strike at', fallVerb: 'The crystal spire shatters into glittering fragments!',
+    flammable: false,
+    fireResult:  { feature: 'rubble', glyph: ',', color: '#5a6a7a' },
+    meleeResult: { feature: 'rubble', glyph: ',', color: '#5a6a7a' }
+  },
+  toxic_barrel: {
+    hpRange: [6, 12], chopVerb: 'strike at', fallVerb: 'The barrel splits open, spilling caustic waste!',
+    flammable: true, fireDmgRange: [3, 7], fireCatchChance: 0.35,
+    fireResult:  { feature: 'poisongas', glyph: '\u2591', color: '#8ab53a' },
+    meleeResult: { feature: 'poisongas', glyph: '\u2591', color: '#8ab53a' }
+  },
+  ruined_wall: {
+    hpRange: [18, 28], chopVerb: 'batter at', fallVerb: 'The crumbling wall finally gives way!',
+    flammable: false,
+    fireResult:  { feature: 'rubble', glyph: ',', color: '#5a5a5a' },
+    meleeResult: { feature: 'rubble', glyph: ',', color: '#5a5a5a' }
+  },
+  scrap_pile: {
+    hpRange: [8, 14], chopVerb: 'dig through', fallVerb: 'The scrap pile collapses in a clatter of metal!',
+    flammable: false,
+    fireResult:  { feature: 'rubble', glyph: ',', color: '#5a6a7a' },
+    meleeResult: { feature: 'rubble', glyph: ',', color: '#5a6a7a' }
   }
 };
 // Called once, wherever a destructible feature tile is first placed (world gen), so it starts
@@ -8873,7 +9279,7 @@ function blocksSight(x, y) {
   if (!t) return true;
   if (t.smokeTurns > 0) return true;
   // water and chasms are see-through/see-over -- they shouldn't cast shadows or hide what's beyond them
-  if (t.feature === 'water' || t.feature === 'chasm' || t.biome === 'ocean' || t.biome === 'lake') return false;
+  if (t.feature === 'water' || t.feature === 'chasm' || t.biome === 'ocean' || t.biome === 'lake' || t.biome === 'river') return false;
   return !t.walkable;
 }
 
@@ -8885,7 +9291,7 @@ function blocksSight(x, y) {
 // when you change dungeon level or leave/enter a dungeon, so nothing is silently tracked/processed for
 // an area you can no longer see or interact with.
 let activeFxTiles = []; // [{ t, x, y }]
-function isWaterTile(t) { return !!(t && (t.feature === 'water' || t.biome === 'ocean' || t.biome === 'lake')); }
+function isWaterTile(t) { return !!(t && (t.feature === 'water' || t.biome === 'ocean' || t.biome === 'lake' || t.biome === 'river')); }
 // ---- shared tile-transform helpers: water and chasm conversion happen from several places
 // (pond generation, chasm generation, bridge collapse, ice thaw) and used to repeat the same
 // five-field literal at every call site. Consolidated here so there's one place to adjust the
@@ -9255,6 +9661,108 @@ function clearAreaFx() {
   activeDecoys = []; // location-tracked; a decoy from the area you're leaving makes no sense elsewhere
 }
 
+// ============================================================================
+// ---- BIOME ENVIRONMENTAL EFFECTS (World Overhaul) -------------------------
+// Standing terrain effects declared on a BIOMES entry (see BIOMES.*.effect) apply here, once per
+// turn, purely from which biome tile the player is currently standing on -- this is what makes a
+// poison swamp actually poison you, a nanite zone actually corrode your gear, and so on, rather
+// than biomes being cosmetic labels. Adding a new effect `type` is a single new case below;
+// adding a new biome that *uses* an existing effect type is a one-line `effect:{...}` in BIOMES,
+// no code changes needed at all. Deliberately player-only for now (monsters already live in their
+// own biome and are balanced around it); dungeon floors and settlements never carry an `effect`,
+// so this is a strict no-op there. ----
+function applyBiomeEnvironmentalEffect() {
+  if (curIsDungeon() || !player.alive) return;
+  const t = curTileAt(player.x, player.y);
+  if (!t) return;
+  const dim = curIsDimension() && DIMENSIONS[player.dimensionId];
+  const b = (dim && dim.biomes && dim.biomes[t.biome]) || BIOMES[t.biome];
+  const eff = b && b.effect;
+  if (!eff) return;
+  if (eff.chance !== undefined && Math.random() >= eff.chance) return;
+  const applyCorruption = () => {
+    if (eff.corruption) player.corruption = Math.min(100, (player.corruption || 0) + eff.corruption * (0.5 + Math.random()));
+  };
+  // Environmental DoTs/debuffs accumulate every turn you linger, but growth (this) was outpacing
+  // natural decay (~1/turn in processEntityStatus) with no ceiling -- stand in a hazard long
+  // enough and you'd rack up a debuff that keeps hurting you for a long time *after* you've
+  // already left, which reads as unfair rather than as a reason to leave. Capping what a single
+  // biome tile can push a status to (it can still be topped up further by an actual monster
+  // attack elsewhere, since this only clamps the biome-effect path) keeps "don't linger here" as
+  // the lesson instead of "one wrong turn ruins the next two minutes."
+  const addCapped = (field, power, cap) => { player[field] = Math.min(cap, (player[field] || 0) + power); };
+  switch (eff.type) {
+    case 'poison':
+      addCapped('statusPoison', eff.power || 2, 12);
+      if (eff.msg) log(eff.msg);
+      applyCorruption();
+      break;
+    case 'slow':
+      player.statusSlow = Math.max(player.statusSlow || 0, eff.power || 2);
+      if (eff.msg) log(eff.msg);
+      break;
+    case 'confuse':
+      addCapped('statusConfuse', eff.power || 2, 10);
+      if (eff.msg) log(eff.msg);
+      break;
+    case 'fear':
+      addCapped('statusFear', eff.power || 2, 10);
+      if (eff.msg) log(eff.msg);
+      applyCorruption();
+      break;
+    case 'curse':
+      addCapped('statusConfuse', eff.power || 1, 10);
+      applyBuffQuiet('armor', -2, 6);
+      if (eff.msg) log(eff.msg);
+      applyCorruption();
+      break;
+    case 'burn': {
+      let dmg = randInt(Math.random, 1, Math.max(2, eff.power || 2));
+      if (player.fireDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - player.fireDmgReduction)));
+      if (dmg > 0) { player.hp -= dmg; lastDamageSource = 'the heat'; if (player.hp <= 0) onDeath(player, null); }
+      if (eff.msg) log(eff.msg);
+      break;
+    }
+    case 'radiation': {
+      const immune = player.poisonImmune || getBuff('resistradiation') > 0;
+      if (!immune) addCapped('statusRadiation', eff.power || 2, 15);
+      if (eff.msg) log(eff.msg);
+      break;
+    }
+    case 'corrode':
+      wearRandomArmorPiece(eff.power || 1);
+      if (eff.msg) log(eff.msg);
+      break;
+    case 'manaregen':
+      if (player.mp < player.maxMp) { player.mp = Math.min(player.maxMp, player.mp + (eff.power || 1)); }
+      break;
+    case 'wildmagic': {
+      const roll = Math.random();
+      if (roll < 0.34) { player.hp = Math.min(player.maxHp, player.hp + randInt(Math.random, 3, 8)); log('Wild fae magic washes over you, knitting a wound shut.'); }
+      else if (roll < 0.67) { player.statusConfuse = (player.statusConfuse || 0) + 2; log('Wild fae magic washes over you, and the world briefly spins.'); }
+      else { applyBuffQuiet('dex', 3, 6); log('Wild fae magic washes over you, and your steps feel lighter.'); }
+      break;
+    }
+    case 'voidtear': {
+      applyCorruption();
+      player.statusFear = (player.statusFear || 0) + 1;
+      const spots = [];
+      for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+        if (!dx && !dy) continue;
+        const nx = player.x + dx, ny = player.y + dy;
+        if (curWalkable(nx, ny) && !entityAt(nx, ny)) spots.push([nx, ny]);
+      }
+      if (spots.length) { const [nx, ny] = choice(Math.random, spots); player.x = nx; player.y = ny; }
+      if (eff.msg) log(eff.msg);
+      break;
+    }
+  }
+}
+// Small helper: apply a timed buff without the standalone "You feel the effects of..." log line
+// applyBuff() always prints -- biome effects want to fold their own flavor message in above
+// instead of stacking a second, more generic one right after it.
+function applyBuffQuiet(stat, power, turns) { player.buffs[stat] = { power, turns: Math.max((player.buffs[stat] && player.buffs[stat].turns) || 0, turns) }; }
+
 function hasLOS(x0, y0, x1, y1) {
   let dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
   let sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
@@ -9295,6 +9803,7 @@ function getActiveStatusEffects(e) {
     }
   }
   if (e.statusPoison > 0) out.push({ label: 'Poisoned', turns: e.statusPoison, kind: 'debuff' });
+  if (e.statusRadiation > 0) out.push({ label: 'Irradiated', turns: e.statusRadiation, kind: 'debuff' });
   if (e.statusFear > 0) out.push({ label: 'Afraid', turns: e.statusFear, kind: 'debuff' });
   if (e.statusConfuse > 0) out.push({ label: 'Confused', turns: e.statusConfuse, kind: 'debuff' });
   if (e.statusSlow > 0) out.push({ label: 'Slowed', turns: e.statusSlow, kind: 'debuff' });
@@ -9306,7 +9815,7 @@ function applyBuff(stat, power, turns) { player.buffs[stat] = { power, turns }; 
 function isPlayerInWater() {
   if (curIsDungeon()) return false;
   const t = curTileAt(player.x, player.y);
-  return !!(t && (t.feature === 'water' || t.biome === 'ocean' || t.biome === 'lake'));
+  return isWaterTile(t);
 }
 // ---- v4 balance pass: Charisma drives ally/summon/companion strength ----
 // Previously every summoned creature and recruited companion scaled off player.level alone
@@ -13299,7 +13808,7 @@ function findNearestSettlementTier(tier, maxRadius) {
         if (sHash >= 0.11) continue;
         const centerWx = cx * CH + Math.floor(CH / 2), centerWy = cy * CH + Math.floor(CH / 2);
         const centerBiome = biomeAtPoint(centerWx, centerWy);
-        if (!['plains', 'forest', 'desert', 'tundra', 'swamp'].includes(centerBiome)) continue;
+        if (!SETTLEMENT_BIOMES.includes(centerBiome)) continue;
         const identity = getSharedSettlementIdentity(cx, cy);
         if (identity.tier === tier) return { cx, cy, footprint: 1 };
       }
@@ -13647,6 +14156,29 @@ const TILE_FEATURE_DESCRIPTIONS = {
   fountain: 'A stone fountain, water trickling quietly.',
   logpile: 'A stacked pile of felled logs, waiting to be milled.',
   fightingring: 'A packed-dirt fighting ring, ringed with worn benches.',
+  // ---- World Overhaul: new biome decor / structure feature descriptions ----
+  giant_mushroom: 'A mushroom taller than you are, cap glowing faintly. Best not to disturb it.',
+  crystal_spire: 'A shard of crystal jutting from the earth, humming with faint resonance.',
+  faerie_ring: 'A ring of pale mushrooms. Something about it makes you want to step inside — and that is exactly why you shouldn\u2019t.',
+  void_rift: 'A hairline tear in the world, edges rippling like heat over sand.',
+  toxic_barrel: 'A rusted barrel, leaking something that glows faintly and smells of nothing good.',
+  ruined_wall: 'A crumbling wall, all that remains standing of something much larger.',
+  scrap_pile: 'A heap of scavenged metal and cabling, picked over more than once already.',
+  giant_mushroom_ring: 'A ring of towering mushrooms, caps glowing faintly with trapped spore-light.',
+  spore_pod_cluster: 'Bulbous fungal pods, swollen and ready to burst at the slightest touch.',
+  sunken_crystal_shrine: 'A shrine grown entirely from crystal, humming a note just below hearing.',
+  faerie_ring_circle: 'Mushrooms in a perfect circle, older than anything reasonable should be.',
+  ancient_treehome: 'A tree so old its hollow trunk has clearly been someone\u2019s home for generations.',
+  blight_altar: 'An altar grown over with corrupt vine, still faintly warm to the touch.',
+  sunken_shrine_bones: 'A half-sunk shrine, the water around it unnaturally still.',
+  ossuary_mound: 'Bones piled with deliberate, unsettling care into a mound taller than a house.',
+  void_rift_scar: 'A jagged gash in the air itself, edges guttering like a dying flame.',
+  irradiated_silo: 'A cracked containment silo, still ticking faintly on a geiger counter you don\u2019t have.',
+  crashed_satellite: 'A satellite, or something like one, half-buried nose-first in the dirt.',
+  server_husk: 'Racks of dead machinery, one light somewhere inside still blinking.',
+  nanite_hive: 'A knot of self-replicating machinery, constantly rebuilding itself in real time.',
+  megaruin_plaza: 'The bones of a public square built for a population long gone.',
+  megaruin_vault: 'A vault door, still sealed, still guarded, still waiting for someone who is never coming back.',
 };
 // A handful of tile features are dynamic per-tile (their exact flavor lives on the specific POI
 // instance, not the shared dictionary above) -- these get looked up by matching world coordinates
@@ -14645,6 +15177,17 @@ function processEntityStatus(e) {
     e.statusSlow--;
     if (e === player && e.statusSlow > 0 && Math.random() < willpowerResistChance()) e.statusSlow--;
   }
+  // Radiation (World Overhaul, irradiated_wastes/nanite biomes): a slower, steadier DoT than
+  // poison, deliberately not reduced by poisonDmgReduction (it's a different mechanism), and not
+  // shaken off early by Willpower the way poison/slow are -- it's meant to be a genuine reason to
+  // not linger in an irradiated zone rather than something you can just tank through.
+  if (e.statusRadiation > 0) {
+    const d = Math.min(e.statusRadiation, 3);
+    e.hp -= d;
+    e.statusRadiation = Math.max(0, e.statusRadiation - 1);
+    if (e === player) { log(`Radiation sickness wracks your body (${d} damage).`); lastDamageSource = 'radiation'; }
+    if (e.hp <= 0) onDeath(e, null);
+  }
   if (e.regen) e.hp = Math.min(e.maxHp, e.hp + e.regen);
   if (e === player && player.mutationRegen) player.hp = Math.min(player.maxHp, player.hp + player.mutationRegen);
 }
@@ -15266,7 +15809,7 @@ function monsterAI(m) {
 // never overwrite a town or a dungeon mouth. Converts walkable land tiles to the 'lake' biome in
 // place (mutates the tiles array chunk.tiles already points to).
 function maybeCarveLake(tiles, cx, cy, centerBiome) {
-  if (!['plains', 'forest', 'denseforest', 'tundra', 'swamp'].includes(centerBiome)) return false;
+  if (!['plains', 'forest', 'denseforest', 'tundra', 'swamp', 'savanna', 'taiga', 'jungle', 'marsh', 'highland_moor', 'ancient_grove'].includes(centerBiome)) return false;
   const lakeHash = coordHash(cx, cy, SEED + 314159);
   if (lakeHash > 0.045) return false; // ~4.5% of eligible land chunks get a lake
   const lrng = mulberry32((cx * 55511 + cy * 90121 + SEED + 8675309) | 0);
@@ -15288,24 +15831,110 @@ function maybeCarveLake(tiles, cx, cy, centerBiome) {
   }
   return carved;
 }
+// ---- rivers: a single ridged-noise band, domain-warped so it winds rather than running dead
+// straight, shared by every chunk (pure function of world coords, so it lines up seamlessly at
+// chunk borders same as elevation/moisture do). Only carves through low/mid elevation (never
+// across a mountain peak) and tapers out at the coast, where it should just look like it's
+// flowing into the ocean rather than terminating abruptly. ----
+function riverFactor(wx, wy) {
+  const warpX = fbm(wx, wy, 220, SEED + 6100, 2) * 46;
+  const warpY = fbm(wx, wy, 220, SEED + 6600, 2) * 46;
+  const n = fbm(wx + warpX, wy + warpY, 170, SEED + 6900, 2);
+  return Math.abs(n - 0.5);
+}
+// ---- roads: cheap-lookup helper -- which nearby chunks would independently roll as a settlement
+// anchor, without generating any of them. Reuses getAnchorSettlementInfo (already pure/cheap,
+// built for exactly this "dry run" purpose by the multi-chunk settlement system) rather than
+// duplicating its hash logic. Radius is intentionally modest: wide enough that most settlements
+// find a neighbor to road up to, cheap enough to run on every wilderness chunk generated. ----
+const ROAD_SCAN_RADIUS = 9;
+function findNearbySettlementAnchors(cx, cy) {
+  const found = [];
+  for (let dy = -ROAD_SCAN_RADIUS; dy <= ROAD_SCAN_RADIUS; dy++) {
+    for (let dx = -ROAD_SCAN_RADIUS; dx <= ROAD_SCAN_RADIUS; dx++) {
+      const acx = cx + dx, acy = cy + dy;
+      const info = getAnchorSettlementInfo(acx, acy);
+      if (info) found.push({ cx: acx, cy: acy, footprint: info.footprint });
+    }
+  }
+  return found;
+}
+// Carves a road through this chunk if it lies on (or very near) the straight line between the two
+// nearest settlement anchors to it. Any chunk sitting between the same pair of settlements
+// independently finds the same pair and the same line, so the road reads as one continuous route
+// across many chunks rather than disconnected fragments -- without needing any global state or a
+// real pathfinder. Crossing water gets an actual bridge (reusing the existing woodbridge feature),
+// crossing a mountain is simply left uncarved (the road "resumes" on the far side), and the
+// corridor is a couple tiles wide with a little per-tile jitter so it doesn't read as a laser-
+// straight surveyed line.
+function maybeCarveRoadsToSettlements(chunk, cx, cy) {
+  const anchors = findNearbySettlementAnchors(cx, cy);
+  if (anchors.length < 2) return;
+  const centerWx = cx * CH + CH / 2, centerWy = cy * CH + CH / 2;
+  const withDist = anchors.map(a => {
+    const awx = a.cx * CH + (a.footprint * CH) / 2, awy = a.cy * CH + (a.footprint * CH) / 2;
+    return { wx: awx, wy: awy, key: a.cx + ',' + a.cy, d: Math.hypot(awx - centerWx, awy - centerWy) };
+  }).sort((a, b) => a.d - b.d);
+  const uniq = [];
+  for (const a of withDist) { if (!uniq.some(u => u.key === a.key)) uniq.push(a); if (uniq.length >= 2) break; }
+  if (uniq.length < 2) return;
+  const [A, B] = uniq;
+  const dx = B.wx - A.wx, dy = B.wy - A.wy;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 1) return;
+  for (let ly = 0; ly < CH; ly++) {
+    for (let lx = 0; lx < CH; lx++) {
+      const wx = cx * CH + lx, wy = cy * CH + ly;
+      const tproj = ((wx - A.wx) * dx + (wy - A.wy) * dy) / lenSq;
+      if (tproj < 0 || tproj > 1) continue; // only between the two settlements, never past either
+      const projX = A.wx + tproj * dx, projY = A.wy + tproj * dy;
+      const jitter = (coordHash(wx, wy, SEED + 41414) - 0.5) * 1.6;
+      const perpDist = Math.hypot(wx - projX, wy - projY) + jitter;
+      if (perpDist > 1.1) continue;
+      const t = chunk.tiles[ly][lx];
+      if (t.building) continue;
+      if (isWaterTile(t)) {
+        t.walkable = true; t.feature = 'woodbridge'; t.bridgeOver = 'water'; t.glyph = '='; t.color = '#a07840'; t.bg = '#1a140a';
+      } else if (t.walkable) {
+        t.feature = 'road'; t.glyph = ':'; t.color = '#b09a6a';
+      }
+      // impassable non-water (mountains, ocean's far shore, etc.) is left alone on purpose -- the
+      // road simply doesn't cross it, matching how a real trade route would route around instead.
+    }
+  }
+}
+
 function generateChunk(cx, cy) {
   const tiles = [];
   for (let ly = 0; ly < CH; ly++) {
     const row = [];
     for (let lx = 0; lx < CH; lx++) {
       const wx = cx * CH + lx, wy = cy * CH + ly;
-      const elev = fbm(wx, wy, 70, SEED + 1, 3);
-      const moist = fbm(wx, wy, 55, SEED + 500, 2);
-      const temp = fbm(wx, wy, 90, SEED + 900, 2);
-      const biomeId = classifyBiome(elev, moist, temp);
+      const n = worldNoiseSample(wx, wy);
+      let biomeId = classifyBiomeFull(wx, wy);
+      // Rivers cut across land biomes (never ocean/lake/mountain, and never on the highest
+      // peaks) -- a thin, winding band wherever the domain-warped ridged noise sits near its
+      // centerline. See riverFactor().
+      if (BIOMES[biomeId] && BIOMES[biomeId].walkable && n.elev < 0.72) {
+        if (riverFactor(wx, wy) < 0.010) biomeId = 'river';
+      }
       const t = makeTile(biomeId);
       const h = coordHash(wx, wy, SEED + 42);
       if (t.walkable) {
-        if (biomeId === 'forest' && h < 0.12) { t.feature = 'tree'; t.walkable = false; t.glyph = 'T'; t.color = '#2e6b2e'; initDestructibleFeature(t); }
-        else if (biomeId === 'denseforest' && h < 0.28) { t.feature = 'tree'; t.walkable = false; t.glyph = 'T'; t.color = '#1f4f1f'; initDestructibleFeature(t); }
-        else if (biomeId === 'desert' && h < 0.03) { t.feature = 'cactus'; t.walkable = false; t.glyph = 'Y'; t.color = '#3f7a3f'; initDestructibleFeature(t); }
-        else if (biomeId === 'swamp' && h < 0.10) { t.feature = 'water'; t.walkable = false; t.glyph = '~'; t.color = '#2a3a1a'; }
-        else if (biomeId === 'plains' && h > 0.985) { t.feature = 'rock'; t.walkable = false; t.glyph='*'; t.color='#8a8a8a'; }
+        // Data-driven decor: each biome can declare its own scatter of scenery features (see
+        // BIOMES.*.decor) instead of a hardcoded per-biome if/else chain -- adding a new biome
+        // with its own scenery is now purely a data change, never a code change here.
+        const decorList = (BIOMES[biomeId] && BIOMES[biomeId].decor) || null;
+        if (decorList) {
+          for (const d of decorList) {
+            if (h < d.chance) {
+              t.feature = d.feature; t.glyph = d.glyph; t.color = d.color;
+              if (d.walkableOverride !== undefined) t.walkable = d.walkableOverride; else t.walkable = false;
+              if (d.destructible) initDestructibleFeature(t);
+              break;
+            }
+          }
+        }
       }
       row.push(t);
     }
@@ -15324,14 +15953,14 @@ function generateChunk(cx, cy) {
     buildSettlementCell(chunk, cx, cy, membership);
   } else {
     const sHash = coordHash(cx, cy, SEED + 12345);
-    const goodBiome = ['plains', 'forest', 'desert', 'tundra', 'swamp'].includes(centerBiome);
+    const goodBiome = SETTLEMENT_BIOMES.includes(centerBiome);
 
     if (sHash < 0.11 && goodBiome && (Math.abs(cx) + Math.abs(cy) > 0)) {
       buildSettlement(chunk, cx, cy, sHash);
     } else {
       const dHash = coordHash(cx, cy, SEED + 98765);
       if (dHash < 0.15 && centerBiome !== 'ocean') {
-        placeDungeonEntrance(chunk, cx, cy, dHash);
+        placeDungeonEntrance(chunk, cx, cy, dHash, centerBiome);
       } else {
         const pHash = coordHash(cx, cy, SEED + 555111);
         if (pHash < 0.06 && centerBiome !== 'ocean' && centerBiome !== 'mountain') {
@@ -15343,18 +15972,21 @@ function generateChunk(cx, cy) {
 
   if (!chunk.settlement && !chunk.poi && !chunk.dungeonEntrance) {
     maybeCarveLake(tiles, cx, cy, centerBiome);
+    maybeCarveRoadsToSettlements(chunk, cx, cy);
     const spawnedBoss = maybeSpawnOverworldBoss(chunk, cx, cy, centerBiome, rng);
     const spawnCount = randInt(rng, 0, 3);
     for (let i = 0; i < spawnCount; i++) {
       const lx = randInt(rng, 1, CH - 2), ly = randInt(rng, 1, CH - 2);
       const t = tiles[ly][lx];
-      if (!t.walkable && t.biome !== 'ocean' && t.biome !== 'lake') continue;
+      if (!t.walkable && t.biome !== 'ocean' && t.biome !== 'lake' && t.biome !== 'river') continue;
       const b = BIOMES[t.biome];
       if (!b.encounter.length) continue;
       const mid = weightedChoice(rng, b.encounter);
-      chunk.monsters.push(makeMonster(mid, cx * CH + lx, cy * CH + ly, overworldDangerScale(cx, cy), rng));
+      const dangerMult = b.dangerMult || 1;
+      chunk.monsters.push(makeMonster(mid, cx * CH + lx, cy * CH + ly, overworldDangerScale(cx, cy) * dangerMult, rng));
     }
     scatterWaterStructures(chunk, cx, cy, rng);
+    scatterBiomeStructures(chunk, cx, cy, rng);
     const itemChance = rng();
     if (itemChance < 0.10) {
       const lx = randInt(rng, 1, CH - 2), ly = randInt(rng, 1, CH - 2);
@@ -16836,7 +17468,7 @@ function movePlayer(dx, dy, forceAttack) {
     return;
   }
   const t = curTileAt(nx, ny);
-  const isWaterTile = t && (t.feature === 'water' || t.biome === 'ocean' || t.biome === 'lake');
+  const waterTile = isWaterTile(t);
   // House Doors & Lockpicking: a lock-capable house door that's currently locked blocks the player
   // specifically, even though the tile itself stays walkable=true (so the resident's own pathing,
   // and everything else that just checks walkability, is unaffected -- see isHouseDoorLocked).
@@ -16897,7 +17529,7 @@ function movePlayer(dx, dy, forceAttack) {
       log(`A ${t.statueName || 'weathered statue'} blocks the way.`);
       return;
     }
-    if (isWaterTile && !curIsDungeon()) {
+    if (waterTile && !curIsDungeon()) {
       const vessel = getBestVessel(player);
       const flying = canFly(player);
       if (canSwim(player)) {
@@ -17051,8 +17683,10 @@ function endTurn() {
   tickDungeonAlarm();
   processTerrainEffects();
   if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
+  applyBiomeEnvironmentalEffect();
+  if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
   const curT = curTileAt(player.x, player.y);
-  const playerInWater = curT && (curT.feature === 'water' || curT.biome === 'ocean' || curT.biome === 'lake') && !curIsDungeon();
+  const playerInWater = isWaterTile(curT) && !curIsDungeon();
   if (!playerInWater) {
     const staminaRegen = Math.max(1, (player.staminaRegenBonus ? 6 : 3) - (player.staminaRegenPenalty || 0));
     // wearing armor heavier than your STR supports means you're spending some of every turn's
