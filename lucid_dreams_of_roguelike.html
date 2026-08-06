@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.28.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.29.0-alpha</div>
     </div>
   </div>
 
@@ -1110,24 +1110,24 @@ function addItemToList(list, item) {
 
 // ---- Monsters ----
 const MONSTER_BASES = {
-  rabbit:  { name:'Rabbit', glyph:'r', color:'#c9b8a0', hp:4, str:2, dex:8, atk:[1,1], armor:0, xp:2, behavior:'flee', biomes:['plains','beach'] },
-  deer:    { name:'Deer', glyph:'d', color:'#a9834a', hp:10, str:4, dex:9, atk:[1,3], armor:0, xp:4, behavior:'flee', biomes:['plains','forest'] },
-  gull:    { name:'Gull', glyph:'v', color:'#dfe6ee', hp:3, str:2, dex:10, atk:[1,1], armor:0, xp:2, behavior:'flee', biomes:['beach'] },
-  crab:    { name:'Crab', glyph:'c', color:'#c9704a', hp:6, str:4, dex:5, atk:[1,3], armor:2, xp:3, behavior:'aggressive', biomes:['beach'] },
-  boar:    { name:'Wild Boar', glyph:'b', color:'#8a6a3d', hp:14, str:8, dex:6, atk:[2,5], armor:1, xp:7, behavior:'aggressive', biomes:['plains','forest'] },
-  wolf:    { name:'Wolf', glyph:'w', color:'#9a9a9a', hp:12, str:7, dex:11, atk:[2,5], armor:0, xp:8, behavior:'aggressive', biomes:['plains','forest','denseforest','tundra'] },
-  spider:  { name:'Giant Spider', glyph:'s', color:'#5a3a5a', hp:10, str:6, dex:12, atk:[1,4], armor:1, xp:8, behavior:'aggressive', biomes:['forest','denseforest'], poison:2 },
-  bear:    { name:'Bear', glyph:'B', color:'#6a4a2a', hp:28, str:14, dex:7, atk:[4,9], armor:2, xp:16, behavior:'aggressive', biomes:['denseforest','tundra'] },
-  bandit:  { name:'Bandit', glyph:'p', color:'#c95a5a', hp:16, str:9, dex:9, atk:[2,6], armor:2, xp:12, behavior:'aggressive', biomes:['forest','desert','denseforest'], dropGold:true },
-  scorpion:{ name:'Scorpion', glyph:'s', color:'#c9a06a', hp:8, str:6, dex:10, atk:[1,4], armor:2, xp:7, behavior:'aggressive', biomes:['desert'], poison:3 },
-  jackal:  { name:'Jackal', glyph:'j', color:'#c9a06a', hp:9, str:6, dex:12, atk:[1,4], armor:0, xp:6, behavior:'aggressive', biomes:['desert'] },
-  vulture: { name:'Vulture', glyph:'v', color:'#8a6a3d', hp:7, str:5, dex:9, atk:[1,3], armor:0, xp:5, behavior:'aggressive', biomes:['desert'] },
-  yeti:    { name:'Yeti', glyph:'Y', color:'#dfe6ee', hp:30, str:15, dex:6, atk:[4,10], armor:2, xp:20, behavior:'aggressive', biomes:['tundra'] },
-  frostling:{name:'Frostling', glyph:'f', color:'#7fd0e0', hp:9, str:6, dex:8, atk:[1,4], armor:0, xp:6, behavior:'aggressive', biomes:['tundra'], frost:2 },
-  crocodile:{name:'Crocodile', glyph:'c', color:'#4a6a3a', hp:20, str:11, dex:6, atk:[3,7], armor:3, xp:13, behavior:'aggressive', biomes:['swamp'], aquatic:true },
-  leech:   { name:'Giant Leech', glyph:'l', color:'#5a2a2a', hp:6, str:4, dex:7, atk:[1,3], armor:0, xp:4, behavior:'aggressive', biomes:['swamp'], lifesteal:true },
-  snake:   { name:'Snake', glyph:'n', color:'#5ac95a', hp:6, str:4, dex:11, atk:[1,3], armor:0, xp:5, behavior:'aggressive', biomes:['swamp','desert'], poison:2 },
-  'bog-zombie':{name:'Bog Zombie', glyph:'z', color:'#5c6b35', hp:18, str:9, dex:3, atk:[2,6], armor:1, xp:11, behavior:'aggressive', biomes:['swamp'] },
+  rabbit:  { name:'Rabbit', glyph:'r', color:'#c9b8a0', hp:4, str:2, dex:8, atk:[1,1], armor:0, xp:2, behavior:'flee' },
+  deer:    { name:'Deer', glyph:'d', color:'#a9834a', hp:10, str:4, dex:9, atk:[1,3], armor:0, xp:4, behavior:'flee' },
+  gull:    { name:'Gull', glyph:'v', color:'#dfe6ee', hp:3, str:2, dex:10, atk:[1,1], armor:0, xp:2, behavior:'flee' },
+  crab:    { name:'Crab', glyph:'c', color:'#c9704a', hp:6, str:4, dex:5, atk:[1,3], armor:2, xp:3, behavior:'aggressive' },
+  boar:    { name:'Wild Boar', glyph:'b', color:'#8a6a3d', hp:14, str:8, dex:6, atk:[2,5], armor:1, xp:7, behavior:'aggressive' },
+  wolf:    { name:'Wolf', glyph:'w', color:'#9a9a9a', hp:12, str:7, dex:11, atk:[2,5], armor:0, xp:8, behavior:'aggressive' },
+  spider:  { name:'Giant Spider', glyph:'s', color:'#5a3a5a', hp:10, str:6, dex:12, atk:[1,4], armor:1, xp:8, behavior:'aggressive', poison:2 },
+  bear:    { name:'Bear', glyph:'B', color:'#6a4a2a', hp:28, str:14, dex:7, atk:[4,9], armor:2, xp:16, behavior:'aggressive' },
+  bandit:  { name:'Bandit', glyph:'p', color:'#c95a5a', hp:16, str:9, dex:9, atk:[2,6], armor:2, xp:12, behavior:'aggressive', dropGold:true },
+  scorpion:{ name:'Scorpion', glyph:'s', color:'#c9a06a', hp:8, str:6, dex:10, atk:[1,4], armor:2, xp:7, behavior:'aggressive', poison:3 },
+  jackal:  { name:'Jackal', glyph:'j', color:'#c9a06a', hp:9, str:6, dex:12, atk:[1,4], armor:0, xp:6, behavior:'aggressive' },
+  vulture: { name:'Vulture', glyph:'v', color:'#8a6a3d', hp:7, str:5, dex:9, atk:[1,3], armor:0, xp:5, behavior:'aggressive' },
+  yeti:    { name:'Yeti', glyph:'Y', color:'#dfe6ee', hp:30, str:15, dex:6, atk:[4,10], armor:2, xp:20, behavior:'aggressive' },
+  frostling:{name:'Frostling', glyph:'f', color:'#7fd0e0', hp:9, str:6, dex:8, atk:[1,4], armor:0, xp:6, behavior:'aggressive', frost:2 },
+  crocodile:{name:'Crocodile', glyph:'c', color:'#4a6a3a', hp:20, str:11, dex:6, atk:[3,7], armor:3, xp:13, behavior:'aggressive', aquatic:true },
+  leech:   { name:'Giant Leech', glyph:'l', color:'#5a2a2a', hp:6, str:4, dex:7, atk:[1,3], armor:0, xp:4, behavior:'aggressive', lifesteal:true },
+  snake:   { name:'Snake', glyph:'n', color:'#5ac95a', hp:6, str:4, dex:11, atk:[1,3], armor:0, xp:5, behavior:'aggressive', poison:2 },
+  'bog-zombie':{name:'Bog Zombie', glyph:'z', color:'#5c6b35', hp:18, str:9, dex:3, atk:[2,6], armor:1, xp:11, behavior:'aggressive' },
   // dungeon-tier
   giantrat:{ name:'Giant Rat', glyph:'r', color:'#9a8a6a', hp:6, str:4, dex:8, atk:[1,3], armor:0, xp:3, behavior:'aggressive', dtier:1 },
   skeleton:{ name:'Skeleton', glyph:'z', color:'#dfe6ee', hp:14, str:8, dex:7, atk:[2,5], armor:2, xp:9, behavior:'aggressive', dtier:1 },
@@ -1262,10 +1262,10 @@ Object.assign(MONSTER_BASES.orc,      { loot:[{id:'ore',chance:0.3,min:1,max:2},
 Object.assign(MONSTER_BASES.troll,    { loot:[{id:'pelt',chance:0.7,min:2,max:3}] });
 
 // new wildlife
-MONSTER_BASES.fox = { name:'Fox', glyph:'f', color:'#c9704a', hp:6, str:4, dex:12, atk:[1,3], armor:0, xp:4, behavior:'flee', biomes:['forest','plains'], loot:[{id:'pelt',chance:0.6,min:1,max:1}] };
-MONSTER_BASES.elk = { name:'Elk', glyph:'e', color:'#8a6a3d', hp:16, str:7, dex:8, atk:[2,4], armor:0, xp:6, behavior:'flee', biomes:['plains','tundra'], loot:[{id:'meat_raw',chance:0.8,min:2,max:4},{id:'pelt',chance:0.6,min:1,max:2}] };
-MONSTER_BASES.giantant = { name:'Giant Ant', glyph:'a', color:'#8a5a2a', hp:9, str:6, dex:9, atk:[1,4], armor:1, xp:6, behavior:'aggressive', biomes:['desert','plains'] };
-MONSTER_BASES.hawk = { name:'Hawk', glyph:'v', color:'#a9834a', hp:5, str:3, dex:14, atk:[1,3], armor:0, xp:4, behavior:'flee', biomes:['plains','tundra','mountain'] };
+MONSTER_BASES.fox = { name:'Fox', glyph:'f', color:'#c9704a', hp:6, str:4, dex:12, atk:[1,3], armor:0, xp:4, behavior:'flee', loot:[{id:'pelt',chance:0.6,min:1,max:1}] };
+MONSTER_BASES.elk = { name:'Elk', glyph:'e', color:'#8a6a3d', hp:16, str:7, dex:8, atk:[2,4], armor:0, xp:6, behavior:'flee', loot:[{id:'meat_raw',chance:0.8,min:2,max:4},{id:'pelt',chance:0.6,min:1,max:2}] };
+MONSTER_BASES.giantant = { name:'Giant Ant', glyph:'a', color:'#8a5a2a', hp:9, str:6, dex:9, atk:[1,4], armor:1, xp:6, behavior:'aggressive' };
+MONSTER_BASES.hawk = { name:'Hawk', glyph:'v', color:'#a9834a', hp:5, str:3, dex:14, atk:[1,3], armor:0, xp:4, behavior:'flee' };
 
 // new dungeon monsters
 MONSTER_BASES.necromancer = { name:'Necromancer', glyph:'p', color:'#5a2a8a', hp:18, str:6, dex:9, atk:[2,5], armor:0, xp:16, behavior:'ranged', dtier:2, loot:[{id:'bone',chance:0.6,min:2,max:3}] };
@@ -2516,7 +2516,7 @@ CYBERNETICS.push(
   // ---- Defense: tier 2-5 ----
   { id:'nanoweave2', name:'Nanoweave Mesh II', category:'Defense', activation:'passive', tier:2, desc:'A denser weave of self-repairing nanofiber.', apply:()=>{ player.cyberArmor=(player.cyberArmor||0)+5; }, remove:()=>{ player.cyberArmor=(player.cyberArmor||0)-5; } },
   { id:'autododge', name:'Autonomic Dodge Reflex', category:'Defense', activation:'passive', tier:3, desc:'Reflex wiring that moves your body before you consciously react.', apply:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.06; }, remove:()=>{ player.dodgeChance-=0.06; } },
-  { id:'hardenedplating', name:'Hardened Subdermal Plating', category:'Defense', activation:'passive', tier:4, desc:'Military-grade plating fused directly to bone.', apply:()=>{ player.cyberArmor=(player.cyberArmor||0)+8; player.maxHp+=15; player.hp+=15; }, remove:()=>{ player.cyberArmor=(player.cyberArmor||0)-8; player.maxHp-=15; } },
+  { id:'hardenedplating', name:'Hardened Subdermal Plating', category:'Defense', activation:'passive', tier:4, desc:'Military-grade plating fused directly to bone.', apply:()=>{ player.cyberArmor=(player.cyberArmor||0)+8; player.maxHp+=15; player.hp+=15; }, remove:()=>{ player.cyberArmor=(player.cyberArmor||0)-8; player.maxHp-=15; player.hp=Math.min(player.hp,player.maxHp); } },
   { id:'lastditchprotocol', name:'Last-Ditch Protocol', category:'Defense', activation:'active', resource:'charge', mp:40, type:'heal', power:[40,60], range:0, tier:5, desc:'An emergency full-system medical override, saved for when everything else fails.' },
   // ---- Exotic: tier 2-5 ----
   { id:'plasmalance', name:'Plasma Lance', category:'Exotic', activation:'active', resource:'charge', mp:32, type:'damage', power:[24,38], range:6, destructive:true, igniteGround:true, tier:3, desc:'A superheated plasma bolt that ignites whatever it touches.' },
@@ -2539,7 +2539,7 @@ CYBERNETICS.push(
   { id:'siegebattery', name:'Siege Battery Array', category:'Weapons Systems', activation:'active', resource:'charge', mp:58, type:'damage', power:[50,78], range:8, aoe:true, aoeRadius:2, destructive:true, tier:5, desc:'Illegal in eleven nations. A full siege weapon crammed into a chest cavity.' },
   // ---- Bio-Augment (new category: organic/HP-focused augments) ----
   { id:'synthblood', name:'Synthetic Blood Filter', category:'Bio-Augment', activation:'passive', tier:1, desc:'Filters toxins from your bloodstream automatically.', apply:()=>{ player.poisonDmgReduction=(player.poisonDmgReduction||0)+0.2; }, remove:()=>{ player.poisonDmgReduction-=0.2; } },
-  { id:'organcloning', name:'Redundant Organ Cloning', category:'Bio-Augment', activation:'passive', tier:2, desc:'Backup organs grown and stored subdermally.', apply:()=>{ player.maxHp+=20; player.hp+=20; }, remove:()=>{ player.maxHp-=20; } },
+  { id:'organcloning', name:'Redundant Organ Cloning', category:'Bio-Augment', activation:'passive', tier:2, desc:'Backup organs grown and stored subdermally.', apply:()=>{ player.maxHp+=20; player.hp+=20; }, remove:()=>{ player.maxHp-=20; player.hp=Math.min(player.hp,player.maxHp); } },
   { id:'adrenalpump', name:'Adrenal Pump System', category:'Bio-Augment', activation:'active', resource:'charge', mp:16, type:'heal', power:[16,26], range:0, tier:2, desc:'Floods your system with a precisely-dosed stimulant.' },
   { id:'boneweave', name:'Bone Density Weave', category:'Bio-Augment', activation:'passive', tier:3, desc:'Your skeleton is reinforced with a synthetic lattice.', apply:()=>{ player.maxHp+=25; player.con+=2; }, remove:()=>{ player.maxHp-=25; player.con-=2; } },
   { id:'regenmesh', name:'Regenerative Mesh', category:'Bio-Augment', activation:'passive', tier:4, desc:'A living mesh under the skin that accelerates all healing.', apply:()=>{ player.mutationRegen=(player.mutationRegen||0)+2; }, remove:()=>{ player.mutationRegen=(player.mutationRegen||0)-2; } },
@@ -2581,7 +2581,7 @@ CYBERNETICS.push(
   { id:'neurospike', name:'Neurospike Launcher', category:'Neural', activation:'active', resource:'charge', mp:20, type:'debuff', stat:'int', power:-8, dur:10, range:5, tier:2, desc:'A small dart that scrambles higher cognitive function.' },
   { id:'empfist', name:'EMP Knuckles', category:'Combat', activation:'active', resource:'charge', mp:18, type:'debuff', stat:'dex', power:-7, dur:8, range:1, tier:2, desc:'A short-range EMP burst delivered by a direct hit.' },
   { id:'graftedmuscle', name:'Grafted Muscle Fiber', category:'Bio-Augment', activation:'passive', tier:2, desc:'Denser synthetic muscle tissue.', apply:()=>{ player.str+=3; }, remove:()=>{ player.str-=3; } },
-  { id:'voidcoreheart', name:'Void Core Heart', category:'Exotic', activation:'passive', tier:5, desc:'Your natural heart, replaced with something that shouldn\'t work but does.', apply:()=>{ player.maxHp+=35; player.maxCharge=(player.maxCharge||60)+30; player.charge=(player.charge||60)+30; }, remove:()=>{ player.maxHp-=35; player.maxCharge-=30; } },
+  { id:'voidcoreheart', name:'Void Core Heart', category:'Exotic', activation:'passive', tier:5, desc:'Your natural heart, replaced with something that shouldn\'t work but does.', apply:()=>{ player.maxHp+=35; player.maxCharge=(player.maxCharge||60)+30; player.charge=(player.charge||60)+30; }, remove:()=>{ player.maxHp-=35; player.maxCharge-=30; player.charge=Math.min(player.charge,player.maxCharge); } },
 );
 
 // ---- eldritch mutations: gained via corruption; permanent once acquired; active ones cost HP ----
@@ -2817,11 +2817,58 @@ TALENTS_V2.push(
   { id:'eldergod', name:'Elder God', category:'eldritch', desc:'Your presence alone unsettles reality: strong chance to confuse or frighten anything you strike', tier:5, requires:{level:20, talent:'mindshatter'}, apply:()=>{ player.eldritchConfuseChance=(player.eldritchConfuseChance||0)+0.2; player.eldritchFearChance=(player.eldritchFearChance||0)+0.2; player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.2; } }
 );
 
-// ---- new item: raft (water travel) ----
+// ---- vessels: a data-driven water-travel framework. A "vessel" is just a carryable item (like
+// any other piece of gear) whose id also appears as a key in the VESSELS table below, describing
+// what owning it does: it grants free water crossing (see canSwim), a combat DEX bonus while
+// actually in the water (see effDex -- a rowboat or ship is a steadier platform to fight from than
+// treading water), and the message logged when it's used to cross. canSwim(), movePlayer's
+// water-crossing branch, and effDex all go through getBestVessel() rather than a hardcoded "does
+// the player own a raft?" check, so every current and future vessel -- rowboat, sailing ship, a
+// canoe or submarine added later -- is a single entry here plus one ITEM_BASES line, never new
+// branching in the movement or combat code. Add more fields the same way if a future vessel needs
+// to do something else entirely (e.g. a stamina discount, cargo capacity). `tier` breaks ties when
+// the player owns more than one: the best vessel they're carrying is the one that's used and named
+// in the log line.
+const VESSELS = {
+  raft:         { name:'Wooden Raft',  tier:1, crossMsg:'You paddle your raft across the water.' },
+  rowboat:      { name:'Rowboat',      tier:2, crossMsg:'You row across the water with steady strokes.', combatDexBonus:1 },
+  sailing_ship: { name:'Sailing Ship', tier:3, crossMsg:'Your ship cuts smoothly across the water, deck barely rocking.', combatDexBonus:2 },
+};
+// Returns the def of the best (highest-tier) vessel the player is carrying, or null if they have
+// none. Only meaningful for the player -- monsters/NPCs that can swim do so on their own bodies,
+// not gear -- but takes an entity param to match the shape of canFly/canSwim/isAquaticOnly so a
+// caller never needs to special-case "is this the player?" itself.
+function getBestVessel(e) {
+  if (e !== player) return null;
+  let best = null;
+  for (const it of player.inventory) {
+    const v = VESSELS[it.id];
+    if (v && (!best || v.tier > best.tier)) best = v;
+  }
+  return best;
+}
 ITEM_BASES.push(
   { id:'raft', name:'Wooden Raft', type:'misc', glyph:'=', color:'#8a6a3d', value:40 },
+  { id:'rowboat', name:'Rowboat', type:'misc', glyph:'b', color:'#a0834a', value:110 },
+  { id:'sailing_ship', name:'Sailing Ship', type:'misc', glyph:'w', color:'#7a8a9a', value:400 },
 );
-RECIPES.push({ id:'craft_raft', name:'Build a Raft', category:'crafting', inputs:[{id:'wood',qty:8},{id:'cloth',qty:2}], output:{id:'raft',qty:1} });
+RECIPES.push(
+  { id:'craft_raft', name:'Build a Raft', category:'crafting', inputs:[{id:'wood',qty:8},{id:'cloth',qty:2}], output:{id:'raft',qty:1} },
+  { id:'craft_rowboat', name:'Build a Rowboat', category:'crafting', inputs:[{id:'wood',qty:16},{id:'iron_ingot',qty:2},{id:'cloth',qty:2}], output:{id:'rowboat',qty:1} },
+  { id:'craft_sailing_ship', name:'Build a Sailing Ship', category:'crafting', inputs:[{id:'wood',qty:40},{id:'iron_ingot',qty:8},{id:'cloth',qty:10}], output:{id:'sailing_ship',qty:1} },
+);
+// ---- salvaging found watercraft: ties specific OCEAN_STRUCTURES ids (see their definitions
+// further down) to the vessel item they yield when the player salvages them via pickUp(). Kept as
+// its own lookup, separate from OCEAN_STRUCTURES itself, so a structure can exist purely as scenery
+// (sea_stack, floating_debris) without needing a `salvageVessel: null` on every entry -- only
+// structures actually worth boarding need to appear here at all.
+const STRUCTURE_SALVAGE_VESSEL = {
+  fishing_boat: 'rowboat',
+  capsized_rowboat: 'rowboat',
+  derelict_raft: 'raft',
+  sailing_ship: 'sailing_ship',
+  pirate_ship: 'sailing_ship',
+};
 
 // ===================== RECIPE EXPANSION: cooking, alchemy, and crafting =====================
 RECIPES.push(
@@ -4101,18 +4148,23 @@ const OVERWORLD_BOSSES = [
   // only appear in chunks that are mostly open ocean (see isDeepOceanChunk in
   // maybeSpawnOverworldBoss) so these read as "something huge in the middle of the sea," not
   // a random puddle ambush.
-  { id:'the_kraken', name:'The Kraken', glyph:'K', color:'#0a2a3a', hp:280, str:26, dex:9, atk:[11,22], armor:6, xp:460, boss:true, bossTier:'rare', faction:'aquatic', aquatic:true,
+  // All four of these are hulking, legless sea/lake monsters -- tentacles, fins, or a serpentine
+  // coil, nothing built to stand on a beach -- so waterOnly is set by hand rather than left to the
+  // name-matching heuristic in the MONSTER_BASES trait pass (which would catch "Kraken" and
+  // "Serpent" fine, but miss "Megalodon" and "Loch Devourer" since those names don't contain a
+  // recognizable body-plan word). See isAquaticOnly()/isPassableFor() for the enforcement.
+  { id:'the_kraken', name:'The Kraken', glyph:'K', color:'#0a2a3a', hp:280, str:26, dex:9, atk:[11,22], armor:6, xp:460, boss:true, bossTier:'rare', faction:'aquatic', aquatic:true, waterOnly:true,
     behavior:'aggressive', biomes:['ocean'], multiattack:2,
     desc:'Tentacled dark beneath the waves, older than the charts that fail to mark where it lives.' },
-  { id:'megalodon', name:'The Megalodon', glyph:'&', color:'#3a5a6a', hp:200, str:24, dex:14, atk:[10,19], armor:4, xp:360, boss:true, bossTier:'uncommon', faction:'aquatic', aquatic:true,
+  { id:'megalodon', name:'The Megalodon', glyph:'&', color:'#3a5a6a', hp:200, str:24, dex:14, atk:[10,19], armor:4, xp:360, boss:true, bossTier:'uncommon', faction:'aquatic', aquatic:true, waterOnly:true,
     behavior:'aggressive', biomes:['ocean'],
     desc:'A shark the length of a longship, its passing felt as a wave before it is ever seen.' },
-  { id:'sea_serpent', name:'Coilfang, the Endless Serpent', glyph:'~', color:'#1a6a5a', hp:230, str:20, dex:16, atk:[9,18], armor:5, xp:390, boss:true, bossTier:'uncommon', faction:'aquatic', aquatic:true,
+  { id:'sea_serpent', name:'Coilfang, the Endless Serpent', glyph:'~', color:'#1a6a5a', hp:230, str:20, dex:16, atk:[9,18], armor:5, xp:390, boss:true, bossTier:'uncommon', faction:'aquatic', aquatic:true, waterOnly:true,
     behavior:'aggressive', biomes:['ocean'], multiattack:2, causesFear:true,
     desc:"A serpentine coil breaks the surface, and keeps breaking it, far longer than anything that length should be able to stay hidden underneath." },
   // Lake counterpart to the ocean superbosses above -- smaller scale to match a lake's smaller
   // footprint, but still a genuine "don't go in the deep part" encounter.
-  { id:'loch_devourer', name:'The Loch Devourer', glyph:'e', color:'#2a5a3a', hp:150, str:18, dex:9, atk:[7,14], armor:3, xp:220, boss:true, bossTier:'uncommon', faction:'aquatic', aquatic:true,
+  { id:'loch_devourer', name:'The Loch Devourer', glyph:'e', color:'#2a5a3a', hp:150, str:18, dex:9, atk:[7,14], armor:3, xp:220, boss:true, bossTier:'uncommon', faction:'aquatic', aquatic:true, waterOnly:true,
     behavior:'aggressive', biomes:['lake'],
     desc:'Something old and eel-like coils beneath a lake too calm to explain how it stays hidden.' },
 ];
@@ -4127,7 +4179,13 @@ OVERWORLD_BOSSES.forEach(b => {
     breathWeapon: b.breathWeapon || null, faction: b.faction || 'beast',
     scriptedAI: b.scriptedAI || null, engageLine: b.engageLine || null, deathLine: b.deathLine || null,
     lore: b.lore || null, causesConfuse: b.causesConfuse || false, multiattack: b.multiattack || null,
-    guaranteedDropTemplate: b.guaranteedDropTemplate || null, aquatic: b.aquatic || false,
+    guaranteedDropTemplate: b.guaranteedDropTemplate || null, aquatic: b.aquatic,
+    // Left as `b.waterOnly` (undefined when not hand-set), not coerced to false, for the same
+    // reason `aquatic` above is: coercing either to a real `false` here would permanently block
+    // the name-based heuristic in the MONSTER_BASES trait pass from ever filling it in for a
+    // *future* boss that doesn't set the flag explicitly -- the pass only fills in gaps where the
+    // value is still `undefined`.
+    waterOnly: b.waterOnly,
   };
 });
 
@@ -4530,18 +4588,18 @@ const STORY_BOSS_AI = {
 MONSTER_BASES.choir_acolyte = { name:'Choir Acolyte', glyph:'a', color:'#f0e0a0', hp:38, str:12, dex:14, atk:[4,9], armor:3, xp:26, behavior:'aggressive', dtier:2, faction:'celestial' };
 MONSTER_BASES.hymnal_construct = { name:'Hymnal Construct', glyph:'H', color:'#d4b45a', hp:70, str:18, dex:8, atk:[7,14], armor:8, xp:45, behavior:'aggressive', dtier:3, faction:'celestial' };
 MONSTER_BASES.sundered_cherub = { name:'Sundered Cherub', glyph:'c', color:'#e8c9d0', hp:30, str:9, dex:19, atk:[3,8], armor:1, xp:24, behavior:'ranged', dtier:2, faction:'celestial' };
-MONSTER_BASES.choir_wraith = { name:'Choir Wraith', glyph:'w', color:'#fff6d8', hp:58, str:15, dex:16, atk:[6,12], armor:2, xp:40, behavior:'ambush', ambushRange:2, dtier:3, faction:'celestial', causesFear:true };
+MONSTER_BASES.choir_wraith = { name:'Choir Wraith', glyph:'w', color:'#fff6d8', hp:58, str:15, dex:16, atk:[6,12], armor:2, xp:40, behavior:'aggressive', ambush:true, ambushRange:2, dtier:3, faction:'celestial', causesFear:true };
 MONSTER_BASES.reliquary_warden = { name:'Reliquary Warden', glyph:'W', color:'#e0c060', hp:95, str:22, dex:11, atk:[9,17], armor:10, xp:62, behavior:'aggressive', dtier:4, faction:'celestial', miniboss:true };
 
 // ---- Cosmic faction: The Drift dimension #4 and its Derelict Hulk gate dungeon ----
 MONSTER_BASES.void_drifter = { name:'Void Drifter', glyph:'v', color:'#4ae0d0', hp:34, str:11, dex:15, atk:[3,8], armor:1, xp:24, behavior:'aggressive', dtier:2, faction:'cosmic' };
-MONSTER_BASES.static_wraith = { name:'Static Wraith', glyph:'w', color:'#9ad8ff', hp:46, str:13, dex:17, atk:[4,10], armor:0, xp:34, behavior:'ambush', ambushRange:2, dtier:3, faction:'cosmic' };
+MONSTER_BASES.static_wraith = { name:'Static Wraith', glyph:'w', color:'#9ad8ff', hp:46, str:13, dex:17, atk:[4,10], armor:0, xp:34, behavior:'aggressive', ambush:true, ambushRange:2, dtier:3, faction:'cosmic' };
 MONSTER_BASES.husk_drone = { name:'Husk Drone', glyph:'H', color:'#7a8a9a', hp:64, str:16, dex:9, atk:[6,12], armor:7, xp:44, behavior:'ranged', dtier:3, faction:'cosmic' };
 MONSTER_BASES.star_leech = { name:'Star Leech', glyph:'e', color:'#d0a0ff', hp:28, str:9, dex:13, atk:[3,7], armor:0, xp:22, behavior:'aggressive', dtier:2, faction:'cosmic' };
 MONSTER_BASES.null_sentinel = { name:'Null Sentinel', glyph:'N', color:'#2ae0c0', hp:100, str:24, dex:10, atk:[9,18], armor:11, xp:65, behavior:'aggressive', dtier:4, faction:'cosmic', miniboss:true };
 
 // ---- nonEuclid faction: the Fourth Corridor dimension #5 and its Folded Vault gate dungeon ----
-MONSTER_BASES.fold_wraith = { name:'Fold Wraith', glyph:'w', color:'#b090ff', hp:40, str:12, dex:16, atk:[4,9], armor:2, xp:28, behavior:'ambush', ambushRange:2, dtier:2, faction:'nonEuclid' };
+MONSTER_BASES.fold_wraith = { name:'Fold Wraith', glyph:'w', color:'#b090ff', hp:40, str:12, dex:16, atk:[4,9], armor:2, xp:28, behavior:'aggressive', ambush:true, ambushRange:2, dtier:2, faction:'nonEuclid' };
 MONSTER_BASES.angle_eater = { name:'Angle-Eater', glyph:'a', color:'#7a5ac0', hp:52, str:14, dex:12, atk:[5,11], armor:4, xp:36, behavior:'aggressive', dtier:3, faction:'nonEuclid' };
 MONSTER_BASES.recursive_husk = { name:'Recursive Husk', glyph:'H', color:'#8a70d0', hp:66, str:17, dex:9, atk:[6,13], armor:6, xp:44, behavior:'aggressive', dtier:3, faction:'nonEuclid', splitInto:'recursive_husk', splitCount:1 };
 MONSTER_BASES.still_walker = { name:'Still Walker', glyph:'s', color:'#c0b0ff', hp:30, str:10, dex:19, atk:[3,7], armor:1, xp:24, behavior:'ranged', dtier:2, faction:'nonEuclid', causesConfuse:true };
@@ -4553,7 +4611,7 @@ MONSTER_BASES.folded_sentinel = { name:'Folded Sentinel', glyph:'S', color:'#a08
 // from scratch -- per the reminder that reuse is fine as long as the dimension still has enough
 // of its own unique identity. kraken_spawn/abyssal_leviathan are deliberately left alone as their
 // own existing dungeon-exclusive finds. ----
-MONSTER_BASES.drift_wraith = { name:'Drift Wraith', glyph:'w', color:'#3a6a8a', hp:36, str:11, dex:15, atk:[3,8], armor:1, xp:26, behavior:'ambush', ambushRange:2, dtier:2, faction:'drowned', aquatic:true };
+MONSTER_BASES.drift_wraith = { name:'Drift Wraith', glyph:'w', color:'#3a6a8a', hp:36, str:11, dex:15, atk:[3,8], armor:1, xp:26, behavior:'aggressive', ambush:true, ambushRange:2, dtier:2, faction:'drowned', aquatic:true };
 MONSTER_BASES.current_stalker = { name:'Current Stalker', glyph:'c', color:'#1a4a6a', hp:50, str:15, dex:16, atk:[5,11], armor:2, xp:38, behavior:'aggressive', dtier:3, faction:'drowned', aquatic:true };
 MONSTER_BASES.tideglass_horror = { name:'Tideglass Horror', glyph:'H', color:'#5a9ac0', hp:60, str:16, dex:9, atk:[6,12], armor:4, xp:46, behavior:'aggressive', dtier:3, faction:'drowned', aquatic:true, causesFear:true };
 MONSTER_BASES.brinelord = { name:'Brinelord', glyph:'B', color:'#0a5a7a', hp:96, str:22, dex:10, atk:[9,17], armor:9, xp:63, behavior:'aggressive', dtier:4, faction:'drowned', aquatic:true, miniboss:true };
@@ -4570,7 +4628,7 @@ MONSTER_BASES.bramble_knight = { name:'Bramble Knight', glyph:'K', color:'#3a6a2
 MONSTER_BASES.glitch_wisp = { name:'Glitch Wisp', glyph:'*', color:'#3af04a', hp:20, str:7, dex:20, atk:[2,5], armor:0, xp:16, behavior:'ranged', dtier:1, faction:'virus' };
 MONSTER_BASES.corrupted_pixel = { name:'Corrupted Pixel', glyph:'#', color:'#ff2a6a', hp:26, str:9, dex:12, atk:[3,6], armor:1, xp:20, behavior:'aggressive', dtier:2, faction:'virus', splitInto:'corrupted_pixel', splitCount:1 };
 MONSTER_BASES.logic_bomb = { name:'Logic Bomb', glyph:'o', color:'#ffb020', hp:18, str:6, dex:8, atk:[1,3], armor:0, xp:22, behavior:'gascloud', dtier:2, faction:'virus', gasRadius:3, gasDamage:6 };
-MONSTER_BASES.trojan_horse = { name:'Trojan Horse', glyph:'h', color:'#a05aff', hp:56, str:16, dex:11, atk:[6,12], armor:3, xp:42, behavior:'ambush', ambushRange:2, dtier:3, faction:'virus' };
+MONSTER_BASES.trojan_horse = { name:'Trojan Horse', glyph:'h', color:'#a05aff', hp:56, str:16, dex:11, atk:[6,12], armor:3, xp:42, behavior:'aggressive', ambush:true, ambushRange:2, dtier:3, faction:'virus' };
 MONSTER_BASES.worm_process = { name:'Worm Process', glyph:'W', color:'#3af0d0', hp:98, str:20, dex:9, atk:[8,16], armor:5, xp:64, behavior:'aggressive', dtier:4, faction:'virus', miniboss:true, summonId:'corrupted_pixel', summonMax:3 };
 // ---- one new cyber monster for dimension #10, alongside the plan to reuse the existing
 // security_drone/combat_android/hacker_construct/cyber_hound/turret_sentry/nanite_swarm roster ----
@@ -6074,7 +6132,7 @@ MONSTER_BASES.kraken_spawn = { name:'Kraken Spawn', glyph:'K', color:'#1a4a5a', 
 // just empty blue tiles. Both share the existing 'aquatic' faction/monster machinery. ----
 MONSTER_BASES.reef_shark = { name:'Reef Shark', glyph:'s', color:'#4a7a8a', hp:16, str:8, dex:15, atk:[2,6], armor:0, xp:10, behavior:'aggressive', dtier:1, faction:'aquatic', aquatic:true };
 MONSTER_BASES.tide_reaver = { name:'Tide Reaver', glyph:'p', color:'#2a5a6a', hp:26, str:10, dex:11, atk:[3,7], armor:1, xp:18, behavior:'aggressive', dtier:2, faction:'aquatic', aquatic:true, loot:[{id:'gold',chance:0.4,min:2,max:6}] };
-MONSTER_BASES.giant_catfish = { name:'Giant Catfish', glyph:'f', color:'#5a6a4a', hp:20, str:9, dex:6, atk:[2,6], armor:1, xp:12, behavior:'ambush', ambushRange:1, dtier:1, faction:'aquatic', aquatic:true };
+MONSTER_BASES.giant_catfish = { name:'Giant Catfish', glyph:'f', color:'#5a6a4a', hp:20, str:9, dex:6, atk:[2,6], armor:1, xp:12, behavior:'aggressive', ambush:true, ambushRange:1, dtier:1, faction:'aquatic', aquatic:true };
 
 // ---- ooze (sewer, flooded_cave) ----
 MONSTER_BASES.acid_slime = { name:'Acid Slime', glyph:'j', color:'#8ac93a', hp:14, str:6, dex:2, atk:[1,4], armor:0, xp:7, behavior:'aggressive', dtier:1, faction:'ooze', splitInto:'slime_small', splitCount:2, armorPierce:1, corrosive:true };
@@ -6493,6 +6551,17 @@ for (const _mid in MONSTER_BASES) {
   // -- swimming / flying: real terrain traversal (see canFly/canSwim), not flavor text --
   if (base.aquatic === undefined && (base.faction === 'aquatic' || base.faction === 'drowned' ||
       /shark|fish|eel|kraken|crab|leviathan|siren|merfolk|serpent/.test(name))) base.aquatic = true;
+  // -- water-bound vs amphibious: not every swimmer belongs on land. A crocodile, a crab, or a
+  // drowned sailor has legs and comes ashore same as anything else; a shark, eel, or tentacled
+  // horror does not, and chasing the player onto a beach makes no sense for it. This only narrows
+  // creatures already flagged aquatic above -- it never restricts a landbound creature -- and
+  // yields to any monster that already states its own waterOnly value by hand (see the_kraken /
+  // megalodon / etc. below). Add a body-plan word here and every current and future matching
+  // monster (including procedurally-flavored variants) inherits the restriction automatically --
+  // no per-monster special-casing needed. Enforced centrally by isPassableFor()/isAquaticOnly(),
+  // which every movement path (player, chase AI, wander, pathing) already funnels through.
+  if (base.aquatic && base.waterOnly === undefined &&
+      /shark|fish|eel|kraken|leviathan|serpent|siren|merfolk|jellyfish|squid|manta|stingray|whale/.test(name)) base.waterOnly = true;
   if (base.flying === undefined && /bat|hawk|vulture|wyvern|drake|harpy|griffin|phoenix|thunderbird|wisp|specter|spectre|ghost|wraith|banshee|imp|gargoyle|angel|seraph|gull/.test(name)) base.flying = true;
   if (base.flying === undefined && base.faction === 'dragon' && !/wyrm|worm/.test(name)) base.flying = true;
 
@@ -6570,7 +6639,7 @@ let uidCounter = 1;
 const MONSTER_EXTRA_FIELDS = [
   'faction', 'splitInto', 'splitCount', 'multiTile', 'breathWeapon', 'gasRadius', 'gasDamage',
   'summonId', 'summonMax', 'ambush', 'ambushRange', 'burrower', 'phaser', 'berserkHpPct',
-  'multiattack', 'range', 'preferredRange', 'miniboss', 'flying', 'aquatic', 'armorPierce',
+  'multiattack', 'range', 'preferredRange', 'miniboss', 'flying', 'aquatic', 'waterOnly', 'armorPierce',
   'causesFear', 'causesConfuse', 'bossPower', 'corrosive', 'scriptedAI', 'engageLine', 'deathLine', 'lore',
   // ---- Living World AI framework (see Part A above / Part B near monsterAI) ----
   'abilities', 'usesMp', 'usesCharge', 'thrower', 'speciesId', 'predator', 'prey',
@@ -6670,10 +6739,6 @@ function makeCorpse(monster) {
   return { uid: 'c' + (uidCounter++), id: 'corpse', type: 'corpse', name: monster.name + ' Corpse', glyph: '%', color: '#5a4a3a', value: 0, sourceMonsterId: monster.monsterId };
 }
 
-function drawWallRing(chunk, gateSide) {
-  // legacy single-chunk entry point: walls all four sides, gate on the south (bottom) edge
-  drawWallRingSides(chunk, { top: true, bottom: true, left: true, right: true }, gateSide === 'south' ? 'bottom' : gateSide);
-}
 // ---- Multi-chunk settlements: only the side(s) of a given cell that sit on the *outer* edge of
 // the whole settlement footprint get a wall+moat; sides facing an adjacent cell are left
 // completely open, which is what actually forms the wide avenue between districts (each cell's
@@ -7921,10 +7986,16 @@ function buildSettlementCell(chunk, cx, cy, membership) {
   const wantsWalls = !flavor.noWalls;
   const gateSide = ['bottom','left','right','top'].find(s => wallSides[s]) || null;
 
-  // The grand cell: for a 2x2 city, the anchor (0,0); for a 3x3 capital, the true center (1,1) --
-  // the only cell touching no outer edge at all, so its "wall" sides are all false and it reads as
-  // a fully open central plaza.
-  const isGrandCell = footprint === 2 ? (ox === 0 && oy === 0) : (ox === 1 && oy === 1);
+  // The grand cell(s): previously just one -- a palace at the city's anchor (0,0) or the capital's
+  // true center (1,1). A real city has more than one standout building (a cathedral, a guildhall, a
+  // great library), so a city now gets two (opposite corners) and a capital gets four (the true
+  // center plus the four cells directly adjacent to it), each themed differently via
+  // GRAND_BUILDING_THEMES. The true center of a capital -- the only cell touching no outer edge at
+  // all -- still always reads as a fully open central plaza (see wallSides/isOuterCell below); the
+  // other grand cells are ordinary walled districts that happen to contain a big standout building.
+  const grandSlot = grandSlotForCell(footprint, ox, oy);
+  const isGrandCell = grandSlot >= 0;
+  const grandTheme = isGrandCell ? GRAND_BUILDING_THEMES[grandSlot % GRAND_BUILDING_THEMES.length] : null;
 
   // Per-cell building-count target: modest per district (town-scale), but there are several
   // districts (4 for a city, 9 for a capital), which is what actually adds up to a massive
@@ -7946,10 +8017,40 @@ function buildSettlementCell(chunk, cx, cy, membership) {
     targetCount,
     houseCountRatio: 0.3,
     guardCount,
-    grand: isGrandCell ? { roleId: 'noble', w: randInt(rng, 9, 12), h: randInt(rng, 7, 9) } : null,
+    grand: isGrandCell ? { roleId: grandTheme.roleId, w: randInt(rng, 9, 12), h: randInt(rng, 7, 9) } : null,
     settlement: { name, buildings: [], type: tier.charAt(0).toUpperCase() + tier.slice(1), kingdom: kingdom.name, kingdomHistory: kingdom.history, flavor: flavorId,
       primarySpecies: kingdom.primarySpecies, secondarySpecies: kingdom.secondarySpecies, footprint, anchorCx, anchorCy, cellOffset: { ox, oy } },
   });
+}
+
+// ---- Multiple Grand Buildings: each themed slot's roleId picks both which NPC role staffs the
+// building and (via ROLE_FLAVOR_LINES / dialogue) how it feels to visit. Palace always comes
+// first (slot 0) so a city's single grand cell -- the (0,0) corner -- is always the palace, same
+// as before this change; a capital's true center is also always the palace for the same reason.
+const GRAND_BUILDING_THEMES = [
+  { roleId: 'noble', label: 'Palace' },
+  { roleId: 'priest', label: 'Grand Cathedral' },
+  { roleId: 'guildclerk', label: 'Guildhall' },
+  { roleId: 'archivist', label: 'Great Library' },
+];
+function grandSlotForCell(footprint, ox, oy) {
+  if (footprint === 2) {
+    // city, 2x2: opposite corners get a grand building each -- palace at the anchor, a second
+    // themed building diagonally across from it.
+    if (ox === 0 && oy === 0) return 0;
+    if (ox === 1 && oy === 1) return 1;
+    return -1;
+  }
+  if (footprint === 3) {
+    // capital, 3x3: the true center (palace, open plaza) plus the four cells directly adjacent to
+    // it (north/south/east/west), each a different themed grand building.
+    if (ox === 1 && oy === 1) return 0;
+    if (ox === 1 && oy === 0) return 1;
+    if (ox === 1 && oy === 2) return 2;
+    if (ox === 0 && oy === 1) return 3;
+    return -1;
+  }
+  return -1;
 }
 
 // ---- The actual settlement-building logic, shared by both the single-chunk and multi-chunk
@@ -8376,7 +8477,7 @@ function maybeSpawnOverworldBoss(chunk, cx, cy, centerBiome, rng) {
     wanderRadius: 14, scriptedAI: bossDef.scriptedAI || null, engageLine: bossDef.engageLine || null,
     deathLine: bossDef.deathLine || null, lore: bossDef.lore || null, berserkHpPct: bossDef.berserkHpPct || null,
     causesConfuse: bossDef.causesConfuse || false, multiattack: bossDef.multiattack || null,
-    aquatic: bossDef.aquatic || false, faction: bossDef.faction || 'beast', causesFear: bossDef.causesFear || false,
+    aquatic: bossDef.aquatic || false, waterOnly: bossDef.waterOnly || false, faction: bossDef.faction || 'beast', causesFear: bossDef.causesFear || false,
   });
   // A fresh copy with its own uid each spawn -- guaranteedDropTemplate must never be shared by
   // reference across multiple wandering spawns of the same boss, or picking it up in one place
@@ -8606,7 +8707,6 @@ function containersAt(x, y) {
   const t = curTileAt(x, y);
   return (t && t.containers) ? t.containers : [];
 }
-function curContainerAt(x, y) { const arr = containersAt(x, y); return arr.length ? arr[0] : null; }
 function placeContainerAt(x, y, container) {
   if (curIsDungeon()) {
     const lvl = curDungeonLevel();
@@ -9234,6 +9334,11 @@ function effDex(e) {
   if (e !== player) return e.dex;
   let d = player.dex + getBuff('dex');
   if (player.waterDexBonus && isPlayerInWater()) d += player.waterDexBonus;
+  // A steadier platform to fight from: a rowboat or ship under you is a lot less precarious than
+  // treading open water, so the best vessel you're carrying (see VESSELS) adds its own DEX bonus
+  // on top of any talent-driven one, same "only while actually in water" gating.
+  const vessel = isPlayerInWater() ? getBestVessel(player) : null;
+  if (vessel && vessel.combatDexBonus) d += vessel.combatDexBonus;
   return d;
 }
 
@@ -9340,16 +9445,28 @@ function waitTurn() { endTurn(); }
 // avoid a trap" is answered consistently no matter who's asking.
 function canFly(e) { return !!e.flying || (e === player && getBuff('flight') > 0); }
 function canSwim(e) { return !!e.freeSwim || !!e.permaWaterbreathing || !!e.aquatic || canFly(e) ||
-  (e === player && (getBuff('waterbreathing') > 0 || player.inventory.some(i => i.id === 'raft'))); }
+  (e === player && (getBuff('waterbreathing') > 0 || !!getBestVessel(player))); }
 function isChasmFeatureTile(t) { return !!t && t.feature === 'chasm'; }
+// True for a creature with no legs to stand on -- a shark, eel, kraken, etc. (see the `waterOnly`
+// heuristic in the MONSTER_BASES trait pass, or a hand-set `waterOnly:true` on a specific monster
+// def). Flight is checked as an escape hatch for consistency with canSwim's own OR-canFly clause,
+// even though nothing water-bound currently flies -- so a future flying-fish-type oddity wouldn't
+// need this function touched, just its own def.
+function isAquaticOnly(e) { return !!e.waterOnly && !canFly(e); }
 // General walkability check for NPC/monster/ally movement: a tile is passable if it's ordinarily
 // walkable, OR it's water and the entity can swim/fly, OR it's a chasm and the entity can fly.
 // Before this, curWalkable flatly rejected both water and chasm tiles for everyone, so a Thalassi
 // guard or a flying wyvern were blocked by a river exactly like a landlocked Human -- this is what
 // actually lets a swimmer swim and a flyer fly instead of that just being an unused data flag.
+// A water-only entity is the mirror case: land tiles are ordinarily walkable for everyone, but a
+// shark or eel has no business standing on one, so that branch is short-circuited for them first --
+// they only ever get to count a tile passable if it's water they can swim in. This is the one
+// place that decision is made, so it applies identically to chasing, wandering, fleeing, and
+// pathing for every entity in the game, without any per-behavior special-casing.
 function isPassableFor(e, x, y) {
   const t = curTileAt(x, y);
   if (!t) return false;
+  if (isAquaticOnly(e)) return isWaterTile(t) && canSwim(e);
   if (t.walkable) return true;
   if (isWaterTile(t)) return canSwim(e);
   if (isChasmFeatureTile(t)) return canFly(e);
@@ -9893,7 +10010,7 @@ function tradeTransact(letter) {
     const list = player.inventory.filter(i => i.type !== 'misc');
     const it = list[idx];
     if (!it) return;
-    const price = Math.round(it.value * 0.45 * (2 - repMult));
+    const price = Math.round(it.value * 0.45 * Math.max(0.15, 2 - repMult));
     player.gold += price;
     player.inventory = player.inventory.filter(i => i.uid !== it.uid);
     Sound.play('tradeSell');
@@ -10177,6 +10294,12 @@ const MOVE_KEYS = {
   k: [0,-1], j: [0,1], h: [-1,0], l: [1,0],
   y: [-1,-1], u: [1,-1], b: [-1,1], n: [1,1],
 };
+// Letters MOVE_KEYS also uses that already have their own dedicated Shift+letter meaning
+// elsewhere in the 'playing' keydown handler (Craft/Library/Cybernetics/Eldritch/auto-travel-home)
+// -- excluded from the Shift-movement fallback above so force-attack via Shift+direction can't
+// silently steal them. WASD has no such conflicts, which is why it's the keyset the user actually
+// wants Shift-force-attack to work with.
+const SHIFT_MOVE_UNSAFE_KEYS = new Set(['h', 'k', 'l', 'y', 'u']);
 
 
 // ---------------- settings / QoL system ----------------
@@ -10779,7 +10902,11 @@ function questStageHint(stage) {
     // the dimension first, then find the sub-dungeon inside it. Point at the dimension (and its
     // unlock condition) rather than trying to locate a dungeon theme that only exists inside a
     // dimension the player may not have visited yet.
-    const dimEntry = Object.entries(DIMENSION_GATE_INFO).find(([, g]) => g.bossId === bossId || g.secondBossId === bossId);
+    // Only the true gatekeeper (bossId) is actually found inside the dimension -- a secondBossId
+    // like The Recursion is deliberately a free-roaming overworld boss (see its definition), killed
+    // *before* the dimension opens rather than found within it, so it's excluded here and instead
+    // falls through to the "Standard overworld boss" branch below, which already handles it correctly.
+    const dimEntry = Object.entries(DIMENSION_GATE_INFO).find(([, g]) => g.bossId === bossId);
     if (dimEntry) {
       const [dimId, gate] = dimEntry;
       const dim = DIMENSIONS[dimId];
@@ -10797,16 +10924,7 @@ function questStageHint(stage) {
       if (gate.kind === 'discovery') return `The boss waits inside ${dim.name}, but that realm is reached by resting at ${gate.structureName} rather than by fighting anything here.`;
       if (gate.kind === 'item_structure') {
         const need = [gate.itemName];
-        if (bossId === gate.secondBossId && gate.secondItemName) need.push(gate.secondItemName);
         return `To reach this boss, you need to open the way into ${dim.name} first -- that requires ${need.join(' and ')} used at ${gate.structureName}. Find those first.`;
-      }
-      // boss_kill to open the dimension -- but this boss IS the gatekeeper, so what's needed is
-      // finding their sub-dungeon on the overworld (dimension gate dungeon that hasn't been
-      // registered yet because the player hasn't been to that dimension chunk).
-      const overallDimGate = DIMENSION_GATE_INFO[dimId];
-      if (overallDimGate && overallDimGate.bossId !== bossId) {
-        // secondBossId case (the_recursion for fourth_corridor)
-        return `${themeInfo ? themeInfo.flavor[0].toUpperCase() + themeInfo.flavor.slice(1) : 'The target'}, but to reach them you'll need to open the way into ${dim.name} first by defeating its primary gatekeeper there.`;
       }
       return `This boss guards the entrance to ${dim.name}. Find the dimension portal -- it opens once they fall. ${themeInfo ? themeInfo.flavor[0].toUpperCase() + themeInfo.flavor.slice(1) : ''}, somewhere in the wider world.`;
     }
@@ -11468,6 +11586,31 @@ function pickUp() {
   // Only worth its own option when there's more than one item to actually bulk up -- with a
   // single item it would just be a redundant duplicate of the option already listed above.
   if (items.length > 1) options.push({ label: 'Pick up everything', action: () => { items.forEach(pickUpSpecificItem); updateSidebar(); endTurn(); } });
+  // ---- salvaging watercraft: a water-tile structure (see OCEAN_STRUCTURES) that's still
+  // basically an intact boat -- a fishing boat, a capsized rowboat, a still-floating ship -- can be
+  // broken down into the matching item from the VESSELS framework above, giving those world
+  // features the same real water-travel function a player-built raft already has, instead of being
+  // pure flavor text. This reuses the vessel system wholesale rather than a boat-specific special
+  // case: STRUCTURE_SALVAGE_VESSEL just maps a structure id to a vessel id, so tagging any future
+  // structure (or biome's worth of them) as salvageable is a one-line addition there. A structure
+  // can only be salvaged once -- the tile reverts to plain open water afterward -- so it can't be
+  // farmed for infinite vessels.
+  const hereTile = curTileAt(player.x, player.y);
+  const salvageVesselId = hereTile && STRUCTURE_SALVAGE_VESSEL[hereTile.feature];
+  if (salvageVesselId) {
+    const vesselDef = VESSELS[salvageVesselId];
+    const structDef = OCEAN_STRUCTURES.find(s => s.id === hereTile.feature);
+    const structName = structDef ? structDef.name.toLowerCase() : 'wreck';
+    options.push({ label: `Salvage the ${structName} (gain a ${vesselDef.name})`, action: () => {
+      const it = makeItem(salvageVesselId, 0, Math.random);
+      if (it) player.inventory.push(it);
+      const b = BIOMES[hereTile.biome];
+      hereTile.feature = null; hereTile.glyph = b.glyph; hereTile.color = b.color;
+      Sound.play('craftSuccess');
+      log(`You salvage the ${structName}. You now carry a ${vesselDef.name}.`);
+      updateSidebar(); endTurn();
+    } });
+  }
   if (!options.length) {
     log(hasCorpse ? 'There is a corpse here. (Some spells can make use of it.)' : 'There is nothing here to pick up.');
     return;
@@ -13214,7 +13357,6 @@ function showStartScreen() {
 // difference is they're shorter, written in a more ad-hoc voice, and never listed under a
 // "by Author" heading in the Library (they just pile into a "Notes & Scraps" category).
 BOOK_CATEGORIES.note = 'Note';
-const NOTE_CATEGORY_ORDER_ADDITION = 'note';
 function makeNoteItem(id, title, body, author) {
   return makeBookItemRaw({
     id: 'note_' + id, title, author: author || 'unknown', date: 'undated', category: 'note',
@@ -13421,7 +13563,7 @@ function generateBestiaryGuideHTML() {
       const tag = m.boss ? ` <span class="dim">[BOSS, power ${m.bossPower||'?'}]</span>` : (m.miniboss ? ' <span class="dim">[miniboss]</span>' : '');
       const behaviorTags = [m.behavior, m.splitInto?'splits':null, m.summonId?'summons':null, m.ambush?'ambush':null, m.burrower?'burrows':null, m.phaser?'phases':null, m.breathWeapon?'breathes '+m.breathWeapon:null, m.multiTile?'charges':null, m.multiattack?'multi-attack':null,
         m.usesMp?'casts spells':null, m.usesCharge?'cybernetic':null, m.thrower?'throws items':null, m.predator?'hunts weaker creatures':null,
-        m.flying?'flies':null, m.aquatic?'swims':null, m.fearless===false?'can be routed':null].filter(Boolean).join(', ');
+        m.flying?'flies':null, m.aquatic?(m.waterOnly?'swims, water-bound':'swims'):null, m.fearless===false?'can be routed':null].filter(Boolean).join(', ');
       html += `<div class="modal-opt">• ${m.name}${tag} <span class="dim">(${behaviorTags})</span></div>`;
     });
   });
@@ -15301,7 +15443,7 @@ function classifyDreamBiome(elev, heat) {
 }
 MONSTER_BASES.figment = { name:'Figment', glyph:'f', color:'#c9c9e0', hp:14, str:6, dex:14, atk:[1,4], armor:0, xp:11, behavior:'flee', dtier:1, faction:'dream' };
 MONSTER_BASES.echo_child = { name:'Echo of a Child', glyph:'e', color:'#e0e0f0', hp:24, str:9, dex:11, atk:[2,6], armor:0, xp:19, behavior:'ranged', dtier:2, faction:'dream', causesFear:true };
-MONSTER_BASES.night_terror = { name:'Night Terror', glyph:'n', color:'#5a1a7a', hp:40, str:15, dex:13, atk:[4,10], armor:2, xp:34, behavior:'ambush', ambushRange:2, dtier:3, faction:'dream' };
+MONSTER_BASES.night_terror = { name:'Night Terror', glyph:'n', color:'#5a1a7a', hp:40, str:15, dex:13, atk:[4,10], armor:2, xp:34, behavior:'aggressive', ambush:true, ambushRange:2, dtier:3, faction:'dream' };
 MONSTER_BASES.unraveled_thing = { name:'Unraveled Thing', glyph:'u', color:'#d060e0', hp:52, str:16, dex:10, atk:[5,11], armor:1, xp:42, behavior:'aggressive', dtier:3, faction:'dream' };
 MONSTER_BASES.lucid_wisp = { name:'Lucid Wisp', glyph:'*', color:'#a0e0ff', hp:18, str:7, dex:16, atk:[1,5], armor:0, xp:14, behavior:'ranged', dtier:1, faction:'dream' };
 MONSTER_BASES.mirror_self = { name:'Mirror Self', glyph:'@', color:'#8a7ac0', hp:46, str:13, dex:13, atk:[4,9], armor:1, xp:38, behavior:'aggressive', dtier:3, faction:'dream', causesFear:true,
@@ -15598,18 +15740,6 @@ const DIMENSIONS = {
     entryFlavor: "The air is hot enough to taste, and everywhere you look, something is glinting -- gold, mostly, though not exclusively, and none of it stacked by anyone who was ever in a hurry.",
   },
 };
-
-// Static lookup (works even immediately after a fresh page load, before anything has actually
-// been generated this session) -- scans the DIMENSIONS config directly rather than relying on
-// DIMENSION_SUBDUNGEONS, which only gets populated once a sub-dungeon has actually been placed.
-function findDimensionSubDungeonConfig(dungeonId) {
-  for (const dimId in DIMENSIONS) {
-    const dim = DIMENSIONS[dimId];
-    const sub = dim.subDungeons.find(s => s.id === dungeonId);
-    if (sub) return { dim, sub };
-  }
-  return null;
-}
 
 // Guarantees the arrival point can actually reach open ground beyond the immediate area, not
 // just the small local patch forceFillArea clears. That local patch alone was never enough: if
@@ -16768,12 +16898,12 @@ function movePlayer(dx, dy, forceAttack) {
       return;
     }
     if (isWaterTile && !curIsDungeon()) {
-      const hasRaft = player.inventory.some(i => i.id === 'raft');
+      const vessel = getBestVessel(player);
       const flying = canFly(player);
       if (canSwim(player)) {
         player.x = nx; player.y = ny;
         Sound.play('splash');
-        log(hasRaft ? 'You paddle your raft across the water.' : flying ? 'You soar over the water.' : 'You swim easily across.');
+        log(vessel ? vessel.crossMsg : flying ? 'You soar over the water.' : 'You swim easily across.');
         endTurn(); return;
       }
       if ((player.stamina || 0) > 0) {
@@ -18931,10 +19061,19 @@ const GUIDE_SECTIONS = [
     function -- monsters chasing, allies following, guards patrolling -- not just the new errand system.</div>
     <div class="modal-opt" style="margin-top:6px"><b>Force-attack any NPC (new).</b> Hold Shift while walking into a
     friendly or neutral NPC (rather than the normal "swap places") for a confirmation prompt to attack them anyway --
-    same crime/bounty handling as attacking a sleeping NPC. Also fixed: bumping into a sleeping NPC previously did
-    the same silent position-swap as bumping into an awake one, which doesn't make much sense (swapping places with
-    someone unconscious) and meant the natural first thing a player would try -- just walking into them -- produced
-    no visible reaction at all. It now opens their sleep-aware dialogue (Wake/Attack/Leave) instead.</div>` },
+    same crime/bounty handling as attacking a sleeping NPC. Works with arrow keys, WASD, and vi-keys alike (fixed a
+    real bug where Shift+WASD specifically did nothing at all -- holding Shift makes the browser report an uppercase
+    key, e.g. 'W' not 'w', which never matched the lowercase-only movement bindings; Shift+arrow keys were unaffected
+    since arrow key names don't change case, which is why only the letter keys had this problem). Also fixed: bumping
+    into a sleeping NPC previously did the same silent position-swap as bumping into an awake one, which doesn't make
+    much sense (swapping places with someone unconscious) and meant the natural first thing a player would try -- just
+    walking into them -- produced no visible reaction at all. It now opens their sleep-aware dialogue (Wake/Attack/
+    Leave) instead.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Multiple grand buildings per city/capital (new).</b> Previously
+    just one standout building per settlement (a palace). A city now gets two (the palace, plus a second themed grand
+    building at the opposite corner); a capital gets four (the palace at the true center, plus a Grand Cathedral,
+    Guildhall, and Great Library in the districts directly adjacent to it). Each is staffed by, and themed around, a
+    different NPC role rather than being a bigger empty building with the same role as before.</div>` },
   { id:'combat', label:'Combat', html: () => `
     <div class="modal-opt">Melee: walk into a hostile. Ranged weapons: equip in Hand, press <b>f</b> to fire at range.</div>
     <div class="modal-opt"><b>Prey creatures now actually flee (bugfix).</b> Rabbits, deer, gulls, foxes, elk, hawks and
@@ -19588,7 +19727,16 @@ function handleKey(e) {
 
   if (gameState === 'playing') {
     if (key === 'Escape') { openSaveLoadMenu(); return; }
-    if (MOVE_KEYS[key]) { e.preventDefault(); const [dx,dy] = MOVE_KEYS[key]; movePlayer(dx,dy,e.shiftKey); return; }
+    // Shift+letter movement (for force-attack, see movePlayer) needs the lowercase fallback since
+    // holding Shift makes the browser report an uppercase key (e.g. 'W', not 'w') that never
+    // matched MOVE_KEYS' lowercase-only entries -- Shift+arrow keys were unaffected since arrow
+    // key names don't change case, which is why only WASD/vi-keys had this reported as broken.
+    // But h/k/l/y/u already have their own dedicated Shift+letter shortcuts a few lines down
+    // (Craft/Library/Cybernetics/Eldritch/auto-travel-home) -- excluded here so movement doesn't
+    // silently steal those.
+    const lower = key.toLowerCase();
+    const moveVec = MOVE_KEYS[key] || (e.shiftKey && !SHIFT_MOVE_UNSAFE_KEYS.has(lower) && MOVE_KEYS[lower]);
+    if (moveVec) { e.preventDefault(); const [dx,dy] = moveVec; movePlayer(dx,dy,e.shiftKey); return; }
     if (key === '.' || key === '5') { e.preventDefault(); waitTurn(); return; }
     if (/^[1-4]$/.test(key)) { useQuickslot(parseInt(key,10)-1); return; }
     if (key === '+' || key === '=') { setZoom(-1); return; }
