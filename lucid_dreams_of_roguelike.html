@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.30.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.31.0-alpha</div>
     </div>
   </div>
 
@@ -9764,6 +9764,7 @@ function applyBiomeEnvironmentalEffect() {
 function applyBuffQuiet(stat, power, turns) { player.buffs[stat] = { power, turns: Math.max((player.buffs[stat] && player.buffs[stat].turns) || 0, turns) }; }
 
 function hasLOS(x0, y0, x1, y1) {
+  if (DEBUG.xrayVision) return true; // X-Ray Vision (debug): ignore wall/obstacle occlusion entirely
   let dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
   let sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
   let err = dx - dy;
@@ -9778,7 +9779,13 @@ function hasLOS(x0, y0, x1, y1) {
 }
 
 // ---------------- stats ----------------
-function getBuff(stat) { return player.buffs[stat] ? player.buffs[stat].power : 0; }
+function getBuff(stat) {
+  // "Invisible to Enemies" (debug) reuses the game's existing invisibility-buff plumbing --
+  // every AI check, dialogue check, and shop reaction that already asks getBuff('invis') > 0
+  // gets the correct behavior for free, instead of needing its own separate bypass.
+  if (stat === 'invis' && DEBUG.invisibleToEnemies) return 999;
+  return player.buffs[stat] ? player.buffs[stat].power : 0;
+}
 const STATUS_LABELS = {
   invis: () => 'Invisible',
   armor: (p) => `Warded (${p>=0?'+':''}${p} armor)`,
@@ -10755,6 +10762,11 @@ function renderLog() {
 // perk) would silently affect what got marked "explored" without matching what was actually
 // drawn as visible or examinable this turn.
 function currentVisRadius() {
+  // Bigger than the visible viewport (51x31 tiles → ~25/15 half-extents) so the whole screen is
+  // always lit at any zoom level, but deliberately NOT huge -- fog-of-war/LOS computation scales
+  // with radius^2, and a radius in the hundreds visibly lags turn processing. 30 gives a generous
+  // buffer beyond the screen edge without that cost.
+  if (DEBUG.infiniteVision) return 30;
   let radius = curIsDungeon() ? 8 : 12;
   // Day/Night Cycle: outdoors, vision shrinks gradually across dawn/dusk (see nightFactor) rather
   // than snapping instantly at the dusk/night boundary, unless the player has some form of night
@@ -10845,6 +10857,27 @@ const DEFAULT_SETTINGS = {
 let settings = null;
 let settingsReturnState = 'title';
 let settingsTab = 'audio';
+
+// ===================== DEV / DEBUG TOOLS =====================
+// Single source of truth for every debug toggle. Deliberately a flat, plain object (not
+// per-save persisted, not part of `player`) -- it's a dev convenience layer that sits ABOVE
+// the save system, so a debug session never contaminates a save file, and toggles reset to
+// safe defaults on a fresh page load. To add a new toggle: add a `false`/`0` default field
+// here, add its checkbox row in renderDebugTab(), and add the one guard-check wherever it
+// needs to take effect (see the "hooks" noted next to each flag below). That's the whole
+// extension contract -- nothing else needs to know this object exists.
+const DEBUG = {
+  infiniteHealth: false,     // hook: installVitalGuards() 'hp' setter
+  noDamage: false,           // hook: installVitalGuards() 'hp' setter
+  infiniteMana: false,       // hook: installVitalGuards() 'mp' setter
+  infiniteStamina: false,    // hook: installVitalGuards() 'stamina' setter
+  infiniteVision: false,     // hook: currentVisRadius() -- label shown as "Extended Vision" in the UI (not literally infinite; see currentVisRadius comment)
+  xrayVision: false,         // hook: hasLOS()
+  freezeTime: false,         // hook: endTurn() ally/monster/npc AI loops
+  noclip: false,             // hook: movePlayer()
+  invisibleToEnemies: false, // hook: getBuff('invis')
+  oneHitKill: false,         // hook: doAttack()
+};
 
 function loadSettings() {
   let saved = null;
@@ -12900,9 +12933,17 @@ function renderTalents() {
       if (owned) {
         html += `<div class="modal-opt dim">✓ ${t.name} — ${t.desc}</div>`;
       } else if (unlocked) {
-        const letter = String.fromCharCode(97 + letterIdx); letterIdx++;
         purchasable.push(t);
-        html += `<div class="modal-opt" onclick="simulateKey('${letter}')" style="color:#e0c34a">[${letter}] ${t.name} — ${t.desc}</div>`;
+        // Only the first 26 unlocked-and-unowned talents get a keyboard letter (a-z is all
+        // handleKey accepts on this screen). Every unlocked talent is still clickable via its
+        // own id though (buyTalentById below), so the list is never effectively capped at 26 the
+        // way it silently was before: past the 26th, the old code kept incrementing the same
+        // single-character "letter" past 'z' into unprintable symbols, and clicking one of those
+        // fired simulateKey() with a character handleKey's `/^[a-z]$/` check then rejected --
+        // so anything past the 26th was both unlabeled AND unclickable.
+        const letter = letterIdx < 26 ? String.fromCharCode(97 + letterIdx) : null;
+        letterIdx++;
+        html += `<div class="modal-opt" onclick="buyTalentById('${t.id}')" style="color:#e0c34a">[${letter || '•'}] ${t.name} — ${t.desc}</div>`;
       } else {
         const reqText = [];
         if (t.requires.level) reqText.push(`Level ${t.requires.level}`);
@@ -12912,19 +12953,28 @@ function renderTalents() {
     });
   });
   talentPurchasable = purchasable;
-  renderModal('Talents', html, player.talentPoints > 0 ? 'Letter/click to spend a point. Esc to close.' : 'Earn points every 3 levels. Esc to close.');
+  renderModal('Talents', html, player.talentPoints > 0 ? 'Letter (a-z) or click to spend a point. Esc to close.' : 'Earn points every 3 levels. Esc to close.');
 }
-function buyTalent(letter) {
-  if (player.talentPoints <= 0) return;
-  const idx = letter.charCodeAt(0) - 97;
-  const t = talentPurchasable[idx];
-  if (!t) return;
+// Core purchase logic shared by both selection paths below, so there's exactly one place that
+// actually spends a point / applies a talent no matter how it was chosen.
+function purchaseTalent(t) {
+  if (!t || player.talentPoints <= 0 || player.talents[t.id]) return;
   player.talents[t.id] = true;
   player.talentPoints--;
   t.apply();
   log(`Talent unlocked: ${t.name} — ${t.desc}`);
   updateSidebar();
   renderTalents();
+}
+// Keyboard path: only ever reachable for the first 26 talents, matching handleKey's `/^[a-z]$/`
+// gate on this screen -- consistent with the letters actually shown for those entries.
+function buyTalent(letter) {
+  purchaseTalent(talentPurchasable[letter.charCodeAt(0) - 97]);
+}
+// Click path: looks the talent up by its own unique id rather than a positional letter, so it
+// works correctly for every purchasable talent regardless of list length or click order.
+function buyTalentById(id) {
+  purchaseTalent(talentPurchasable.find(t => t.id === id));
 }
 
 // ---- relationships v3: cooldown on Talk, diminishing gifts, quest-completion affection ----
@@ -14980,8 +15030,48 @@ function resolveSpellAtTile(spell, wx, wy) {
 }
 
 // ---- player model v6: Charge (cybernetics), Corruption (eldritch), installed/known lists ----
+// ---- Debug vital guards ----
+// Converts hp/mp/stamina on a player object from plain data properties into accessor
+// properties, so every one of the ~100+ scattered `player.hp -= dmg` sites throughout combat,
+// traps, hazards, rituals, etc. -- across the WHOLE file -- gets funneled through one guarded
+// setter instead of needing to be individually patched. This is what makes "Infinite Health" /
+// "Take No Damage" / "Infinite Mana" / "Infinite Stamina" work correctly everywhere, including
+// against instant death-checks that run immediately after a damage line (the setter fires
+// synchronously as part of the `-=`, before any following `if (player.hp <= 0)` check).
+// Values live in closure variables (not extra `_hp`-style properties on the object) so the
+// save file's JSON shape is completely unaffected -- JSON.stringify still just sees a plain
+// numeric `hp`/`mp`/`stamina` field, read through the getter like any other property.
+const VITAL_GUARD_CONFIG = {
+  hp: { maxKey: 'maxHp', infiniteFlags: ['infiniteHealth'], blockDecreaseFlags: ['infiniteHealth', 'noDamage'] },
+  mp: { maxKey: 'maxMp', infiniteFlags: ['infiniteMana'], blockDecreaseFlags: [] },
+  stamina: { maxKey: 'maxStamina', infiniteFlags: ['infiniteStamina'], blockDecreaseFlags: [] },
+};
+function installVitalGuards(p) {
+  Object.keys(VITAL_GUARD_CONFIG).forEach(key => {
+    const cfg = VITAL_GUARD_CONFIG[key];
+    let backing = p[key];
+    Object.defineProperty(p, key, {
+      enumerable: true,
+      configurable: true,
+      get() { return backing; },
+      set(v) {
+        let nv = v;
+        // "Take No Damage" style flags: block any decrease outright, but still allow increases
+        // (healing potions, regen ticks, level-up HP gains, etc. all still work normally).
+        if (cfg.blockDecreaseFlags.some(f => DEBUG[f]) && nv < backing) nv = backing;
+        // "Infinite X" flags: on top of the above, actively clamp UP to the current max whenever
+        // the max is known, so the pool reads as permanently full rather than merely "can't drop".
+        if (cfg.infiniteFlags.some(f => DEBUG[f]) && typeof p[cfg.maxKey] === 'number') {
+          nv = Math.max(nv, p[cfg.maxKey]);
+        }
+        backing = nv;
+      },
+    });
+  });
+  return p;
+}
 function newPlayer() {
-  return {
+  return installVitalGuards({
     x: 0, y: 0, mode: 'overworld', dungeonId: null, dungeonDepth: 0, overworldReturn: null,
     // v3 balance pass: base stats dropped from a flat 10 to 8. Combined with recalcVitalsFromStats()
     // (called once, right after archetype/custom creation finishes picking final stats) this is what
@@ -15010,7 +15100,7 @@ function newPlayer() {
     quickslots: [null, null, null, null],
     knownSettlements: [], knownDungeons: [], customNames: {},
     personalStash: null, // Settlement Overhaul: lazily created by getPlayerStash() on first storage-house visit
-  };
+  });
 }
 // derives max HP from CON and max MP from INT; called exactly once, right after an archetype or a
 // finished custom build has set the character's final starting stats, so a warrior's higher CON and
@@ -15110,6 +15200,10 @@ function doAttack(att, def) {
   const critChance = 0.08 + (att.critBonus || 0) + (isPlayer ? getBuff('crit') : 0);
   if (Math.random() < critChance) { dmg *= (2 + (isPlayer ? (player.critDmgBonus || 0) : 0)); crit = true; }
   dmg = Math.max(1, Math.round(dmg));
+  // One-Hit Kill (debug): only ever amplifies the PLAYER's outgoing damage against something
+  // other than the player themselves -- never touches incoming damage, so it can't be (ab)used
+  // to also make monster attacks lethal in one hit.
+  if (isPlayer && DEBUG.oneHitKill && def !== player) dmg = Math.max(dmg, (def.maxHp || def.hp || 0) + 9999);
   def.hp -= dmg;
   if (isPlayer) def.harmedByPlayer = true;
   // ---- v3 durability wear: only on crits (weapon under exceptional strain) and heavy hits
@@ -17467,6 +17561,11 @@ function movePlayer(dx, dy, forceAttack) {
     endTurn();
     return;
   }
+  // Noclip (debug): bypasses every wall/door/chasm/statue collision branch below in one place,
+  // rather than needing a bypass threaded through each of them individually. Deliberately placed
+  // AFTER the entity-at-destination handling above, so noclip doesn't change attack/swap/dialogue
+  // behavior toward monsters or NPCs -- it only ever lets you walk through terrain and obstacles.
+  if (DEBUG.noclip) { player.x = nx; player.y = ny; endTurn(); return; }
   const t = curTileAt(nx, ny);
   const waterTile = isWaterTile(t);
   // House Doors & Lockpicking: a lock-capable house door that's currently locked blocks the player
@@ -17712,11 +17811,19 @@ function endTurn() {
   checkKingdomDiscovery();
   checkFastTravelDiscovery();
 
-  for (const a of curAllies().slice()) { if (!player.alive || player.hp <= 0) break; allyAI(a); }
-  for (const m of curMonsters().slice()) { if (!player.alive || player.hp <= 0) break; if (m.alive) { monsterAI(m); reconcileEntityChunk(m, 'monsters'); } }
-  if (!player.alive || player.hp <= 0) { gameOver(); return; }
-  for (const n of curNPCs().slice()) { if (n.alive) { npcAI(n); reconcileEntityChunk(n, 'npcs'); } }
-  if (!player.alive || player.hp <= 0) { gameOver(); return; }
+  // Freeze Time (debug): every other entity in the world -- allies, monsters, NPCs -- simply
+  // never takes a turn while this is on. The player still moves, acts, and regenerates normally
+  // (turnCount keeps advancing, since that's what drives the player's own regen/status ticks
+  // above); the world around them just holds perfectly still. Skipping the AI loops entirely
+  // (rather than, say, zeroing monster damage) also means no monster ever repositions, notices,
+  // or loses track of the player while frozen -- which is what "freeze time" should feel like.
+  if (!DEBUG.freezeTime) {
+    for (const a of curAllies().slice()) { if (!player.alive || player.hp <= 0) break; allyAI(a); }
+    for (const m of curMonsters().slice()) { if (!player.alive || player.hp <= 0) break; if (m.alive) { monsterAI(m); reconcileEntityChunk(m, 'monsters'); } }
+    if (!player.alive || player.hp <= 0) { gameOver(); return; }
+    for (const n of curNPCs().slice()) { if (n.alive) { npcAI(n); reconcileEntityChunk(n, 'npcs'); } }
+    if (!player.alive || player.hp <= 0) { gameOver(); return; }
+  }
   markSeen();
   render();
 }
@@ -19189,6 +19296,179 @@ function confirmDeleteSaveChoice(key) {
   if (key === 'n' || key === 'Escape') { showTitleScreen(); return; }
 }
 
+// ===================== DEBUG TOOLS: actions =====================
+// Everything a debug button/toggle actually DOES lives here, separate from the rendering code
+// below (renderDebugTab). Every "get all X" / "search & add" function reads its source array
+// (SPELLS / TECHNIQUES / MUTATIONS / CYBERNETICS / ITEM_BASES) LIVE at call time rather than
+// from any cached copy, so adding, removing, or editing entries in those arrays elsewhere in
+// the file is automatically picked up here with zero further changes -- that's the whole
+// point of pulling straight from the canonical arrays instead of a hand-maintained list.
+
+function debugLog(msg) { log('[DEBUG] ' + msg); }
+
+// ---- vitals / world state ----
+function debugFullRestore() {
+  player.hp = player.maxHp; player.mp = player.maxMp; player.stamina = player.maxStamina || 100;
+  player.charge = player.maxCharge || 60;
+  player.statusPoison = 0; player.statusFear = 0; player.statusConfuse = 0; player.buffs = {};
+  debugLog('Fully restored HP/MP/Stamina/Charge and cleared status effects.');
+  updateSidebar();
+}
+function debugRevealMap() {
+  // Capped well below "the whole map": for the overworld/dimensions this lazily generates every
+  // chunk it touches (CH=24 tiles/chunk), so a huge radius here doesn't just cost render time --
+  // it permanently generates and stores a large swath of terrain the player may never visit,
+  // bloating memory and the save file. 48 tiles covers a generous local area (a full dungeon
+  // floor, or a solid multi-chunk radius outdoors) without that runaway cost.
+  const count = revealArea(48);
+  debugLog(`Revealed ${count} previously unseen tiles in the current area.`);
+}
+function debugAddGold(amount) {
+  player.gold = (player.gold || 0) + amount;
+  debugLog(`Added ${amount} gold (now ${player.gold}).`);
+  updateSidebar();
+}
+function debugLevelUp(times) {
+  // Calls levelUp() directly rather than routing through gainXP() -- gainXP() always logs an
+  // "X XP gained" message and expects a real amount, neither of which applies to a debug level
+  // grant. levelUp() itself is self-contained (bumps level/xpNext/stats without touching
+  // player.xp), so it's safe to call directly without disturbing the player's actual XP progress
+  // toward their next level.
+  let leveled = 0;
+  for (let i = 0; i < times; i++) {
+    if (player.level >= LEVEL_CAP) break;
+    levelUp();
+    leveled++;
+  }
+  debugLog(leveled ? `Leveled up to ${player.level}.` : `Already at the level cap (${LEVEL_CAP}).`);
+  updateSidebar();
+}
+function debugKillAllNearby() {
+  const targets = curMonsters().slice().filter(m => m.alive);
+  targets.forEach(m => onDeath(m, player));
+  debugLog(`Killed ${targets.length} nearby monster${targets.length === 1 ? '' : 's'}.`);
+  updateSidebar();
+}
+
+// ---- "get all" grants ----
+function debugGetAllSpells() {
+  let added = 0;
+  SPELLS.forEach(s => { if (!player.knownSpells.includes(s.id)) { player.knownSpells.push(s.id); added++; } });
+  debugLog(`Learned all spells (${added} new, ${SPELLS.length} total known).`);
+  updateSidebar();
+}
+function debugGetAllTechniques() {
+  let added = 0;
+  TECHNIQUES.forEach(t => { if (!player.knownTechniques.includes(t.id)) { player.knownTechniques.push(t.id); added++; } });
+  debugLog(`Learned all techniques (${added} new, ${TECHNIQUES.length} total known).`);
+  updateSidebar();
+}
+function debugGrantMutationSilent(id) {
+  const m = MUTATIONS.find(x => x.id === id);
+  if (!m || player.mutations.includes(id)) return false;
+  player.mutations.push(id);
+  if (m.activation === 'passive' && m.apply) m.apply();
+  return true;
+}
+function debugGetAllMutations() {
+  let added = 0;
+  MUTATIONS.forEach(m => { if (debugGrantMutationSilent(m.id)) added++; });
+  debugLog(`Granted all eldritch mutations (${added} new, ${MUTATIONS.length} total held).`);
+  updateSidebar();
+}
+function debugGrantCyberSilent(id) {
+  const c = CYBERNETICS.find(x => x.id === id);
+  if (!c) return false;
+  if (!player.knownCyberIds.includes(id)) player.knownCyberIds.push(id);
+  if (player.installedCyber.includes(id)) return false;
+  // "Get All Cyberware" is meant to actually equip everything for testing, not just unlock it
+  // for later manual installation -- so raise the slot cap to fit, same as installing normally.
+  if (player.installedCyber.length >= (player.cyberSlots || 3)) player.cyberSlots = player.installedCyber.length + 1;
+  if (c.activation === 'passive' && c.apply) c.apply();
+  player.installedCyber.push(id);
+  return true;
+}
+function debugGetAllCyber() {
+  let added = 0;
+  CYBERNETICS.forEach(c => { if (debugGrantCyberSilent(c.id)) added++; });
+  debugLog(`Installed all cyberware (${added} new, ${CYBERNETICS.length} total installed; slots expanded to fit).`);
+  updateSidebar();
+}
+
+// ---- unified item/ability search + add ("dropdown list with a search bar") ----
+// Pulls straight from the live canonical arrays every time it's called -- no separate index to
+// keep in sync. Add a new spell/item/technique/mutation/cybernetic anywhere else in the file and
+// it appears in this search immediately, with no changes needed here.
+function debugRegistrySearch(query) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return [];
+  const results = [];
+  const ITEM_TYPE_LABELS = { weapon: 'Weapon', armor: 'Armor', consumable: 'Consumable', scroll: 'Scroll', material: 'Material', misc: 'Misc', chest: 'Chest' };
+  ITEM_BASES.forEach(b => {
+    if (b.id.toLowerCase().includes(q) || b.name.toLowerCase().includes(q)) {
+      results.push({ kind: 'item', id: b.id, name: b.name, tag: ITEM_TYPE_LABELS[b.type] || b.type });
+    }
+  });
+  SPELLS.forEach(s => { if (s.id.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)) results.push({ kind: 'spell', id: s.id, name: s.name, tag: 'Spell' }); });
+  TECHNIQUES.forEach(t => { if (t.id.toLowerCase().includes(q) || t.name.toLowerCase().includes(q)) results.push({ kind: 'technique', id: t.id, name: t.name, tag: 'Technique' + (t.school ? ' · ' + t.school : '') }); });
+  MUTATIONS.forEach(m => { if (m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)) results.push({ kind: 'mutation', id: m.id, name: m.name, tag: 'Eldritch' + (m.category ? ' · ' + m.category : '') }); });
+  CYBERNETICS.forEach(c => { if (c.id.toLowerCase().includes(q) || c.name.toLowerCase().includes(q)) results.push({ kind: 'cyber', id: c.id, name: c.name, tag: 'Cyberware' + (c.category ? ' · ' + c.category : '') }); });
+  return results.slice(0, 50);
+}
+const DEBUG_KIND_LABELS = { item: 'Item', spell: 'Spell', technique: 'Technique', mutation: 'Eldritch', cyber: 'Cyber' };
+function renderDebugSearchResults(query) {
+  if (!query || !query.trim()) return `<div class="npcline dim">Type a name to search items, spells, techniques, eldritch mutations, and cyberware…</div>`;
+  const results = debugRegistrySearch(query);
+  if (!results.length) return `<div class="npcline dim">No matches for "${escapeHtml(query)}".</div>`;
+  return results.map(r => `<div class="modal-opt" onclick="debugGiveByKindId('${r.kind}','${r.id}')">[${DEBUG_KIND_LABELS[r.kind]}] ${escapeHtml(r.name)} <span class="dim">(${escapeHtml(r.tag)})</span> — click to add</div>`).join('');
+}
+// Only re-renders the results list, never the search box itself -- re-rendering the whole tab
+// on every keystroke would blow away the input's focus/caret mid-type.
+function debugSearchInput(val) {
+  const el = document.getElementById('debug-search-results');
+  if (el) el.innerHTML = renderDebugSearchResults(val);
+}
+function debugGiveByKindId(kind, id) {
+  const qtyEl = document.getElementById('debug-item-qty');
+  const rarityEl = document.getElementById('debug-item-rarity');
+  const qty = Math.max(1, Math.min(99, parseInt(qtyEl && qtyEl.value, 10) || 1));
+  const rarity = Math.max(0, Math.min(4, parseInt(rarityEl && rarityEl.value, 10) || 0));
+  if (kind === 'item') {
+    const base = ITEM_BASES.find(b => b.id === id);
+    if (!base) return;
+    for (let i = 0; i < qty; i++) { const it = makeItem(id, rarity, Math.random, 1); if (it) addItemToList(player.inventory, it); }
+    debugLog(`Added ${qty}x ${base.name} to inventory.`);
+  } else if (kind === 'spell') {
+    if (!player.knownSpells.includes(id)) player.knownSpells.push(id);
+    debugLog(`Learned spell: ${(SPELLS.find(s => s.id === id) || {}).name || id}.`);
+  } else if (kind === 'technique') {
+    if (!player.knownTechniques.includes(id)) player.knownTechniques.push(id);
+    debugLog(`Learned technique: ${(TECHNIQUES.find(t => t.id === id) || {}).name || id}.`);
+  } else if (kind === 'mutation') {
+    const granted = debugGrantMutationSilent(id);
+    debugLog(granted ? `Granted eldritch mutation: ${(MUTATIONS.find(m => m.id === id) || {}).name || id}.` : `Already have that mutation.`);
+  } else if (kind === 'cyber') {
+    const granted = debugGrantCyberSilent(id);
+    debugLog(granted ? `Installed cyberware: ${(CYBERNETICS.find(c => c.id === id) || {}).name || id}.` : `Already installed.`);
+  }
+  updateSidebar();
+}
+
+// ---- toggle plumbing ----
+function debugToggle(flag, checked) {
+  DEBUG[flag] = !!checked;
+  if (gameState === 'settings') renderSettingsTab('debug');
+}
+function debugSetVitalFlags(enabled) {
+  ['infiniteHealth', 'noDamage', 'infiniteMana', 'infiniteStamina'].forEach(f => { DEBUG[f] = enabled; });
+  if (gameState === 'settings') renderSettingsTab('debug');
+}
+function debugResetAllFlags() {
+  Object.keys(DEBUG).forEach(f => { DEBUG[f] = false; });
+  debugLog('All debug toggles reset to off.');
+  if (gameState === 'settings') renderSettingsTab('debug');
+}
+
 // ---------------- settings screen ----------------
 const SETTINGS_TABS = [
   { id: 'audio', label: 'Audio' },
@@ -19229,6 +19509,13 @@ function sliderHtml(path, value, min, max, step) {
 function choiceGroupHtml(path, options, current) {
   return `<div class="settings-choicegroup">${options.map(o => `<span class="settings-choice${o.id===current?' active':''}" onclick="setSetting('${path}', '${o.id}')">${o.label}</span>`).join('')}</div>`;
 }
+// Same shape as toggleHtml(), but wired to DEBUG.<flag> via debugToggle() instead of to
+// settings via setSetting() -- debug toggles are intentionally a separate, unsaved state
+// object (see the DEBUG comment above), so they need their own control-binding helper rather
+// than being shoehorned through the settings-persistence path.
+function debugToggleHtml(flag, checked) {
+  return `<label class="toggle-switch"><input type="checkbox" ${checked ? 'checked' : ''} onchange="debugToggle('${flag}', this.checked)"><span class="toggle-track"></span></label>`;
+}
 function colorPickerHtml(path, value, fallback) {
   const cur = value || fallback;
   return `<input type="color" value="${cur}" onchange="setSetting('${path}', this.value)" style="width:44px;height:26px;border:1px solid var(--line);background:none;cursor:pointer;vertical-align:middle;">
@@ -19236,7 +19523,17 @@ function colorPickerHtml(path, value, fallback) {
 }
 function renderSettingsTab(tabId) {
   settingsTab = tabId;
-  const tabBar = SETTINGS_TABS.map(t => `<span class="settings-tab${t.id===tabId?' active':''}" onclick="settingsTabClick('${t.id}')">${t.label}</span>`).join('');
+  // The Debug tab only makes sense with an active character in the world (it reads/writes
+  // `player` directly), so it's appended to the tab bar only when Settings was opened from
+  // gameplay -- not when browsing Settings from the title screen with no player object yet.
+  // The Debug tab reads/writes `player` directly, so it must only ever appear when a player
+  // object actually exists. settingsReturnState === 'playing' alone isn't sufficient proof of
+  // that: the header gear icon is clickable from ANY screen (including mid character-creation,
+  // before newPlayer() has run, where `player` is still undefined), and openSettingsFromHeader()
+  // passes 'playing' for every non-title screen. Checking `player` directly is what actually
+  // guarantees safety here.
+  const visibleTabs = (settingsReturnState === 'playing' && player) ? SETTINGS_TABS.concat([{ id: 'debug', label: 'Debug' }]) : SETTINGS_TABS;
+  const tabBar = visibleTabs.map(t => `<span class="settings-tab${t.id===tabId?' active':''}" onclick="settingsTabClick('${t.id}')">${t.label}</span>`).join('');
   let body = `<div class="settings-tabs">${tabBar}</div>`;
   const s = settings;
 
@@ -19272,13 +19569,83 @@ function renderSettingsTab(tabId) {
   } else if (tabId === 'accessibility') {
     body += row('Reduce Motion', 'Disables flicker/pulse effects on fire, gas, and other animated tiles.', toggleHtml('reduceMotion', s.reduceMotion));
     body += `<div class="npcline dim" style="margin-top:10px;">Font size and contrast live under the Display tab; HUD text density lives under HUD &amp; Layout.</div>`;
+  } else if (tabId === 'debug') {
+    // Defense in depth: even though the tab is only ever offered when `player` exists (see
+    // visibleTabs above), settingsTab can also be reached indirectly if the underlying game
+    // state changes while Settings is open (e.g. the character dies while the modal is up).
+    // Falling back to a message instead of crashing on `player.hp` etc. keeps this safe either way.
+    body += player ? renderDebugTab() : `<div class="npcline dim">No active character to debug right now.</div>`;
   }
 
-  body += `<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
-    <span class="settings-btn" onclick="resetSettingsToDefault()">Reset All Settings to Default</span>
-    ${settingsReturnState === 'playing' ? `<span class="settings-btn" style="border-color:#8a3a3a;color:#e08a7a" onclick="quitToMenu()">Quit to Title Screen</span>` : ''}
+  if (tabId !== 'debug') {
+    body += `<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
+      <span class="settings-btn" onclick="resetSettingsToDefault()">Reset All Settings to Default</span>
+      ${settingsReturnState === 'playing' ? `<span class="settings-btn" style="border-color:#8a3a3a;color:#e08a7a" onclick="quitToMenu()">Quit to Title Screen</span>` : ''}
+    </div>`;
+  }
+  renderModal('Settings', body, tabId === 'debug' ? 'Esc to go back. Dev-only tools — nothing here is saved to your character file.' : 'Esc to go back. Changes apply and save instantly.');
+}
+
+// ---------------- Debug tab UI ----------------
+function renderDebugTab() {
+  let html = `<div class="npcline dim" style="margin-bottom:10px;">Dev tools for exploring freely without dying. These toggles live outside your save file — they reset to off on a fresh page load and never get written to disk.</div>`;
+
+  html += `<div class="trade-col-title">Survival</div>`;
+  html += row('Infinite Health', 'HP is always forced back up to full.', debugToggleHtml('infiniteHealth', DEBUG.infiniteHealth));
+  html += row('Take No Damage', 'Blocks HP loss from any source, without forcing HP to full (so healing still matters).', debugToggleHtml('noDamage', DEBUG.noDamage));
+  html += row('Infinite Mana', 'MP is always forced back up to full.', debugToggleHtml('infiniteMana', DEBUG.infiniteMana));
+  html += row('Infinite Stamina', 'Stamina is always forced back up to full.', debugToggleHtml('infiniteStamina', DEBUG.infiniteStamina));
+  html += `<div style="margin-top:6px;display:flex;gap:10px;flex-wrap:wrap;">
+    <span class="settings-btn" onclick="debugSetVitalFlags(true)">Enable All Survival Toggles</span>
+    <span class="settings-btn" onclick="debugSetVitalFlags(false)">Disable All Survival Toggles</span>
+    <span class="settings-btn" onclick="debugFullRestore()">Full Restore Now</span>
   </div>`;
-  renderModal('Settings', body, 'Esc to go back. Changes apply and save instantly.');
+
+  html += `<div class="trade-col-title" style="margin-top:14px;">Perception &amp; World</div>`;
+  html += row('Extended Vision', 'Lights up a wide area well beyond the screen edge, regardless of light or time of day. Deliberately capped short of the whole map — a much larger radius visibly slows down turn processing.', debugToggleHtml('infiniteVision', DEBUG.infiniteVision));
+  html += row('X-Ray Vision', 'See through walls and obstacles entirely — no shadows, no line-of-sight blocking. Combine with Infinite Vision to see everywhere at once.', debugToggleHtml('xrayVision', DEBUG.xrayVision));
+  html += row('Freeze Time', 'Every ally, monster, and NPC stops taking turns — the world holds still while you explore.', debugToggleHtml('freezeTime', DEBUG.freezeTime));
+  html += row('Noclip', 'Walk straight through walls, doors, statues, and chasms.', debugToggleHtml('noclip', DEBUG.noclip));
+  html += row('Invisible to Enemies', 'Monsters and hostile NPCs never notice or target you.', debugToggleHtml('invisibleToEnemies', DEBUG.invisibleToEnemies));
+  html += row('One-Hit Kill', 'Your attacks always drop non-player targets in a single hit.', debugToggleHtml('oneHitKill', DEBUG.oneHitKill));
+  html += `<div style="margin-top:6px;display:flex;gap:10px;flex-wrap:wrap;">
+    <span class="settings-btn" onclick="debugRevealMap()">Reveal Full Map (current area)</span>
+    <span class="settings-btn" onclick="debugKillAllNearby()">Kill All Nearby Monsters</span>
+  </div>`;
+
+  html += `<div class="trade-col-title" style="margin-top:14px;">Grant Everything</div>`;
+  html += `<div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <span class="settings-btn" onclick="debugGetAllSpells()">Get All Spells (${SPELLS.length})</span>
+    <span class="settings-btn" onclick="debugGetAllTechniques()">Get All Techniques (${TECHNIQUES.length})</span>
+    <span class="settings-btn" onclick="debugGetAllMutations()">Get All Eldritch Mutations (${MUTATIONS.length})</span>
+    <span class="settings-btn" onclick="debugGetAllCyber()">Get All Cyberware (${CYBERNETICS.length})</span>
+  </div>`;
+
+  html += `<div class="trade-col-title" style="margin-top:14px;">Progression &amp; Gold</div>`;
+  html += `<div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <span class="settings-btn" onclick="debugLevelUp(1)">Level Up x1</span>
+    <span class="settings-btn" onclick="debugLevelUp(5)">Level Up x5</span>
+    <span class="settings-btn" onclick="debugAddGold(1000)">+1,000 Gold</span>
+    <span class="settings-btn" onclick="debugAddGold(10000)">+10,000 Gold</span>
+  </div>`;
+
+  html += `<div class="trade-col-title" style="margin-top:14px;">Add Item or Ability</div>`;
+  html += `<div class="npcline dim" style="margin-bottom:6px;">Searches every item, spell, technique, eldritch mutation, and cyberware in the game by name — the list always reflects whatever currently exists in those tables.</div>`;
+  html += `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+    <input type="text" placeholder="Search by name…" oninput="debugSearchInput(this.value)" style="flex:1;min-width:180px;background:var(--panel);border:1px solid var(--line);color:var(--text);padding:6px 8px;font-family:inherit;font-size:1.1rem;">
+    <label class="dim">Qty <input type="number" id="debug-item-qty" value="1" min="1" max="99" style="width:50px;background:var(--panel);border:1px solid var(--line);color:var(--text);padding:4px;font-family:inherit;"></label>
+    <label class="dim">Quality
+      <select id="debug-item-rarity" style="background:var(--panel);border:1px solid var(--line);color:var(--text);padding:4px;font-family:inherit;">
+        <option value="0">Common</option><option value="1">Fine</option><option value="2" selected>Rare</option><option value="3">Epic</option><option value="4">Legendary</option>
+      </select>
+    </label>
+  </div>`;
+  html += `<div id="debug-search-results" style="max-height:220px;overflow-y:auto;border:1px solid var(--line);padding:6px;">${renderDebugSearchResults('')}</div>`;
+
+  html += `<div style="margin-top:14px;">
+    <span class="settings-btn" style="border-color:#8a3a3a;color:#e08a7a" onclick="debugResetAllFlags()">Reset All Debug Toggles</span>
+  </div>`;
+  return html;
 }
 
 // Custom and Random sit at the front (before the letter-indexed premade classes) since they're
