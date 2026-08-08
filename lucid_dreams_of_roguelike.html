@@ -444,7 +444,7 @@
         <b>V</b> fast travel &nbsp; <b>m</b> mark spot<br>
         <b>t</b> talk &nbsp; <b>x</b> look &nbsp; <b>r</b> rest<br>
         <b>G</b> auto-travel &nbsp; <b>H</b> auto-home<br>
-        <b>X</b> auto-explore<br>
+        <b>X</b> auto-explore &nbsp; <b>M</b> dungeon map<br>
         <b>&gt;</b> enter/descend &nbsp; <b>&lt;</b> ascend<br>
         <b>?</b> full guide &nbsp; click map to examine
       </div>
@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.31.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.32.0-alpha</div>
     </div>
   </div>
 
@@ -1589,20 +1589,93 @@ const RECIPES = [
 ];
 
 // dungeon theme metadata: tier drives rarity + monster/boss pool ceiling + size
+// ---- per-theme genPool / maxSizeTier (see player feedback: dungeons weren't matching their
+// theme -- e.g. an "Abandoned House" generating maze/cave-blob layouts that read as a generic
+// dungeon rather than a house). Before this pass every theme fell through to the shared
+// GENERATOR_WEIGHTS_BY_GENRE.rooms/.cave table (see pickGeneratorId), so a house, a sewer, and a
+// fortress all had the exact same odds of rolling a natural cave cavern or a hand-dug maze --
+// nothing distinguished them beyond monster roster. `genPool` overrides that shared table
+// per-theme so a layout is at least *plausible* for the place it claims to be; themes not listed
+// here (ruins, crypt, ruinedlibrary, castle, fortress, labyrinth) already fit their genre's
+// default pool reasonably well -- crumbling ruins/crypts naturally read as "structure reclaimed by
+// cave/maze," which is exactly what hybrid_cave_ruins/maze/drunken_walk depict -- so they're left
+// alone rather than churned for no reason. `maxSizeTier` (see rollDungeonSize) caps how big a
+// theme's footprint can roll -- a "Colossal Abandoned House" makes no sense the way a "Colossal
+// Ancient Ruins" does, so house-scale themes get capped at a size that still reads as a building.
 const DUNGEON_THEMES = {
-  abandonedhouse: { name:'Abandoned House', tier:'common', genre:'rooms', depthRange:[1,2], dtierMax:1 },
+  abandonedhouse: { name:'Abandoned House', tier:'common', genre:'rooms', depthRange:[1,2], dtierMax:1,
+    // a house is walls-and-rooms, full stop -- no natural caves, no hand-dug maze tunnels, no
+    // cave-reclaimed ruins. rooms_bsp carries most of the weight (ordinary rooms+halls); grand_hall
+    // gives an occasional great room; maze stays only as a rare "this house has a weird, cramped,
+    // add-on floor plan" outlier rather than a real labyrinth.
+    genPool: [['rooms_bsp', 70], ['grand_hall', 20], ['maze', 10]], maxSizeTier: 'medium' },
   cave:           { name:'Cave', tier:'common', genre:'cave', depthRange:[2,5], dtierMax:1 },
-  sewer:          { name:'Sewer', tier:'common', genre:'cave', depthRange:[2,4], dtierMax:1 },
+  sewer:          { name:'Sewer', tier:'common', genre:'cave', depthRange:[2,4], dtierMax:1,
+    // built brick tunnels + drainage, not a natural cavern system -- maze/cave_noise (both read as
+    // engineered/eroded passageways) and drunken_walk (a hand-dug overflow tunnel) carry it;
+    // cave_ca's smooth organic blobs and hybrid_cave_ruins' "ancient structure" framing both fit a
+    // sewer poorly, so they're dropped rather than just deprioritized.
+    genPool: [['maze', 32], ['cave_noise', 30], ['drunken_walk', 28], ['cave_ca', 10]] },
   ruins:          { name:'Ancient Ruins', tier:'uncommon', genre:'rooms', depthRange:[3,6], dtierMax:2 },
   crypt:          { name:'Forgotten Crypt', tier:'uncommon', genre:'rooms', depthRange:[3,6], dtierMax:2 },
   ruinedlibrary:  { name:'Ruined Library', tier:'uncommon', genre:'rooms', depthRange:[2,5], dtierMax:2, bookHeavy:true,
     factions:['undead','eldritch'] },
-  castle:         { name:'Abandoned Castle', tier:'uncommon', genre:'rooms', depthRange:[4,7], dtierMax:2 },
-  fortress:       { name:'Ruined Fortress', tier:'rare', genre:'rooms', depthRange:[6,10], dtierMax:3 },
-  tower:          { name:'Ancient Tower', tier:'rare', genre:'rooms', depthRange:[6,10], dtierMax:3 },
+  castle:         { name:'Abandoned Castle', tier:'uncommon', genre:'rooms', depthRange:[4,7], dtierMax:2,
+    // a castle is defined by grand rooms and defensible, twisting corridors -- weighted up from the
+    // generic rooms pool; the smooth natural cave blob (cave_ca) is dropped since a castle interior
+    // caving in wholesale into a cavern doesn't read as "castle" the way a crumbling ruin does.
+    genPool: [['rooms_bsp', 34], ['grand_hall', 26], ['maze', 22], ['hybrid_cave_ruins', 18]] },
+  fortress:       { name:'Ruined Fortress', tier:'rare', genre:'rooms', depthRange:[6,10], dtierMax:3,
+    genPool: [['rooms_bsp', 32], ['maze', 26], ['grand_hall', 18], ['hybrid_cave_ruins', 24]] },
+  tower:          { name:'Ancient Tower', tier:'rare', genre:'rooms', depthRange:[6,10], dtierMax:3,
+    // a tower is a tight, vertical, built structure -- rooms/maze dominate; cave_ca is dropped
+    // entirely (a natural cavern blob doesn't belong inside a tower's walls) and hybrid/drunken_walk
+    // stay as rare "the tower is crumbling into the hillside" outliers rather than a common outcome.
+    genPool: [['rooms_bsp', 44], ['maze', 34], ['hybrid_cave_ruins', 12], ['drunken_walk', 10]] },
   labyrinth:      { name:'Labyrinth', tier:'rare', genre:'rooms', depthRange:[7,12], dtierMax:4 },
 };
 const DUNGEON_TIER_WEIGHTS = { common: 65, uncommon: 25, rare: 10 };
+
+// ---- dungeon SIZE tiers: a whole separate axis from tier/theme. Size decides the physical
+// footprint of every floor in the dungeon (grid w/h) and trades directly against depth -- a
+// "massive"/"colossal" dungeon is one huge excavation, not a ten-floor tower, so its
+// maxDepthCap pulls maxDepth way down while its footprint balloons. clusterCount controls how
+// many separate generation "clusters" (see genSprawlClusters) a floor gets stitched together
+// from; sizes with clusterCount[1] > 1 lean toward the sprawling multi-cluster generator instead
+// of one single layout, which is what makes a big dungeon feel like it spans real, distinct
+// areas rather than just a bigger version of the same room. Weighted so roughly half of all
+// dungeons land large-or-bigger -- small dungeons still exist and are still common, but they're
+// no longer the default experience. `colossal` is the genuine "mega dungeon" showpiece size: a
+// single sprawling floor built from 6-9 stitched-together clusters, roughly 10x the tile area of
+// a medium dungeon. Add a new size here and rollDungeonSize / generateDungeonLevel both pick it
+// up automatically -- nothing else needs to change.
+const DUNGEON_SIZE_TIERS = [
+  { id:'tiny',     label:'Tiny',     weight:6,  w:[26,32],   h:[16,20],  maxDepthCap:3, clusterCount:[1,1] },
+  { id:'small',    label:'Small',    weight:18, w:[38,46],   h:[24,30],  maxDepthCap:5, clusterCount:[1,1] },
+  { id:'medium',   label:'',         weight:26, w:[52,64],   h:[32,40],  maxDepthCap:8, clusterCount:[1,2] },
+  { id:'large',    label:'Large',    weight:24, w:[74,90],   h:[44,54],  maxDepthCap:5, clusterCount:[2,3] },
+  { id:'vast',     label:'Vast',     weight:16, w:[100,122], h:[60,72],  maxDepthCap:3, clusterCount:[3,5] },
+  { id:'massive',  label:'Massive',  weight:8,  w:[136,158], h:[82,96],  maxDepthCap:2, clusterCount:[4,6] },
+  { id:'colossal', label:'Colossal', weight:2,  w:[172,200], h:[102,122],maxDepthCap:1, clusterCount:[6,9] },
+];
+function dungeonSizeById(id) { return DUNGEON_SIZE_TIERS.find(s => s.id === id) || DUNGEON_SIZE_TIERS[2]; }
+// rare (and to a lesser extent uncommon) dungeons lean bigger still, so the biggest layouts in
+// the game are also usually the ones worth bragging about finding.
+function rollDungeonSize(rng, meta) {
+  const bias = meta && meta.tier === 'rare' ? 1.6 : meta && meta.tier === 'uncommon' ? 1.2 : 1.0;
+  // ---- theme size cap (see DUNGEON_THEMES.maxSizeTier): a handful of themes are, in-fiction, a
+  // single ordinary-scale building (an "Abandoned House" above all) and shouldn't ever roll
+  // vast/massive/colossal footprints just because the general size-tier table allows it for
+  // dungeons in general. Themes without maxSizeTier are unaffected -- this only ever narrows the
+  // roll for the themes that opt in.
+  let tiers = DUNGEON_SIZE_TIERS;
+  if (meta && meta.maxSizeTier) {
+    const capIdx = DUNGEON_SIZE_TIERS.findIndex(s => s.id === meta.maxSizeTier);
+    if (capIdx >= 0) tiers = DUNGEON_SIZE_TIERS.slice(0, capIdx + 1);
+  }
+  const weights = tiers.map(s => [s.id, s.weight * (s.w[0] >= 74 ? bias : 1)]);
+  return dungeonSizeById(weightedChoice(rng, weights));
+}
 
 // quest templates for radiant quest generation
 const QUEST_MONSTER_POOL = ['wolf','boar','bandit','spider','jackal','snake','goblin','giantrat','skeleton'];
@@ -4128,7 +4201,7 @@ Object.assign(DUNGEON_THEMES, {
   sky_bastion:      { name:'Sky Bastion', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
   derelict_hulk:    { name:'Derelict Hulk', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
   folded_vault:     { name:'Folded Vault', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
-  flooded_crypt:    { name:'Flooded Crypt', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
+  flooded_crypt:    { name:'Flooded Crypt', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4, hazard:'water' },
   gear_sanctum:     { name:'Gear Sanctum', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
   overgrown_sepulchre: { name:'Overgrown Sepulchre', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
   corrupted_kernel: { name:'Corrupted Kernel', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4 },
@@ -6293,6 +6366,54 @@ Object.assign(DUNGEON_THEMES, {
   the_wyrm_hoard: { name:'The Wyrm Hoard', tier:'dimension', genre:'rooms', depthRange:[6,6], dtierMax:5, factions:['dragon'] },
 });
 
+// ---- per-theme generator pools, second pass: every theme added by the two Object.assign blocks
+// above still fell through to the generic GENERATOR_WEIGHTS_BY_GENRE.rooms/.cave table (the same
+// class of issue the Abandoned House fix addressed for the original 10 themes -- see the big
+// comment on the base DUNGEON_THEMES literal). A lot of these have a strong, specific identity a
+// generic "rooms" roll can't express: a Witch's Hut is a single small building, not a maze; a
+// Derelict Hulk is a wrecked ship's corridors, not a natural cave blob; a Cyber Vault is server
+// racks and access corridors, not stalagmites. This pass tunes the ones with the clearest
+// mismatch. NOT included here (left on the generic pool deliberately): themes whose generic
+// "rooms"/"cave" roll already reads fine for what they are (goblin_stronghold, sunken_temple,
+// frozen_tomb, demon_gate, gods_threshold, necropolis, eldritch_rift, dragons_lair, spider_nest,
+// goblin_warren, flooded_cave, ossuary_ruins, sunken_ruins, overgrown_sepulchre, and most of the
+// rarer tier:'dimension' final-boss themes, which are curated one-off encounters rather than
+// commonly-rolled dungeons) -- churning those for no real gain risked introducing new mismatches
+// instead of fixing one.
+const DUNGEON_THEME_GENPOOLS = {
+  mineshaft:          [['drunken_walk', 35], ['maze', 30], ['cave_noise', 20], ['cave_ca', 15]],
+  witch_hut:          [['rooms_bsp', 70], ['grand_hall', 30]],
+  old_barracks:       [['rooms_bsp', 55], ['grand_hall', 30], ['maze', 15]],
+  bandit_hideout:     [['rooms_bsp', 55], ['drunken_walk', 30], ['grand_hall', 15]],
+  smugglers_den:      [['rooms_bsp', 35], ['drunken_walk', 35], ['maze', 20], ['cave_noise', 10]],
+  obsidian_spire:     [['rooms_bsp', 44], ['maze', 30], ['hybrid_cave_ruins', 14], ['grand_hall', 12]],
+  sky_bastion:        [['rooms_bsp', 40], ['grand_hall', 30], ['maze', 20], ['hybrid_cave_ruins', 10]],
+  derelict_hulk:      [['rooms_bsp', 45], ['maze', 35], ['grand_hall', 20]],
+  folded_vault:       [['rooms_bsp', 50], ['maze', 30], ['grand_hall', 20]],
+  corrupted_kernel:   [['rooms_bsp', 45], ['maze', 40], ['grand_hall', 15]],
+  undercity_spire:    [['rooms_bsp', 42], ['maze', 30], ['hybrid_cave_ruins', 16], ['grand_hall', 12]],
+  corrupted_sector:   [['rooms_bsp', 45], ['maze', 40], ['grand_hall', 15]],
+  neon_undercroft:    [['rooms_bsp', 45], ['maze', 35], ['grand_hall', 20]],
+  cyber_vault:        [['rooms_bsp', 45], ['maze', 35], ['grand_hall', 20]],
+  forsaken_cathedral: [['grand_hall', 35], ['rooms_bsp', 35], ['maze', 15], ['hybrid_cave_ruins', 15]],
+  trapped_vault:      [['rooms_bsp', 50], ['maze', 30], ['grand_hall', 20]],
+  // "Wyrmreach Lair" is genre:'rooms' (unlike its sibling dragons_lair, which is genre:'cave') but
+  // the name promises a cave-like wyrm's den -- rather than changing its genre (a bigger change
+  // that would also touch whatever else keys off meta.genre), this blends real cave weight into
+  // its pool so it actually reads as a lair.
+  wyrmreach_lair:     [['hybrid_cave_ruins', 35], ['cave_ca', 25], ['rooms_bsp', 20], ['maze', 20]],
+  ruined_lab:         [['rooms_bsp', 45], ['maze', 35], ['grand_hall', 20]],
+  corrupted_facility: [['rooms_bsp', 45], ['maze', 40], ['grand_hall', 15]],
+  brass_citadel:      [['rooms_bsp', 35], ['grand_hall', 35], ['maze', 20], ['hybrid_cave_ruins', 10]],
+  // a factory floor of construct assembly lines should be regular and grid-like, never a cave.
+  assembly_line:      [['rooms_bsp', 50], ['maze', 35], ['grand_hall', 15]],
+  // a disorienting, non-Euclidean gallery of echoes is exactly what the maze generator is for.
+  echo_gallery:       [['maze', 55], ['rooms_bsp', 25], ['hybrid_cave_ruins', 20]],
+  // overgrown with plant life reclaiming a structure -- the cave/ruins hybrid IS the theme here.
+  the_seedvault:      [['hybrid_cave_ruins', 45], ['rooms_bsp', 30], ['cave_ca', 25]],
+};
+for (const theme in DUNGEON_THEME_GENPOOLS) if (DUNGEON_THEMES[theme]) DUNGEON_THEMES[theme].genPool = DUNGEON_THEME_GENPOOLS[theme];
+
 // ===================== MONSTER EXPANSION PACK: ~76 new enemies, every faction/theme, varied AI =====================
 // slime is retrofitted into a true splitter: killing one spawns weaker slime_smalls in its place.
 Object.assign(MONSTER_BASES.slime, { splitInto: 'slime_small', splitCount: 2 });
@@ -7829,7 +7950,11 @@ function placeDungeonEntrance(chunk, cx, cy, seedVal, centerBiome) {
   const theme = weightedChoice(rng, pool.map(id => [id, preferred.includes(id) ? 4 : 1]));
   const meta = DUNGEON_THEMES[theme];
   const [dMin, dMax] = meta.depthRange;
-  const maxDepth = Math.max(dMin, Math.min(dMax, dMin + Math.floor(distFromOrigin / 4) + randInt(rng,0,2)));
+  const sizeTier = rollDungeonSize(rng, meta);
+  // Size and depth trade off: a big physical footprint gets far fewer floors (see
+  // DUNGEON_SIZE_TIERS.maxDepthCap) so a "massive" dungeon reads as one huge excavation rather
+  // than a ten-floor tower with a huge floor plan repeated ten times.
+  const maxDepth = Math.max(1, Math.min(sizeTier.maxDepthCap, Math.max(dMin, Math.min(dMax, dMin + Math.floor(distFromOrigin / 4) + randInt(rng,0,2)))));
   const variant = rollDungeonVariant(rng, distFromOrigin);
   // recommended level: derived from the dungeon's *actual* depth/dtier ceiling and variant power
   // mod, not the tier label -- this is the number that now genuinely predicts difficulty.
@@ -7838,10 +7963,11 @@ function placeDungeonEntrance(chunk, cx, cy, seedVal, centerBiome) {
   const id = 'd_' + cx + '_' + cy;
   decorateDungeonEntrance(chunk, lx, ly, theme);
   const eg = ENTRANCE_GLYPHS[theme] || { glyph: '>', name: 'an entrance' };
-  const displayName = variant.label ? `${variant.label} ${meta.name}` : meta.name;
+  const sizePrefix = sizeTier.label ? sizeTier.label + ' ' : '';
+  const displayName = variant.label ? `${sizePrefix}${variant.label} ${meta.name}` : `${sizePrefix}${meta.name}`;
   t.glyph = eg.glyph; t.color = tier === 'rare' ? '#e05ae0' : (tier === 'uncommon' ? '#5ac9e0' : '#9ac95a'); t.feature = 'dungeon_entrance'; t.dungeonId = id; t.walkable = true;
-  chunk.dungeonEntrance = { id, theme, maxDepth, tier, name: displayName, entranceName: eg.name, x: cx*CH+lx, y: cy*CH+ly, variant: variant.id, recommendedLevel };
-  dungeonRegistry.set(id, { id, theme, maxDepth, tier, name: displayName, entranceName: eg.name, levels: [], x: cx*CH+lx, y: cy*CH+ly, variant: variant.id, targetPower, recommendedLevel, originMode: 'overworld' });
+  chunk.dungeonEntrance = { id, theme, maxDepth, tier, name: displayName, entranceName: eg.name, x: cx*CH+lx, y: cy*CH+ly, variant: variant.id, recommendedLevel, size: sizeTier.id };
+  dungeonRegistry.set(id, { id, theme, maxDepth, tier, name: displayName, entranceName: eg.name, levels: [], x: cx*CH+lx, y: cy*CH+ly, variant: variant.id, targetPower, recommendedLevel, originMode: 'overworld', size: sizeTier.id });
 }
 
 // ===================== WORLD GENERATION v5 =====================
@@ -9786,6 +9912,19 @@ function getBuff(stat) {
   if (stat === 'invis' && DEBUG.invisibleToEnemies) return 999;
   return player.buffs[stat] ? player.buffs[stat].power : 0;
 }
+// ---- BUG FIX: every AI spot ever checking invisibility applied the same "not while adjacent"
+// carve-out to BOTH the real invisibility potion/spell AND the debug toggle, since both were read
+// through the same getBuff('invis') value. That's the right call for the real buff (you shouldn't
+// be able to vanish from something already standing on top of you), but it meant "Invisible to
+// Enemies" -- whose tooltip promises enemies "never notice or target you", no caveats -- still let
+// enemies attack the moment you got adjacent or swung at them yourself. This gives the debug flag
+// its own unconditional path, independent of distance, while leaving the real buff's melee
+// exception intact. Use this instead of a bare `getBuff('invis') > 0 && dist > 1` check anywhere
+// AI decides whether it can currently see/target the player. ----
+function invisHidesPlayerAt(dist) {
+  if (DEBUG.invisibleToEnemies) return true;
+  return getBuff('invis') > 0 && dist > 1;
+}
 const STATUS_LABELS = {
   invis: () => 'Invisible',
   armor: (p) => `Warded (${p>=0?'+':''}${p} armor)`,
@@ -10027,7 +10166,8 @@ function bfsNextStep(e, tx, ty) {
   const queue = [{ x: e.x, y: e.y }];
   const cameFrom = Object.create(null);
   let qi = 0;
-  const maxNodes = inDungeon ? DW2 * DH2 : (OVERWORLD_PATH_RADIUS * 2 + 1) * (OVERWORLD_PATH_RADIUS * 2 + 1);
+  const _pathLvl = inDungeon ? curDungeonLevel() : null;
+  const maxNodes = inDungeon ? ((_pathLvl ? _pathLvl.w * _pathLvl.h : DW2 * DH2)) : (OVERWORLD_PATH_RADIUS * 2 + 1) * (OVERWORLD_PATH_RADIUS * 2 + 1);
   let found = false;
   while (qi < queue.length && visited.size < maxNodes) {
     const cur = queue[qi++];
@@ -11783,7 +11923,7 @@ function gatherNearbyGroundItems() {
 function enterDungeon(id) {
   clearAreaFx();
   const dg = dungeonRegistry.get(id);
-  if (!dg.levels[0]) dg.levels[0] = generateDungeonLevel(dg.theme, 1, dg.maxDepth, dg.variant);
+  if (!dg.levels[0]) dg.levels[0] = generateDungeonLevel(dg.theme, 1, dg.maxDepth, dg.variant, dg.size);
   player.overworldReturn = { x: player.x, y: player.y, mode: player.mode, dimensionId: player.dimensionId || null };
   player.mode = 'dungeon'; player.dungeonId = id; player.dungeonDepth = 1;
   const lvl = dg.levels[0];
@@ -11799,7 +11939,7 @@ function descend() {
   const dg = curDungeon(); const nd = player.dungeonDepth + 1;
   if (nd > dg.maxDepth) { log('This is the deepest level.'); checkMainQuestDungeonTier(dg.tier); return; }
   clearAreaFx();
-  if (!dg.levels[nd - 1]) dg.levels[nd - 1] = generateDungeonLevel(dg.theme, nd, dg.maxDepth, dg.variant);
+  if (!dg.levels[nd - 1]) dg.levels[nd - 1] = generateDungeonLevel(dg.theme, nd, dg.maxDepth, dg.variant, dg.size);
   player.dungeonDepth = nd;
   const lvl = dg.levels[nd - 1];
   player.x = lvl.upStairs.x; player.y = lvl.upStairs.y;
@@ -11864,7 +12004,7 @@ function chasmFall() {
     return;
   }
   clearAreaFx();
-  if (!dg.levels[nd - 1]) dg.levels[nd - 1] = generateDungeonLevel(dg.theme, nd, dg.maxDepth, dg.variant);
+  if (!dg.levels[nd - 1]) dg.levels[nd - 1] = generateDungeonLevel(dg.theme, nd, dg.maxDepth, dg.variant, dg.size);
   const lvl = dg.levels[nd - 1];
   const landing = pickChasmLanding(lvl);
   player.dungeonDepth = nd;
@@ -12221,6 +12361,75 @@ function openQuestLog() {
   }
   renderModal('Quest Log', html, 'Esc to close.');
 }
+
+// ---- dungeon map overview ('M'): the procgen overhaul made dungeons genuinely large (a "vast"
+// or "massive" layout can span 100+ tiles in either direction, see DUNGEON_SIZE_TIERS and
+// genSprawlClusters), and this game never had any way to see more of a level than fit on the
+// camera-relative viewport at once -- on a floor that size, that meant getting lost in fog of
+// war with no way to orient yourself against what you'd already explored. This renders every
+// `.seen` tile of the CURRENT dungeon floor at once on a small canvas (a real minimap, not a
+// wall of monospace glyphs -- at up to 150x92 tiles that would either be unreadably tiny text or
+// wider than the screen). Only tiles the player has actually seen are drawn; the rest of the
+// canvas stays black, same "you haven't been there yet" rule fog-of-war already uses everywhere
+// else in the game -- this is a memory aid, not free reconnaissance.
+function openDungeonMap() {
+  if (!curIsDungeon()) { log("There's no dungeon map to check while you're on the surface."); return; }
+  const lvl = curDungeonLevel();
+  if (!lvl) return;
+  Sound.play('uiOpen');
+  gameState = 'dungeonmap';
+  // Cap the canvas at a sane on-screen size regardless of how big the actual floor is -- a
+  // tiny/small dungeon gets big, easy-to-read cells; a massive one shrinks its cells down rather
+  // than overflowing the modal.
+  const cell = Math.max(2, Math.min(9, Math.floor(620 / Math.max(lvl.w, lvl.h))));
+  const cw = lvl.w * cell, ch = lvl.h * cell;
+  const exploredCount = lvl.grid.reduce((sum, row) => sum + row.filter(t => t.seen).length, 0);
+  const totalWalkable = lvl.grid.reduce((sum, row) => sum + row.filter(t => t.walkable).length, 0);
+  const pct = totalWalkable ? Math.round(100 * exploredCount / totalWalkable) : 0;
+  const sizeLabel = (dungeonSizeById(lvl.size).label || 'Medium');
+  const html = `
+    <div style="text-align:center;color:var(--text-dim);font-size:1rem;margin-bottom:10px;">
+      Depth ${lvl.depth} &nbsp;•&nbsp; ${sizeLabel} &nbsp;•&nbsp; ${lvl.w}×${lvl.h} tiles &nbsp;•&nbsp; ${pct}% explored
+    </div>
+    <canvas id="dungeonmap-canvas" width="${cw}" height="${ch}"
+      style="display:block;margin:0 auto;image-rendering:pixelated;border:1px solid var(--line);background:#000;"></canvas>
+    <div style="text-align:center;color:var(--text-dim);font-size:0.95rem;margin-top:10px;">
+      <span style="color:#ffe08a;">■</span> you &nbsp;
+      <span style="color:#e0c34a;">■</span> stairs up &nbsp;
+      <span style="color:#e05ae0;">■</span> stairs down${lvl.hasWaystone ? ` &nbsp; <span style="color:#e8ab52;">■</span> waystone` : ''}
+    </div>`;
+  document.getElementById('modal-inner').classList.add('modal-wide');
+  renderModal('Dungeon Map', html, 'Esc to close.');
+  const canvas = document.getElementById('dungeonmap-canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cw, ch);
+  for (let y = 0; y < lvl.h; y++) {
+    for (let x = 0; x < lvl.w; x++) {
+      const t = lvl.grid[y][x];
+      if (!t || !t.seen) continue;
+      let color;
+      if (t.glyph === '<') color = '#e0c34a';
+      else if (t.glyph === '>') color = '#e05ae0';
+      else if (t.feature === 'waystone') color = '#e8ab52';
+      else if (t.feature === 'water') color = '#2a4a6a';
+      else if (t.feature === 'chasm') color = '#141418';
+      else if (t.feature === 'woodbridge') color = '#a07840';
+      else if (t.feature === 'fungus') color = '#2f6a44';
+      else if (t.feature === 'statue') color = '#6a6a72';
+      else if (t.feature === 'lockeddoor' || t.feature === 'leverdoor') color = '#8a6a3a';
+      else if (t.feature === 'lever') color = '#9a8a6a';
+      else if (t.feature === 'rubble') color = '#5a5346';
+      else if (!t.walkable) color = '#211d18';
+      else color = t.zone === 'cave' ? '#3a3f34' : '#4a4536';
+      ctx.fillStyle = color;
+      ctx.fillRect(x * cell, y * cell, cell, cell);
+    }
+  }
+  // player marker drawn last so it's never obscured by tile colors underneath it
+  ctx.fillStyle = '#ffe08a';
+  ctx.fillRect(player.x * cell, player.y * cell, cell, cell);
+}
+
 
 // ---- book reader & library/codex ----
 // Reading a book logs it to player.readLog (so the Library screen can list it even after the
@@ -13550,7 +13759,7 @@ function npcAI(n) {
   }
   if (n.hostile) {
     let seesPlayer = dist <= 9 && hasLOS(n.x, n.y, player.x, player.y);
-    if (invisible && dist > 1) { seesPlayer = false; n.engaged = false; }
+    if (invisHidesPlayerAt(dist)) { seesPlayer = false; n.engaged = false; }
     if (seesPlayer || n.engaged) {
       n.engaged = true;
       if (dist <= 1) doAttack(n, player); else if (dist <= 8) stepToward(n, player.x, player.y);
@@ -14175,6 +14384,7 @@ const TILE_FEATURE_DESCRIPTIONS = {
   tentwall: 'The canvas wall of a tent, staked into the ground.',
   poisongas: 'A roiling cloud of poison gas hangs in the air here — best not to breathe it in.',
   scorched: 'Scorched, blackened ground — something burned hot here.',
+  fungus: 'A patch of faintly bioluminescent fungus, glowing dim green against the dark.',
   waystone: 'A waystone, carved with old travel-wardings. Stand here to reach the fast-travel network for free.',
   rift_portal: "A tear in the world, its edges rippling like heat over sand. It leads somewhere that isn't here.",
   slumbering_altar: 'A dream-worn altar, half-sunk into itself. Resting here feels like it would take you somewhere else entirely.',
@@ -15413,9 +15623,19 @@ function gatherPotentialTargets(e) {
 // every time the two combatants briefly lose exact line of sight around a corner. Intelligent
 // attackers (see the `intelligent` heuristic in Part A) weigh in the target's remaining HP% too,
 // so an orc raiding party focuses down whoever's already hurt instead of just whoever's closest.
+// ---- BUG FIX: pickHostileTarget previously never consulted the invis buff, so "Invisible to
+// Enemies" (and the real invisibility potion/spell) only worked on entities that already had you
+// as their target and were running their own hand-rolled invis check (see npcAI/runCombatState).
+// Any wandering/dormant monster or NPC defender-hunter re-querying this function for a target --
+// which is most of them, most of the time -- would happily spot and lock onto an "invisible"
+// player. Now both the continue-existing-target shortcut and the fresh-acquisition scan treat the
+// player as unseen while invisible, with the same "not while adjacent" carve-out used everywhere
+// else invisibility is checked (you can't hide from something already standing on top of you). ----
 function pickHostileTarget(e, visionRange) {
   if (e.target && e.target.alive && e.target.hp > 0 && isHostileTo(e, e.target)) {
-    if (chebyshev(e.x, e.y, e.target.x, e.target.y) <= visionRange + 3) return e.target;
+    const dCur = chebyshev(e.x, e.y, e.target.x, e.target.y);
+    const curHidden = e.target === player && invisHidesPlayerAt(dCur);
+    if (!curHidden && dCur <= visionRange + 3) return e.target;
   }
   let best = null, bestScore = Infinity;
   for (const cand of gatherPotentialTargets(e)) {
@@ -15423,6 +15643,7 @@ function pickHostileTarget(e, visionRange) {
     if (!isHostileTo(e, cand)) continue;
     const d = chebyshev(e.x, e.y, cand.x, cand.y);
     if (d > visionRange) continue;
+    if (cand === player && invisHidesPlayerAt(d)) continue; // can't be freshly spotted while hidden by invisibility
     if (!hasLOS(e.x, e.y, cand.x, cand.y)) continue;
     const hpPct = cand.maxHp ? cand.hp / cand.maxHp : 1;
     const score = e.intelligent ? (d + hpPct * 5) : d; // weakness-weighted for tool-using attackers, pure distance otherwise
@@ -15687,8 +15908,8 @@ function runCombatState(m, vision) {
   const log = posVisibleToPlayer(m.x, m.y) ? realLog : () => {};
   const target = m.target;
   if (!target || !target.alive || target.hp <= 0) { loseTarget(m); return; }
-  const invisibleFromMe = target === player && getBuff('invis') > 0 && chebyshev(m.x, m.y, target.x, target.y) > 1;
   const dist = chebyshev(m.x, m.y, target.x, target.y);
+  const invisibleFromMe = target === player && invisHidesPlayerAt(dist);
   const seesTarget = !invisibleFromMe && dist <= vision && hasLOS(m.x, m.y, target.x, target.y);
   if (!seesTarget && dist > vision + 4) { loseTarget(m); return; }
 
@@ -15847,9 +16068,8 @@ function monsterAI(m) {
   // ---- scripted story bosses: bespoke multi-phase AI takes over the whole turn, untouched ----
   if (m.scriptedAI && STORY_BOSS_AI[m.scriptedAI]) {
     const dist = chebyshev(m.x, m.y, player.x, player.y);
-    const invisible = getBuff('invis') > 0;
     let seesPlayer = dist <= vision && hasLOS(m.x, m.y, player.x, player.y);
-    if (invisible && dist > 1) seesPlayer = false;
+    if (invisHidesPlayerAt(dist)) seesPlayer = false;
     if (!m.engageLineShown && (seesPlayer || dist <= 6)) {
       m.engageLineShown = true;
       if (m.engageLine) log(`${m.name}: "${m.engageLine}"`);
@@ -16617,14 +16837,15 @@ function placeDimensionSubDungeon(chunk, cx, cy, sub, dim, fill) {
   const meta = DUNGEON_THEMES[sub.theme];
   const rng = mulberry32((cx * 3331 + cy * 9091 + SEED + 77321) | 0);
   const variant = rollDungeonVariant(rng, 12);
-  const maxDepth = meta.depthRange[1];
+  const sizeTier = rollDungeonSize(rng, meta);
+  const maxDepth = Math.max(1, Math.min(sizeTier.maxDepthCap, meta.depthRange[1]));
   const targetPower = Math.max(1, Math.min(6, (meta.dtierMax || 2) + Math.floor(maxDepth / 4) + variant.powerMod));
   const recommendedLevel = recommendedLevelForPower(targetPower);
   decorateDungeonEntrance(chunk, sub.lx, sub.ly, sub.decorateStyle);
   t.glyph = sub.entranceGlyph; t.color = sub.entranceColor; t.feature = 'dungeon_entrance'; t.dungeonId = sub.id;
-  chunk.dungeonEntrance = { id: sub.id, theme: sub.theme, maxDepth, tier: 'rare', name: meta.name, entranceName: sub.entranceName, x: cx*CH+sub.lx, y: cy*CH+sub.ly, variant: variant.id, recommendedLevel };
+  chunk.dungeonEntrance = { id: sub.id, theme: sub.theme, maxDepth, tier: 'rare', name: meta.name, entranceName: sub.entranceName, x: cx*CH+sub.lx, y: cy*CH+sub.ly, variant: variant.id, recommendedLevel, size: sizeTier.id };
   if (!dungeonRegistry.has(sub.id)) {
-    dungeonRegistry.set(sub.id, { id: sub.id, theme: sub.theme, maxDepth, tier: 'rare', name: meta.name, entranceName: sub.entranceName, levels: [], x: cx*CH+sub.lx, y: cy*CH+sub.ly, variant: variant.id, targetPower, recommendedLevel, originMode: 'dimension', originDimensionId: dim.id });
+    dungeonRegistry.set(sub.id, { id: sub.id, theme: sub.theme, maxDepth, tier: 'rare', name: meta.name, entranceName: sub.entranceName, levels: [], x: cx*CH+sub.lx, y: cy*CH+sub.ly, variant: variant.id, targetPower, recommendedLevel, originMode: 'dimension', originDimensionId: dim.id, size: sizeTier.id });
   }
   if (!DIMENSION_SUBDUNGEONS.some(d => d.id === sub.id)) DIMENSION_SUBDUNGEONS.push({ id: sub.id, dimId: dim.id, cx, cy });
 }
@@ -16826,32 +17047,711 @@ function travelThroughRift() {
 
 
 
-// ---- dungeon generation v6: hazard tiles per theme (traps/poison/water) + cyber/eldritch loot bias ----
-function generateDungeonLevel(theme, depth, maxDepth, variantId) {
+// ==================== DUNGEON GENERATION v7: layered, mixed procgen ====================
+// Overhaul goals (see design notes below each generator): more than one *kind* of layout per
+// theme instead of a single "rooms" or "cave" algorithm, layered/hybrid generation that lets a
+// cave open into structured ruins in the same floor, real size variety (a "massive" dungeon
+// trades floor count for a genuinely sprawling footprint -- see DUNGEON_SIZE_TIERS above), and
+// tile-level `.zone` tagging ('cave' | 'ruins' | 'hall' | 'maze' | 'tunnel') so everything
+// downstream -- monster packs, statues vs. stalagmites, chasms vs. pillars -- can react to what
+// kind of space a tile is actually in, not just the dungeon's overall theme.
+//
+// Every generator below shares one contract: `(W, H, rng, opts) -> { grid, rooms, clusters? }`.
+//   - grid: W*H array-of-rows of dtile2() tiles.
+//   - rooms: rectangular rooms as {x,y,w,h,cx,cy,grand?,clusterId?} -- may be empty for
+//     room-less layouts (pure caves/mazes). Anything that wants "a room to work with" (lever
+//     puzzles, locked vaults, pillars) reads this list, so a generator that has no real rooms
+//     just contributes nothing there rather than needing special-casing everywhere else.
+//   - clusters (sprawl_clusters only): the sub-regions a floor was stitched together from, so
+//     encounter/loot placement can treat a massive dungeon's separate wings independently.
+// Adding a new generator is a three-step, purely additive change: write the function, add it to
+// DUNGEON_GENERATORS, and give it a weight in GENERATOR_WEIGHTS_BY_GENRE (or a theme's own
+// `genPool`). Nothing else in generateDungeonLevel needs to know it exists.
+
+// ---- shared tile constructor: every generator and every feature-placer below builds tiles this
+// way, so wall/floor color+bg stay consistent across the whole dungeon system in one place. The
+// optional `zone` tag is the hook everything downstream uses to react to what kind of space a
+// tile is in (see the big comment above).
+function dtile2(glyph, walkable, color, zone) {
+  const t = { glyph, walkable, color: color || (walkable ? '#5a5248' : '#3a352c'), bg: walkable ? '#161310' : '#0c0a08', feature: walkable ? 'floor' : 'wall' };
+  if (zone) t.zone = zone;
+  return t;
+}
+// L-shaped corridor carve, shared by every room-based generator. `rng`/`wideChance` are optional:
+// when given, there's a chance the corridor carves a second parallel strip alongside itself (in a
+// randomly-chosen perpendicular direction per corridor, not the same side every time) -- a plain
+// Brogue-style "this is a real hallway, not a mouse tunnel" widening, used sparingly so it reads
+// as a deliberate main passage rather than every corridor in the dungeon being 2-wide.
+function carveCorridor(g, x0, y0, x1, y1, rng, wideChance) {
+  const wide = !!(rng && wideChance && rng() < wideChance);
+  const perp = wide ? (rng() < 0.5 ? 1 : -1) : 0;
+  let x = x0, y = y0;
+  while (x !== x1) {
+    if (g[y] && g[y][x] !== undefined) g[y][x] = dtile2('.', true, null, g[y][x].zone);
+    if (perp && g[y+perp] && g[y+perp][x] !== undefined) g[y+perp][x] = dtile2('.', true, null, g[y+perp][x].zone);
+    x += x1 > x ? 1 : -1;
+  }
+  while (y !== y1) {
+    if (g[y] && g[y][x] !== undefined) g[y][x] = dtile2('.', true, null, g[y][x].zone);
+    if (perp && g[y] && g[y][x+perp] !== undefined) g[y][x+perp] = dtile2('.', true, null, g[y][x+perp].zone);
+    y += y1 > y ? 1 : -1;
+  }
+  if (g[y1] && g[y1][x1] !== undefined) g[y1][x1] = dtile2('.', true, null, g[y1][x1].zone);
+}
+// carve a rectangle as rect/round/diamond/lshape/cross -- room shape variety so a floor plan
+// doesn't read as wall-to-wall rectangles the way the old generator always did. lshape/cross are
+// only ever requested for rooms big enough (see genRoomsBSP) that the notch/arms read as an
+// actual shape rather than a rounding error.
+function carveRoomShape(g, rx, ry, rw, rh, shape, zone) {
+  const cx = rx + rw / 2, cy = ry + rh / 2;
+  for (let y = ry; y < ry + rh; y++) for (let x = rx; x < rx + rw; x++) {
+    if (shape === 'round') {
+      const nx = (x + 0.5 - cx) / (rw / 2), ny = (y + 0.5 - cy) / (rh / 2);
+      if (nx * nx + ny * ny > 1) continue;
+    } else if (shape === 'diamond') {
+      const nx = Math.abs(x + 0.5 - cx) / (rw / 2), ny = Math.abs(y + 0.5 - cy) / (rh / 2);
+      if (nx + ny > 1) continue;
+    } else if (shape === 'lshape') {
+      // one corner quadrant (always the far corner from the room's origin) is left as wall,
+      // turning a plain rectangle into an actual L -- a real geometric variant, not just a
+      // softened rectangle the way round/diamond are.
+      const notchX = (x - rx) >= Math.ceil(rw * 0.55), notchY = (y - ry) < Math.floor(rh * 0.45);
+      if (notchX && notchY) continue;
+    } else if (shape === 'cross') {
+      const inV = x >= rx + Math.floor(rw * 0.33) && x < rx + Math.ceil(rw * 0.67);
+      const inH = y >= ry + Math.floor(rh * 0.33) && y < ry + Math.ceil(rh * 0.67);
+      if (!inV && !inH) continue;
+    }
+    if (g[y] && g[y][x] !== undefined) g[y][x] = dtile2('.', true, null, zone);
+  }
+}
+
+// a winding, organic connector (used by genSprawlClusters) -- mostly steps toward the goal but
+// wanders sideways and occasionally jogs off to one side, so a tunnel between two wings of a
+// massive dungeon reads as something that was dug/explored rather than ruler-straight
+function carveWindingTunnel(g, x0, y0, x1, y1, rng, W, H) {
+  let x = x0, y = y0, guard = 0;
+  while ((x !== x1 || y !== y1) && guard++ < (W + H) * 3) {
+    if (g[y] && g[y][x] !== undefined) g[y][x] = dtile2('.', true, null, g[y][x].zone || 'tunnel');
+    const dxAbs = Math.abs(x1 - x), dyAbs = Math.abs(y1 - y);
+    if (rng() < 0.72 || dyAbs === 0) { if (dxAbs > 0) x += x1 > x ? 1 : -1; else if (dyAbs > 0) y += y1 > y ? 1 : -1; }
+    else { if (dyAbs > 0) y += y1 > y ? 1 : -1; else if (dxAbs > 0) x += x1 > x ? 1 : -1; }
+    if (rng() < 0.15) {
+      const jog = choice(rng, [[1,0],[-1,0],[0,1],[0,-1]]);
+      const jx = x + jog[0], jy = y + jog[1];
+      if (jx > 0 && jy > 0 && jx < W - 1 && jy < H - 1 && g[jy] && g[jy][jx] !== undefined) g[jy][jx] = dtile2('.', true, null, g[jy][jx].zone || 'tunnel');
+    }
+    x = Math.max(1, Math.min(W - 2, x)); y = Math.max(1, Math.min(H - 2, y));
+  }
+  if (g[y1] && g[y1][x1] !== undefined) g[y1][x1] = dtile2('.', true, null, g[y1][x1].zone || 'tunnel');
+}
+// carve a winding path THROUGH a layout, punching straight through walls where needed, and tag
+// only the newly-punched cells with a given zone (cells that were already floor keep their
+// original zone) -- the mechanism behind applyOverlayVein below.
+function carveErosionVein(g, x0, y0, x1, y1, rng, W, H, veinZone) {
+  function stamp(x, y) {
+    if (!(g[y] && g[y][x] !== undefined)) return;
+    const wasWall = !g[y][x].walkable;
+    g[y][x] = dtile2('.', true, null, wasWall ? veinZone : (g[y][x].zone || veinZone));
+  }
+  let x = x0, y = y0, guard = 0;
+  stamp(x, y);
+  while ((x !== x1 || y !== y1) && guard++ < (W + H) * 3) {
+    const dxAbs = Math.abs(x1 - x), dyAbs = Math.abs(y1 - y);
+    if (rng() < 0.7 || dyAbs === 0) { if (dxAbs > 0) x += x1 > x ? 1 : -1; else if (dyAbs > 0) y += y1 > y ? 1 : -1; }
+    else { if (dyAbs > 0) y += y1 > y ? 1 : -1; else if (dxAbs > 0) x += x1 > x ? 1 : -1; }
+    x = Math.max(1, Math.min(W - 2, x)); y = Math.max(1, Math.min(H - 2, y));
+    stamp(x, y);
+    if (rng() < 0.12) {
+      const jog = choice(rng, [[1,0],[-1,0],[0,1],[0,-1]]);
+      const jx = x + jog[0], jy = y + jog[1];
+      if (jx > 0 && jy > 0 && jx < W - 1 && jy < H - 1) stamp(jx, jy);
+    }
+  }
+}
+// ---- overlay vein: genHybridCaveRuins and genSprawlClusters already combine techniques
+// side-by-side (different regions of the same floor built by different generators). This is the
+// other kind of combination -- a SECOND technique layered directly on top of the SAME space a
+// primary generator already built, cutting straight through its walls and rooms rather than
+// occupying its own region. A rooms_bsp floor gets an organic fault-line crack (cave-flavored)
+// running through several rooms, opening unplanned shortcuts a pure BSP tree would never
+// produce; a cave floor gets a short fragment of straight, structured corridor (ruins-flavored)
+// suggesting something was built into it rather than grown with it. Deliberately rare (most
+// floors stay a "pure" single technique) and modest -- this is a textural surprise on top of an
+// already-complete layout, not a redesign of it. Skipped for generators that are already
+// multi-technique on their own (maze, the two hybrid/sprawl composites) so it doesn't stack
+// combination on top of combination.
+function applyOverlayVein(g, W, H, rng, primaryGenId, theme) {
+  const isRoomsy = primaryGenId === 'rooms_bsp' || primaryGenId === 'grand_hall';
+  const isCavey = primaryGenId === 'cave_ca' || primaryGenId === 'cave_noise' || primaryGenId === 'drunken_walk';
+  if (!isRoomsy && !isCavey) return;
+  // a natural cave fault-line cracking through the walls fits a crumbling ruin; it doesn't fit an
+  // ordinary lived-in building, so this "roomsy floor gets a cave-flavored vein" surprise is
+  // skipped specifically for house-scale themes (see DUNGEON_THEMES.maxSizeTier).
+  if (isRoomsy && theme && DUNGEON_THEMES[theme] && DUNGEON_THEMES[theme].maxSizeTier === 'medium') return;
+  if (rng() > 0.24) return;
+  const veinCount = (W * H > 9000 && rng() < 0.4) ? 2 : 1;
+  for (let v = 0; v < veinCount; v++) {
+    const x0 = randInt(rng, Math.floor(W*0.1), Math.floor(W*0.4));
+    const y0 = randInt(rng, Math.floor(H*0.1), Math.floor(H*0.9));
+    const x1 = randInt(rng, Math.floor(W*0.6), Math.floor(W*0.9));
+    const y1 = randInt(rng, Math.floor(H*0.1), Math.floor(H*0.9));
+    carveErosionVein(g, x0, y0, x1, y1, rng, W, H, isRoomsy ? 'cave' : 'ruins');
+  }
+}
+// ---- connectivity repair: flood-fills every walkable region, erases pockets too small to be
+// worth a tunnel, then iteratively carves a connector from the largest remaining stray region to
+// the main one until everything is reachable. This is what lets genHybridCaveRuins and
+// genSprawlClusters get away with generating their pieces mostly independently -- whatever seam
+// or gap is left between them gets stitched shut here, and (bonus) it's also what makes the
+// "cave that opens into structured ruins" transition tunnel happen automatically rather than
+// needing to be hand-authored for every combination of sub-generators.
+function computeComponents(g, W, H) {
+  const seen = new Array(H); for (let y = 0; y < H; y++) seen[y] = new Array(W).fill(false);
+  const comps = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (seen[y][x] || !g[y][x].walkable) continue;
+    const stack = [[x, y]]; seen[y][x] = true; const cells = [];
+    while (stack.length) {
+      const [cx, cy] = stack.pop(); cells.push({ x: cx, y: cy });
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nx = cx + dx, ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H || seen[ny][nx] || !g[ny][nx].walkable) continue;
+        seen[ny][nx] = true; stack.push([nx, ny]);
+      }
+    }
+    comps.push(cells);
+  }
+  return comps;
+}
+function ensureConnectivity(g, W, H) {
+  function pruneAndSort() {
+    let comps = computeComponents(g, W, H);
+    comps.sort((a, b) => b.length - a.length);
+    comps = comps.filter((c, i) => {
+      if (i > 0 && c.length < 5) { c.forEach(p => { g[p.y][p.x] = dtile2('#', false); }); return false; }
+      return true;
+    });
+    return comps;
+  }
+  let comps = pruneAndSort();
+  let guard = 0;
+  while (comps.length > 1 && guard++ < 60) {
+    const main = comps[0], other = comps[comps.length - 1];
+    const rep = c => c[Math.floor(c.length / 2)];
+    const mc = rep(main), oc = rep(other);
+    carveCorridor(g, oc.x, oc.y, mc.x, mc.y);
+    comps = pruneAndSort();
+  }
+}
+
+// ---- 1) classic room-and-corridor, now with variable BSP split depth (bigger footprints get
+// more, smaller rooms automatically), non-rectangular room shapes, a "grand" flagged largest
+// room for pillars to key off later, and a handful of extra loop corridors so the layout isn't a
+// pure tree (a labyrinth theme asks for a lot more of these; see opts.theme). ----
+function genRoomsBSP(W, H, rng, opts) {
+  opts = opts || {};
+  const g = [];
+  for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push(dtile2('#', false)); g.push(row); }
+  const splitDepth = Math.max(3, Math.min(6, 3 + Math.floor((W * H) / 2200)));
+  const roomRects = [];
+  let biggestArea = 0, biggestIdx = -1;
+
+  function makeRoomInLeaf(p) {
+    if (p.w < 5 || p.h < 5) return null;
+    const rw = Math.max(3, Math.min(p.w - 2, p.w - 2 - Math.floor(rng() * 3)));
+    const rh = Math.max(3, Math.min(p.h - 2, p.h - 2 - Math.floor(rng() * 2)));
+    const rx = p.x + Math.floor((p.w - rw) / 2);
+    const ry = p.y + Math.floor((p.h - rh) / 2);
+    if (rx < 1 || ry < 1 || rx + rw >= W - 1 || ry + rh >= H - 1 || rw < 3 || rh < 3) return null;
+    const shapeRoll = rng();
+    let shape;
+    if (rw >= 6 && rh >= 6) shape = shapeRoll < 0.5 ? 'rect' : (shapeRoll < 0.68 ? 'round' : (shapeRoll < 0.82 ? 'diamond' : (shapeRoll < 0.91 ? 'lshape' : 'cross')));
+    else shape = shapeRoll < 0.72 ? 'rect' : 'round';
+    carveRoomShape(g, rx, ry, rw, rh, shape, 'ruins');
+    const rect = { cx: Math.floor(rx + rw / 2), cy: Math.floor(ry + rh / 2), x: rx, y: ry, w: rw, h: rh, shape };
+    if (rw * rh > biggestArea) { biggestArea = rw * rh; biggestIdx = roomRects.length; }
+    roomRects.push(rect);
+    return rect;
+  }
+  // recursive split that returns, for each subtree, a representative room to connect siblings
+  // through -- and connects the two HALVES of every split directly to each other as soon as
+  // they're both resolved. This is the actual BSP dungeon graph (edges follow the spatial
+  // partition tree, so the layout branches everywhere the tree branches) instead of a flat chain
+  // stringing every leaf room together in array order regardless of where they actually sit --
+  // which is what made every earlier room-based floor read as "one room after another" no matter
+  // how the rooms happened to be arranged in space. A room can now end up with 1 connection (a
+  // true dead end), 2 (a through-room), or 3+ (a real junction), the way an actual branching
+  // dungeon should.
+  function split(x, y, w, h, depthN) {
+    if (depthN <= 0 || w < 10 || h < 8) {
+      const r = makeRoomInLeaf({ x, y, w, h });
+      return r ? { room: r, all: [r] } : { room: null, all: [] };
+    }
+    const horiz = w < h;
+    let leftRes, rightRes;
+    if (horiz) { const cut = Math.floor(h * (0.35 + rng() * 0.3)); leftRes = split(x, y, w, cut, depthN - 1); rightRes = split(x, y + cut, w, h - cut, depthN - 1); }
+    else { const cut = Math.floor(w * (0.35 + rng() * 0.3)); leftRes = split(x, y, cut, h, depthN - 1); rightRes = split(x + cut, y, w - cut, h, depthN - 1); }
+    const all = leftRes.all.concat(rightRes.all);
+    if (leftRes.room && rightRes.room) {
+      // main spine gets an 18% chance per link of widening into a real hallway (see carveCorridor)
+      carveCorridor(g, leftRes.room.cx, leftRes.room.cy, rightRes.room.cx, rightRes.room.cy, rng, 0.18);
+      return { room: choice(rng, [leftRes.room, rightRes.room]), all };
+    }
+    return { room: leftRes.room || rightRes.room, all };
+  }
+  split(0, 0, W, H, splitDepth);
+
+  if (biggestIdx >= 0 && roomRects[biggestIdx].w >= 8 && roomRects[biggestIdx].h >= 7) {
+    const r = roomRects[biggestIdx]; r.grand = true;
+    for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) if (g[y][x].walkable) g[y][x].zone = 'hall';
+  }
+  // extra loop connections on top of the tree -- these are what turn a pure tree (every route is
+  // the only route) into something with actual alternate paths and choices, Brogue-style; bumped
+  // up from the old flat-chain version since the tree alone is already less repetitive
+  const extraLoops = opts.theme === 'labyrinth' ? roomRects.length : Math.ceil(roomRects.length * 0.22);
+  for (let i = 0; i < extraLoops && roomRects.length > 2; i++) {
+    const a = choice(rng, roomRects), b = choice(rng, roomRects);
+    if (a !== b) carveCorridor(g, a.cx, a.cy, b.cx, b.cy);
+  }
+  return { grid: g, rooms: roomRects };
+}
+
+// ---- 2) cellular-automata cave: the original algorithm, now rng-seeded (was silently using
+// Math.random(), meaning cave floors were never actually reproducible from the world seed) and
+// with fill probability/iteration count varying a little per roll so caves don't all feel like
+// the exact same density. ----
+function genCaveCA(W, H, rng) {
+  const fillProb = 0.42 + rng() * 0.06;
+  const iterations = 4 + (rng() < 0.4 ? 1 : 0);
+  let g = [];
+  for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push(rng() < fillProb || x === 0 || y === 0 || x === W - 1 || y === H - 1); g.push(row); }
+  for (let it = 0; it < iterations; it++) {
+    const ng = [];
+    for (let y = 0; y < H; y++) {
+      const row = [];
+      for (let x = 0; x < W; x++) {
+        let walls = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= W || ny >= H || g[ny][nx]) walls++;
+        }
+        row.push(walls >= 5);
+      }
+      ng.push(row);
+    }
+    g = ng;
+  }
+  const out = [];
+  for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push(dtile2(g[y][x] ? '#' : '.', !g[y][x], null, 'cave')); out.push(row); }
+  return { grid: out, rooms: [] };
+}
+
+// ---- 3) noise cavern: bilinear-interpolated value noise (two octaves) thresholded into open
+// space, then lightly smoothed. Produces big, soft-edged open chambers rather than CA's fine
+// tunnel-and-pocket texture -- a genuinely different cave "flavor", the way Caves of Qud's open
+// caverns read differently from a tight roguelike maze-cave. ----
+function valueNoise2D(W, H, rng, scale) {
+  const gw = Math.ceil(W / scale) + 2, gh = Math.ceil(H / scale) + 2;
+  const coarse = [];
+  for (let y = 0; y < gh; y++) { const row = []; for (let x = 0; x < gw; x++) row.push(rng()); coarse.push(row); }
+  const out = [];
+  for (let y = 0; y < H; y++) {
+    const row = [];
+    for (let x = 0; x < W; x++) {
+      const fx = x / scale, fy = y / scale;
+      const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = x0 + 1, y1 = y0 + 1;
+      const tx = fx - x0, ty = fy - y0;
+      const v00 = coarse[y0][x0], v10 = coarse[y0][x1], v01 = coarse[y1][x0], v11 = coarse[y1][x1];
+      const a = v00 + (v10 - v00) * tx, b = v01 + (v11 - v01) * tx;
+      row.push(a + (b - a) * ty);
+    }
+    out.push(row);
+  }
+  return out;
+}
+function genCaveNoise(W, H, rng) {
+  const n1 = valueNoise2D(W, H, rng, Math.max(4, Math.floor(Math.min(W, H) / 6)));
+  const n2 = valueNoise2D(W, H, rng, Math.max(2, Math.floor(Math.min(W, H) / 14)));
+  let g = [];
+  for (let y = 0; y < H; y++) {
+    const row = [];
+    for (let x = 0; x < W; x++) {
+      const v = n1[y][x] * 0.65 + n2[y][x] * 0.35;
+      const edge = x < 2 || y < 2 || x >= W - 2 || y >= H - 2;
+      row.push(edge || v < 0.46);
+    }
+    g.push(row);
+  }
+  for (let it = 0; it < 2; it++) {
+    const ng = [];
+    for (let y = 0; y < H; y++) {
+      const row = [];
+      for (let x = 0; x < W; x++) {
+        let walls = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= W || ny >= H || g[ny][nx]) walls++;
+        }
+        row.push(walls >= 5);
+      }
+      ng.push(row);
+    }
+    g = ng;
+  }
+  const out = [];
+  for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push(dtile2(g[y][x] ? '#' : '.', !g[y][x], null, 'cave')); out.push(row); }
+  return { grid: out, rooms: [] };
+}
+
+// ---- 4) true maze: a randomized-backtracker perfect maze on a coarse cell grid (2 tiles per
+// cell, walls between), braided afterward so it isn't one single agonizing thread, with a
+// handful of small chamber pockets carved in so there's somewhere a pack of monsters can
+// actually stand together. Replaces the old "labyrinth" hack (which was just a normal room
+// layout with a few extra random corridors added) with an actual maze algorithm. ----
+function genMaze(W, H, rng, opts) {
+  const g = [];
+  for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push(dtile2('#', false, null, 'maze')); g.push(row); }
+  const cw = Math.floor((W - 2) / 2), ch = Math.floor((H - 2) / 2);
+  if (cw < 3 || ch < 3) return genRoomsBSP(W, H, rng, opts); // too small to maze meaningfully
+  const visited = []; for (let y = 0; y < ch; y++) visited.push(new Array(cw).fill(false));
+  const cellXY = (cx, cy) => ({ x: 1 + cx * 2, y: 1 + cy * 2 });
+  const stack = [[0, 0]]; visited[0][0] = true;
+  const start = cellXY(0, 0); g[start.y][start.x] = dtile2('.', true, null, 'maze');
+  while (stack.length) {
+    const [cx, cy] = stack[stack.length - 1];
+    const dirs = [[1,0],[-1,0],[0,1],[0,-1]].filter(([dx, dy]) => {
+      const nx = cx + dx, ny = cy + dy;
+      return nx >= 0 && ny >= 0 && nx < cw && ny < ch && !visited[ny][nx];
+    });
+    if (!dirs.length) { stack.pop(); continue; }
+    const [dx, dy] = choice(rng, dirs);
+    const nx = cx + dx, ny = cy + dy; visited[ny][nx] = true;
+    const a = cellXY(cx, cy), b = cellXY(nx, ny);
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    g[b.y][b.x] = dtile2('.', true, null, 'maze');
+    g[my][mx] = dtile2('.', true, null, 'maze');
+    stack.push([nx, ny]);
+  }
+  const braid = opts && opts.braid != null ? opts.braid : 0.12;
+  for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++) {
+    if (rng() >= braid) continue;
+    for (const [dx, dy] of [[1,0],[0,1]]) {
+      const nx = cx + dx, ny = cy + dy;
+      if (nx >= cw || ny >= ch) continue;
+      const a = cellXY(cx, cy), b = cellXY(nx, ny);
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      if (g[my][mx].walkable) continue;
+      g[my][mx] = dtile2('.', true, null, 'maze');
+    }
+  }
+  const pockets = 2 + Math.floor((cw * ch) / 60);
+  const rooms = [];
+  for (let i = 0; i < pockets; i++) {
+    const pcx = randInt(rng, 1, cw - 2), pcy = randInt(rng, 1, ch - 2);
+    const c = cellXY(pcx, pcy);
+    const rw = randInt(rng, 2, 3), rh = randInt(rng, 2, 3);
+    const rx = Math.max(1, c.x - Math.floor(rw / 2)), ry = Math.max(1, c.y - Math.floor(rh / 2));
+    let ok = true;
+    for (let y = ry; y < ry + rh && ok; y++) for (let x = rx; x < rx + rw && ok; x++) if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1) ok = false;
+    if (!ok) continue;
+    for (let y = ry; y < ry + rh; y++) for (let x = rx; x < rx + rw; x++) g[y][x] = dtile2('.', true, null, 'maze');
+    rooms.push({ x: rx, y: ry, w: rw, h: rh, cx: rx + Math.floor(rw / 2), cy: ry + Math.floor(rh / 2) });
+  }
+  return { grid: g, rooms };
+}
+
+// ---- 5) grand hall: a BSP layout with one dominant, oversized central chamber carved through
+// the middle and stitched to every surrounding room directly -- a genuine set-piece room (throne
+// room, ritual chamber, ballroom) instead of just another BSP leaf, meant to be dressed up with
+// pillars afterward. ----
+function genGrandHall(W, H, rng, opts) {
+  const base = genRoomsBSP(W, H, rng, opts);
+  const hw = Math.max(10, Math.floor(W * 0.4)), hh = Math.max(8, Math.floor(H * 0.4));
+  const hx = Math.floor((W - hw) / 2), hy = Math.floor((H - hh) / 2);
+  for (let y = hy; y < hy + hh; y++) for (let x = hx; x < hx + hw; x++) {
+    if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1) continue;
+    base.grid[y][x] = dtile2('.', true, null, 'hall');
+  }
+  const hall = { x: hx, y: hy, w: hw, h: hh, cx: hx + Math.floor(hw / 2), cy: hy + Math.floor(hh / 2), grand: true };
+  for (const r of base.rooms) { if (r !== hall) carveCorridor(base.grid, r.cx, r.cy, hall.cx, hall.cy, rng, 0.3); }
+  base.rooms.push(hall);
+  return base;
+}
+
+// ---- 6) hybrid cave/ruins: partitions the floor into two regions along a wandering (not
+// straight) boundary line, generates a cave in one and structured rooms in the other at full
+// size, then clips each to its half. The two halves are stitched independently and very likely
+// won't line up passable tiles right at the seam -- that's fine, ensureConnectivity() (run once,
+// after generation, back in generateDungeonLevel) carves the actual transition tunnel, which is
+// exactly the "a cave that leads into a structured dungeon ruins" the overhaul asked for. ----
+// ---- 6) hybrid regions: partitions the floor along one or two wandering (not straight)
+// boundary lines and generates a DIFFERENT primary technique in each resulting band at full
+// size, clipping each to its slice. 65% of the time it's the original two-region cave/ruins
+// split; 35% of the time it's a genuine three-way split (cave | ruins | maze), sharing all three
+// techniques across the same floor. The bands are stitched independently and very likely won't
+// line up passable tiles right at each seam -- that's fine, ensureConnectivity() (run once, after
+// generation, back in generateDungeonLevel) carves the actual transition tunnels, which is
+// exactly the "a cave that leads into a structured dungeon ruins" the overhaul asked for, now
+// extended to "...which further in gives way to a maze" for the three-way case.
+function genHybridCaveRuins(W, H, rng, opts) {
+  const horiz = rng() < 0.5;
+  const threeWay = rng() < 0.35;
+  const g = [];
+  for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push(dtile2('#', false)); g.push(row); }
+  const length = horiz ? W : H, perp = horiz ? H : W;
+  function wanderBoundary(centerFrac) {
+    let pos = Math.floor(perp * centerFrac);
+    const b = [];
+    for (let i = 0; i < length; i++) { b.push(pos); pos += randInt(rng, -1, 1); pos = Math.max(3, Math.min(perp - 4, pos)); }
+    return b;
+  }
+  const caveGenChoice = weightedChoice(rng, [['cave_ca', 45], ['cave_noise', 30], ['drunken_walk', 25]]);
+  const subA = DUNGEON_GENERATORS[caveGenChoice](W, H, rng, opts); // cave region
+  const subB = genRoomsBSP(W, H, rng, opts); // ruins region
+
+  if (!threeWay) {
+    const boundary = wanderBoundary(0.4 + rng() * 0.2);
+    for (let i = 0; i < length; i++) {
+      const b = boundary[i];
+      for (let j = 0; j < perp; j++) {
+        const x = horiz ? i : j, y = horiz ? j : i;
+        const inA = j < b;
+        const src = inA ? subA.grid : subB.grid;
+        g[y][x] = src[y][x];
+        if (g[y][x].walkable) g[y][x].zone = inA ? 'cave' : 'ruins';
+      }
+    }
+    const rooms = (subB.rooms || []).filter(r => {
+      const i = horiz ? r.cx : r.cy, j = horiz ? r.cy : r.cx;
+      const idx = Math.max(0, Math.min(length - 1, i));
+      return j >= boundary[idx];
+    });
+    return { grid: g, rooms };
+  }
+
+  const subC = genMaze(W, H, rng, opts); // maze region
+  const b1 = wanderBoundary(0.3 + rng() * 0.08);
+  const b2 = wanderBoundary(0.62 + rng() * 0.1);
+  const rooms = [];
+  for (let i = 0; i < length; i++) {
+    const lo = Math.min(b1[i], b2[i]), hi = Math.max(b1[i], b2[i]);
+    for (let j = 0; j < perp; j++) {
+      const x = horiz ? i : j, y = horiz ? j : i;
+      let src, zone;
+      if (j < lo) { src = subA.grid; zone = 'cave'; }
+      else if (j < hi) { src = subB.grid; zone = 'ruins'; }
+      else { src = subC.grid; zone = 'maze'; }
+      g[y][x] = src[y][x];
+      if (g[y][x].walkable) g[y][x].zone = zone;
+    }
+  }
+  (subB.rooms || []).forEach(r => {
+    const i = horiz ? r.cx : r.cy, j = horiz ? r.cy : r.cx;
+    const idx = Math.max(0, Math.min(length - 1, i));
+    const lo = Math.min(b1[idx], b2[idx]), hi = Math.max(b1[idx], b2[idx]);
+    if (j >= lo && j < hi) rooms.push(r);
+  });
+  (subC.rooms || []).forEach(r => {
+    const i = horiz ? r.cx : r.cy, j = horiz ? r.cy : r.cx;
+    const idx = Math.max(0, Math.min(length - 1, i));
+    const hi = Math.max(b1[idx], b2[idx]);
+    if (j >= hi) rooms.push(r);
+  });
+  return { grid: g, rooms };
+}
+
+// ---- 7) sprawling clusters: for large/vast/massive dungeons (see DUNGEON_SIZE_TIERS). Places
+// several independent sub-layouts (each its own random pick of the generators above) across a
+// grid of bounding boxes, pastes them in with a zone tag AND a clusterId, then links them with
+// winding organic tunnels -- with a few extra cross-links so there's more than one route through
+// a floor this large. generateDungeonLevel uses the returned `clusters` list to distribute
+// monsters/loot per-wing rather than one flat scatter across the whole huge grid. ----
+// ---- 8) drunken walk: one or more random walkers wander the grid carving floor as they move
+// (mostly continuing their current heading, occasionally turning), leaving an organic,
+// unpredictable tunnel network -- neither CA's smooth blobby caverns nor BSP's rectangular
+// rooms, closer to an actual hand-dug mine or water-eaten cave system. Multiple walkers crossing
+// their own and each other's paths create loops and junctions on their own, which is exactly the
+// "not linear, not just a rectangle with rounded corners" texture a single blobby cave sometimes
+// lacks on a small map. Occasional wider pauses leave small chamber pockets along the route
+// (returned as `rooms`, same as every other generator) rather than a corridor-only network. ----
+function genDrunkenWalk(W, H, rng) {
+  const g = [];
+  for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push(dtile2('#', false)); g.push(row); }
+  const walkerCount = Math.max(2, Math.min(6, Math.round(Math.sqrt(W * H) / 12)));
+  const stepsPerWalker = Math.round((W + H) * 2.2);
+  const rooms = [];
+  const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+  function carveAt(cx, cy, radius) {
+    for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) {
+      if (dx*dx + dy*dy > radius*radius + 0.5) continue;
+      const nx = cx+dx, ny = cy+dy;
+      if (nx < 1 || ny < 1 || nx >= W-1 || ny >= H-1) continue;
+      g[ny][nx] = dtile2('.', true, null, 'cave');
+    }
+  }
+  for (let w = 0; w < walkerCount; w++) {
+    let x = randInt(rng, Math.floor(W*0.2), Math.floor(W*0.8));
+    let y = randInt(rng, Math.floor(H*0.2), Math.floor(H*0.8));
+    let dir = choice(rng, dirs);
+    carveAt(x, y, 1);
+    for (let s = 0; s < stepsPerWalker; s++) {
+      if (rng() < 0.22) dir = choice(rng, dirs); // momentum: usually keeps going straight, sometimes turns
+      const nx = x + dir[0], ny = y + dir[1];
+      if (nx < 2 || ny < 2 || nx >= W-2 || ny >= H-2) { dir = choice(rng, dirs); continue; }
+      x = nx; y = ny;
+      const pauseChamber = rng() < 0.05;
+      carveAt(x, y, pauseChamber ? randInt(rng, 2, 3) : (rng() < 0.15 ? 2 : 1));
+      if (pauseChamber) rooms.push({ x: Math.max(1, x-2), y: Math.max(1, y-2), w: 5, h: 5, cx: x, cy: y });
+    }
+  }
+  return { grid: g, rooms };
+}
+
+function genSprawlClusters(W, H, rng, opts) {
+  const sizeTier = (opts && opts.sizeTier) || { clusterCount: [2, 3] };
+  const n = randInt(rng, sizeTier.clusterCount[0], sizeTier.clusterCount[1]);
+  const g = [];
+  for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push(dtile2('#', false)); g.push(row); }
+  // ---- BUGFIX (see player report: "entire right side has no structures and is solid"): the old
+  // version laid clusters onto a FIXED cols x rowsN square grid (cols = ceil(sqrt(n))) and just
+  // `continue`d past any cell once idx reached n. Whenever n didn't evenly fill that square grid
+  // (e.g. n=3 -> a 2x2 grid with only 3 of 4 cells used, n=5/7/8 -> similar), the leftover cell(s)
+  // were never carved at all -- because of the row-major iteration order those leftovers were
+  // always the trailing cells, i.e. the right side and/or bottom of the map, staying permanently
+  // solid rock. Fixed by choosing a row count first and then spreading all n clusters across those
+  // rows as evenly as possible (some rows get one extra), with each row's cells sized to fill that
+  // row's FULL width regardless of its column count. Every cluster the roll asked for now always
+  // gets placed somewhere -- there's no longer a "leftover cell" concept for gaps to hide in.
+  const rowsN = Math.max(1, Math.min(n, Math.round(Math.sqrt(n * H / W)) || 1));
+  const perRowBase = Math.floor(n / rowsN), rowsWithExtra = n % rowsN;
+  const cellH = Math.floor(H / rowsN);
+  const clusters = [], rooms = [];
+  const subGenChoices = ['rooms_bsp', 'cave_ca', 'cave_noise', 'maze', 'grand_hall', 'drunken_walk'];
+  // ---- respect a theme's genPool for sub-layouts too: pickGeneratorId can route straight into
+  // sprawl_clusters (whenever a size tier's clusterCount allows more than one cluster) BEFORE it
+  // ever consults meta.genPool -- so without this, a themed dungeon that happened to roll a
+  // multi-cluster layout would still pull each wing from the generic uniform subGenChoices list
+  // above, including cave generators for themes (like Abandoned House) whose genPool deliberately
+  // excludes caves. Filter the theme's own weighted pool down to whichever of the sub-eligible
+  // generators it actually allows, and use THAT for every wing instead when one is available.
+  const themeGenPool = opts && opts.meta && opts.meta.genPool;
+  const subGenWeights = themeGenPool ? themeGenPool.filter(([id]) => subGenChoices.includes(id)) : null;
+  let idx = 0;
+  for (let ry = 0; ry < rowsN; ry++) {
+    const colsInRow = perRowBase + (ry < rowsWithExtra ? 1 : 0);
+    if (colsInRow <= 0) continue;
+    const cellW = Math.floor(W / colsInRow);
+    for (let rx = 0; rx < colsInRow; rx++) {
+      const pad = 2;
+      const bx = rx * cellW + pad, by = ry * cellH + pad;
+      // clamp to whatever room is actually left on the grid (rather than skipping the cluster
+      // entirely when the nominal size doesn't fit) so a cramped cell still gets *something*.
+      const bw = Math.max(10, Math.min(Math.max(14, cellW - pad * 2), W - bx - 1));
+      const bh = Math.max(8, Math.min(Math.max(10, cellH - pad * 2), H - by - 1));
+      const genId = (subGenWeights && subGenWeights.length) ? weightedChoice(rng, subGenWeights) : choice(rng, subGenChoices);
+      const kind = (genId === 'cave_ca' || genId === 'cave_noise' || genId === 'drunken_walk') ? 'cave' : (genId === 'maze' ? 'maze' : (genId === 'grand_hall' ? 'hall' : 'ruins'));
+      const sub = DUNGEON_GENERATORS[genId](bw, bh, rng, opts);
+      const subH = sub.grid.length, subW = subH ? sub.grid[0].length : 0;
+      for (let y = 0; y < subH; y++) for (let x = 0; x < subW; x++) {
+        const t = sub.grid[y][x];
+        if (t.walkable && g[by + y] && g[by + y][bx + x] !== undefined) { t.zone = t.zone || kind; t.clusterId = idx; g[by + y][bx + x] = t; }
+      }
+      (sub.rooms || []).forEach(r => rooms.push({ x: r.x + bx, y: r.y + by, w: r.w, h: r.h, cx: r.cx + bx, cy: r.cy + by, grand: r.grand, clusterId: idx }));
+      clusters.push({ id: idx, x: bx, y: by, w: subW, h: subH, kind, cx: bx + Math.floor(subW / 2), cy: by + Math.floor(subH / 2) });
+      idx++;
+    }
+  }
+  for (let i = 1; i < clusters.length; i++) carveWindingTunnel(g, clusters[i - 1].cx, clusters[i - 1].cy, clusters[i].cx, clusters[i].cy, rng, W, H);
+  if (clusters.length > 2) {
+    const extraLinks = Math.max(1, Math.floor(clusters.length / 2) - 1);
+    for (let i = 0; i < extraLinks; i++) {
+      const a = choice(rng, clusters), b = choice(rng, clusters);
+      if (a.id === b.id) continue;
+      carveWindingTunnel(g, a.cx, a.cy, b.cx, b.cy, rng, W, H);
+    }
+  }
+  return { grid: g, rooms, clusters };
+}
+
+// ---- generator registry + selection: the one place a theme's genre or an explicit genPool maps
+// to an actual generator id. Extend either table to add variety to a theme without touching
+// generateDungeonLevel at all. ----
+const DUNGEON_GENERATORS = {
+  rooms_bsp: genRoomsBSP,
+  cave_ca: genCaveCA,
+  cave_noise: genCaveNoise,
+  maze: genMaze,
+  grand_hall: genGrandHall,
+  hybrid_cave_ruins: genHybridCaveRuins,
+  drunken_walk: genDrunkenWalk,
+  sprawl_clusters: genSprawlClusters,
+};
+const GENERATOR_WEIGHTS_BY_GENRE = {
+  cave:  [['cave_ca', 34], ['cave_noise', 18], ['hybrid_cave_ruins', 20], ['drunken_walk', 20], ['maze', 8]],
+  rooms: [['rooms_bsp', 32], ['grand_hall', 12], ['hybrid_cave_ruins', 16], ['maze', 16], ['cave_ca', 8], ['drunken_walk', 16]],
+};
+function pickGeneratorId(theme, meta, sizeTier, rng) {
+  if (theme === 'labyrinth') return weightedChoice(rng, [['maze', 50], ['hybrid_cave_ruins', 18], ['drunken_walk', 12], ['rooms_bsp', 20]]);
+  if (sizeTier.clusterCount[1] > 1 && rng() < 0.75) return 'sprawl_clusters';
+  const pool = meta.genPool || GENERATOR_WEIGHTS_BY_GENRE[meta.genre] || GENERATOR_WEIGHTS_BY_GENRE.rooms;
+  return weightedChoice(rng, pool);
+}
+
+// ---- dungeon generation v7: layered/mixed procgen (see the generator registry above), size-
+// driven footprints, zone-aware feature and encounter placement, hazard tiles per theme
+// (traps/poison/water) + cyber/eldritch loot bias ----
+function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId) {
   const meta = DUNGEON_THEMES[theme] || { genre: 'rooms', dtierMax: 2, tier: 'common' };
   const variant = DUNGEON_VARIANTS.find(v => v.id === variantId) || DUNGEON_VARIANTS[1];
-  let grid, rooms;
-  if (meta.genre === 'cave') { const gen = genCaveV2(); grid = gen.grid; rooms = gen.rooms; }
-  else { const gen = genRoomsV2(theme === 'labyrinth'); grid = gen.grid; rooms = gen.rooms; }
-
-  const level = { grid, depth, monsters: [], items: [], upStairs: null, downStairs: null, w: DW2, h: DH2 };
-  const floors = [];
-  for (let y = 0; y < DH2; y++) for (let x = 0; x < DW2; x++) if (grid[y][x].walkable) floors.push({x,y});
-  if (floors.length < 4) {
-    for (let y = 10; y < 16; y++) for (let x = 10; x < 20; x++) { grid[y][x] = dtile2('.', true); floors.push({x,y}); }
-  }
+  const sizeTier = dungeonSizeById(sizeId);
+  // Everything about this floor -- including the LAYOUT ITSELF, which previously used unseeded
+  // Math.random() inside genRoomsV2/genCaveV2 and so was never actually reproducible -- now
+  // comes from one deterministic rng seeded off (theme, depth, world seed). Same inputs, same
+  // dungeon, every time.
   const rng = mulberry32((depth * 7919 + theme.length * 131 + SEED + 314159) | 0);
+  const W = randInt(rng, sizeTier.w[0], sizeTier.w[1]);
+  const H = randInt(rng, sizeTier.h[0], sizeTier.h[1]);
+  const genId = pickGeneratorId(theme, meta, sizeTier, rng);
+  const gen = DUNGEON_GENERATORS[genId](W, H, rng, { theme, meta, depth, sizeTier });
+  const grid = gen.grid;
+  const rooms = gen.rooms || [];
+  ensureConnectivity(grid, W, H);
+  // ---- cross-technique overlay: see applyOverlayVein for what/why. Runs after the primary
+  // layout is already fully connected, so it can only ever add new floor (and therefore new
+  // shortcuts/loops) -- it never removes anything the primary generator or connectivity repair
+  // already guaranteed, so it carries no risk of reintroducing a disconnected floor.
+  applyOverlayVein(grid, W, H, rng, genId, theme);
+
+  const level = { grid, depth, monsters: [], items: [], upStairs: null, downStairs: null, w: W, h: H, genId, size: sizeTier.id };
+  const floors = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (grid[y][x].walkable) floors.push({ x, y });
+  if (floors.length < 4) {
+    const cx0 = Math.max(1, Math.floor(W / 2) - 5), cy0 = Math.max(1, Math.floor(H / 2) - 3);
+    for (let y = cy0; y < Math.min(H - 1, cy0 + 6); y++) for (let x = cx0; x < Math.min(W - 1, cx0 + 10); x++) { grid[y][x] = dtile2('.', true); floors.push({ x, y }); }
+  }
+  const hasCaveZone = floors.some(f => grid[f.y][f.x].zone === 'cave');
+  const hasRuinsZone = floors.some(f => { const z = grid[f.y][f.x].zone; return z === 'ruins' || z === 'hall'; });
+
   const up = choice(rng, floors);
   level.upStairs = up;
   grid[up.y][up.x] = dtile2('<', true, '#e0c34a');
   let down; let bestD = -1;
-  for (let i = 0; i < 40; i++) {
+  const stairAttempts = Math.min(120, Math.max(40, Math.floor(floors.length / 15)));
+  for (let i = 0; i < stairAttempts; i++) {
     const c = choice(rng, floors);
-    const d = Math.abs(c.x-up.x)+Math.abs(c.y-up.y);
+    const d = Math.abs(c.x - up.x) + Math.abs(c.y - up.y);
     if (d > bestD) { bestD = d; down = c; }
   }
   level.downStairs = down;
   grid[down.y][down.x] = dtile2('>', true, '#e05ae0');
+
+  // bigger footprints get proportionally more monsters/loot/traps -- a "massive" dungeon at the
+  // same depth as a "small" one should feel like it actually has more *in* it, not just more
+  // empty floor to walk across.
+  const areaScale = Math.sqrt((W * H) / (58 * 36));
 
   const dtierCeil = Math.min(meta.dtierMax || 2, Math.ceil(depth/3));
   let pool = Object.keys(MONSTER_BASES).filter(k => MONSTER_BASES[k].dtier && MONSTER_BASES[k].dtier <= dtierCeil && !MONSTER_BASES[k].boss);
@@ -16860,12 +17760,49 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
     if (themedPool.length) pool = themedPool;
   }
   const usablePool = pool.length ? pool : ['giantrat','goblin'];
-  const monCount = Math.min(16, 4 + depth * 2);
-  for (let i = 0; i < monCount; i++) {
-    const c = choice(rng, floors);
-    if ((c.x===up.x&&c.y===up.y) || (c.x===down.x&&c.y===down.y)) continue;
-    const mid = choice(rng, usablePool);
-    level.monsters.push(makeMonster(mid, c.x, c.y, depth, rng));
+  // ---- zone-flavored species: a theme that explicitly locks its faction list (e.g. "The
+  // Assembly Line" -> constructs only, "The Wyrm Hoard" -> dragons only) keeps that lock
+  // everywhere, including any cave pocket a hybrid/sprawl layout happens to generate -- the
+  // fiction there is "this whole place is one thing," not an ecosystem, so a cave zone should
+  // still be constructs, not suddenly wildlife. For the majority of themes that DON'T hard-lock
+  // (no `factions` declared, or the common single-loose-faction case), a cave zone gets its pool
+  // blended with natural fauna (beast/ooze/aquatic) at the same depth ceiling when any exist --
+  // so a ruins dungeon's cave wing reads as an actual cave with things that live in caves,
+  // rather than the exact same cultists/skeletons standing on differently-shaped floor tiles.
+  const factionLocked = !!(meta.factions && meta.factions.length);
+  function poolForZone(basePool, zoneKind) {
+    if (zoneKind !== 'cave' || factionLocked) return basePool;
+    const flavorFactions = ['beast', 'ooze', 'aquatic'];
+    const flavorPool = Object.keys(MONSTER_BASES).filter(k => MONSTER_BASES[k].dtier && MONSTER_BASES[k].dtier <= dtierCeil && !MONSTER_BASES[k].boss && flavorFactions.includes(MONSTER_BASES[k].faction));
+    if (!flavorPool.length) return basePool;
+    // blend rather than replace -- weighted toward fauna (appears ~2x as often in choice()) but
+    // the theme's usual roster can still show up, so it doesn't feel like a hard biome switch
+    return basePool.concat(flavorPool, flavorPool);
+  }
+  const monCount = Math.max(3, Math.min(140, Math.round((4 + depth * 2) * areaScale)));
+  if (gen.clusters && gen.clusters.length > 1) {
+    // Spread encounters across each cluster so a sprawling dungeon's separate wings each feel
+    // genuinely populated in their own right, rather than one global scatter that could bias
+    // toward whichever cluster happened to get the most floor tiles.
+    const per = Math.max(2, Math.floor(monCount / gen.clusters.length));
+    for (const cl of gen.clusters) {
+      const clusterFloors = floors.filter(f => f.x >= cl.x && f.x < cl.x + cl.w && f.y >= cl.y && f.y < cl.y + cl.h);
+      if (clusterFloors.length) placeEncounters(clusterFloors, level, rng, poolForZone(usablePool, cl.kind), depth, up, down, per);
+    }
+  } else if (hasCaveZone && hasRuinsZone) {
+    // hybrid single-region floor (genHybridCaveRuins): split the population between the two
+    // zones proportional to their share of the walkable area, each with its own zone-flavored pool
+    const caveFloors = floors.filter(f => grid[f.y][f.x].zone === 'cave');
+    const otherFloors = floors.filter(f => grid[f.y][f.x].zone !== 'cave');
+    if (caveFloors.length && otherFloors.length) {
+      const caveShare = Math.max(1, Math.min(monCount - 1, Math.round(monCount * caveFloors.length / floors.length)));
+      placeEncounters(caveFloors, level, rng, poolForZone(usablePool, 'cave'), depth, up, down, caveShare);
+      placeEncounters(otherFloors, level, rng, usablePool, depth, up, down, monCount - caveShare);
+    } else {
+      placeEncounters(floors, level, rng, usablePool, depth, up, down, monCount);
+    }
+  } else {
+    placeEncounters(floors, level, rng, usablePool, depth, up, down, monCount);
   }
   if (depth === maxDepth) {
     // target the boss by actual power band (theme dtier ceiling + depth + variant), not just the
@@ -16958,13 +17895,28 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
         if (player.story && player.story.antagonist) boss.name = player.story.antagonist;
       }
       level.monsters.push(boss);
+      // ---- honor guard: a couple of themed sentries stationed near the boss chamber, so the
+      // final fight on this floor doesn't open in total silence right up to the boss's own tile.
+      if (rng() < 0.6) {
+        for (let gI = 0; gI < randInt(rng, 1, 2); gI++) {
+          for (let tries = 0; tries < 20; tries++) {
+            const gx = bc.x + randInt(rng, -3, 3), gy = bc.y + randInt(rng, -3, 3);
+            const gt = grid[gy] && grid[gy][gx];
+            if (!gt || !gt.walkable || occupiedInLevel(level, gx, gy) || (gx===up.x&&gy===up.y)) continue;
+            level.monsters.push(makeMonster(choice(rng, usablePool), gx, gy, depth, rng));
+            break;
+          }
+        }
+      }
     }
     if (maxDepth >= 6 && theme !== 'dream_sanctum') {
       grid[down.y][down.x] = { glyph: '\u2666', walkable: true, color: '#e8ab52', bg: '#1a140a', feature: 'waystone' };
       level.hasWaystone = true;
     }
   } else if (depth > 1 && (variant.guaranteedMiniboss ? rng() < 0.7 : rng() < (0.3 + (variant.minibossChanceMod || 0)))) {
-    // ---- miniboss: a themed, tougher-than-usual encounter on a non-final level ----
+    // ---- miniboss: a themed, tougher-than-usual encounter on a non-final level, placed in an
+    // actual "lair" room far from the entrance when the layout has real rooms to offer, with a
+    // couple of guards fleshing the lair out instead of the miniboss standing alone. ----
     let miniPool = Object.keys(MONSTER_BASES).filter(k => MONSTER_BASES[k].miniboss);
     if (meta.factions && meta.factions.length) {
       let factions = meta.factions;
@@ -16973,44 +17925,69 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
       if (themedMini.length) miniPool = themedMini;
     }
     if (miniPool.length) {
-      const mc = choice(rng, floors);
-      if (!((mc.x===up.x&&mc.y===up.y) || (mc.x===down.x&&mc.y===down.y))) {
+      const lairRooms = rooms.filter(r => chebyshev(r.cx, r.cy, up.x, up.y) > 6);
+      let mc;
+      if (lairRooms.length && rng() < 0.7) { const lair = choice(rng, lairRooms); mc = { x: lair.cx, y: lair.cy }; }
+      else mc = choice(rng, floors);
+      if (mc && !((mc.x===up.x&&mc.y===up.y) || (mc.x===down.x&&mc.y===down.y)) && grid[mc.y] && grid[mc.y][mc.x] && grid[mc.y][mc.x].walkable) {
         level.monsters.push(makeMonster(choice(rng, miniPool), mc.x, mc.y, depth + 1, rng));
+        if (rng() < 0.55) {
+          for (let gI = 0; gI < randInt(rng, 1, 2); gI++) {
+            for (let tries = 0; tries < 15; tries++) {
+              const gx = mc.x + randInt(rng, -2, 2), gy = mc.y + randInt(rng, -2, 2);
+              const gt = grid[gy] && grid[gy][gx];
+              if (!gt || !gt.walkable || occupiedInLevel(level, gx, gy)) continue;
+              level.monsters.push(makeMonster(choice(rng, usablePool), gx, gy, depth, rng));
+              break;
+            }
+          }
+        }
       }
     }
   }
-  const itemCount = 3 + Math.floor(depth * 1.2);
+  const itemCount = Math.max(2, Math.round((3 + depth * 1.2) * areaScale));
+  // ---- risk/reward loot: a plain roll purely off depth means an item sitting right next to the
+  // entrance is exactly as good as one at the far, dangerous end of the floor -- there's no
+  // incentive to actually explore. Items placed well away from the up-stairs get a modest chance
+  // at a rarity bump instead, the same "the good stuff is further from the door" principle Brogue
+  // and Caves of Qud both lean on. It's a chance, not a rule, so it stays a pleasant surprise
+  // rather than a guaranteed marker of "loot room."
+  const farThreshold = Math.min(W, H) * 0.4;
   for (let i = 0; i < itemCount; i++) {
     const c = choice(rng, floors);
-    const rarity = Math.max(0, Math.min(4, Math.round(Math.floor(depth / 3) * variant.lootMod)));
+    const isFar = chebyshev(c.x, c.y, up.x, up.y) > farThreshold;
+    const farBonus = isFar && rng() < 0.35 ? 1 : 0;
+    const rarity = Math.max(0, Math.min(4, Math.round(Math.floor(depth / 3) * variant.lootMod) + farBonus));
     const maxValueTier = Math.min(4, rarity + 1);
     const baseIds = lootEligibleBaseIds(maxValueTier, { excludeTypes: ['misc', 'chest', 'corpse'] });
     const it = makeItem(choice(rng, baseIds), rarity, rng);
     level.items.push({ x: c.x, y: c.y, item: it });
   }
-  for (let i = 0; i < 2 + Math.floor(depth/2); i++) {
+  for (let i = 0; i < Math.max(1, Math.round((2 + Math.floor(depth/2)) * areaScale)); i++) {
     const c = choice(rng, floors);
     const gold = makeItem('gold', 0, rng);
     gold.amount = Math.round(randInt(rng, 5, 15) * depth * variant.lootMod);
     level.items.push({ x: c.x, y: c.y, item: gold });
   }
-  // ---- world containers: chests placed in dungeons are now real, persistent objects (open them
-  // in place, take what you want, come back later -- see IN-WORLD CONTAINERS above) rather than a
-  // pickup item that vanishes the instant it's opened. A handful of theme-appropriate extra
-  // containers (urns in crypts/necropolises, bookshelves/desks in anything room-based and not a
-  // bare cave/sewer, sacks/crates everywhere else) round out the level so there's always
-  // something worth searching for beyond the stairs and the fight. ----
+  // ---- world containers: chests placed in dungeons are real, persistent objects (open them
+  // in place, take what you want, come back later) rather than a pickup item that vanishes the
+  // instant it's opened. A handful of theme-appropriate extra containers (urns in crypts/
+  // necropolises, bookshelves/desks in anything room-based and not a bare cave/sewer, sacks/
+  // crates everywhere else) round out the level. On a multi-cluster dungeon, every wing gets its
+  // own independent roll instead of one flat roll for the whole sprawling floor. ----
   {
     if (!level.containers) level.containers = [];
     const ctier = Math.max(0, Math.min(4, Math.round(Math.floor(depth/2) * variant.lootMod)));
-    const chestCount = rng() < 0.5 ? 1 : (rng() < 0.2 ? 2 : 0);
+    const clusterN = (gen.clusters && gen.clusters.length > 1) ? gen.clusters.length : 1;
+    let chestCount = 0;
+    for (let c = 0; c < clusterN; c++) chestCount += (rng() < 0.5 ? 1 : (rng() < 0.2 ? 2 : 0));
     for (let i = 0; i < chestCount; i++) {
       const c = choice(rng, floors);
       const container = makeContainer('chest', { contents: rollContainerLoot(rng, 'chest', ctier), locked: rng() < 0.25 });
       level.containers.push({ x: c.x, y: c.y, container });
     }
     const isBookish = meta.genre !== 'cave' && theme !== 'sewer';
-    const extraCount = meta.bookHeavy ? randInt(rng, 4, 7) : randInt(rng, 1, 3);
+    const extraCount = Math.max(1, Math.round((meta.bookHeavy ? randInt(rng, 4, 7) : randInt(rng, 1, 3)) * areaScale));
     for (let i = 0; i < extraCount; i++) {
       const c = choice(rng, floors);
       let kind;
@@ -17032,11 +18009,13 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
     const c = choice(rng, floors);
     level.items.push({ x: c.x, y: c.y, item: makeMutagen(rng) });
   }
-  // ---- environmental features: traps, structures, and puzzles. Not every dungeon gets every
-  // feature -- a constructed castle doesn't get a natural chasm, and only water-themed dungeons
-  // get ponds -- but every dungeon gets a genuine chance at *something* beyond bare floor and
-  // monsters. All of it plugs into the same fire/gas/steam engine everything else uses. ----
-  placeTraps(grid, floors, rng, up, down, meta, depth);
+  // ---- environmental features: traps, structures, and puzzles, now zone-aware -- a tile's
+  // `.zone` (set by the generator, see the registry above) decides whether a big room gets
+  // pillars or a cave gets glowing fungus, rather than gating everything off the dungeon's
+  // single overall genre the way the old system did. Every dungeon still gets a genuine chance
+  // at *something* beyond bare floor and monsters, and hybrid/sprawl floors can now roll BOTH
+  // cave dressing and ruin dressing in the same level, since they genuinely contain both. ----
+  placeTraps(grid, floors, rng, up, down, meta, depth, areaScale);
   if (meta.hazard === 'poison') {
     for (let i = 0; i < 4; i++) {
       const c = choice(rng, floors);
@@ -17045,10 +18024,15 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
     }
   }
   if (meta.hazard === 'water') { placeWaterFeature(grid, floors, rng, up, down); if (rng() < 0.35) placeWaterFeature(grid, floors, rng, up, down); }
-  if (meta.genre === 'cave' && rng() < 0.55) placeChasmFeature(grid, floors, rng, up, down);
+  else if (hasCaveZone && rng() < 0.3) placeWaterFeature(grid, floors, rng, up, down);
+  if ((meta.genre === 'cave' || hasCaveZone) && rng() < 0.55) placeChasmFeature(grid, floors, rng, up, down);
+  if (hasCaveZone && rng() < 0.6) placeFungusPatches(grid, floors, rng, up, down);
+  if (hasRuinsZone && rng() < 0.5) placeRubble(grid, floors, rng, up, down);
+  if (rooms.length && rng() < 0.6) placePillars(grid, rooms, rng);
   if (rng() < 0.4) placeLockedVault(grid, floors, level, rng, up, down, meta);
-  if (meta.genre === 'rooms' && rooms.length >= 3 && rng() < 0.3) placeLeverPuzzle(grid, rooms, level, rng, up, down, meta);
-  if (meta.genre === 'rooms' && rng() < 0.35) placeStatues(grid, floors, rng, up, down, meta);
+  if (rooms.length >= 3 && rng() < 0.3) placeLeverPuzzle(grid, rooms, level, rng, up, down, meta);
+  if ((meta.genre === 'rooms' || meta.genre === 'cave' || hasRuinsZone || hasCaveZone) && rng() < 0.4) placeStatues(grid, floors, rng, up, down, meta);
+  guaranteeStairsReachable(grid);
   validateAndRepairLockedDoors(grid, up);
   return level;
 
@@ -17062,7 +18046,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
   // the player hunt for a key or solve a puzzle that accomplishes nothing. ----
   function validateAndRepairLockedDoors(g, upStairs) {
     const doors = [];
-    for (let y = 0; y < DH2; y++) for (let x = 0; x < DW2; x++) {
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const t = g[y] && g[y][x];
       if (t && (t.feature === 'lockeddoor' || t.feature === 'leverdoor')) doors.push({ x, y, t });
     }
@@ -17074,7 +18058,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
         const [cx, cy] = stack.pop();
         for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
           const nx = cx + dx, ny = cy + dy, key = nx + ',' + ny;
-          if (nx < 0 || ny < 0 || ny >= DH2 || nx >= DW2 || visited.has(key)) continue;
+          if (nx < 0 || ny < 0 || ny >= H || nx >= W || visited.has(key)) continue;
           const t = g[ny][nx];
           if (!t || !t.walkable) continue;
           visited.add(key);
@@ -17098,68 +18082,160 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
     }
   }
 
-  function dtile2(glyph, walkable, color) {
-    return { glyph, walkable, color: color || (walkable ? '#5a5248' : '#3a352c'), bg: walkable ? '#161310' : '#0c0a08', feature: walkable?'floor':'wall' };
-  }
   function occupiedInLevel(lv, x, y) {
     return lv.monsters.some(m => m.x===x && m.y===y) || lv.items.some(it => it.x===x && it.y===y);
   }
+  // ---- softlock guard: before turning any walkable tile into a blocking one (statue, pillar,
+  // etc.), check whether doing so would sever the only path between the up and down stairs -- a
+  // one-tile-wide corridor is exactly the case where a single misplaced statue can wall the
+  // player out of the rest of the dungeon entirely. Cheap BFS per candidate tile (grids top out
+  // around 150x92, and only a handful of blocking features are ever placed per floor), and it's
+  // the tile itself that gets skipped on failure, not the whole feature pass -- a statue that
+  // would block the corridor just doesn't get placed there; the rest of the room still can. ----
+  function wouldDisconnectStairs(g, x, y) {
+    const t = g[y][x];
+    if (!t || !t.walkable) return false;
+    t.walkable = false;
+    const visited = new Set([up.x + ',' + up.y]);
+    const stack = [[up.x, up.y]];
+    let reached = false;
+    while (stack.length) {
+      const [cx, cy] = stack.pop();
+      if (cx === down.x && cy === down.y) { reached = true; break; }
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nx = cx + dx, ny = cy + dy, key = nx + ',' + ny;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H || visited.has(key)) continue;
+        const nt = g[ny][nx];
+        if (!nt.walkable) continue;
+        visited.add(key);
+        stack.push([nx, ny]);
+      }
+    }
+    t.walkable = true;
+    return !reached;
+  }
+  // ---- last-resort safety net: run once, right after every feature-placement pass (statues,
+  // pillars, water, chasms, vaults, lever puzzles, and anything added later) has finished. This
+  // is deliberately separate from wouldDisconnectStairs above -- that guard prevents the common
+  // case cleanly, but a *combination* of several features (e.g. a chasm and a statue each fine on
+  // their own, placed before/after each other in ways that only jointly seal a corridor) could
+  // still in principle slip through. This check costs one BFS and, in the extremely rare case it
+  // ever fires, guarantees the stairs stay reachable by carving a direct corridor between them
+  // rather than leaving any possibility of a softlocked floor.
+  function guaranteeStairsReachable(g) {
+    const visited = new Set([up.x + ',' + up.y]);
+    const stack = [[up.x, up.y]];
+    let reached = false;
+    while (stack.length) {
+      const [cx, cy] = stack.pop();
+      if (cx === down.x && cy === down.y) { reached = true; break; }
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nx = cx + dx, ny = cy + dy, key = nx + ',' + ny;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H || visited.has(key)) continue;
+        const nt = g[ny][nx];
+        if (!nt.walkable) continue;
+        visited.add(key);
+        stack.push([nx, ny]);
+      }
+    }
+    if (!reached) carveCorridor(g, up.x, up.y, down.x, down.y);
+  }
+  // ---- clever encounter placement: instead of scattering monsters one at a time onto random
+  // floor tiles independently, most of the level's population comes in as dens/hordes (3-6 of
+  // the SAME species clustered together -- a nest, a warren, a guard barracks) or patrols (2-3
+  // mixed escorts moving as a loose group), with only a minority as true lone wanderers. This is
+  // the "hordes of specific enemies" / "clever and unique enemy placements" the overhaul asked
+  // for, and it's reused for both a normal single-layout floor and, once per wing, for a
+  // multi-cluster sprawling one. ----
+  function placeEncounters(floorList, lvl, prng, speciesPool, dpt, upStairs, downStairs, targetCount) {
+    if (!floorList.length || !speciesPool.length) return;
+    let placed = 0, guard = 0;
+    const usedSpots = new Set();
+    const isFree = (x, y) => !usedSpots.has(x+','+y) && !(x===upStairs.x&&y===upStairs.y) && !(x===downStairs.x&&y===downStairs.y) && !occupiedInLevel(lvl, x, y);
+    while (placed < targetCount && guard++ < targetCount * 12 + 40) {
+      const roll = prng();
+      if (roll < 0.32) {
+        const species = choice(prng, speciesPool);
+        const center = choice(prng, floorList);
+        if (!isFree(center.x, center.y)) continue;
+        const packSize = Math.min(targetCount - placed, randInt(prng, 3, 6));
+        let n = 0;
+        for (let t2 = 0; t2 < packSize * 10 && n < packSize; t2++) {
+          const ox = center.x + randInt(prng, -3, 3), oy = center.y + randInt(prng, -3, 3);
+          const tile = lvl.grid[oy] && lvl.grid[oy][ox];
+          if (!tile || !tile.walkable || !isFree(ox, oy)) continue;
+          lvl.monsters.push(makeMonster(species, ox, oy, dpt, prng));
+          usedSpots.add(ox+','+oy); n++; placed++;
+        }
+        if (n === 0) continue;
+      } else if (roll < 0.55 && speciesPool.length > 1) {
+        const center = choice(prng, floorList);
+        if (!isFree(center.x, center.y)) continue;
+        const packSize = Math.min(targetCount - placed, randInt(prng, 2, 3));
+        let n = 0;
+        for (let t2 = 0; t2 < packSize * 10 && n < packSize; t2++) {
+          const ox = center.x + randInt(prng, -2, 2), oy = center.y + randInt(prng, -2, 2);
+          const tile = lvl.grid[oy] && lvl.grid[oy][ox];
+          if (!tile || !tile.walkable || !isFree(ox, oy)) continue;
+          lvl.monsters.push(makeMonster(choice(prng, speciesPool), ox, oy, dpt, prng));
+          usedSpots.add(ox+','+oy); n++; placed++;
+        }
+        if (n === 0) continue;
+      } else {
+        const c = choice(prng, floorList);
+        if (!c || !isFree(c.x, c.y)) continue;
+        lvl.monsters.push(makeMonster(choice(prng, speciesPool), c.x, c.y, dpt, prng));
+        usedSpots.add(c.x+','+c.y); placed++;
+      }
+    }
+  }
   // ---- typed traps: every dungeon gets a small baseline chance of something nasty, trap-themed
-  // dungeons get a heavy, varied spread. Darts and spikes are single-tile; fire, gas, and alarm
-  // traps affect an area or the whole level, same as the equivalent spells/grenades. ----
-  function placeTraps(g, floors, rng, up, down, meta, depth) {
-    const heavy = meta.hazard === 'traps';
-    // Wider variety than before -- confusion spores, snare nets, teleport runes, and ambush
-    // runes join the original dart/spike/fire/gas/alarm/floorbreak set, so a heavy-trap dungeon
-    // actually feels varied room to room instead of the same handful of tiles repeating.
-    const count = heavy ? 5 + Math.floor(depth/2) : (rng() < 0.65 ? 1 + Math.floor(depth/5) : 0);
+  // dungeons get a heavy, varied spread, and bigger floors get proportionally more (areaScale) so
+  // a massive dungeon doesn't feel emptier of danger than a small one just because it has more
+  // floor tiles to spread across. ----
+  function placeTraps(g, floorList, prng, upStairs, downStairs, dmeta, dpt, scale) {
+    const heavy = dmeta.hazard === 'traps';
+    const count = Math.round((heavy ? 5 + Math.floor(dpt/2) : (prng() < 0.65 ? 1 + Math.floor(dpt/5) : 0)) * scale);
     const basePool = heavy
       ? ['dart','spike','fire','gas','alarm','floorbreak','mine','confuse','net','teleport','summon','spike','fire','gas']
       : ['dart','spike','gas','alarm','mine','confuse','net'];
-    // Ambush runes need to know what to summon -- reuse the exact same faction/tier pool the
-    // level's regular monsters were drawn from (see the monster population step above), so an
-    // ambush always matches the dungeon it's in.
-    const dtierCeil = Math.min(meta.dtierMax || 2, Math.ceil(depth/3));
-    let summonPool = Object.keys(MONSTER_BASES).filter(k => MONSTER_BASES[k].dtier && MONSTER_BASES[k].dtier <= dtierCeil && !MONSTER_BASES[k].boss);
-    if (meta.factions && meta.factions.length) {
-      const themedPool = summonPool.filter(k => meta.factions.includes(MONSTER_BASES[k].faction));
+    const dtierCeil2 = Math.min(dmeta.dtierMax || 2, Math.ceil(dpt/3));
+    let summonPool = Object.keys(MONSTER_BASES).filter(k => MONSTER_BASES[k].dtier && MONSTER_BASES[k].dtier <= dtierCeil2 && !MONSTER_BASES[k].boss);
+    if (dmeta.factions && dmeta.factions.length) {
+      const themedPool = summonPool.filter(k => dmeta.factions.includes(MONSTER_BASES[k].faction));
       if (themedPool.length) summonPool = themedPool;
     }
     if (!summonPool.length) summonPool = ['giantrat', 'goblin'];
     for (let i = 0; i < count; i++) {
-      const c = choice(rng, floors);
-      if ((c.x===up.x&&c.y===up.y)||(c.x===down.x&&c.y===down.y)) continue;
+      const c = choice(prng, floorList);
+      if ((c.x===upStairs.x&&c.y===upStairs.y)||(c.x===downStairs.x&&c.y===downStairs.y)) continue;
       const t = g[c.y][c.x];
       if (!t.walkable || t.hiddenTrap || t.feature !== 'floor') continue;
       t.hiddenTrap = true;
-      t.trapType = choice(rng, basePool);
-      if (t.trapType === 'summon') { t.summonPool = summonPool.slice(); t.summonDepth = depth; }
-      if (t.trapType === 'mine') { t.minePower = [10 + depth, 20 + depth * 2]; t.mineRadius = 2; }
+      t.trapType = choice(prng, basePool);
+      if (t.trapType === 'summon') { t.summonPool = summonPool.slice(); t.summonDepth = dpt; }
+      if (t.trapType === 'mine') { t.minePower = [10 + dpt, 20 + dpt * 2]; t.mineRadius = 2; }
     }
   }
-  // ---- water features: several distinct shapes so hazard dungeons don't all get the same
-  // single round puddle. Ponds are the common baseline; rivers and lakes are rarer and more
-  // dramatic. Every variant guarantees at least one crossing so it's a hazard to route around,
-  // never a dead end -- and if a fancier shape can't find room to fit, we fall back to a pond. ----
-  function placeWaterFeature(g, floors, rng, up, down) {
-    const type = weightedChoice(rng, [['pond', 55], ['river', 28], ['lake', 17]]);
+  function placeWaterFeature(g, floorList, prng, upStairs, downStairs) {
+    const type = weightedChoice(prng, [['pond', 55], ['river', 28], ['lake', 17]]);
     let ok = false;
-    if (type === 'river') ok = placeRiver(g, floors, rng, up, down);
-    else if (type === 'lake') ok = placeLake(g, floors, rng, up, down);
-    if (!ok) ok = placePond(g, floors, rng, up, down);
+    if (type === 'river') ok = placeRiver(g, floorList, prng, upStairs, downStairs);
+    else if (type === 'lake') ok = placeLake(g, floorList, prng, upStairs, downStairs);
+    if (!ok) ok = placePond(g, floorList, prng, upStairs, downStairs);
     return ok;
   }
-  function placePond(g, floors, rng, up, down) {
-    const center = choice(rng, floors);
-    if (chebyshev(center.x,center.y,up.x,up.y) < 4 || chebyshev(center.x,center.y,down.x,down.y) < 3) return false;
-    const spread = 2 + rng()*1.5;
+  function placePond(g, floorList, prng, upStairs, downStairs) {
+    const center = choice(prng, floorList);
+    if (chebyshev(center.x,center.y,upStairs.x,upStairs.y) < 4 || chebyshev(center.x,center.y,downStairs.x,downStairs.y) < 3) return false;
+    const spread = 2 + prng()*1.5;
     const cells = [];
     for (let dy=-3; dy<=3; dy++) for (let dx=-3; dx<=3; dx++) {
       if (dx*dx+dy*dy > spread*spread) continue;
       const x=center.x+dx, y=center.y+dy;
-      if (x<2||y<2||x>=DW2-2||y>=DH2-2) continue;
+      if (x<2||y<2||x>=W-2||y>=H-2) continue;
       const t = g[y][x];
-      if (t.walkable && t.feature==='floor' && !occupiedInLevel(level, x, y) && !(x===up.x&&y===up.y) && !(x===down.x&&y===down.y)) cells.push({x,y});
+      if (t.walkable && t.feature==='floor' && !occupiedInLevel(level, x, y) && !(x===upStairs.x&&y===upStairs.y) && !(x===downStairs.x&&y===downStairs.y)) cells.push({x,y});
     }
     if (cells.length < 4) return false;
     cells.forEach(c => setTileWater(g[c.y][c.x]));
@@ -17169,18 +18245,14 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
     }
     return true;
   }
-  // ---- a meandering river running the length of the level, only forming where it crosses
-  // open floor (never punched through walls) so it can appear as one continuous ribbon in a
-  // cave or as broken pools linking several rooms. Several bridges keep it from being an
-  // impassable wall down the middle of the map. ----
-  function placeRiver(g, floors, rng, up, down) {
-    const horiz = rng() < 0.5;
-    const amplitude = 3 + rng()*4;
-    const wavelen = 9 + rng()*9;
-    const phase = rng()*Math.PI*2;
-    const wide = rng() < 0.3;
-    const baseline = 5 + rng()*((horiz?DH2:DW2)-10);
-    const length = horiz ? DW2 : DH2;
+  function placeRiver(g, floorList, prng, upStairs, downStairs) {
+    const horiz = prng() < 0.5;
+    const amplitude = 3 + prng()*4;
+    const wavelen = 9 + prng()*9;
+    const phase = prng()*Math.PI*2;
+    const wide = prng() < 0.3;
+    const baseline = 5 + prng()*((horiz?H:W)-10);
+    const length = horiz ? W : H;
     const cells = [];
     for (let i = 2; i < length-2; i++) {
       const center = Math.round(baseline + Math.sin(i/wavelen*Math.PI*2 + phase) * amplitude);
@@ -17188,14 +18260,14 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
       for (let th = 0; th <= spanEnd; th++) {
         const x = horiz ? i : center+th;
         const y = horiz ? center+th : i;
-        if (x<2||y<2||x>=DW2-2||y>=DH2-2) continue;
+        if (x<2||y<2||x>=W-2||y>=H-2) continue;
         const t = g[y][x];
-        if (t.walkable && t.feature==='floor' && !occupiedInLevel(level, x, y) && !(x===up.x&&y===up.y) && !(x===down.x&&y===down.y)) cells.push({x,y});
+        if (t.walkable && t.feature==='floor' && !occupiedInLevel(level, x, y) && !(x===upStairs.x&&y===upStairs.y) && !(x===downStairs.x&&y===downStairs.y)) cells.push({x,y});
       }
     }
     if (cells.length < 10) return false;
     cells.forEach(c => setTileWater(g[c.y][c.x]));
-    const bridgeCount = 2 + Math.floor(rng()*2);
+    const bridgeCount = 2 + Math.floor(prng()*2);
     for (let b = 0; b < bridgeCount; b++) {
       const idx = Math.floor((b+0.5) * cells.length / bridgeCount);
       const c = cells[idx];
@@ -17210,40 +18282,35 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
     }
     return true;
   }
-  // ---- a sprawling lake that can span a large stretch of the level, big enough that it needs
-  // several separate crossings rather than one bridge. Rare -- meant to feel like a real
-  // set-piece body of water, not just a bigger puddle. ----
-  function placeLake(g, floors, rng, up, down) {
-    const center = choice(rng, floors);
-    if (chebyshev(center.x,center.y,up.x,up.y) < 6 || chebyshev(center.x,center.y,down.x,down.y) < 5) return false;
-    const spreadX = 6 + rng()*5, spreadY = 5 + rng()*4;
+  function placeLake(g, floorList, prng, upStairs, downStairs) {
+    const center = choice(prng, floorList);
+    if (chebyshev(center.x,center.y,upStairs.x,upStairs.y) < 6 || chebyshev(center.x,center.y,downStairs.x,downStairs.y) < 5) return false;
+    const spreadX = 6 + prng()*5, spreadY = 5 + prng()*4;
     const cells = [];
     for (let dy=-Math.ceil(spreadY); dy<=Math.ceil(spreadY); dy++) for (let dx=-Math.ceil(spreadX); dx<=Math.ceil(spreadX); dx++) {
       if ((dx*dx)/(spreadX*spreadX) + (dy*dy)/(spreadY*spreadY) > 1) continue;
       const x=center.x+dx, y=center.y+dy;
-      if (x<2||y<2||x>=DW2-2||y>=DH2-2) continue;
+      if (x<2||y<2||x>=W-2||y>=H-2) continue;
       const t = g[y][x];
-      if (t.walkable && t.feature==='floor' && !occupiedInLevel(level, x, y) && !(x===up.x&&y===up.y) && !(x===down.x&&y===down.y)) cells.push({x,y});
+      if (t.walkable && t.feature==='floor' && !occupiedInLevel(level, x, y) && !(x===upStairs.x&&y===upStairs.y) && !(x===downStairs.x&&y===downStairs.y)) cells.push({x,y});
     }
     if (cells.length < 12) return false;
     cells.forEach(c => setTileWater(g[c.y][c.x]));
-    bridgeLakeOrCavern(g, rng, center, spreadX, spreadY, 'water');
+    bridgeLakeOrCavern(g, prng, center, spreadX, spreadY, 'water');
     return true;
   }
-  // shared helper: lay one or two straight bridge lines through a big blob feature (lake or
-  // chasm cavern) so a sprawling hazard always has more than one crossing point.
-  function bridgeLakeOrCavern(g, rng, center, spreadX, spreadY, kind) {
-    const lines = 2 + (rng() < 0.5 ? 1 : 0);
+  function bridgeLakeOrCavern(g, prng, center, spreadX, spreadY, kind) {
+    const lines = 2 + (prng() < 0.5 ? 1 : 0);
     for (let i=0;i<lines;i++) {
       const useRow = i % 2 === 0;
       if (useRow) {
-        const y = center.y + Math.round((rng()-0.5) * spreadY * 0.6);
+        const y = center.y + Math.round((prng()-0.5) * spreadY * 0.6);
         for (let x = center.x - Math.ceil(spreadX)-1; x <= center.x + Math.ceil(spreadX)+1; x++) {
           const t = g[y] && g[y][x];
           if (t && t.feature === kind) { t.walkable = true; t.feature = 'woodbridge'; t.bridgeOver = kind; t.glyph = '='; t.color = '#a07840'; t.bg = '#1a140a'; }
         }
       } else {
-        const x = center.x + Math.round((rng()-0.5) * spreadX * 0.6);
+        const x = center.x + Math.round((prng()-0.5) * spreadX * 0.6);
         for (let y = center.y - Math.ceil(spreadY)-1; y <= center.y + Math.ceil(spreadY)+1; y++) {
           const t = g[y] && g[y][x];
           if (t && t.feature === kind) { t.walkable = true; t.feature = 'woodbridge'; t.bridgeOver = kind; t.glyph = '='; t.color = '#a07840'; t.bg = '#1a140a'; }
@@ -17251,29 +18318,25 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
       }
     }
   }
-  // ---- chasm features: a straight crack is the common case; caverns and branching rifts are
-  // rarer, bigger set pieces. All three guarantee a crossing. ----
-  function placeChasmFeature(g, floors, rng, up, down) {
-    const type = weightedChoice(rng, [['crack', 55], ['cavern', 24], ['branching', 21]]);
+  function placeChasmFeature(g, floorList, prng, upStairs, downStairs) {
+    const type = weightedChoice(prng, [['crack', 55], ['cavern', 24], ['branching', 21]]);
     let ok = false;
-    if (type === 'cavern') ok = placeChasmCavern(g, floors, rng, up, down);
-    else if (type === 'branching') ok = placeChasmBranching(g, floors, rng, up, down);
-    if (!ok) ok = placeChasm(g, floors, rng, up, down);
+    if (type === 'cavern') ok = placeChasmCavern(g, floorList, prng, upStairs, downStairs);
+    else if (type === 'branching') ok = placeChasmBranching(g, floorList, prng, upStairs, downStairs);
+    if (!ok) ok = placeChasm(g, floorList, prng, upStairs, downStairs);
     return ok;
   }
-  // ---- a chasm slicing across a cave, with exactly one wooden bridge as the crossing point --
-  // burn the bridge down (deliberately or by accident) and that route is gone for good. ----
-  function placeChasm(g, floors, rng, up, down) {
-    const center = choice(rng, floors);
-    if (chebyshev(center.x,center.y,up.x,up.y) < 5 || chebyshev(center.x,center.y,down.x,down.y) < 4) return false;
-    const horiz = rng() < 0.5;
+  function placeChasm(g, floorList, prng, upStairs, downStairs) {
+    const center = choice(prng, floorList);
+    if (chebyshev(center.x,center.y,upStairs.x,upStairs.y) < 5 || chebyshev(center.x,center.y,downStairs.x,downStairs.y) < 4) return false;
+    const horiz = prng() < 0.5;
     const cells = [];
     for (let i=-3;i<=3;i++) {
       const x = horiz ? center.x : center.x+i;
       const y = horiz ? center.y+i : center.y;
-      if (x<2||y<2||x>=DW2-2||y>=DH2-2) continue;
+      if (x<2||y<2||x>=W-2||y>=H-2) continue;
       const t = g[y][x];
-      if (t.walkable && t.feature==='floor' && !occupiedInLevel(level, x, y) && !(x===up.x&&y===up.y) && !(x===down.x&&y===down.y)) cells.push({x,y});
+      if (t.walkable && t.feature==='floor' && !occupiedInLevel(level, x, y) && !(x===upStairs.x&&y===upStairs.y) && !(x===downStairs.x&&y===downStairs.y)) cells.push({x,y});
     }
     if (cells.length < 4) return false;
     cells.forEach(c => setTileChasm(g[c.y][c.x]));
@@ -17282,46 +18345,41 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
     bt.walkable = true; bt.feature = 'woodbridge'; bt.bridgeOver = 'chasm'; bt.glyph = '='; bt.color = '#a07840'; bt.bg = '#1a140a';
     return true;
   }
-  // ---- a wide chasm chamber -- a real gulf splitting the room, not just a crack. Rare, and
-  // needs two separate crossings since one bridge would feel stingy across something this big. ----
-  function placeChasmCavern(g, floors, rng, up, down) {
-    const center = choice(rng, floors);
-    if (chebyshev(center.x,center.y,up.x,up.y) < 6 || chebyshev(center.x,center.y,down.x,down.y) < 5) return false;
-    const spreadX = 5 + rng()*4, spreadY = 4 + rng()*3;
+  function placeChasmCavern(g, floorList, prng, upStairs, downStairs) {
+    const center = choice(prng, floorList);
+    if (chebyshev(center.x,center.y,upStairs.x,upStairs.y) < 6 || chebyshev(center.x,center.y,downStairs.x,downStairs.y) < 5) return false;
+    const spreadX = 5 + prng()*4, spreadY = 4 + prng()*3;
     const cells = [];
     for (let dy=-Math.ceil(spreadY); dy<=Math.ceil(spreadY); dy++) for (let dx=-Math.ceil(spreadX); dx<=Math.ceil(spreadX); dx++) {
       if ((dx*dx)/(spreadX*spreadX) + (dy*dy)/(spreadY*spreadY) > 1) continue;
       const x=center.x+dx, y=center.y+dy;
-      if (x<2||y<2||x>=DW2-2||y>=DH2-2) continue;
+      if (x<2||y<2||x>=W-2||y>=H-2) continue;
       const t = g[y][x];
-      if (t.walkable && t.feature==='floor' && !occupiedInLevel(level, x, y) && !(x===up.x&&y===up.y) && !(x===down.x&&y===down.y)) cells.push({x,y});
+      if (t.walkable && t.feature==='floor' && !occupiedInLevel(level, x, y) && !(x===upStairs.x&&y===upStairs.y) && !(x===downStairs.x&&y===downStairs.y)) cells.push({x,y});
     }
     if (cells.length < 10) return false;
     cells.forEach(c => setTileChasm(g[c.y][c.x]));
-    bridgeLakeOrCavern(g, rng, center, spreadX, spreadY, 'chasm');
+    bridgeLakeOrCavern(g, prng, center, spreadX, spreadY, 'chasm');
     return true;
   }
-  // ---- a chasm that forks into two or three rifts from a shared point, rather than one clean
-  // line. Rarest and most disorienting -- only the shared junction is bridged, so committing to
-  // the wrong arm means backtracking. ----
-  function placeChasmBranching(g, floors, rng, up, down) {
-    const center = choice(rng, floors);
-    if (chebyshev(center.x,center.y,up.x,up.y) < 6 || chebyshev(center.x,center.y,down.x,down.y) < 5) return false;
-    const armCount = 2 + (rng() < 0.5 ? 1 : 0);
+  function placeChasmBranching(g, floorList, prng, upStairs, downStairs) {
+    const center = choice(prng, floorList);
+    if (chebyshev(center.x,center.y,upStairs.x,upStairs.y) < 6 || chebyshev(center.x,center.y,downStairs.x,downStairs.y) < 5) return false;
+    const armCount = 2 + (prng() < 0.5 ? 1 : 0);
     const dirPool = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
     const usedDirs = [];
     const allCells = [];
     for (let a = 0; a < armCount; a++) {
       let dir, tries = 0;
-      do { dir = choice(rng, dirPool); tries++; }
+      do { dir = choice(prng, dirPool); tries++; }
       while (tries < 20 && usedDirs.some(d => d[0]===dir[0] && d[1]===dir[1]));
       usedDirs.push(dir);
-      const len = 3 + Math.floor(rng()*3);
+      const len = 3 + Math.floor(prng()*3);
       for (let i=0;i<=len;i++) {
         const x = center.x + dir[0]*i, y = center.y + dir[1]*i;
-        if (x<2||y<2||x>=DW2-2||y>=DH2-2) continue;
+        if (x<2||y<2||x>=W-2||y>=H-2) continue;
         const t = g[y][x];
-        if (t.walkable && t.feature==='floor' && !occupiedInLevel(level, x, y) && !(x===up.x&&y===up.y) && !(x===down.x&&y===down.y)) allCells.push({x,y});
+        if (t.walkable && t.feature==='floor' && !occupiedInLevel(level, x, y) && !(x===upStairs.x&&y===upStairs.y) && !(x===downStairs.x&&y===downStairs.y)) allCells.push({x,y});
       }
     }
     if (allCells.length < 6) return false;
@@ -17336,164 +18394,197 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId) {
     }
     return true;
   }
-  // ---- a genuine locked treasure vault: a small side room carved fresh behind a locked door,
-  // with the matching key placed elsewhere on the level (sometimes on a guarding monster). ----
-  function placeLockedVault(g, floors, level, rng, up, down, meta) {
+  // ---- locked vault, with a chance of the "island vault" variant: instead of a plain walled
+  // room, the chest sits on a small dry island ringed by water or chasm, reachable by exactly one
+  // bridge tile lined up with the door -- a small, well-worn Brogue-style flourish ("the treasure
+  // is behind the door AND across the moat") that reuses the same water/chasm/bridge machinery
+  // every other environmental feature on this floor already uses, rather than a new mechanic. ----
+  function placeLockedVault(g, floorList, lvl, prng, upStairs, downStairs, dmeta) {
     for (let attempt = 0; attempt < 25; attempt++) {
-      const c = choice(rng, floors);
+      const c = choice(prng, floorList);
       if (!g[c.y] || !g[c.y][c.x] || !g[c.y][c.x].walkable) continue;
-      if (chebyshev(c.x,c.y,up.x,up.y) < 5 || chebyshev(c.x,c.y,down.x,down.y) < 4) continue;
-      const [ddx,ddy] = choice(rng, [[1,0],[-1,0],[0,1],[0,-1]]);
-      const doorX = c.x+ddx, doorY = c.y+ddy, vx = doorX+ddx, vy = doorY+ddy;
-      if (doorX<3||doorY<3||doorX>=DW2-3||doorY>=DH2-3) continue;
-      if (!g[doorY] || !g[doorY][doorX] || g[doorY][doorX].walkable) continue; // needs solid wall for the door
+      if (chebyshev(c.x,c.y,upStairs.x,upStairs.y) < 5 || chebyshev(c.x,c.y,downStairs.x,downStairs.y) < 4) continue;
+      const [ddx,ddy] = choice(prng, [[1,0],[-1,0],[0,1],[0,-1]]);
+      const island = prng() < 0.32;
+      const vaultRadius = island ? 2 : 1;
+      const doorX = c.x+ddx, doorY = c.y+ddy;
+      const vx = doorX+ddx*vaultRadius, vy = doorY+ddy*vaultRadius;
+      if (doorX < vaultRadius+2 || doorY < vaultRadius+2 || doorX >= W-(vaultRadius+2) || doorY >= H-(vaultRadius+2)) continue;
+      if (!g[doorY] || !g[doorY][doorX] || g[doorY][doorX].walkable) continue;
       const cells = [];
       let ok = true;
-      for (let oy=-1; oy<=1; oy++) for (let ox=-1; ox<=1; ox++) {
+      for (let oy=-vaultRadius; oy<=vaultRadius && ok; oy++) for (let ox=-vaultRadius; ox<=vaultRadius; ox++) {
         const x=vx+ox, y=vy+oy;
-        if (x<2||y<2||x>=DW2-2||y>=DH2-2) { ok=false; break; }
-        if ((x===up.x&&y===up.y)||(x===down.x&&y===down.y)) { ok=false; break; }
-        // The whole 3x3 pocket has to currently be solid, uncarved rock. If any of it is already
-        // floor, we'd just be knocking a "secret" door into a room that's already open on the
-        // other side -- a locked door in the middle of a room that gates nothing, which is
-        // exactly the generation bug this guards against.
+        if (x<2||y<2||x>=W-2||y>=H-2) { ok=false; break; }
+        if ((x===upStairs.x&&y===upStairs.y)||(x===downStairs.x&&y===downStairs.y)) { ok=false; break; }
         if (!g[y] || !g[y][x] || g[y][x].walkable) { ok=false; break; }
         cells.push({x,y});
       }
       if (!ok) continue;
       cells.forEach(p => { g[p.y][p.x] = dtile2('.', true); });
-      const token = 'vk' + Math.floor(rng()*1e9);
+      const token = 'vk' + Math.floor(prng()*1e9);
       g[doorY][doorX] = { glyph:'+', color:'#8a6a3a', bg:'#1a140a', walkable:false, feature:'lockeddoor', vaultToken: token };
-      const rarity = Math.max(1, Math.min(4, Math.round(Math.floor((level.depth||1)/2) * 1.3) + 1));
+      if (island) {
+        // ring the chest (distance-1 cells around vx,vy) with water/chasm, except the one tile
+        // lined up with the door, which becomes the single bridge across
+        const moatKind = dmeta.hazard === 'water' ? 'water' : (prng() < 0.5 ? 'water' : 'chasm');
+        for (const p of cells) {
+          const rdx = p.x - vx, rdy = p.y - vy;
+          if (Math.max(Math.abs(rdx), Math.abs(rdy)) !== 1) continue;
+          if (rdx === -ddx && rdy === -ddy) continue;
+          if (moatKind === 'water') setTileWater(g[p.y][p.x]); else setTileChasm(g[p.y][p.x]);
+        }
+        const bt = g[vy-ddy] && g[vy-ddy][vx-ddx];
+        if (bt) { bt.walkable = true; bt.feature = 'woodbridge'; bt.bridgeOver = moatKind; bt.glyph = '='; bt.color = '#a07840'; bt.bg = '#1a140a'; }
+      }
+      const rarity = Math.max(1, Math.min(4, Math.round(Math.floor((lvl.depth||1)/2) * 1.3) + 1 + (island?1:0)));
       const chestBase = ITEM_BASES.find(b=>b.id==='chest');
-      const chestItem = Object.assign({}, chestBase, { uid:'i'+Math.random().toString(36).slice(2,9), tier: rarity, lootBias: meta.lootBias, secured: true });
-      level.items.push({ x: vx, y: vy, item: chestItem });
+      const chestItem = Object.assign({}, chestBase, { uid:'i'+Math.random().toString(36).slice(2,9), tier: rarity, lootBias: dmeta.lootBias, secured: true });
+      lvl.items.push({ x: vx, y: vy, item: chestItem });
       const key = { uid:'i'+Math.random().toString(36).slice(2,9), id:'vault_key', type:'key', name:'Tarnished Vault Key', glyph:'k', color:'#e8c34a', value:0, vaultToken: token };
-      if (level.monsters.length && rng() < 0.6) {
-        const guard = choice(rng, level.monsters);
+      if (lvl.monsters.length && prng() < 0.6) {
+        const guard = choice(prng, lvl.monsters);
         guard.guaranteedDrops = (guard.guaranteedDrops || []).concat([key]);
       } else {
-        const kc = choice(rng, floors.filter(f => chebyshev(f.x,f.y,vx,vy) > 4));
-        if (kc) level.items.push({ x: kc.x, y: kc.y, item: key });
-        else level.items.push({ x: c.x, y: c.y, item: key });
+        const kc = choice(prng, floorList.filter(f => chebyshev(f.x,f.y,vx,vy) > 4));
+        if (kc) lvl.items.push({ x: kc.x, y: kc.y, item: key });
+        else lvl.items.push({ x: c.x, y: c.y, item: key });
       }
       return;
     }
   }
-  // ---- a lever puzzle: several levers, only one genuine. Pull the right one and a nearby vault
-  // (or, lacking one, a reinforced dead-end wall) opens; pull a decoy and pay for it. ----
-  function placeLeverPuzzle(g, rooms, level, rng, up, down, meta) {
-    const candidates = rooms.filter(r => r.w >= 5 && r.h >= 5 && chebyshev(r.cx,r.cy,up.x,up.y) > 4);
+  function placeLeverPuzzle(g, roomList, lvl, prng, upStairs, downStairs, dmeta) {
+    const candidates = roomList.filter(r => r.w >= 5 && r.h >= 5 && chebyshev(r.cx,r.cy,upStairs.x,upStairs.y) > 4);
     if (!candidates.length) return;
-    const room = choice(rng, candidates);
+    const room = choice(prng, candidates);
     const spots = [];
     for (let x = room.x+1; x < room.x+room.w-1; x++) { spots.push({x, y: room.y+1}); }
     if (spots.length < 3) return;
-    const leverCount = Math.min(spots.length, 3 + (rng()<0.4?1:0));
+    const leverCount = Math.min(spots.length, 3 + (prng()<0.4?1:0));
     const chosen = [];
-    while (chosen.length < leverCount && spots.length) { chosen.push(spots.splice(Math.floor(rng()*spots.length),1)[0]); }
-    const correctIdx = Math.floor(rng()*chosen.length);
-    const puzzleId = 'lp' + Math.floor(rng()*1e9);
-    const flavor = meta.lootBias === 'cyber' ? 'control switch' : (meta.lootBias === 'eldritch' ? 'rune-etched lever' : 'iron lever');
+    while (chosen.length < leverCount && spots.length) { chosen.push(spots.splice(Math.floor(prng()*spots.length),1)[0]); }
+    const correctIdx = Math.floor(prng()*chosen.length);
+    const puzzleId = 'lp' + Math.floor(prng()*1e9);
+    const flavor = dmeta.lootBias === 'cyber' ? 'control switch' : (dmeta.lootBias === 'eldritch' ? 'rune-etched lever' : 'iron lever');
     chosen.forEach((spot, i) => {
       const t = g[spot.y][spot.x];
       if (!t || !t.walkable) return;
       t.feature = 'lever'; t.leverCorrect = (i === correctIdx); t.leverPulled = false; t.leverName = flavor;
       t.puzzleId = puzzleId; t.glyph = '/'; t.color = '#9a8a6a';
     });
-    // reward: a fresh side vault behind the room's far wall, unlocked by the correct lever
-    const doorX = Math.min(DW2-3, room.x+room.w+1), doorY = room.cy;
+    const doorX = Math.min(W-3, room.x+room.w+1), doorY = room.cy;
     if (g[doorY] && g[doorY][doorX] && !g[doorY][doorX].walkable) {
       const vx = doorX+1, vy = doorY;
       const cells = [];
       let ok = true;
       for (let oy=-1; oy<=1; oy++) for (let ox=-1; ox<=1; ox++) {
         const x=vx+ox, y=vy+oy;
-        if (x<2||y<2||x>=DW2-2||y>=DH2-2) { ok=false; break; }
-        // same guarantee as the locked vault: don't carve a door into a pocket that's already
-        // open floor, or the lever "reward" ends up gating nothing.
+        if (x<2||y<2||x>=W-2||y>=H-2) { ok=false; break; }
         if (!g[y] || !g[y][x] || g[y][x].walkable) { ok=false; break; }
         cells.push({x,y});
       }
       if (ok) {
         cells.forEach(p => { g[p.y][p.x] = dtile2('.', true); });
         g[doorY][doorX] = { glyph:'+', color:'#6a7a9a', bg:'#1a140a', walkable:false, feature:'leverdoor', puzzleId };
-        const rarity = Math.max(1, Math.min(4, Math.round(Math.floor((level.depth||1)/2) * 1.3)));
+        const rarity = Math.max(1, Math.min(4, Math.round(Math.floor((lvl.depth||1)/2) * 1.3)));
         const chestBase = ITEM_BASES.find(b=>b.id==='chest');
-        const chestItem = Object.assign({}, chestBase, { uid:'i'+Math.random().toString(36).slice(2,9), tier: rarity, lootBias: meta.lootBias, secured: true });
-        level.items.push({ x: vx, y: vy, item: chestItem });
+        const chestItem = Object.assign({}, chestBase, { uid:'i'+Math.random().toString(36).slice(2,9), tier: rarity, lootBias: dmeta.lootBias, secured: true });
+        lvl.items.push({ x: vx, y: vy, item: chestItem });
       }
     }
   }
-  // ---- decorative statues that also block movement and line of sight, giving rooms cover and
-  // chokepoints to actually use tactically instead of open featureless boxes. ----
-  function placeStatues(g, floors, rng, up, down, meta) {
-    const count = 1 + Math.floor(rng()*3);
-    const names = meta.lootBias === 'cyber' ? ['inert combat frame','shattered drone husk'] :
-      (meta.lootBias === 'eldritch' ? ['weeping obsidian idol','writhing stone effigy'] : ['crumbling statue','weathered idol']);
+  // ---- decorative blockers that also give rooms cover and chokepoints to use tactically: ruin
+  // zones get statues/idols, cave zones get stalagmites/rock formations instead -- same mechanic
+  // (blocks movement and sight), different flavor depending on what kind of space it's in. ----
+  function placeStatues(g, floorList, prng, upStairs, downStairs, dmeta) {
+    const count = Math.round((1 + Math.floor(prng()*3)) * Math.max(1, areaScale));
+    // ---- BUGFIX: this used to hand out "crumbling statue"/"weathered idol" ruin-flavored names
+    // to every non-cave zone regardless of theme -- including house-scale themes (Abandoned House)
+    // whose rooms_bsp floor is unconditionally tagged zone:'ruins' by the generator itself (see
+    // genRoomsBSP's carveRoomShape call). That meant an ordinary house could get "crumbling
+    // statues" and "weathered idols" standing in its rooms. House-scale themes now get mundane
+    // domestic-clutter names instead.
+    const isHouseScale = dmeta.maxSizeTier === 'medium';
+    const ruinNames = isHouseScale ? ['toppled armoire', 'overturned table', 'collapsed shelving unit'] :
+      dmeta.lootBias === 'cyber' ? ['inert combat frame','shattered drone husk'] :
+      (dmeta.lootBias === 'eldritch' ? ['weeping obsidian idol','writhing stone effigy'] : ['crumbling statue','weathered idol']);
+    const caveNames = ['jagged stalagmite','mineral-crusted spire','fused rock formation'];
     for (let i = 0; i < count; i++) {
-      const c = choice(rng, floors);
-      if ((c.x===up.x&&c.y===up.y)||(c.x===down.x&&c.y===down.y)) continue;
+      const c = choice(prng, floorList);
+      if ((c.x===upStairs.x&&c.y===upStairs.y)||(c.x===downStairs.x&&c.y===downStairs.y)) continue;
       const t = g[c.y][c.x];
       if (!t.walkable || t.feature !== 'floor' || occupiedInLevel(level, c.x, c.y)) continue;
-      t.walkable = false; t.feature = 'statue'; t.glyph = '\u2660'; t.color = '#6a6a72'; t.statueName = choice(rng, names);
+      if (wouldDisconnectStairs(g, c.x, c.y)) continue;
+      const isCave = t.zone === 'cave';
+      t.walkable = false; t.feature = 'statue'; t.glyph = isCave ? '\u25B2' : '\u2660'; t.color = isCave ? '#6a6a5a' : '#6a6a72';
+      t.statueName = choice(prng, isCave ? caveNames : ruinNames);
     }
   }
-  function genRoomsV2(labyrinth) {
-    const g = [];
-    for (let y = 0; y < DH2; y++) { const row = []; for (let x = 0; x < DW2; x++) row.push(dtile2('#', false)); g.push(row); }
-    const rooms = [];
-    function split(x, y, w, h, depthN) {
-      if (depthN <= 0 || w < 10 || h < 8) { rooms.push({x,y,w,h}); return; }
-      const horiz = w < h;
-      if (horiz) { const cut = Math.floor(h * (0.35 + Math.random()*0.3)); split(x, y, w, cut, depthN-1); split(x, y+cut, w, h-cut, depthN-1); }
-      else { const cut = Math.floor(w * (0.35 + Math.random()*0.3)); split(x, y, cut, h, depthN-1); split(x+cut, y, w-cut, h, depthN-1); }
-    }
-    split(0, 0, DW2, DH2, 4);
-    const roomRects = [];
-    for (const p of rooms) {
-      if (p.w < 5 || p.h < 5) continue;
-      const rw = Math.max(3, Math.min(p.w - 2, p.w - 2 - Math.floor(Math.random()*3)));
-      const rh = Math.max(3, Math.min(p.h - 2, p.h - 2 - Math.floor(Math.random()*2)));
-      const rx = p.x + Math.floor((p.w - rw)/2);
-      const ry = p.y + Math.floor((p.h - rh)/2);
-      if (rx < 0 || ry < 0 || rx+rw >= DW2 || ry+rh >= DH2 || rw<3||rh<3) continue;
-      for (let y = ry; y < ry+rh; y++) for (let x = rx; x < rx+rw; x++) g[y][x] = dtile2('.', true);
-      roomRects.push({ cx: Math.floor(rx+rw/2), cy: Math.floor(ry+rh/2), x: rx, y: ry, w: rw, h: rh });
-    }
-    for (let i = 1; i < roomRects.length; i++) { const a = roomRects[i-1], b = roomRects[i]; carveCorridor(g, a.cx, a.cy, b.cx, b.cy); }
-    if (labyrinth) { for (let i = 0; i < roomRects.length; i++) { const a = choice(Math.random, roomRects); const b = choice(Math.random, roomRects); carveCorridor(g, a.cx, a.cy, b.cx, b.cy); } }
-    return { grid: g, rooms: roomRects };
-  }
-  function carveCorridor(g, x0, y0, x1, y1) {
-    let x = x0, y = y0;
-    while (x !== x1) { g[y][x] = dtile2('.', true); x += x1 > x ? 1 : -1; }
-    while (y !== y1) { g[y][x] = dtile2('.', true); y += y1 > y ? 1 : -1; }
-    g[y1][x1] = dtile2('.', true);
-  }
-  function genCaveV2() {
-    let g = [];
-    for (let y = 0; y < DH2; y++) { const row = []; for (let x = 0; x < DW2; x++) row.push(Math.random() < 0.44 || x===0||y===0||x===DW2-1||y===DH2-1); g.push(row); }
-    for (let it = 0; it < 5; it++) {
-      const ng = [];
-      for (let y = 0; y < DH2; y++) {
-        const row = [];
-        for (let x = 0; x < DW2; x++) {
-          let walls = 0;
-          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-            if (dx===0&&dy===0) continue;
-            const nx=x+dx, ny=y+dy;
-            if (nx<0||ny<0||nx>=DW2||ny>=DH2||g[ny][nx]) walls++;
+  // ---- pillars: scattered blocking columns inside rooms, so open chambers get real tactical
+  // texture -- cover, chokepoints, broken sightlines -- instead of reading as an empty box. Grand
+  // rooms/halls get a proper grid of pillars; smaller-but-still-roomy spaces (a 6x6+ room, the
+  // size that would otherwise be a single featureless rectangle -- exactly the "bandit hideout is
+  // just a box" complaint) get a sparser scatter of 1-3 standalone obstacles instead of a full
+  // grid, so a plain rooms_bsp floor doesn't need to roll a "grand" room just to get any interior
+  // texture at all. ----
+  function placePillars(g, roomList, prng) {
+    for (const r of roomList) {
+      const isGrand = r.grand || (r.w >= 9 && r.h >= 8);
+      if (isGrand) {
+        if (prng() < 0.25) continue;
+        const spacing = prng() < 0.5 ? 3 : 4;
+        for (let y = r.y+2; y < r.y+r.h-2; y += spacing) {
+          for (let x = r.x+2; x < r.x+r.w-2; x += spacing) {
+            if (prng() < 0.15) continue;
+            const t = g[y] && g[y][x];
+            if (!t || !t.walkable) continue;
+            if (wouldDisconnectStairs(g, x, y)) continue;
+            t.walkable = false; t.feature = 'statue'; t.glyph = '\u2503'; t.color = '#5a5248'; t.statueName = 'stone pillar';
           }
-          row.push(walls >= 5);
         }
-        ng.push(row);
+      } else if (r.w >= 6 && r.h >= 6 && prng() < 0.55) {
+        const count = randInt(prng, 1, 3);
+        for (let i = 0; i < count; i++) {
+          const x = randInt(prng, r.x+1, r.x+r.w-2), y = randInt(prng, r.y+1, r.y+r.h-2);
+          const t = g[y] && g[y][x];
+          if (!t || !t.walkable) continue;
+          if (wouldDisconnectStairs(g, x, y)) continue;
+          t.walkable = false; t.feature = 'statue'; t.glyph = '\u2503'; t.color = '#5a5248'; t.statueName = 'stone pillar';
+        }
       }
-      g = ng;
     }
-    const out = [];
-    for (let y = 0; y < DH2; y++) { const row=[]; for (let x=0;x<DW2;x++) row.push(dtile2(g[y][x] ? '#':'.', !g[y][x])); out.push(row); }
-    return { grid: out, rooms: [] };
+  }
+  // ---- rubble: cosmetic difficult-looking debris in structured zones -- still walkable, just
+  // visually communicates "this place fell apart a long time ago" the way bare clean floor never
+  // does. Reuses the same 'rubble' feature the overworld's destructible decor already leaves
+  // behind, so it's consistent with what the player already knows that tile means. ----
+  function placeRubble(g, floorList, prng, upStairs, downStairs) {
+    const count = randInt(prng, 3, 8);
+    for (let i = 0; i < count; i++) {
+      const c = choice(prng, floorList);
+      if ((c.x===upStairs.x&&c.y===upStairs.y)||(c.x===downStairs.x&&c.y===downStairs.y)) continue;
+      const t = g[c.y][c.x];
+      if (!t.walkable || t.feature !== 'floor') continue;
+      t.feature = 'rubble'; t.glyph = ','; t.color = '#6a6152';
+    }
+  }
+  // ---- glowing fungus: cosmetic bioluminescent patches marking a stretch of cave as alive
+  // rather than empty rock -- a quiet, Caves-of-Qud-flavored detail with no mechanical weight of
+  // its own beyond atmosphere. ----
+  function placeFungusPatches(g, floorList, prng, upStairs, downStairs) {
+    const patches = randInt(prng, 1, 3);
+    for (let p = 0; p < patches; p++) {
+      const center = choice(prng, floorList);
+      const spread = 2 + Math.floor(prng()*2);
+      for (let dy=-spread; dy<=spread; dy++) for (let dx=-spread; dx<=spread; dx++) {
+        if (dx*dx+dy*dy > spread*spread) continue;
+        const x=center.x+dx, y=center.y+dy;
+        const t = g[y] && g[y][x];
+        if (!t || !t.walkable || t.feature !== 'floor' || prng() < 0.35) continue;
+        if ((x===upStairs.x&&y===upStairs.y)||(x===downStairs.x&&y===downStairs.y)) continue;
+        t.feature = 'fungus'; t.glyph = '\u201e'; t.color = '#5ac97a'; t.bg = '#0e1a10';
+      }
+    }
   }
 }
 function makeCyberChip(rng) {
@@ -17628,7 +18719,15 @@ function movePlayer(dx, dy, forceAttack) {
       log(`A ${t.statueName || 'weathered statue'} blocks the way.`);
       return;
     }
-    if (waterTile && !curIsDungeon()) {
+    // ---- BUG FIX: this whole swim/vessel/exhaustion branch was gated behind !curIsDungeon(),
+    // so any dungeon water tile (Flooded Cave, Sunken Temple, Sunken Ruins, Flooded Crypt, and
+    // any other room/cave with hazard:'water') fell straight through to "You can't go that way" --
+    // permanently impassable, even for a Tidewalker with free swimming, a waterbreathing potion, or
+    // a raft in inventory. Monsters/NPCs were never affected (isPassableFor has no such location
+    // check), and the tile's own look/examine text ("you could swim across...") already promised
+    // this worked everywhere. Dropping the dungeon exclusion so the player follows the same rule
+    // as everyone/everything else in the world. ----
+    if (waterTile) {
       const vessel = getBestVessel(player);
       const flying = canFly(player);
       if (canSwim(player)) {
@@ -17687,7 +18786,9 @@ function movePlayer(dx, dy, forceAttack) {
     t.leverPulled = true;
     if (t.leverCorrect) {
       log(`You pull the ${t.leverName || 'lever'}. Somewhere nearby, a heavy mechanism grinds open.`);
-      for (let yy = 0; yy < DH2; yy++) for (let xx = 0; xx < DW2; xx++) {
+      const _lvl = curDungeonLevel();
+      const _lw = _lvl ? _lvl.w : DW2, _lh = _lvl ? _lvl.h : DH2;
+      for (let yy = 0; yy < _lh; yy++) for (let xx = 0; xx < _lw; xx++) {
         const dt = curTileAt(xx, yy);
         if (dt && dt.feature === 'leverdoor' && dt.puzzleId === t.puzzleId) { dt.walkable = true; dt.feature = 'floor'; dt.glyph = "'"; dt.color = '#8a6a3a'; }
       }
@@ -17785,7 +18886,11 @@ function endTurn() {
   applyBiomeEnvironmentalEffect();
   if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
   const curT = curTileAt(player.x, player.y);
-  const playerInWater = isWaterTile(curT) && !curIsDungeon();
+  // ---- BUG FIX: matches the movePlayer water-crossing fix above -- this used to also exclude
+  // dungeons, which was harmless only because dungeon water was unreachable before that fix. Now
+  // that the player can actually stand in it, treading water should suppress stamina regen the
+  // same way it does in the overworld, rather than dungeon water silently acting like dry floor. ----
+  const playerInWater = isWaterTile(curT);
   if (!playerInWater) {
     const staminaRegen = Math.max(1, (player.staminaRegenBonus ? 6 : 3) - (player.staminaRegenPenalty || 0));
     // wearing armor heavier than your STR supports means you're spending some of every turn's
@@ -19017,7 +20122,7 @@ function applyLoadedSave(data) {
   if (player.mode === 'dungeon' && player.dungeonId) {
     const dg = dungeonRegistry.get(player.dungeonId);
     if (dg) {
-      if (!dg.levels[player.dungeonDepth - 1]) dg.levels[player.dungeonDepth - 1] = generateDungeonLevel(dg.theme, player.dungeonDepth, dg.maxDepth, dg.variant);
+      if (!dg.levels[player.dungeonDepth - 1]) dg.levels[player.dungeonDepth - 1] = generateDungeonLevel(dg.theme, player.dungeonDepth, dg.maxDepth, dg.variant, dg.size);
     } else {
       player.mode = 'overworld';
       player.x = player.overworldReturn ? player.overworldReturn.x : 0;
@@ -20766,6 +21871,7 @@ function handleKey(e) {
     if (key === 'G') { autoTravelToStairs(); return; }
     if (key === 'H') { autoTravelHome(); return; }
     if (key === 'X') { autoExplore(); return; }
+    if (key === 'M') { openDungeonMap(); return; }
     if (key === '>') { useStairs(); return; }
     if (key === '<') { useStairsUp(); return; }
     if (key === '?') { openHelp(); return; }
@@ -20773,6 +21879,10 @@ function handleKey(e) {
     return;
   }
 
+  if (gameState === 'dungeonmap') {
+    if (key === 'Escape' || key === 'M') { closeModal(); return; }
+    return;
+  }
   if (gameState === 'saveload') {
     if (key === 'Escape') { closeModal(); return; }
     if (/^[a-z]$/.test(key)) { saveLoadChoice(key); return; }
