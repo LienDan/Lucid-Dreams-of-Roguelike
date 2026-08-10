@@ -473,7 +473,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.33.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.33.1-alpha</div>
     </div>
   </div>
 
@@ -23396,6 +23396,223 @@ function debugGiveByKindId(kind, id) {
   updateSidebar();
 }
 
+// ---- destination teleport: dimensions & dungeon types ----
+// Player feedback: a way to jump straight to any dimension or dungeon type for testing/exploring,
+// built as a framework that never needs touching again when new dimensions or dungeon themes get
+// added elsewhere in the file. Both list-builders below read DIMENSIONS / DUNGEON_THEMES LIVE at
+// call time -- the same "no separate index to maintain" pattern debugRegistrySearch uses above --
+// so a new dimension or theme defined anywhere else in the file shows up here automatically,
+// correctly grouped and searchable, with zero further changes needed in this section. That's the
+// whole point: this is the one place in the codebase that should never need editing again just
+// because content got added somewhere else.
+function debugDimensionList() {
+  return Object.keys(DIMENSIONS).map(id => ({ id, name: DIMENSIONS[id].name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+// Grouped by tier purely for browsability (40+ dungeon themes flat would be a wall of text) --
+// 'dimension' here means "tier:'dimension' in DUNGEON_THEMES", i.e. themes normally only ever
+// placed by hand inside a specific dimension (a Trail Guardian dungeon or one of its scattered
+// interior sub-dungeons), never rolled by the overworld. The debug teleporter deliberately
+// ignores that placement restriction -- it's a testing tool, not the real placement system -- so
+// every theme in the game, however it's normally reached, is one click away here.
+const DEBUG_DUNGEON_TIER_LABELS = { common: 'Common', uncommon: 'Uncommon', rare: 'Rare', dimension: 'Dimension Sub-Dungeons' };
+const DEBUG_DUNGEON_TIER_ORDER = ['common', 'uncommon', 'rare', 'dimension'];
+function debugDungeonTypeList() {
+  return Object.keys(DUNGEON_THEMES).map(id => ({ id, name: DUNGEON_THEMES[id].name, tier: DUNGEON_THEMES[id].tier || 'common' }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+function debugDestinationSearch(query) {
+  const q = (query || '').trim().toLowerCase();
+  const dims = debugDimensionList().filter(d => !q || d.id.toLowerCase().includes(q) || d.name.toLowerCase().includes(q));
+  const dungeons = debugDungeonTypeList().filter(d => !q || d.id.toLowerCase().includes(q) || d.name.toLowerCase().includes(q));
+  return { dims, dungeons };
+}
+function renderDebugDestinationResults(query) {
+  const { dims, dungeons } = debugDestinationSearch(query);
+  if (!dims.length && !dungeons.length) return `<div class="npcline dim">No matches for "${escapeHtml(query)}".</div>`;
+  let html = '';
+  if (dims.length) {
+    html += `<div class="trade-col-title">Dimensions (${dims.length})</div>`;
+    html += dims.map(d => `<div class="modal-opt" onclick="debugTeleportToDimension('${d.id}')">${escapeHtml(d.name)} <span class="dim">— click to travel</span></div>`).join('');
+  }
+  if (dungeons.length) {
+    const knownTiers = new Set(DEBUG_DUNGEON_TIER_ORDER);
+    for (const tierId of DEBUG_DUNGEON_TIER_ORDER) {
+      const inTier = dungeons.filter(d => d.tier === tierId);
+      if (!inTier.length) continue;
+      html += `<div class="trade-col-title">${DEBUG_DUNGEON_TIER_LABELS[tierId] || tierId} Dungeon Types (${inTier.length})</div>`;
+      html += inTier.map(d => `<div class="modal-opt" onclick="debugTeleportToDungeonType('${d.id}')">${escapeHtml(d.name)} <span class="dim">— click to spawn &amp; enter</span></div>`).join('');
+    }
+    // Any theme with a tier label the fixed order above doesn't know about (a future tier kind)
+    // still shows up here, in its own catch-all group, instead of silently vanishing.
+    const leftover = dungeons.filter(d => !knownTiers.has(d.tier));
+    if (leftover.length) {
+      html += `<div class="trade-col-title">Other Dungeon Types (${leftover.length})</div>`;
+      html += leftover.map(d => `<div class="modal-opt" onclick="debugTeleportToDungeonType('${d.id}')">${escapeHtml(d.name)} <span class="dim">(${escapeHtml(d.tier)}) — click to spawn &amp; enter</span></div>`).join('');
+    }
+  }
+  return html;
+}
+// Only re-renders the results list, never the search box itself, same reasoning as
+// debugSearchInput above: re-rendering the whole tab on every keystroke would blow away the
+// input's focus/caret mid-type.
+function debugDestinationSearchInput(val) {
+  const el = document.getElementById('debug-destination-results');
+  if (el) el.innerHTML = renderDebugDestinationResults(val);
+}
+// Where "the overworld" actually is, for bookkeeping purposes, when the debug teleporter is used
+// from arbitrarily deep in a dungeon/dimension stack: if already inside a dungeon, the *true*
+// origin is whatever that dungeon's own overworldReturn already points to (so chaining several
+// debug jumps together never loses the thread back to reality); otherwise it's just wherever the
+// player is standing right now.
+function debugResolveOverworldAnchor() {
+  if (curIsDungeon()) {
+    const r = player.overworldReturn || { x: player.x, y: player.y, mode: 'overworld', dimensionId: null };
+    return { x: r.x, y: r.y, mode: r.mode || 'overworld', dimensionId: r.dimensionId || null };
+  }
+  return { x: player.x, y: player.y, mode: player.mode, dimensionId: player.dimensionId || null };
+}
+// Jumps straight to a dimension's arrival point, bypassing the normal discovery/rift-portal
+// requirement entirely -- for testing/exploring, not something the normal game ever offers.
+// Mirrors travelThroughRift()'s bookkeeping (dimensionReturn, discoveredDimensions,
+// visitedDimensions, checkMainQuestDimensionVisit) so the world stays internally consistent:
+// stepping back out, quest triggers, and anything else gating on "has visited X" all behave
+// exactly as if the player had found and used the real rift.
+function debugTeleportToDimension(dimId) {
+  const dim = DIMENSIONS[dimId];
+  if (!dim) { debugLog(`Unknown dimension: ${dimId}`); return; }
+  clearAreaFx();
+  // Only capture a fresh dimensionReturn when NOT already mid-dimension -- hopping from one
+  // debug-visited dimension straight to another must never overwrite the real point of origin,
+  // or "return to overworld" would strand the player one dimension short of home.
+  if (!curIsDimension()) {
+    player.dimensionReturn = { mode: player.mode, x: player.x, y: player.y, dungeonId: player.dungeonId, dungeonDepth: player.dungeonDepth };
+  }
+  player.mode = 'dimension'; player.dimensionId = dimId;
+  const a = dim.arrival;
+  player.x = a.cx * CH + a.lx; player.y = a.cy * CH + a.ly;
+  player.discoveredDimensions = player.discoveredDimensions || [];
+  if (!player.discoveredDimensions.includes(dimId)) player.discoveredDimensions.push(dimId);
+  player.visitedDimensions = player.visitedDimensions || [];
+  if (!player.visitedDimensions.includes(dimId)) player.visitedDimensions.push(dimId);
+  checkMainQuestDimensionVisit(dimId);
+  relocateAllies();
+  Sound.play('gate');
+  debugLog(`Teleported into ${dim.name}.`);
+  log(`*** [DEBUG] You are pulled sideways into ${dim.name}. ${dim.entryFlavor} ***`);
+  markSeen(); updateSidebar();
+  closeSettings();
+}
+// Builds a standalone dungeonRegistry entry for a given theme, the same shape and same random
+// rolls (size/depth/variant/power) as one placeDungeonEntrance() would roll naturally out in the
+// world -- just without needing a map tile to anchor it to, since the debug teleporter drops the
+// player straight onto its up-stairs instead of walking them to a physical entrance. A fresh id
+// is minted every call rather than reused, so repeat debug visits to the same theme never collide
+// with each other or with a real, naturally-placed dungeon of that theme somewhere out in the
+// world. originMode/originDimensionId are set from debugResolveOverworldAnchor() so this dungeon
+// slots correctly into the waystone fast-travel/exit system (see renderTravel()'s known-dungeon
+// list and warpToDungeonEntrance()) exactly like a real one would, if the player later fast-travels
+// to it or finds an interior exit-waystone.
+let debugDungeonSpawnSeq = 0;
+function debugSpawnDungeonInstance(themeId) {
+  const meta = DUNGEON_THEMES[themeId];
+  const anchor = debugResolveOverworldAnchor();
+  debugDungeonSpawnSeq++;
+  const rng = mulberry32((Date.now() ^ (debugDungeonSpawnSeq * 104729) ^ (SEED || 0)) | 0);
+  // tier:'dimension' themes (Trail Guardian dungeons + their scattered interior sub-dungeons)
+  // have no real tier weight of their own to fall back on for recommended-level math -- 'rare'
+  // matches exactly how placeDimensionSubDungeon()/placeDimensionDungeonEntrance() register these
+  // same themes when the game places them for real.
+  const tier = meta.tier === 'dimension' ? 'rare' : meta.tier;
+  const [dMin, dMax] = meta.depthRange;
+  const sizeTier = rollDungeonSize(rng, meta);
+  const maxDepth = Math.max(1, Math.min(sizeTier.maxDepthCap, randInt(rng, dMin, dMax)));
+  const variant = rollDungeonVariant(rng, 10);
+  const targetPower = Math.max(1, Math.min(6, (meta.dtierMax || 2) + Math.floor(maxDepth / 4) + variant.powerMod));
+  const recommendedLevel = recommendedLevelForPower(targetPower);
+  const eg = ENTRANCE_GLYPHS[themeId] || { glyph: '>', name: 'an entrance' };
+  const sizePrefix = sizeTier.label ? sizeTier.label + ' ' : '';
+  const displayName = variant.label ? `${sizePrefix}${variant.label} ${meta.name}` : `${sizePrefix}${meta.name}`;
+  const id = 'debug_' + themeId + '_' + Date.now() + '_' + debugDungeonSpawnSeq;
+  dungeonRegistry.set(id, {
+    id, theme: themeId, maxDepth, tier, name: displayName, entranceName: eg.name, levels: [],
+    x: anchor.x, y: anchor.y, variant: variant.id, targetPower, recommendedLevel,
+    originMode: anchor.mode === 'dimension' ? 'dimension' : 'overworld',
+    originDimensionId: anchor.mode === 'dimension' ? anchor.dimensionId : undefined,
+    size: sizeTier.id,
+  });
+  return id;
+}
+// Spawns a fresh instance of the given dungeon theme and drops the player straight onto its
+// up-stairs -- same entry bookkeeping as enterDungeon() (overworldReturn, mode/dungeonId/depth,
+// relocateAllies, knownDungeons, checkExploreQuests), so ascending back out, quest tracking, and
+// everything else behaves exactly as if the player had walked up to a real entrance and pressed
+// '>'. If used while already mid-dungeon (chaining debug jumps dungeon-to-dungeon), the *existing*
+// overworldReturn is deliberately left untouched -- see debugResolveOverworldAnchor() -- so ascend
+// still finds its way back to real ground instead of getting stuck pointing at a dungeon that no
+// longer has a return path of its own.
+function debugTeleportToDungeonType(themeId) {
+  const meta = DUNGEON_THEMES[themeId];
+  if (!meta) { debugLog(`Unknown dungeon type: ${themeId}`); return; }
+  clearAreaFx();
+  const id = debugSpawnDungeonInstance(themeId);
+  if (!curIsDungeon()) {
+    player.overworldReturn = { x: player.x, y: player.y, mode: player.mode, dimensionId: player.dimensionId || null };
+  }
+  const dg = dungeonRegistry.get(id);
+  dg.levels[0] = generateDungeonLevel(dg.theme, 1, dg.maxDepth, dg.variant, dg.size);
+  player.mode = 'dungeon'; player.dungeonId = id; player.dungeonDepth = 1;
+  const lvl = dg.levels[0];
+  player.x = lvl.upStairs.x; player.y = lvl.upStairs.y;
+  relocateAllies();
+  player.knownDungeons = player.knownDungeons || [];
+  if (!player.knownDungeons.includes(id)) player.knownDungeons.push(id);
+  checkExploreQuests();
+  debugLog(`Spawned and entered ${dg.name} (${dg.tier}, ${dg.maxDepth} level${dg.maxDepth === 1 ? '' : 's'}, recommended level ${dg.recommendedLevel}+).`);
+  log(`*** [DEBUG] You are dropped directly into ${dg.name} — Depth 1/${dg.maxDepth}. ***`);
+  markSeen(); updateSidebar();
+  closeSettings();
+}
+// Unwinds however deep the debug jumps went (dungeon-in-dimension, dimension-in-dungeon, chained
+// debug jumps, any combination) back to the true overworld in one click -- walks the same
+// overworldReturn/dimensionReturn chain the normal ascend()/travelThroughRift() exits use, just
+// repeatedly, instead of asking the tester to back out one hop at a time. Capped at 10 hops purely
+// as a sanity guard against an unforeseen circular return chain; every real chain here is at most
+// two or three hops deep.
+function debugReturnToOverworld() {
+  if (player.mode === 'overworld') { debugLog('Already in the overworld.'); return; }
+  clearAreaFx();
+  let guard = 0;
+  while (player.mode !== 'overworld' && guard++ < 10) {
+    if (curIsDungeon()) {
+      const ret = player.overworldReturn || { x: 0, y: 0, mode: 'overworld', dimensionId: null };
+      player.mode = ret.mode || 'overworld';
+      player.dimensionId = ret.mode === 'dimension' ? (ret.dimensionId || null) : null;
+      player.dungeonId = null; player.dungeonDepth = 0;
+      player.x = ret.x; player.y = ret.y;
+    } else if (curIsDimension()) {
+      const r = player.dimensionReturn || { mode: 'overworld', x: 0, y: 0 };
+      player.mode = r.mode; player.dungeonId = r.dungeonId || null; player.dungeonDepth = r.dungeonDepth || 0;
+      player.x = r.x; player.y = r.y; player.dimensionId = null;
+    } else break;
+  }
+  relocateAllies();
+  debugLog('Returned to the overworld.');
+  log('*** [DEBUG] You are pulled back to the overworld. ***');
+  markSeen(); updateSidebar();
+  closeSettings();
+}
+function debugTeleportRandomDimension() {
+  const ids = Object.keys(DIMENSIONS);
+  if (!ids.length) return;
+  debugTeleportToDimension(ids[Math.floor(Math.random() * ids.length)]);
+}
+function debugTeleportRandomDungeonType() {
+  const ids = Object.keys(DUNGEON_THEMES);
+  if (!ids.length) return;
+  debugTeleportToDungeonType(ids[Math.floor(Math.random() * ids.length)]);
+}
+
 // ---- toggle plumbing ----
 function debugToggle(flag, checked) {
   DEBUG[flag] = !!checked;
@@ -23583,6 +23800,16 @@ function renderDebugTab() {
     </label>
   </div>`;
   html += `<div id="debug-search-results" style="max-height:220px;overflow-y:auto;border:1px solid var(--line);padding:6px;">${renderDebugSearchResults('')}</div>`;
+
+  html += `<div class="trade-col-title" style="margin-top:14px;">Travel: Dimensions &amp; Dungeon Types</div>`;
+  html += `<div class="npcline dim" style="margin-bottom:6px;">Jump straight into any dimension, or spawn a fresh instance of any dungeon type and drop straight into it — for testing and exploring without needing to earn or find the real thing first. Both lists below are read live off the game's actual dimension/dungeon-theme tables, so anything added there shows up here automatically with no further changes needed. Every trip behaves like a real visit (quest hooks, discovery, waystone fast-travel all stay in sync) and dungeons are freshly rolled each time, exactly like one you'd stumble on in the world.</div>`;
+  html += `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+    <input type="text" placeholder="Search dimensions or dungeon types…" oninput="debugDestinationSearchInput(this.value)" style="flex:1;min-width:180px;background:var(--panel);border:1px solid var(--line);color:var(--text);padding:6px 8px;font-family:inherit;font-size:1.1rem;">
+    <span class="settings-btn" onclick="debugTeleportRandomDimension()">Random Dimension</span>
+    <span class="settings-btn" onclick="debugTeleportRandomDungeonType()">Random Dungeon Type</span>
+    <span class="settings-btn" onclick="debugReturnToOverworld()">Return to Overworld</span>
+  </div>`;
+  html += `<div id="debug-destination-results" style="max-height:260px;overflow-y:auto;border:1px solid var(--line);padding:6px;">${renderDebugDestinationResults('')}</div>`;
 
   html += `<div style="margin-top:14px;">
     <span class="settings-btn" style="border-color:#8a3a3a;color:#e08a7a" onclick="debugResetAllFlags()">Reset All Debug Toggles</span>
