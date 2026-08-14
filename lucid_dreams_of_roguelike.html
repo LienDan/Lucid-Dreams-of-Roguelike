@@ -476,7 +476,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.36.1-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.36.5-alpha</div>
     </div>
   </div>
 
@@ -538,11 +538,59 @@
 //    Symbiotic (research_corruption_taxonomy), and the newer technique schools -- Monastic Arts,
 //    Dual Wielding, Berserker Arts, Tactics (guide_martial_disciplines). No placement plumbing
 //    needed -- maybeStockBookContainer() already seeds from BOOKS_MANUAL generically.
+//  - Talents vs. weather/temperature: the Survival talent line had a full 5-tier water-adaptation
+//    path (tidewalker->krakensbane) but nothing at all for the temperature-exposure hazard system
+//    (handleTemperatureExposure) or the weather-driven vision/ranged-accuracy penalties
+//    (weatherVisRadiusDelta/weatherRangedAccuracyMod), despite both being real, already-ticking
+//    mechanics. Added a mirrored 5-tier "Weathered" line: coldadapted/heatadapted reduce
+//    statusChill/statusHeat buildup, stormtoughened negates the vision/ranged-accuracy weather
+//    penalty (player.weatherVisResist/weatherAccResist, now read by those two functions),
+//    seasonsteel gives full temperature immunity, and the capstone Storm Ward adds a genuine
+//    passive heal-over-time while severe weather is actually raging around you (checked live via
+//    currentWeatherDef().visMod, not a flag set once) -- so committing to this line changes how a
+//    storm plays for you rather than just being a stat stick with weather-flavored text.
+//  - Talents vs. cybernetics: the 'cyber' category had exactly one entry (Gunslinger) despite a
+//    full slot/charge/cyberDmgBonus system existing; slot-count talents existed but were scattered
+//    uncategorized in the generic tier ladder. Added a proper 5-tier cyber line (Ferrocoating ->
+//    Singularity Core) covering charge economy (chargeRegenBonus, feeds the real per-turn charge
+//    tick) and cyberware damage. Also fixed a real design smell while in there: EMP attacks used to
+//    hardcode `player.statusConfuse += 3` separately at 3 different boss call sites with no
+//    resistance hook anywhere -- centralized into applyEmpConfuse() (reads new empResist/
+//    empImmune) and repointed all 3 sites at it, so EMP Dampeners/Singularity Core actually do
+//    something instead of being talents for a resistance nothing ever checked.
+//  - Talents vs. mutation categories: the 'eldritch' talent line (Whisperer->Elder God) is a
+//    complete 5-tier chain, but it's built entirely around confuse/fear/eldritch-damage, which
+//    fits Aberrant/Void-Cosmic/Plague mutations well and doesn't fit Predatory (physical hunting
+//    kit) or Symbiotic (a passenger sharing life with you) at all -- those two categories had
+//    real, distinct mutation kits with zero talent-tree support that spoke to them. Added two new
+//    branches off Whisperer: Predator's Edge->Apex Ascendant and Passenger's Grip->True Union.
+//    Required a real formula change, not just new talent objects: added MUTATION_CATEGORY_DMG_FIELD
+//    (a data-driven category->player-field map) into applyEffectToTarget's dmgMult so a
+//    category-specific bonus only applies to abilities actually tagged that category. Also fixed a
+//    real bug found in the process: every lifetap-type mutation's own flavor text promises vitality
+//    flowing back ("drawn back doubled", "shares back with you") but the code never actually
+//    healed the caster at all -- now it does (40% base return, boosted by the new
+//    mutationLifetapBonus field), so those abilities' text and mechanics finally agree.
+//  - Enemy AI, construct/virus: added the two behaviors this list previously flagged as missing.
+//    systematic (constructs) doesn't get scared or excited -- it locks onto a target and its
+//    accuracy calibrates upward the longer it stays in uninterrupted contact with that same
+//    target, resetting on a target switch. adaptive (virus) runs cost-benefit on the fight itself:
+//    hurt and behind it hardens (temporary armor, pulls its punches) instead of trading blows it's
+//    likely to lose, healthy with the target visibly hurt it commits fully (bonus damage) to close
+//    the opportunity out. Both fully self-contained in runCombatState, no new hooks elsewhere.
+//    Reassignment excludes boss:true this time (not just scriptedAI) -- their special moves still
+//    fire via tryMonsterCast regardless, but their tuned baseline melee is left as originally
+//    authored rather than swept into a new archetype without a balance pass.
 //
 // NOT YET DONE (found during audit, real gaps, ordered roughly by how load-bearing they are):
-//  - Enemy AI still has room to grow: no dedicated behavior yet for constructs/virus (currently
-//    fall back to plain aggressive or whatever was individually authored), and the new archetypes
-//    above could use 1-2 more example monsters each actually testing the numbers in practice.
+//  - Plague and Void/Cosmic mutation categories still lack their own specialization branch the way
+//    Predatory/Symbiotic now have one (MUTATION_CATEGORY_DMG_FIELD already has entries reserved
+//    for plagueDmgBonus/voidCosmicDmgBonus/aberrantDmgBonus -- just needs the talent branches).
+//  - Enemy AI: demonic/human/goblinoid/orc/giantkin/settlement/celestial factions and plants still
+//    fall back to plain 'aggressive' by design (either already covered by squad tactics via the
+//    'intelligent' flag, or -- for plants -- genuinely shouldn't have mobile tactics). Worth a
+//    second look at demonic specifically, which doesn't have squad tactics and isn't obviously
+//    served by any of the six new archetypes as-is -- may want its own behavior eventually.
 //  - Lore still has room to grow: relationships beyond courtship/marriage (gift decay, rivalry?),
 //    the notes/rumor-scrap system covering itself, and companion/ally mechanics if they exist as
 //    their own system, all still have zero in-world text.
@@ -3274,6 +3322,16 @@ TALENTS_V2.push(
   { id:'quiverofmany', name:'Quiver of Many', category:'Throwing', desc:'Thrown weapons that stick in a foe have a chance to be recovered instantly instead of staying stuck', tier:3, requires:{level:10, talent:'bladedancer'}, apply:()=>{ player.throwRecoverChance=(player.throwRecoverChance||0)+0.35; } },
   { id:'masterofblades', name:'Master of Blades', category:'Throwing', desc:'+25% thrown weapon damage; thrown weapons never break from the throw itself', tier:4, requires:{level:15, talent:'quiverofmany'}, apply:()=>{ player.throwDmgBonus=(player.throwDmgBonus||0)+0.25; player.throwNoWear=true; } },
   { id:'tidewalker', name:'Tidewalker', category:'survival', desc:'+3 DEX while in water', tier:1, requires:null, apply:()=>{ player.waterDexBonus=(player.waterDexBonus||0)+3; } },
+  // ---- Weathered: the survival tree already had a full water-adaptation line but nothing at all
+  // for the temperature/weather-exposure hazard system (see handleTemperatureExposure,
+  // weatherVisRadiusDelta, weatherRangedAccuracyMod) despite it being an equally real environmental
+  // threat. Mirrors the water line's tier shape (1/2/3/4/5-capstone) so a build can specialize into
+  // "the storm doesn't touch me" the same way it can into "the sea doesn't touch me".
+  { id:'coldadapted', name:'Cold-Adapted', category:'survival', desc:'Resist 40% of cold-exposure buildup', tier:1, requires:null, apply:()=>{ player.chillResist=(player.chillResist||0)+0.4; } },
+  { id:'heatadapted', name:'Heat-Adapted', category:'survival', desc:'Resist 40% of heat-exposure buildup', tier:2, requires:{level:5, talent:'coldadapted'}, apply:()=>{ player.heatResist=(player.heatResist||0)+0.4; } },
+  { id:'stormtoughened', name:'Storm-Toughened', category:'survival', desc:'Bad weather no longer worsens your vision or ranged accuracy', tier:3, requires:{level:10, talent:'heatadapted'}, apply:()=>{ player.weatherVisResist=1; player.weatherAccResist=1; } },
+  { id:'seasonsteel', name:"Season's Steel", category:'survival', desc:'Full immunity to cold- and heat-exposure buildup', tier:4, requires:{level:15, talent:'stormtoughened'}, apply:()=>{ player.chillResist=1; player.heatResist=1; } },
+  { id:'stormward_capstone', name:'Storm Ward', category:'survival', desc:'Completely unaffected by extreme weather and temperature; regenerate slightly faster while severe weather rages nearby', tier:5, requires:{level:20, talent:'seasonsteel'}, apply:()=>{ player.climateImmune=true; player.stormRegenBonus=true; } },
   { id:'pathfinder', name:'Pathfinder', category:'survival', desc:'See slightly further in the overworld', tier:1, requires:null, apply:()=>{ player.visionBonus=(player.visionBonus||0)+2; } },
   { id:'quickfingers', name:'Quick Fingers', category:'combat', desc:'+5% critical hit chance', tier:1, requires:null, apply:()=>{ player.critBonus=(player.critBonus||0)+0.05; } },
   { id:'thickhide', name:'Thick Hide', category:'survival', desc:'+2 Armor (innate)', tier:1, requires:null, apply:()=>{ player.talentArmor=(player.talentArmor||0)+2; } },
@@ -3284,6 +3342,18 @@ TALENTS_V2.push(
   { id:'wanderer', name:'Wanderer', category:'survival', desc:'Stamina drains 15% slower while exploring', tier:1, requires:null, apply:()=>{ player.staminaDrainReduction=(player.staminaDrainReduction||0)+0.15; } },
   { id:'whisperer', name:'Whisperer', category:'eldritch', desc:'+10% damage from eldritch abilities', tier:1, requires:null, apply:()=>{ player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.1; } },
   { id:'gunslinger', name:'Gunslinger', category:'cyber', desc:'+10% damage with ranged weapons', tier:1, requires:null, apply:()=>{ player.rangedDmgBonus=(player.rangedDmgBonus||0)+0.1; } },
+  // ---- Cyber, rounded out: before this pass the only categorized cyber talent was Gunslinger,
+  // even though a full cybernetics slot/charge/cyberDmgBonus system exists (see player.cyberSlots,
+  // player.charge, arcbladeimplant's cyberDmgBonus). Slot-count talents already existed but were
+  // scattered uncategorized in the generic tier ladder (cyberslot1/cyberslot2/ironsynapse); this
+  // line adds the missing charge-economy and EMP-resistance side, including a genuinely new
+  // mechanic -- EMP attacks used to just hardcode a 3-turn confuse at every boss call site, now
+  // they all route through applyEmpConfuse() so this line's resistance actually does something.
+  { id:'ferrocoating', name:'Ferrocoating', category:'cyber', desc:'+3 Armor (innate) from subdermal plating', tier:1, requires:null, apply:()=>{ player.talentArmor=(player.talentArmor||0)+3; } },
+  { id:'empdampeners', name:'EMP Dampeners', category:'cyber', desc:'Resist 60% of the duration from EMP/system-scramble effects', tier:2, requires:{level:5, talent:'ferrocoating'}, apply:()=>{ player.empResist=(player.empResist||0)+0.6; } },
+  { id:'capacitorbank', name:'Capacitor Bank', category:'cyber', desc:'+25 Max Charge; Charge regenerates 50% faster', tier:3, requires:{level:10, talent:'empdampeners'}, apply:()=>{ player.maxCharge=(player.maxCharge||60)+25; player.charge=(player.charge||60)+25; player.chargeRegenBonus=(player.chargeRegenBonus||0)+0.5; } },
+  { id:'overclockedcore_talent', name:'Overclocked Core', category:'cyber', desc:'+4 cyberware damage; active cybernetics cost 15% less Charge', tier:4, requires:{level:15, talent:'capacitorbank'}, apply:()=>{ player.cyberDmgBonus=(player.cyberDmgBonus||0)+4; player.cyberCostReduction=(player.cyberCostReduction||0)+0.15; } },
+  { id:'singularitycore', name:'Singularity Core', category:'cyber', desc:'Total EMP immunity; +8 cyberware damage; +30 Max Charge', tier:5, requires:{level:20, talent:'overclockedcore_talent'}, apply:()=>{ player.empImmune=true; player.cyberDmgBonus=(player.cyberDmgBonus||0)+8; player.maxCharge=(player.maxCharge||60)+30; player.charge=(player.charge||60)+30; } },
   { id:'silvertongue', name:'Silver Tongue', category:'survival', desc:'NPCs warm up to you 20% faster', tier:1, requires:null, apply:()=>{ player.affectionBonus=(player.affectionBonus||0)+0.2; } },
   // ---- tier 2: level 5 ----
   { id:'banquet', name:'Banquet', category:'cooking', desc:'Cooking recipes yield one extra portion', tier:2, requires:{level:5}, apply:()=>{ player.cookingYieldBonus=(player.cookingYieldBonus||0)+1; } },
@@ -3334,7 +3404,22 @@ TALENTS_V2.push(
   { id:'krakensbane', name:"Kraken's Bane", category:'survival', desc:'+40 Max HP; the ocean itself bends around you', tier:5, requires:{level:20, talent:'leviathansgrace'}, apply:()=>{ player.maxHp+=40; player.hp+=40; player.waterDexBonus=(player.waterDexBonus||0)+4; } },
   { id:'grimreaper', name:'Grim Reaper', category:'combat', desc:'+15% critical chance; +30% critical damage', tier:5, requires:{level:20, talent:'deathdealer'}, apply:()=>{ player.critBonus=(player.critBonus||0)+0.15; player.critDmgBonus=(player.critDmgBonus||0)+0.3; } },
   { id:'immovableobject', name:'Immovable Object', category:'survival', desc:'+8 Armor (innate); +40 Max HP', tier:5, requires:{level:20, talent:'fortress'}, apply:()=>{ player.talentArmor=(player.talentArmor||0)+8; player.maxHp+=40; player.hp+=40; } },
-  { id:'eldergod', name:'Elder God', category:'eldritch', desc:'Your presence alone unsettles reality: strong chance to confuse or frighten anything you strike', tier:5, requires:{level:20, talent:'mindshatter'}, apply:()=>{ player.eldritchConfuseChance=(player.eldritchConfuseChance||0)+0.2; player.eldritchFearChance=(player.eldritchFearChance||0)+0.2; player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.2; } }
+  { id:'eldergod', name:'Elder God', category:'eldritch', desc:'Your presence alone unsettles reality: strong chance to confuse or frighten anything you strike', tier:5, requires:{level:20, talent:'mindshatter'}, apply:()=>{ player.eldritchConfuseChance=(player.eldritchConfuseChance||0)+0.2; player.eldritchFearChance=(player.eldritchFearChance||0)+0.2; player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.2; } },
+  // ---- Predatory & Symbiotic specialization branches, both stemming from Whisperer alongside the
+  // existing Void-Touched->Elder God confuse/fear line. That original line fits Aberrant/Void-
+  // Cosmic/Plague mutations (unsettling, diseased, reality-bending) but doesn't fit Predatory
+  // (physical hunting prowess) or Symbiotic (a passenger sharing life with you) at all -- a
+  // Predatory or Symbiotic build had nothing in the talent tree that actually spoke to their kit.
+  // Uses the new MUTATION_CATEGORY_DMG_FIELD hook (applyEffectToTarget) so these bonuses only
+  // apply to abilities actually tagged with that category, not eldritch damage broadly.
+  { id:'predatorsedge', name:"Predator's Edge", category:'eldritch', desc:'+8% damage from Predatory mutations; +2 STR', tier:2, requires:{level:5, talent:'whisperer'}, apply:()=>{ player.predatoryDmgBonus=(player.predatoryDmgBonus||0)+0.08; player.str+=2; } },
+  { id:'apexpredator_talent', name:'Apex Predator', category:'eldritch', desc:'+12% more damage from Predatory mutations; your lifetap-style mutations return 20% more HP', tier:3, requires:{level:10, talent:'predatorsedge'}, apply:()=>{ player.predatoryDmgBonus=(player.predatoryDmgBonus||0)+0.12; player.mutationLifetapBonus=(player.mutationLifetapBonus||0)+0.2; } },
+  { id:'undyinghunger', name:'Undying Hunger', category:'eldritch', desc:'+15% more damage from Predatory mutations; +3 STR/DEX', tier:4, requires:{level:15, talent:'apexpredator_talent'}, apply:()=>{ player.predatoryDmgBonus=(player.predatoryDmgBonus||0)+0.15; player.str+=3; player.dex+=3; } },
+  { id:'apexascendant', name:'Apex Ascendant', category:'eldritch', desc:'+20% more damage from Predatory mutations; lifetap-style mutations return 40% more HP; +5 STR', tier:5, requires:{level:20, talent:'undyinghunger'}, apply:()=>{ player.predatoryDmgBonus=(player.predatoryDmgBonus||0)+0.2; player.mutationLifetapBonus=(player.mutationLifetapBonus||0)+0.4; player.str+=5; } },
+  { id:'passengersgrip', name:"Passenger's Grip", category:'eldritch', desc:'+8% damage from Symbiotic mutations; +1 mutation regeneration per turn', tier:2, requires:{level:5, talent:'whisperer'}, apply:()=>{ player.symbioticDmgBonus=(player.symbioticDmgBonus||0)+0.08; player.mutationRegen=(player.mutationRegen||0)+1; } },
+  { id:'boundvitality', name:'Bound Vitality', category:'eldritch', desc:'+12% more damage from Symbiotic mutations; +20 Max HP', tier:3, requires:{level:10, talent:'passengersgrip'}, apply:()=>{ player.symbioticDmgBonus=(player.symbioticDmgBonus||0)+0.12; player.maxHp+=20; player.hp+=20; } },
+  { id:'livingarmor', name:'Living Armor', category:'eldritch', desc:'+15% more damage from Symbiotic mutations; +1 more mutation regeneration; active mutations cost 15% less HP', tier:4, requires:{level:15, talent:'boundvitality'}, apply:()=>{ player.symbioticDmgBonus=(player.symbioticDmgBonus||0)+0.15; player.mutationRegen=(player.mutationRegen||0)+1; player.mutationHpCostReduction=(player.mutationHpCostReduction||0)+0.15; } },
+  { id:'trueunion', name:'True Union', category:'eldritch', desc:'+20% more damage from Symbiotic mutations; +2 more mutation regeneration; your passenger can absorb one additional killing blow before you rest', tier:5, requires:{level:20, talent:'livingarmor'}, apply:()=>{ player.symbioticDmgBonus=(player.symbioticDmgBonus||0)+0.2; player.mutationRegen=(player.mutationRegen||0)+2; player.secondWindMax=(player.secondWindMax||0)+1; player.secondWindCharges=(player.secondWindCharges||0)+1; } }
 );
 
 // ---- vessels: a data-driven water-travel framework. A "vessel" is just a carryable item (like
@@ -4990,7 +5075,7 @@ const STORY_BOSS_AI = {
     if (dist <= 2 && bossReady(m, 'emp')) {
       bossCool(m, 'emp', 6);
       Sound.play('trap');
-      player.statusConfuse = (player.statusConfuse || 0) + 3;
+      applyEmpConfuse(3);
       log(`${m.name} discharges an EMP Pulse! Your thoughts scatter with static.`);
       return true;
     }
@@ -5331,7 +5416,7 @@ STORY_BOSS_AI.hollow_signal = function (m, dist, seesPlayer) {
   }
   if (bossReady(m, 'emp') && Math.random() < 0.25) {
     bossCool(m, 'emp', 6);
-    player.statusConfuse = (player.statusConfuse || 0) + 3;
+    applyEmpConfuse(3);
     log(`${m.name} pulses an EMP Burst -- your senses scramble!`);
     return true;
   }
@@ -5675,7 +5760,7 @@ STORY_BOSS_AI.black_ice = function (m, dist, seesPlayer) {
   }
   if (bossReady(m, 'emp') && Math.random() < 0.25) {
     bossCool(m, 'emp', 6);
-    player.statusConfuse = (player.statusConfuse || 0) + 3;
+    applyEmpConfuse(3);
     log(`${m.name} pulses an EMP Burst -- your HUD static-scrambles!`);
     return true;
   }
@@ -7345,17 +7430,19 @@ for (const _mid in MONSTER_BASES) {
 // default every monster got before it had a specific behavior authored, and by the time the
 // roster grew past 150 entries roughly that many things were doing pure walk-and-hit with zero
 // tactical distinction regardless of whether they were a mindless slime or a cosmic horror. This
-// reassigns that placeholder to one of four new behaviors (see runCombatState: relentless/erratic/
-// engulf/stalker) purely by faction/temperament, so every monster still authored with a *specific*
-// behavior (ranged/charger/turret/kiter/gascloud/swarm/flee) is left completely untouched, and so
-// is anything with scriptedAI (bespoke boss phases already override the whole turn regardless of
-// base.behavior). Deliberately data-driven and faction-keyed rather than one-off per monster ID,
-// so a new faction member added later inherits sensible tactics automatically instead of needing
-// this list touched again.
-const AI_VARIETY_FACTION_MAP = { undead:'relentless', ooze:'engulf', eldritch:'erratic', cosmic:'erratic', nonEuclid:'erratic', dream:'erratic' };
+// reassigns that placeholder to one of six new behaviors (see runCombatState: relentless/erratic/
+// engulf/stalker/systematic/adaptive) purely by faction/temperament, so every monster still
+// authored with a *specific* behavior (ranged/charger/turret/kiter/gascloud/swarm/flee) is left
+// completely untouched, and so is anything with scriptedAI (bespoke boss phases already override
+// the whole turn regardless of base.behavior) or boss:true (tuned encounters -- their special
+// moves still fire via tryMonsterCast either way, but their baseline melee/movement is left as
+// originally authored rather than swept into an experimental archetype). Deliberately data-driven
+// and faction-keyed rather than one-off per monster ID, so a new faction member added later
+// inherits sensible tactics automatically instead of needing this list touched again.
+const AI_VARIETY_FACTION_MAP = { undead:'relentless', ooze:'engulf', eldritch:'erratic', cosmic:'erratic', nonEuclid:'erratic', dream:'erratic', construct:'systematic', virus:'adaptive' };
 for (const _mid in MONSTER_BASES) {
   const base = MONSTER_BASES[_mid];
-  if (base.behavior !== 'aggressive' || base.scriptedAI) continue;
+  if (base.behavior !== 'aggressive' || base.scriptedAI || base.boss) continue;
   if (AI_VARIETY_FACTION_MAP[base.faction]) { base.behavior = AI_VARIETY_FACTION_MAP[base.faction]; continue; }
   if (base.predator && base.faction !== 'plant') base.behavior = 'stalker';
 }
@@ -9731,11 +9818,22 @@ function playerControlWeather(spell) {
 }
 
 // ---------------------------------------------------------------- TERRAIN / PLAYER TICK ----
+// EMP/system-scramble resistance: cyber talents can grant player.empResist (0-1, reduces the
+// confuse duration a pure electromagnetic burst inflicts) and player.empImmune (ignores it
+// entirely). Centralized here so every EMP-flavored attack rolls it the same way instead of each
+// boss call site reimplementing its own math.
+function applyEmpConfuse(dur) {
+  if (player.empImmune) { log('Your shielding absorbs the pulse without a flicker.'); return; }
+  const reduced = Math.max(0, Math.round(dur * (1 - (player.empResist || 0))));
+  if (reduced <= 0) { log('The pulse washes over your systems and dissipates.'); return; }
+  player.statusConfuse = (player.statusConfuse || 0) + reduced;
+}
 function handleTemperatureExposure(temp) {
+  if (player.climateImmune) { player.statusChill = Math.max(0, (player.statusChill || 0) - 3); player.statusHeat = Math.max(0, (player.statusHeat || 0) - 3); return; }
   if (temp <= 12) {
     const protectedFromCold = getBuff('resistfrost') > 0;
     if (protectedFromCold) { player.statusChill = Math.max(0, (player.statusChill || 0) - 3); return; }
-    player.statusChill = Math.min(20, (player.statusChill || 0) + 2);
+    player.statusChill = Math.min(20, (player.statusChill || 0) + Math.max(0, Math.round(2 * (1 - (player.chillResist || 0)))));
     if (player.statusChill >= 14) {
       const dmg = randInt(Math.random, 1, 3);
       player.hp -= dmg; lastDamageSource = 'the bitter cold';
@@ -9748,7 +9846,7 @@ function handleTemperatureExposure(temp) {
   if (temp >= 88) {
     const protectedFromHeat = (player.fireDmgReduction || 0) > 0 || getBuff('resistfire') > 0;
     if (protectedFromHeat) { player.statusHeat = Math.max(0, (player.statusHeat || 0) - 3); return; }
-    player.statusHeat = Math.min(20, (player.statusHeat || 0) + 2);
+    player.statusHeat = Math.min(20, (player.statusHeat || 0) + Math.max(0, Math.round(2 * (1 - (player.heatResist || 0)))));
     if (player.statusHeat >= 14) {
       const dmg = randInt(Math.random, 1, 3);
       player.hp -= dmg; lastDamageSource = 'heatstroke';
@@ -11599,7 +11697,7 @@ function rollHit(att, def, ranged) {
   // Weather/Climate overhaul: wind, storms, and low visibility make ranged attacks specifically
   // less reliable (a thrown weapon or arrow drifts, a sandstorm blots out the target) -- melee is
   // unaffected since it doesn't rely on a flight path.
-  if (ranged) chance += weatherRangedAccuracyMod();
+  if (ranged) chance += weatherRangedAccuracyMod() * (att === player ? (1 - (player.weatherAccResist || 0)) : 1);
   chance = Math.max(0.1, Math.min(0.95, chance));
   return Math.random() < chance;
 }
@@ -11871,6 +11969,10 @@ function totalStatBonus(it, stat) {
 // those are read directly off player.equipment.* at the point of use instead, so listing them
 // here would double-apply them. This list is only for stats with no other read site. ----
 const EQUIP_FLAT_BONUS_KEYS = ['dodgeChance', 'critBonus', 'critDmgBonus', 'eldritchDmgBonus', 'poisonDmgReduction', 'lifestealBonus', 'spellDmgBonus', 'techniqueDmgBonus'];
+// Maps a mutation's `category` to the player field a specialization talent can set to boost just
+// that category's damage (see applyEffectToTarget's dmgMult). Deliberately data-driven: adding a
+// new specialization line for a category not listed here is a one-line addition, not a formula change.
+const MUTATION_CATEGORY_DMG_FIELD = { Predatory: 'predatoryDmgBonus', Symbiotic: 'symbioticDmgBonus', Plague: 'plagueDmgBonus', 'Void/Cosmic': 'voidCosmicDmgBonus', Aberrant: 'aberrantDmgBonus' };
 function applyStatBonuses(it) {
   const s = totalStatBonus(it,'str'), d = totalStatBonus(it,'dex'), i = totalStatBonus(it,'int'), c = totalStatBonus(it,'con');
   if (s) player.str += s;
@@ -12485,7 +12587,7 @@ function currentVisRadius() {
   radius += player.visionBonus || 0;
   if (curIsDungeon() && player.permaNightVision) radius += 3;
   if (getBuff('nightvision') > 0) radius += 5;
-  radius += weatherVisRadiusDelta();
+  radius += weatherVisRadiusDelta() * (1 - (player.weatherVisResist || 0));
   return Math.max(3, radius);
 }
 function markSeen() {
@@ -16654,7 +16756,11 @@ function paySpellCost(ability) {
 // ---- extended effect application: confuse status, blinklike (shared by phantom step / time skip /
 // cyber blink implants / mutation warp step), and environment destruction on fire-flagged abilities ----
 function applyEffectToTarget(spell, t) {
-  const dmgMult = (1 + (player.spellDmgBonus || 0) + (abilityPoolOf(spell.id) === 'technique' ? (player.techniqueDmgBonus || 0) : 0) + (abilityPoolOf(spell.id) === 'mutation' ? (player.mutationDmgBonus ? player.mutationDmgBonus/20 : 0) + (player.eldritchDmgBonus || 0) : 0)) * abilityPenaltyFactor(abilityRequirementDeficit(spell)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell);
+  // Category-specific mutation damage bonuses (Predatory/Symbiotic/etc talent lines) live in this
+  // lookup rather than as hardcoded per-category branches, so a future category (Plague, Void/
+  // Cosmic, ...) just needs an entry here plus a talent that sets the field -- no formula changes.
+  const catBonusField = (abilityPoolOf(spell.id) === 'mutation' && spell.category) ? MUTATION_CATEGORY_DMG_FIELD[spell.category] : null;
+  const dmgMult = (1 + (player.spellDmgBonus || 0) + (abilityPoolOf(spell.id) === 'technique' ? (player.techniqueDmgBonus || 0) : 0) + (abilityPoolOf(spell.id) === 'mutation' ? (player.mutationDmgBonus ? player.mutationDmgBonus/20 : 0) + (player.eldritchDmgBonus || 0) + (catBonusField ? (player[catBonusField] || 0) : 0) : 0)) * abilityPenaltyFactor(abilityRequirementDeficit(spell)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell);
   // martial techniques push the wielded weapon far past normal use -- unlike plain attacks,
   // these do chip away at durability (see doAttack() for the equivalent crit-only weapon wear).
   if (abilityPoolOf(spell.id) === 'technique' && ['damage','execute','smite','drain'].includes(spell.type) && player.equipment.hand) {
@@ -16663,7 +16769,13 @@ function applyEffectToTarget(spell, t) {
   if (spell.type === 'lifetap') {
     const dmg = Math.round(randInt(Math.random, spell.power[0], spell.power[1]) * dmgMult);
     t.hp -= dmg;
-    log(`You tap your own life force! ${t.name} takes ${dmg} dark damage (-${spell.selfCost} HP).`);
+    // Every lifetap-flavored ability's own description promises vitality flowing back ("drawn
+    // back doubled", "shares back with you", "shares the spoils") but nothing actually returned
+    // any HP before this -- it just dealt damage at an HP cost. Real return now, boosted further
+    // by the Symbiotic/Predatory talent lines (mutationLifetapBonus) for builds that lean into it.
+    const healBack = Math.round(dmg * (0.4 + (player.mutationLifetapBonus || 0)));
+    if (healBack > 0) player.hp = Math.min(player.maxHp, player.hp + healBack);
+    log(`You tap your own life force! ${t.name} takes ${dmg} dark damage (-${spell.selfCost} HP)${healBack > 0 ? `, ${healBack} flowing back into you` : ''}.`);
     if (t.hp <= 0) onDeath(t, player);
     if (spell.destructive) scorchArea(t.x, t.y, 2);
     return;
@@ -17342,6 +17454,11 @@ function processEntityStatus(e) {
   }
   if (e.regen) e.hp = Math.min(e.maxHp, e.hp + e.regen);
   if (e === player && player.mutationRegen) player.hp = Math.min(player.maxHp, player.hp + player.mutationRegen);
+  // Eye of the Storm capstone: thrives specifically in weather severe enough to matter (proxied by
+  // a strong visMod -- the same field driving the vision/accuracy penalties everyone else suffers).
+  if (e === player && player.stormRegenBonus && !curIsDungeon() && Math.abs(currentWeatherDef().visMod || 0) >= 2 && player.hp < player.maxHp && Math.random() < 0.3) {
+    player.hp = Math.min(player.maxHp, player.hp + 1);
+  }
 }
 
 // ---- monster/boss AI v6: confusion status + breath weapons for overworld bosses. Generalized to
@@ -17997,6 +18114,57 @@ function runCombatState(m, vision) {
     m.stalkerPounceReady = dist > 2; // still closing from a real distance -- next contact is a pounce
     const spot = pickApproachSpot(m, target);
     stepToward(m, spot.x, spot.y);
+    return;
+  }
+
+  // ---- systematic: constructs (golems, sentries, war-machines). Cold and literal -- it does not
+  // panic, does not get bored, and does not lose the thread of what it's doing. The longer it
+  // spends locked onto the same target without breaking contact, the more its accuracy improves,
+  // representing targeting systems calibrating rather than a living thing getting angrier.
+  // Resets the moment it switches targets or loses the trail, unlike a living grudge.
+  if (m.behavior === 'systematic') {
+    if (m.systematicTarget !== target) { m.systematicTarget = target; m.systematicFocusTurns = 0; }
+    if (dist <= 1) {
+      m.systematicFocusTurns = Math.min(6, (m.systematicFocusTurns || 0) + 1);
+      const bonus = 1 + m.systematicFocusTurns * 0.05; // up to +30% at full calibration
+      const orig = m.atk;
+      m.atk = [Math.round(orig[0] * bonus), Math.round(orig[1] * bonus)];
+      if (m.systematicFocusTurns === 6) log(`${m.name}'s targeting systems lock in with mechanical certainty.`);
+      doAttack(m, target);
+      m.atk = orig;
+      return;
+    }
+    stepToward(m, target.x, target.y);
+    return;
+  }
+
+  // ---- adaptive: virus-faction processes. Doesn't get braver or more desperate the way a living
+  // thing does -- it runs cost-benefit on the fight in progress. Hurt and behind, it hardens
+  // (temporary armor, reduced own damage output) rather than trading blows it's likely to lose.
+  // Healthy with the target visibly hurt, it commits fully (bonus damage) to close out the
+  // opportunity before it closes. A genuinely different fight than any of the other archetypes:
+  // punishes greedy overextension into one late, and punishes tunnel-visioning past a weak one.
+  if (m.behavior === 'adaptive') {
+    if (dist <= 1) {
+      const selfHpPct = m.hp / m.maxHp;
+      const targetHpPct = target.hp / (target.maxHp || target.hp || 1);
+      if (selfHpPct < 0.4) {
+        const origArmor = m.armor; const origAtk = m.atk;
+        m.armor = (m.armor || 0) + 4;
+        m.atk = [Math.max(1, Math.round(origAtk[0] * 0.7)), Math.max(1, Math.round(origAtk[1] * 0.7))];
+        doAttack(m, target);
+        m.armor = origArmor; m.atk = origAtk;
+      } else if (targetHpPct < 0.35) {
+        const orig = m.atk;
+        m.atk = [Math.round(orig[0] * 1.4), Math.round(orig[1] * 1.4)];
+        doAttack(m, target);
+        m.atk = orig;
+      } else {
+        doAttack(m, target);
+      }
+      return;
+    }
+    stepToward(m, target.x, target.y);
     return;
   }
 
@@ -23331,7 +23499,7 @@ function endTurn() {
     const encumbranceDrag = Math.min(staminaRegen, Math.ceil(armorStrDeficit() * 0.4));
     player.stamina = Math.min(player.maxStamina || 100, (player.stamina || 0) + Math.max(0, staminaRegen - encumbranceDrag));
   }
-  player.charge = Math.min(player.maxCharge || 60, (player.charge || 0) + 3);
+  player.charge = Math.min(player.maxCharge || 60, (player.charge || 0) + Math.round(3 * (1 + (player.chargeRegenBonus || 0))));
   // Willpower (WIL) quickens the passive HP/MP trickle: every ~3 points of WIL above baseline
   // shaves a turn off the interval, floored so it can never tick every single turn.
   const wilRegenSpeedup = Math.floor(Math.max(0, player.wil - 8) / 3);
