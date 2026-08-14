@@ -400,6 +400,9 @@
       <div id="corruption-row" class="hidden">
         <div class="bar-text" id="corruption-text" style="color:#a03ac9">Corruption 0/100</div>
       </div>
+      <div id="weather-row">
+        <div class="bar-text" id="weather-text" style="line-height:1.5"></div>
+      </div>
       <div id="status-row" class="hidden">
         <h2>Status Effects</h2>
         <div class="bar-text" id="status-list" style="line-height:1.7"></div>
@@ -473,7 +476,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.33.1-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.34.0-alpha</div>
     </div>
   </div>
 
@@ -851,7 +854,7 @@ const BIOMES = {
   // ---- fantastical biomes: overtly magical country, the kind that only exists in a world with
   // real wizards and real fae in it. Each has a genuine mechanical hook, not just a paint job. ----
   mushroom_forest: { name:'Mushroom Forest', walkable:true, glyph:'"', color:'#c060a0', bg:'#1a0e1a', family:'fantastical', dangerMult:1.15,
-    encounter:[['spore_stalker',5],['giant_ant',3],['spider',3]],
+    encounter:[['spore_stalker',5],['giantant',3],['spider',3]],
     effect:{type:'confuse', chance:0.14, power:2, msg:'A cloud of disorienting spores bursts around you.'},
     decor:[{feature:'giant_mushroom', glyph:'8', color:'#d070b0', chance:0.10, destructible:true}] },
   crystal_grove: { name:'Crystal Grove', walkable:true, glyph:'"', color:'#7ac9e0', bg:'#101a24', family:'fantastical', dangerMult:1.1,
@@ -9138,7 +9141,36 @@ let turnCount = 0;
 // instead of just refilling HP/MP for free.
 const DAY_LENGTH = 1440; // turns per full day/night cycle (1 turn ~= 1 in-game minute)
 function turnsForHour(h) { return Math.round((h / 24) * DAY_LENGTH); }
-function getTimeInfo() {
+// ---- Per-zone time profiles (Weather/Climate/World Events overhaul) --------------------------
+// Not every dimension should run on an Earth solar cycle. 'solar' zones use the original
+// turnCount-driven dawn/day/dusk/night logic unchanged. 'fixed' zones are locked permanently in
+// one signature phase (the Abyssal Wastes' sky never actually goes dark, it's just perpetually
+// lit by distant fire; the Drift is airless void, so it's always "night"). 'cycle' zones run on
+// their own non-solar rhythm -- their own period length and their own named phases (the
+// Undertow's tides, the Clockwork Expanse's shift-bells) -- while still producing a `night`/`day`
+// classification underneath so every system that already asks isNight()/nightFactor() (vision,
+// combat, temperature) keeps working without having to know which kind of clock it's reading.
+const ZONE_TIME_PROFILES = {
+  overworld:          { mode:'solar' },
+  neo_kalyx:          { mode:'solar' }, // a real city skyline: sunrise/sunset, neon after dark
+  wyrmreach:          { mode:'solar' }, // scorching days, brutally cold desert nights
+  abyssal_wastes:     { mode:'fixed', phase:'dusk',  label:'The Ever-Ember' },
+  gilded_choir:       { mode:'fixed', phase:'day',   label:'The Unwaning Light' },
+  the_drift:          { mode:'fixed', phase:'night', label:'The Long Dark' },
+  the_boneyard:       { mode:'fixed', phase:'dusk',  label:'The Long Dusk' },
+  corrupted_kernel:   { mode:'fixed', phase:'night', label:'Runtime (no sunset defined)' },
+  the_interstice:     { mode:'fixed', phase:'night', label:'Between Places' },
+  lucid_expanse:      { mode:'cycle', length:480,  labels:['Waking Drift','Lucid Bloom','Fading Focus','Deep Dream'], nightLabels:['Deep Dream'] },
+  fourth_corridor:    { mode:'cycle', length:389,  labels:['Recursion Alpha','Recursion Beta','Recursion Gamma','Recursion Delta'], nightLabels:['Recursion Gamma','Recursion Delta'] },
+  the_undertow:       { mode:'cycle', length:720,  labels:['Slack Tide','Flood Tide','Ebb Tide','Black Current'], nightLabels:['Black Current'] },
+  clockwork_expanse:  { mode:'cycle', length:600,  labels:['First Bell','Working Shift','Rest Bell','Deep Wind-Down'], nightLabels:['Deep Wind-Down','Rest Bell'] },
+  the_bloom:          { mode:'cycle', length:1440, labels:['Inhale','Bloomlight','Exhale','Spore-Dark'], nightLabels:['Spore-Dark'] },
+};
+function zoneTimeProfile() {
+  if (curIsDimension()) return ZONE_TIME_PROFILES[player.dimensionId] || ZONE_TIME_PROFILES.overworld;
+  return ZONE_TIME_PROFILES.overworld;
+}
+function solarTimeInfo() {
   const t = ((turnCount % DAY_LENGTH) + DAY_LENGTH) % DAY_LENGTH;
   const day = Math.floor(turnCount / DAY_LENGTH) + 1;
   const hour = Math.floor((t / DAY_LENGTH) * 24);
@@ -9150,12 +9182,37 @@ function getTimeInfo() {
   else phase = 'night';
   return { day, hour, minute, phase };
 }
+function getTimeInfo() {
+  const profile = zoneTimeProfile();
+  if (profile.mode === 'fixed') {
+    const day = Math.floor(turnCount / DAY_LENGTH) + 1;
+    const hourByPhase = { dawn:6, day:12, dusk:19, night:23 };
+    return { day, hour: hourByPhase[profile.phase] ?? 12, minute:0, phase: profile.phase, phaseLabel: profile.label, fixedZone:true };
+  }
+  if (profile.mode === 'cycle') {
+    const len = profile.length;
+    const t = ((turnCount % len) + len) % len;
+    const day = Math.floor(turnCount / len) + 1;
+    const segCount = profile.labels.length;
+    const segIdx = Math.min(segCount - 1, Math.floor((t / len) * segCount));
+    const phaseLabel = profile.labels[segIdx];
+    const isNightSeg = profile.nightLabels.includes(phaseLabel);
+    return { day, hour: Math.floor((t / len) * 24), minute: Math.floor((((t / len) * 24) % 1) * 60), phase: isNightSeg ? 'night' : 'day', phaseLabel, fixedZone:true };
+  }
+  return solarTimeInfo();
+}
 function isNight() { const p = getTimeInfo().phase; return p === 'night' || p === 'dusk'; }
 // Continuous 0 (full day) -> 1 (full night) factor, replacing the old hard per-phase jump (vision
 // used to snap -4 the instant dusk began; the dark-overlay tint snapped between 4 fixed values at
-// each phase boundary). Ramps smoothly across the whole 2-hour dawn/dusk window instead, so both
-// vision radius and the screen tint change gradually turn-by-turn rather than all at once.
+// each phase boundary). Ramps smoothly across the whole 2-hour dawn/dusk window for solar zones;
+// fixed zones return a constant appropriate to their permanent phase; cycle zones use a plain
+// binary day/night split since their "hours" don't map onto a real dawn/dusk window.
 function nightFactor() {
+  const profile = zoneTimeProfile();
+  if (profile.mode === 'fixed') {
+    return profile.phase === 'night' ? 1 : profile.phase === 'dusk' ? 0.55 : profile.phase === 'dawn' ? 0.3 : 0;
+  }
+  if (profile.mode === 'cycle') return getTimeInfo().phase === 'night' ? 0.85 : 0;
   const ti = getTimeInfo();
   const hourFrac = ti.hour + ti.minute / 60;
   if (hourFrac >= 7 && hourFrac < 18) return 0;
@@ -9165,11 +9222,27 @@ function nightFactor() {
 }
 function formatTimeInfo() {
   const ti = getTimeInfo();
+  if (ti.fixedZone) return `Day ${ti.day} \u2014 ${ti.phaseLabel}`;
   const h12 = ((ti.hour % 12) || 12);
   const ampm = ti.hour < 12 ? 'AM' : 'PM';
   const mm = String(ti.minute).padStart(2, '0');
   const phaseLabel = { dawn: 'Dawn', day: 'Day', dusk: 'Dusk', night: 'Night' }[ti.phase];
   return `Day ${ti.day}, ${h12}:${mm} ${ampm} (${phaseLabel})`;
+}
+// Faction-vs-time-of-day combat edge (Weather/Climate/World Events overhaul): undead, dream, and
+// eldritch/demonic things hit a little harder -- and take a little less -- from the player after
+// dark; celestial things are the mirror image, stronger by day. A thematic +/-12% swing, applied
+// in doAttack right alongside the existing per-dimension damage multipliers (Infernal Dominance,
+// Vigil's Peace, etc.) rather than a new combat pass, so it composes cleanly with everything
+// already there instead of double-dipping.
+const NIGHT_EMPOWERED_FACTIONS = new Set(['undead', 'dream', 'eldritch', 'demonic']);
+const DAY_EMPOWERED_FACTIONS = new Set(['celestial']);
+function timeOfDayDamageMult(faction) {
+  if (curIsDungeon() || !faction) return 1;
+  const nf = nightFactor();
+  if (NIGHT_EMPOWERED_FACTIONS.has(faction)) return 1 + 0.12 * nf;
+  if (DAY_EMPOWERED_FACTIONS.has(faction)) return 1 + 0.12 * (1 - nf);
+  return 1;
 }
 // Used by inn rooms / the companion service: fast-forwards the clock to 7 AM the following day.
 // Simplification, noted honestly: this jumps turnCount directly rather than simulating every
@@ -9180,6 +9253,1158 @@ function advanceTimeToMorning() {
   const nextDay = Math.floor(turnCount / DAY_LENGTH) + 1;
   turnCount = nextDay * DAY_LENGTH + turnsForHour(7);
 }
+
+// ============================================================================
+// ============================================================================
+// ---- WEATHER, CLIMATE & WORLD EVENTS OVERHAUL ------------------------------
+// ============================================================================
+// A ground-up addition, not a reskin: weather is no longer cosmetic. It's driven by each
+// zone's climate (overworld biome temperature *and* each dimension's own thematic climate),
+// it changes over time with some narrative continuity (a thunderstorm winds down into rain,
+// not straight to clear skies), and it reaches into systems that already exist rather than
+// duplicating them -- fire/ice/gas ride the same tile-effect plumbing igniteTile/extinguishTile/
+// addGasCloud already provided (see BIOME ENVIRONMENTAL EFFECTS above), so "rain puts out fire"
+// and "a blizzard freezes the pond" cost almost nothing new to simulate correctly.
+//
+// Layered on top: an expanded Day/Night system (some dimensions get real solar cycles, some are
+// permanently fixed in a signature phase, some run on their own non-solar rhythm entirely -- see
+// ZONE_TIME_PROFILES), and a 100+ entry Random World Event registry (see WORLD_EVENTS below) with
+// a shared, extensible effect dispatcher so a new event is almost always just a new data entry,
+// not a new function.
+//
+// Deliberately zone-wide rather than per-tile: one weather state per dimension (plus one for the
+// overworld), the same granularity most roguelikes use for weather, rather than tracking it per
+// chunk. This keeps the simulation cheap and legible ("it's snowing in the Boneyard") instead of
+// a patchwork that's expensive to compute and hard for the player to read at a glance.
+// ============================================================================
+
+// ---------------------------------------------------------------- WEATHER CATALOG ----
+// Every field is optional except name/color -- an entry that doesn't set, say, `lightningChance`
+// just never rolls a lightning strike. `elementMods` is the emergent-interaction heart of the
+// system: a multiplier applied to fire/frost/shock/poison damage (from spells, monster bolts,
+// and weapon elemental damage alike -- see weatherElementMultiplier()) whenever that kind of
+// damage is dealt while this weather is active. `tempShift` feeds into currentTemperature();
+// `visMod` is a direct delta to vision radius (negative = harder to see, positive = easier, e.g.
+// aurora light at night); `igniteMult` scales igniteTile()'s success chance and burn duration
+// (0 = nothing can catch fire at all); `extinguishChance` is a per-turn, per-burning-tile chance
+// this weather puts it out on its own.
+const WEATHER_TYPES = {
+  clear:        { name:'Clear Skies', glyph:'.', color:'#e8d090', tempShift:0,
+    enterMsg:'The sky clears.' },
+  partly_cloudy:{ name:'Partly Cloudy', glyph:'~', color:'#c9c0a0', tempShift:-2,
+    enterMsg:'Clouds drift in, gentle and unhurried.' },
+  overcast:     { name:'Overcast', glyph:'=', color:'#8a8a90', tempShift:-4, visMod:-1,
+    enterMsg:'A flat grey ceiling settles over everything.' },
+  drizzle:      { name:'Drizzle', glyph:"'", color:'#7a9ac0', tempShift:-3, visMod:-1,
+    elementMods:{ fire:0.7, shock:1.1 }, igniteMult:0.4, extinguishChance:0.06,
+    enterMsg:'A fine drizzle starts to fall.' },
+  rain:         { name:'Rain', glyph:'/', color:'#4a7ac0', tempShift:-6, visMod:-2, slowChance:0.05,
+    elementMods:{ fire:0.4, shock:1.3, poison:0.85 }, igniteMult:0.05, extinguishChance:0.35,
+    enterMsg:'Rain begins to fall in earnest.' },
+  thunderstorm: { name:'Thunderstorm', glyph:'\u26A1', color:'#c0a0ff', tempShift:-8, visMod:-3, slowChance:0.08,
+    elementMods:{ fire:0.3, shock:1.6 }, igniteMult:0.02, extinguishChance:0.4, lightningChance:0.12,
+    enterMsg:'Thunder cracks somewhere close, and the rain turns violent.' },
+  hailstorm:    { name:'Hailstorm', glyph:'*', color:'#d0e8ff', tempShift:-10, visMod:-3, staminaDrain:1,
+    elementMods:{ frost:1.2, fire:0.5 }, extinguishChance:0.25, hailDamage:true,
+    enterMsg:'Ice begins hammering down out of a bruised sky.' },
+  fog:          { name:'Fog', glyph:'"', color:'#9a9a9a', tempShift:-2, visMod:-5,
+    enterMsg:'A heavy fog rolls in, swallowing the horizon.' },
+  mist:         { name:'Mist', glyph:'"', color:'#a8b0a0', tempShift:-1, visMod:-3,
+    enterMsg:'A thin mist clings low to the ground.' },
+  windy:        { name:'Windy', glyph:'\u2248', color:'#c9d0c0', tempShift:-1, rangedAccuracyMod:-0.15,
+    elementMods:{ fire:1.1 }, enterMsg:'A stiff wind picks up.' },
+  gale:         { name:'Gale', glyph:'\u2248', color:'#a8c0b0', tempShift:-3, visMod:-1, staminaDrain:1, slowChance:0.1,
+    rangedAccuracyMod:-0.3, elementMods:{ fire:1.3 }, enterMsg:'The wind rises to a roar, tearing at loose gear.' },
+  heatwave:     { name:'Heatwave', glyph:'^', color:'#e08030', tempShift:18, visMod:-1, staminaDrain:2,
+    elementMods:{ fire:1.4, frost:0.6 }, igniteMult:1.8, enterMsg:'The heat becomes oppressive, shimmering off the ground.' },
+  drought:      { name:'Drought', glyph:',', color:'#c9a860', tempShift:10,
+    elementMods:{ fire:1.25, poison:1.1 }, igniteMult:1.4, enterMsg:'The air turns bone-dry.' },
+  sandstorm:    { name:'Sandstorm', glyph:'%', color:'#c9a858', tempShift:6, visMod:-6, staminaDrain:2, slowChance:0.15,
+    rangedAccuracyMod:-0.4, elementMods:{ fire:0.9 }, enterMsg:'A wall of scouring sand sweeps in.' },
+  duststorm:    { name:'Dust Storm', glyph:'%', color:'#a89060', tempShift:3, visMod:-4, staminaDrain:1, slowChance:0.08,
+    enterMsg:'Choking dust rises and blots out the distance.' },
+  snow:         { name:'Snow', glyph:'*', color:'#e8f4ff', tempShift:-14, visMod:-2, slowChance:0.1,
+    elementMods:{ frost:1.3, fire:0.5 }, igniteMult:0.15, extinguishChance:0.1, freezeChance:0.08,
+    enterMsg:'Snow begins to fall, quiet and steady.' },
+  blizzard:     { name:'Blizzard', glyph:'*', color:'#c0e0ff', tempShift:-26, visMod:-6, staminaDrain:3, slowChance:0.25,
+    elementMods:{ frost:1.6, fire:0.2 }, igniteMult:0, extinguishChance:0.3, freezeChance:0.2,
+    enterMsg:'The snow turns into a howling, blinding blizzard.' },
+  whiteout:     { name:'Whiteout', glyph:'#', color:'#ffffff', tempShift:-30, visMod:-9, staminaDrain:3, slowChance:0.3,
+    elementMods:{ frost:1.7, fire:0.1 }, igniteMult:0, freezeChance:0.3,
+    enterMsg:'You can no longer tell sky from ground -- the whiteout swallows everything.' },
+  frost:        { name:'Hard Frost', glyph:'"', color:'#a0d0e0', tempShift:-12,
+    elementMods:{ frost:1.2 }, freezeChance:0.1, enterMsg:'A hard frost settles over everything, brittle and silent.' },
+  acid_rain:    { name:'Acid Rain', glyph:'/', color:'#a0e030', tempShift:-5, visMod:-2, corrodeChance:0.06,
+    elementMods:{ poison:1.4, fire:0.4 }, extinguishChance:0.3, enterMsg:'The rain hisses faintly where it lands -- it burns.' },
+  ashfall:      { name:'Ashfall', glyph:',', color:'#a89078', tempShift:4, visMod:-4, staminaDrain:1,
+    elementMods:{ fire:1.15, poison:1.2 }, enterMsg:'Fine grey ash sifts down out of the sky like slow snow.' },
+  spore_bloom:  { name:'Spore Bloom', glyph:'\u2699', color:'#c060a0', tempShift:0, visMod:-2, gasChance:0.08, gasKind:'confuse',
+    elementMods:{ poison:1.5 }, enterMsg:'Clouds of drifting spores thicken the air.' },
+  toxic_smog:   { name:'Toxic Smog', glyph:'%', color:'#8ac93a', tempShift:2, visMod:-4, gasChance:0.1, gasKind:'poison',
+    elementMods:{ poison:1.6, fire:0.9 }, enterMsg:'A caustic smog rolls between the towers.' },
+  bioluminescent_tide: { name:'Bioluminescent Tide', glyph:'\u2248', color:'#3ae0c0', tempShift:-2, visMod:2, positiveChance:0.05,
+    elementMods:{ shock:1.1 }, enterMsg:'The water itself begins to glow, cold and blue-green.' },
+  static_storm: { name:'Static Storm', glyph:'\u26A1', color:'#ffe860', tempShift:-4, visMod:-2,
+    elementMods:{ shock:1.8, fire:0.6 }, lightningChance:0.18, corrodeChance:0.03,
+    enterMsg:'Every exposed edge of metal starts to crackle and spark.' },
+  void_flux:    { name:'Void Flux', glyph:'%', color:'#8a2ae0', tempShift:-8, visMod:-3, blinkChance:0.03,
+    elementMods:{ frost:1.1, shock:1.1, poison:1.1 }, enterMsg:'Reality thins out and starts to ripple at the edges.' },
+  starfall_drizzle: { name:'Starfall Drizzle', glyph:'*', color:'#f0e0a0', tempShift:-3, positiveChance:0.06,
+    enterMsg:'Faint points of light drift down like slow, silent rain.' },
+  bone_wind:    { name:'Bone Wind', glyph:'\u2248', color:'#c0c0c8', tempShift:-6, visMod:-3, fearChance:0.04,
+    elementMods:{ poison:1.1 }, enterMsg:'A cold wind rattles through hollow places, carrying half-heard whispers.' },
+  aurora:       { name:'Aurora', glyph:'~', color:'#5ae0a0', tempShift:-10, visMod:3, positiveChance:0.06,
+    elementMods:{ shock:1.2, frost:1.1 }, enterMsg:'Curtains of pale green light ripple silently overhead.' },
+  gear_squall:  { name:'Gear Squall', glyph:'o', color:'#c0a050', tempShift:-2, visMod:-3, staminaDrain:1, corrodeChance:0.05,
+    elementMods:{ shock:1.15, fire:0.9 }, enterMsg:'A rattling storm of loose cogs and grit blows through.' },
+  pressure_swell: { name:'Pressure Swell', glyph:'\u2248', color:'#0a5a7a', tempShift:-4, visMod:-2, staminaDrain:2, slowChance:0.15,
+    enterMsg:'The current surges, and the pressure in your ears builds painfully.' },
+  eternal_haze: { name:'Runtime Haze', glyph:'%', color:'#3af0d0', tempShift:0, visMod:-2,
+    elementMods:{ shock:1.2 }, enterMsg:'The ambient noise-haze thickens, motes of stray data drifting past.' },
+};
+
+// ---------------------------------------------------------------- CLIMATE PROFILES ----
+// One entry per zone (the overworld, plus every dimension). `baseTemp` is an abstract 0-100
+// scale (50 = mild); `weatherTable` is a list of {id, weight} pairs this zone can roll from.
+// Deliberately curated per dimension rather than one shared pool everywhere -- some weather is
+// common across many zones (rain, fog, storms), but plenty is a genuine signature of one place
+// (ashfall belongs to the Abyssal Wastes and Wyrmreach, void_flux to the Drift and the Fourth
+// Corridor, bioluminescent_tide only to the Undertow, and so on), which is what makes each
+// dimension feel like its own place rather than a reskinned overworld.
+const ZONE_CLIMATE = {
+  overworld: { baseTemp:50, weatherTable:[
+    ['clear',30],['partly_cloudy',20],['overcast',12],['drizzle',10],['rain',10],['fog',8],['windy',8],
+    ['thunderstorm',4],['heatwave',3],['snow',5],['gale',3],['hailstorm',1],['sandstorm',2],['blizzard',1],
+    ['frost',3],['drought',2],['whiteout',1],['duststorm',2],['mist',5],
+  ]},
+  abyssal_wastes: { baseTemp:85, weatherTable:[
+    ['ashfall',30],['heatwave',22],['drought',15],['duststorm',15],['bone_wind',10],['thunderstorm',5],['static_storm',5],
+  ]},
+  lucid_expanse: { baseTemp:50, weatherTable:[
+    ['starfall_drizzle',22],['fog',20],['mist',20],['aurora',10],['void_flux',15],['clear',13],
+  ]},
+  gilded_choir: { baseTemp:55, weatherTable:[
+    ['clear',40],['starfall_drizzle',20],['partly_cloudy',20],['aurora',10],['fog',10],
+  ]},
+  the_drift: { baseTemp:5, weatherTable:[
+    ['void_flux',30],['aurora',25],['starfall_drizzle',15],['frost',15],['eternal_haze',15],
+  ]},
+  fourth_corridor: { baseTemp:50, weatherTable:[
+    ['void_flux',35],['eternal_haze',20],['static_storm',15],['fog',15],['aurora',15],
+  ]},
+  the_undertow: { baseTemp:35, weatherTable:[
+    ['pressure_swell',30],['bioluminescent_tide',25],['fog',20],['mist',15],['static_storm',10],
+  ]},
+  clockwork_expanse: { baseTemp:65, weatherTable:[
+    ['gear_squall',30],['static_storm',20],['ashfall',15],['duststorm',15],['overcast',10],['clear',10],
+  ]},
+  the_bloom: { baseTemp:60, weatherTable:[
+    ['spore_bloom',35],['rain',20],['fog',15],['drizzle',15],['mist',15],
+  ]},
+  corrupted_kernel: { baseTemp:50, weatherTable:[
+    ['eternal_haze',30],['static_storm',25],['void_flux',25],['toxic_smog',20],
+  ]},
+  neo_kalyx: { baseTemp:55, weatherTable:[
+    ['toxic_smog',25],['overcast',20],['rain',15],['acid_rain',15],['clear',10],['windy',10],['static_storm',5],
+  ]},
+  the_boneyard: { baseTemp:30, weatherTable:[
+    ['bone_wind',30],['fog',25],['overcast',20],['frost',15],['ashfall',10],
+  ]},
+  wyrmreach: { baseTemp:90, weatherTable:[
+    ['heatwave',30],['drought',20],['ashfall',20],['thunderstorm',10],['clear',15],['gale',5],
+  ]},
+  the_interstice: { baseTemp:45, weatherTable:[
+    ['void_flux',40],['eternal_haze',30],['static_storm',20],['aurora',10],
+  ]},
+};
+
+// Overworld-only refinement: which biome families run hot/cold/humid, biasing the weather roll
+// on top of the flat zone table above -- this is the literal "weather affected by the biome it's
+// in" the brief asked for. Dimensions intentionally skip this (their weather table is already a
+// hand-curated match for their theme), so this only ever runs for the overworld zone.
+const HOT_BIOMES = new Set(['desert','badlands','salt_flat','savanna']);
+const COLD_BIOMES = new Set(['tundra','taiga','highland_moor','mountain']);
+const HUMID_BIOMES = new Set(['swamp','jungle','marsh','denseforest','mushroom_forest']);
+const HOT_WEATHER = new Set(['heatwave','drought','sandstorm','duststorm']);
+const COLD_WEATHER = new Set(['snow','blizzard','whiteout','frost','hailstorm']);
+const HUMID_WEATHER = new Set(['rain','thunderstorm','fog','drizzle','acid_rain']);
+function biomeTempTag(t) {
+  if (!t) return 'temperate';
+  if (HOT_BIOMES.has(t.biome)) return 'hot';
+  if (COLD_BIOMES.has(t.biome)) return 'cold';
+  if (HUMID_BIOMES.has(t.biome)) return 'humid';
+  return 'temperate';
+}
+function biomeWeatherBiasMult(weatherId, tag) {
+  if (tag === 'hot') { if (HOT_WEATHER.has(weatherId)) return 2.4; if (COLD_WEATHER.has(weatherId)) return 0.04; }
+  if (tag === 'cold') { if (COLD_WEATHER.has(weatherId)) return 2.4; if (HOT_WEATHER.has(weatherId)) return 0.04; }
+  if (tag === 'humid') { if (HUMID_WEATHER.has(weatherId)) return 1.8; }
+  return 1;
+}
+
+// ---------------------------------------------------------------- WEATHER STATE ----
+let weatherState = {}; // zoneKey -> { id, turnsRemaining }
+function zoneKey() { return curIsDimension() ? player.dimensionId : 'overworld'; }
+function zoneClimate(zk) { return ZONE_CLIMATE[zk] || ZONE_CLIMATE.overworld; }
+function ensureWeather(zk) {
+  if (!weatherState[zk]) weatherState[zk] = { id:'clear', turnsRemaining: randInt(Math.random, 60, 140) };
+  return weatherState[zk];
+}
+function currentWeatherId(zk) { zk = zk || zoneKey(); if (curIsDungeon()) return 'clear'; return ensureWeather(zk).id; }
+function currentWeatherDef(zk) { return WEATHER_TYPES[currentWeatherId(zk)] || WEATHER_TYPES.clear; }
+
+function weightedWeatherTable(zk) {
+  const climate = zoneClimate(zk);
+  let table = climate.weatherTable;
+  if (zk === 'overworld' && !curIsDungeon()) {
+    const t = curTileAt(player.x, player.y);
+    const tag = biomeTempTag(t);
+    if (tag !== 'temperate') table = table.map(([id, w]) => [id, w * biomeWeatherBiasMult(id, tag)]);
+  }
+  return table;
+}
+function rollWeather(zk) {
+  const table = weightedWeatherTable(zk);
+  const total = table.reduce((s, e) => s + e[1], 0);
+  let r = Math.random() * total;
+  for (const [id, w] of table) { r -= w; if (r <= 0) return id; }
+  return table.length ? table[0][0] : 'clear';
+}
+// Soft continuity: a severe weather type has a decent chance to wind down into something related
+// rather than snapping straight back to clear -- a thunderstorm becomes plain rain or overcast,
+// a blizzard eases into ordinary snow, and so on. Otherwise a fresh weighted roll from the zone
+// table, same as the very first weather of a session.
+const WEATHER_SOFT_TRANSITIONS = {
+  thunderstorm:['rain','overcast'], blizzard:['snow','overcast'], whiteout:['blizzard','snow'],
+  sandstorm:['duststorm','clear'], heatwave:['drought','partly_cloudy'], hailstorm:['rain','overcast'],
+  gale:['windy','partly_cloudy'], drought:['partly_cloudy','clear'],
+};
+function pickNextWeather(zk) {
+  const cur = currentWeatherId(zk);
+  const soft = WEATHER_SOFT_TRANSITIONS[cur];
+  if (soft && Math.random() < 0.55) return soft[Math.floor(Math.random() * soft.length)];
+  return rollWeather(zk);
+}
+const WEATHER_SEVERE = new Set(['thunderstorm','blizzard','whiteout','sandstorm','hailstorm','static_storm','acid_rain','void_flux','gale']);
+function weatherDuration(id) { return WEATHER_SEVERE.has(id) ? randInt(Math.random, 20, 55) : randInt(Math.random, 60, 160); }
+
+function announceWeatherChange(zk, fromId, toId) {
+  if (zk !== zoneKey()) return; // only narrate the weather the player is actually standing in
+  const def = WEATHER_TYPES[toId];
+  if (def && def.enterMsg) log(def.enterMsg);
+}
+
+// ---------------------------------------------------------------- TEMPERATURE ----
+function currentTemperature() {
+  const zk = zoneKey();
+  let temp = zoneClimate(zk).baseTemp;
+  if (zk === 'overworld' && !curIsDungeon()) {
+    const tag = biomeTempTag(curTileAt(player.x, player.y));
+    if (tag === 'hot') temp += 20; else if (tag === 'cold') temp -= 20; else if (tag === 'humid') temp += 5;
+  }
+  const wdef = currentWeatherDef(zk);
+  temp += (wdef.tempShift || 0);
+  const tp = zoneTimeProfile();
+  if (tp.mode !== 'fixed') temp -= 10 * nightFactor();
+  return temp;
+}
+function temperatureLabel(temp) {
+  if (temp <= 10) return 'Freezing';
+  if (temp <= 30) return 'Cold';
+  if (temp <= 65) return 'Mild';
+  if (temp <= 85) return 'Hot';
+  return 'Scorching';
+}
+
+// ---------------------------------------------------------------- ELEMENT / VISION / ACCURACY HOOKS ----
+// Reads a spell-, ability-, or weapon-like object's element flags (frost/igniteGround/
+// chainLightning/element/poison -- whichever vocabulary that call site already uses) and returns
+// the current weather's multiplier for that element. Called from applyEffectToTarget (player
+// spells), monsterCastAt (monster bolts/AOE cast at the player), and chainLightningFrom (so a
+// storm empowering Chain Lightning actually empowers every jump, not just the first hit).
+function weatherElementMultiplier(spellLike) {
+  if (curIsDungeon() || !spellLike) return 1;
+  const em = currentWeatherDef().elementMods;
+  if (!em) return 1;
+  let mult = 1;
+  if (spellLike.frost || spellLike.element === 'frost') mult *= (em.frost || 1);
+  if (spellLike.igniteGround || spellLike.element === 'fire') mult *= (em.fire || 1);
+  if (spellLike.chainLightning || spellLike.element === 'shock') mult *= (em.shock || 1);
+  if (spellLike.poison || spellLike.gasCloud || spellLike.element === 'poison') mult *= (em.poison || 1);
+  return mult;
+}
+function weatherVisRadiusDelta() { if (curIsDungeon()) return 0; return currentWeatherDef().visMod || 0; }
+function weatherRangedAccuracyMod() { if (curIsDungeon()) return 0; return currentWeatherDef().rangedAccuracyMod || 0; }
+function weatherIgniteChanceMult() { if (curIsDungeon()) return 1; return currentWeatherDef().igniteMult ?? 1; }
+
+// ---------------------------------------------------------------- TERRAIN / PLAYER TICK ----
+function handleTemperatureExposure(temp) {
+  if (temp <= 12) {
+    const protectedFromCold = getBuff('resistfrost') > 0;
+    if (protectedFromCold) { player.statusChill = Math.max(0, (player.statusChill || 0) - 3); return; }
+    player.statusChill = Math.min(20, (player.statusChill || 0) + 2);
+    if (player.statusChill >= 14) {
+      const dmg = randInt(Math.random, 1, 3);
+      player.hp -= dmg; lastDamageSource = 'the bitter cold';
+      log(`The cold bites deep -- you're shivering uncontrollably. (${dmg} damage)`);
+      if (player.hp <= 0) onDeath(player, null);
+    } else if (player.statusChill === 8) log('The cold is starting to seep into your bones.');
+  } else {
+    player.statusChill = Math.max(0, (player.statusChill || 0) - 1);
+  }
+  if (temp >= 88) {
+    const protectedFromHeat = (player.fireDmgReduction || 0) > 0 || getBuff('resistfire') > 0;
+    if (protectedFromHeat) { player.statusHeat = Math.max(0, (player.statusHeat || 0) - 3); return; }
+    player.statusHeat = Math.min(20, (player.statusHeat || 0) + 2);
+    if (player.statusHeat >= 14) {
+      const dmg = randInt(Math.random, 1, 3);
+      player.hp -= dmg; lastDamageSource = 'heatstroke';
+      log(`The heat presses down like a physical weight -- your vision swims. (${dmg} damage)`);
+      if (player.hp <= 0) onDeath(player, null);
+    } else if (player.statusHeat === 8) log('The heat is becoming genuinely dangerous.');
+  } else {
+    player.statusHeat = Math.max(0, (player.statusHeat || 0) - 1);
+  }
+}
+function applyWeatherBoon(weatherId) {
+  if (weatherId === 'starfall_drizzle') { player.mp = Math.min(player.maxMp, player.mp + 1); }
+  else if (weatherId === 'aurora') { applyBuffQuiet('crit', 1, 5); }
+  else if (weatherId === 'bioluminescent_tide') { player.stamina = Math.min(player.maxStamina || 100, (player.stamina || 0) + 2); }
+}
+// ---------------------------------------------------------------- UNIFIED LIGHTNING STRIKES ----
+// Design pass: every lightning strike in the game -- whether from ordinary storm weather or a
+// telegraphed lightningBarrage event -- now goes through this single shared pipeline instead of
+// resolving instantly. A strike is scheduled at a specific (x,y), stays marked and visible (see
+// renderWeatherOverlay's danger-zone pass) for its warning window, and only actually deals damage
+// if something is still standing there when the timer runs out. This is deliberately real damage,
+// uncapped and lethal-capable -- the fairness comes entirely from the strike being avoidable, not
+// from numerically softening it. Ambient weather strikes get a short (1-turn) "the sky flashes"
+// warning, matching how fast real lightning actually is while still giving one action's worth of
+// reaction time; telegraphed barrage events mark their strikes for the event's full warning
+// window instead, since those are meant to be read and planned around, not just reacted to.
+let pendingLightningStrikes = []; // [{ x, y, turnsLeft, dmgRange, sourceLabel, zk }]
+function scheduleLightningStrike(x, y, turnsLeft, dmgRange, sourceLabel, zk, announce) {
+  pendingLightningStrikes.push({ x, y, turnsLeft, dmgRange, sourceLabel, zk: zk || zoneKey() });
+  // `announce` defaults to true for a single ambient strike (its own little heads-up is the only
+  // warning it gets); barrage-style events pass false since they already log one consolidated
+  // warning for the whole volley instead of one line per marked tile.
+  if (announce !== false && posVisibleToPlayer(x, y)) log(x === player.x && y === player.y ? "The air crackles right over your head!" : "The air crackles nearby, sharp with the smell of ozone.");
+}
+function tickLightningStrikes() {
+  if (!pendingLightningStrikes.length) return;
+  for (const p of pendingLightningStrikes) p.turnsLeft--;
+  const ready = pendingLightningStrikes.filter(p => p.turnsLeft <= 0);
+  pendingLightningStrikes = pendingLightningStrikes.filter(p => p.turnsLeft > 0);
+  for (const p of ready) resolveLightningStrike(p);
+}
+function resolveLightningStrike(p) {
+  // If the player has since left the zone this strike was marked in (dove into a dungeon,
+  // crossed into a different dimension), it quietly fizzles rather than resolving against
+  // whatever happens to occupy those coordinates in the wrong place.
+  if (p.zk !== zoneKey()) return;
+  lightningFlashTimer = 4;
+  const t = curTileAt(p.x, p.y);
+  if (!t) return;
+  const occ = entityAt(p.x, p.y);
+  const visible = posVisibleToPlayer(p.x, p.y);
+  if (occ && occ.alive !== false) {
+    const dmg = randInt(Math.random, p.dmgRange[0], p.dmgRange[1]);
+    occ.hp -= dmg;
+    if (occ === player) { lastDamageSource = p.sourceLabel; if (player.hp <= 0) onDeath(player, null); }
+    else if (occ.hp <= 0) onDeath(occ, null);
+    log(`${occ === player ? 'The strike finds you' : `Lightning strikes ${occ.name}`}! (${dmg} damage)`);
+  } else if (visible) {
+    log('Lightning slams into the marked ground -- nothing was standing there.');
+  }
+  if (isFlammableTile(t) && Math.random() < 0.4) igniteTile(p.x, p.y, 5, true);
+}
+// ---------------------------------------------------------------- WEATHER VISUAL OVERLAY ----
+// Deliberately stateless: rather than a persistent particle system (extra memory, extra
+// bookkeeping to save/load, extra edge cases on canvas resize), each frame draws a deterministic
+// pattern of streaks/flakes/motes derived from a running frame counter -- visually convincing at
+// a glance, and nearly free to compute since nothing needs to be tracked between frames.
+let weatherParticleFrame = 0;
+let lightningFlashTimer = 0;
+const WEATHER_WASH_ALPHA = {
+  fog:0.22, mist:0.14, sandstorm:0.28, duststorm:0.2, ashfall:0.18, toxic_smog:0.22,
+  spore_bloom:0.16, overcast:0.08, heatwave:0.1, drought:0.06, eternal_haze:0.14, void_flux:0.12,
+  whiteout:0.4, blizzard:0.22, bone_wind:0.12,
+};
+const WEATHER_PARTICLE_KIND = {
+  rain:'rain', drizzle:'rain', thunderstorm:'rain', acid_rain:'rain', gear_squall:'rain',
+  snow:'snow', blizzard:'snow', whiteout:'snow', hailstorm:'snow',
+  starfall_drizzle:'sparkle', aurora:'sparkle', bioluminescent_tide:'sparkle', static_storm:'sparkle',
+};
+function renderWeatherOverlay() {
+  if (curIsDungeon()) return;
+  weatherParticleFrame++;
+  const wid = currentWeatherId();
+  const def = currentWeatherDef();
+  ctx.save();
+  const washAlpha = WEATHER_WASH_ALPHA[wid] || 0;
+  if (washAlpha > 0) {
+    ctx.fillStyle = def.color; ctx.globalAlpha = washAlpha;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  const kind = WEATHER_PARTICLE_KIND[wid];
+  if (kind === 'rain') {
+    ctx.strokeStyle = def.color; ctx.globalAlpha = 0.35; ctx.lineWidth = 1;
+    for (let i = 0; i < 60; i++) {
+      const seed = (i * 7919 + weatherParticleFrame * 13) % 10000;
+      const x = (seed * 97) % canvas.width;
+      const y = ((seed * 53) + weatherParticleFrame * 24) % canvas.height;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - 4, y + 12); ctx.stroke();
+    }
+  } else if (kind === 'snow') {
+    ctx.fillStyle = def.color;
+    for (let i = 0; i < 50; i++) {
+      const seed = (i * 6151 + Math.floor(weatherParticleFrame / 2) * 17) % 10000;
+      let x = (seed * 83 + Math.sin(weatherParticleFrame * 0.05 + i) * 10) % canvas.width;
+      if (x < 0) x += canvas.width;
+      const y = ((seed * 61) + weatherParticleFrame * 6) % canvas.height;
+      ctx.globalAlpha = 0.55;
+      ctx.beginPath(); ctx.arc(x, y, 1.6, 0, Math.PI * 2); ctx.fill();
+    }
+  } else if (kind === 'sparkle') {
+    ctx.fillStyle = def.color;
+    for (let i = 0; i < 30; i++) {
+      const seed = (i * 4409 + Math.floor(weatherParticleFrame / 4) * 23) % 10000;
+      const x = (seed * 71) % canvas.width;
+      const y = ((seed * 89) + weatherParticleFrame * 3) % canvas.height;
+      ctx.globalAlpha = 0.3 + 0.5 * Math.abs(Math.sin(weatherParticleFrame * 0.08 + i));
+      ctx.beginPath(); ctx.arc(x, y, 1.4, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  ctx.restore();
+  if (lightningFlashTimer > 0) {
+    ctx.save();
+    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = Math.min(0.5, lightningFlashTimer * 0.12);
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+    lightningFlashTimer--;
+  }
+}
+function tickWeather() {
+  if (curIsDungeon() || !player.alive) return;
+  const zk = zoneKey();
+  const st = ensureWeather(zk);
+  st.turnsRemaining--;
+  if (st.turnsRemaining <= 0) {
+    const nextId = pickNextWeather(zk);
+    if (nextId !== st.id) announceWeatherChange(zk, st.id, nextId);
+    st.id = nextId;
+    st.turnsRemaining = weatherDuration(nextId);
+  }
+  const def = currentWeatherDef(zk);
+  if (def.extinguishChance) {
+    for (const entry of activeFxTiles) {
+      if (entry.t.fireTurns > 0 && Math.random() < def.extinguishChance) extinguishTile(entry.x, entry.y);
+    }
+  }
+  if (def.freezeChance && Math.random() < def.freezeChance) {
+    for (let tries = 0; tries < 3; tries++) {
+      const dx = randInt(Math.random, -6, 6), dy = randInt(Math.random, -6, 6);
+      const t = curTileAt(player.x + dx, player.y + dy);
+      if (t && isWaterTile(t) && !t.frozenTurns) {
+        t.walkable = true; t.feature = 'ice'; t.wasChasm = false; t.glyph = '='; t.color = '#bfe8f5'; t.bg = '#0d1c22'; t.frozenTurns = 40;
+        trackFxTile(t, player.x + dx, player.y + dy);
+        break;
+      }
+    }
+  }
+  if (def.gasChance && Math.random() < def.gasChance) {
+    const dx = randInt(Math.random, -4, 4), dy = randInt(Math.random, -4, 4);
+    const t = curTileAt(player.x + dx, player.y + dy);
+    if (t && t.walkable) addGasCloud(player.x + dx, player.y + dy, 6, 2, def.gasKind || 'poison');
+  }
+  if (def.lightningChance && Math.random() < def.lightningChance) {
+    const sx = player.x + randInt(Math.random, -8, 8), sy = player.y + randInt(Math.random, -8, 8);
+    scheduleLightningStrike(sx, sy, 1, [6, 14], 'a lightning strike');
+  }
+  if (def.corrodeChance && Math.random() < def.corrodeChance) wearRandomArmorPiece(1);
+  if (def.hailDamage && Math.random() < 0.08) {
+    const dmg = randInt(Math.random, 1, 3);
+    player.hp -= dmg; lastDamageSource = 'hail';
+    log(`Hail stings hard against exposed skin. (${dmg} damage)`);
+    if (player.hp <= 0) onDeath(player, null);
+  }
+  if (def.fearChance && Math.random() < def.fearChance) { player.statusFear = Math.max(player.statusFear || 0, 1); }
+  if (def.blinkChance && Math.random() < def.blinkChance) {
+    const spots = [];
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+      if (!dx && !dy) continue;
+      const nx = player.x + dx, ny = player.y + dy;
+      if (curWalkable(nx, ny) && !entityAt(nx, ny)) spots.push([nx, ny]);
+    }
+    if (spots.length) { const [nx, ny] = choice(Math.random, spots); player.x = nx; player.y = ny; log('The flux catches you -- the world lurches sideways for an instant.'); }
+  }
+  if (def.staminaDrain) player.stamina = Math.max(0, (player.stamina || 0) - def.staminaDrain);
+  if (def.slowChance && Math.random() < def.slowChance) player.statusSlow = Math.max(player.statusSlow || 0, 1);
+  if (def.positiveChance && Math.random() < def.positiveChance) applyWeatherBoon(st.id);
+  handleTemperatureExposure(currentTemperature());
+}
+
+// ============================================================================
+// ---- RANDOM WORLD EVENTS -----------------------------------------------------
+// A data-driven registry (WORLD_EVENTS below): each entry is almost always just data, not a new
+// function -- `type` picks one of a small set of reusable, parameterized handlers
+// (WORLD_EVENT_HANDLERS) that already know how to damage, buff, spawn, ignite, freeze, alter
+// weather, shift gold/xp, or move the player. Adding a new event later should, in the overwhelming
+// majority of cases, mean adding one object to WORLD_EVENTS, not writing new code.
+//
+// Scheduling is a hybrid, per the brief's own "up to you": a small, constant per-turn chance for
+// ANY event to fire (so nothing is ever strictly tied to sleeping through a day), plus a larger,
+// guaranteed roll-opportunity the moment a new in-game day begins (so the pacing still feels tied
+// to "a new day, a new possibility" the way a roguelike calendar suggests). Rarity tiers weight
+// which pool gets rolled from; common events are common, legendary events are exactly as rare as
+// their name promises. Everything scope-gated per zone: overworld-only events won't fire in a
+// dimension, and vice versa -- and several dimensions have events nothing else shares (a `war
+// between settlements`-style raid makes no sense loose in the void of the Drift; a `meteor
+// shower` fits almost everywhere).
+// ============================================================================
+
+// ---------------------------------------------------------------- WAR BETWEEN SETTLEMENTS ----
+// Real NPC-vs-NPC warfare, not a spawned-monster stand-in for it. A small detachment of real
+// guard NPCs -- built the exact same way any settlement's own guards are (makeNPC, full stats,
+// full AI) -- gets raised under a rival kingdom's banner and marched in on the settlement nearest
+// the player. From there, everything is the game's existing generic hostility/combat AI: the
+// isHostileTo() extension above makes the two sides read each other as enemies, pickHostileTarget
+// finds them across the settlement, doAttack resolves the actual fighting, alertNearbyAllies
+// pulls more defenders in as the fight escalates. No new combat system was written for this --
+// the framework for "two factions of ordinary people fight each other" already existed for guards
+// vs. hostile monsters; this just gives it a second faction of ordinary people to apply to.
+let activeWarParties = []; // [{ npcs: [uid,...], warKingdom, expireTurn, cx, cy }]
+// Finds the nearest ALREADY-DISCOVERED settlement chunk to a point, same discovery rule
+// nearestSettlement() uses for auto-travel (never conjures a settlement out of unexplored fog),
+// but returns the raw chunk (with its .settlement.kingdom) instead of just a travel summary.
+// `opts.requireGuards`, when set, prefers the nearest settlement that actually HAS guards
+// (village/town/city/capital -- hamlets are guardCounts:0, see the settlement generator) over a
+// closer but undefended hamlet, still falling back to the closest settlement of any size if no
+// guarded one has been discovered yet rather than refusing to return anything at all. Exists
+// specifically for spawnWarParty: a "settlement war" that lands on an undefended hamlet isn't a
+// war, it's just invaders standing around an empty village with nothing to fight.
+function nearestSettlementChunkWithKingdom(fromX, fromY, opts) {
+  opts = opts || {};
+  let bestAny = null, bestAnyD = Infinity;
+  let bestGuarded = null, bestGuardedD = Infinity;
+  for (const c of worldChunks.values()) {
+    if (!c.settlement) continue;
+    const sx = c.cx * CH + Math.floor(CH / 2), sy = c.cy * CH + Math.floor(CH / 2);
+    const d = chebyshev(fromX, fromY, sx, sy);
+    if (d < bestAnyD) { bestAnyD = d; bestAny = { chunk: c, cx: c.cx, cy: c.cy, x: sx, y: sy, dist: d }; }
+    const tier = (c.settlement.type || '').toLowerCase();
+    if (tier !== 'hamlet' && d < bestGuardedD) { bestGuardedD = d; bestGuarded = { chunk: c, cx: c.cx, cy: c.cy, x: sx, y: sy, dist: d }; }
+  }
+  if (opts.requireGuards) return bestGuarded || bestAny;
+  return bestAny;
+}
+// Picks a kingdom distinct from the defending one to be the invader, reusing the same
+// procedural-kingdom generator every other kingdom in the game comes from (so it has real,
+// consistent lore/name/history -- getKingdom() caches by region, so this is either an already-met
+// rival or a fresh one generated in exactly the same style) rather than inventing a fake label.
+function pickRivalKingdom(defenderCx, defenderCy) {
+  for (let tries = 0; tries < 6; tries++) {
+    const angle = Math.random() * Math.PI * 2;
+    const offset = KINGDOM_REGION * (2 + Math.floor(Math.random() * 4));
+    const rx = defenderCx + Math.round(Math.cos(angle) * offset);
+    const ry = defenderCy + Math.round(Math.sin(angle) * offset);
+    const k = getKingdom(rx, ry);
+    if (k.name !== getKingdom(defenderCx, defenderCy).name) return k;
+  }
+  return getKingdom(defenderCx + KINGDOM_REGION * 3, defenderCy); // deterministic fallback, still a real generated kingdom
+}
+function spawnWarParty(count, duration) {
+  const target = nearestSettlementChunkWithKingdom(player.x, player.y, { requireGuards: true });
+  if (!target) return null; // no discovered settlement to defend -- nothing to raid, event quietly doesn't fire
+  const defenderKingdom = target.chunk.settlement.kingdom;
+  const rival = pickRivalKingdom(target.cx, target.cy);
+  const rng = Math.random;
+  const spawned = [];
+  const expireTurn = turnCount + duration;
+  // Anchor the invasion on an actual defender's position, not the settlement's abstract
+  // geometric center -- a settlement's guards can end up spread anywhere within its full
+  // footprint (real distances of 15-25+ tiles from center are common for bigger towns), well
+  // outside pickHostileTarget's ~8-tile detection range. Landing near a real guard instead
+  // guarantees the two sides can actually notice and reach each other, rather than the invasion
+  // silently fizzling because nobody was ever close enough to trigger the fight in the first
+  // place. Falls back to the geometric center only if the settlement somehow has no guard NPC
+  // generated yet (shouldn't happen given requireGuards above, but stay safe regardless).
+  const existingGuards = (target.chunk.npcs || []).filter(n => NPC_DEFENDER_ROLES.has(n.roleId) && n.alive);
+  const anchor = existingGuards.length ? choice(rng, existingGuards) : { x: target.x, y: target.y };
+  // Places one invader NPC at a specific tile -- factored out so both the LOS-preferred search
+  // below and its no-LOS fallback share one code path instead of duplicating NPC creation.
+  function placeInvaderAt(x, y) {
+    const cx = Math.floor(x / CH), cy = Math.floor(y / CH);
+    const chunk = getChunk(cx, cy);
+    const npc = makeNPC('guard', x, y, rng, rival.name, randomSpeciesWeighted(rng));
+    npc.warKingdom = rival.name;
+    npc.warExpire = expireTurn;
+    chunk.npcs.push(npc);
+    markLocationDirty(x, y);
+    spawned.push({ uid: npc.uid, cx, cy });
+  }
+  for (let i = 0; i < count; i++) {
+    let placed = false, fallbackSpot = null;
+    for (let tries = 0; tries < 15 && !placed; tries++) {
+      const dx = randInt(rng, -6, 6), dy = randInt(rng, -6, 6);
+      const x = anchor.x + dx, y = anchor.y + dy;
+      if (Math.abs(dx) < 2 && Math.abs(dy) < 2) continue; // don't drop them right on top of the guard
+      const t = curTileAt(x, y);
+      if (!t || !t.walkable || entityAt(x, y)) continue;
+      if (!fallbackSpot) fallbackSpot = { x, y };
+      // pickHostileTarget requires clear line of sight, and a settlement's buildings/walls can
+      // block it even between tiles that are geometrically close -- so prefer a spawn tile that
+      // can actually SEE at least one real guard over one that's merely nearby on the map.
+      if (existingGuards.length && !existingGuards.some(g => hasLOS(x, y, g.x, g.y))) continue;
+      placeInvaderAt(x, y);
+      placed = true;
+    }
+    if (!placed && fallbackSpot) placeInvaderAt(fallbackSpot.x, fallbackSpot.y); // a blind spawn beats no spawn -- alertNearbyAllies can still eventually pull defenders in
+  }
+  if (spawned.length) activeWarParties.push({ npcs: spawned, warKingdom: rival.name, defenderKingdom, expireTurn });
+  return { count: spawned.length, rivalName: rival.name, defenderName: defenderKingdom, settlementName: target.chunk.settlement.name };
+}
+// A warzone isn't peacetime: the player should be free to wade into an active settlement war on
+// whichever side they like -- helping the defenders by cutting down invaders, or even siding with
+// the invaders against the town -- without the ordinary "you attacked a non-hostile NPC" crime/
+// bounty penalty applying, since that penalty exists to model unprovoked violence against
+// civilians going about their day, not choosing a side in a battle already underway. Covers both
+// halves of the fight: invaders carry `.warKingdom` directly; defenders don't carry any tag
+// themselves, so this checks whether an active war party's location matches theirs instead.
+function isInActiveWar(npc) {
+  if (!npc || npc.kind !== 'npc') return false;
+  if (npc.warKingdom) return true;
+  if (!activeWarParties.length) return false;
+  const cx = Math.floor(npc.x / CH), cy = Math.floor(npc.y / CH);
+  return activeWarParties.some(wp => wp.npcs.some(e => e.cx === cx && e.cy === cy));
+}
+// Cleans up war parties once their clock runs out: any of the invaders still standing withdraw
+// (tagged clean, quietly removed from the world) rather than lingering forever as an unkillable
+// vestigial threat or, worse, an eternal live war the player has to remember to go finish.
+function tickWarParties() {
+  if (!activeWarParties.length) return;
+  const stillActive = [];
+  for (const wp of activeWarParties) {
+    if (turnCount < wp.expireTurn) { stillActive.push(wp); continue; }
+    let anyLeft = false, lastX = null, lastY = null;
+    for (const entry of wp.npcs) {
+      const c = worldChunks.get(chunkKey(entry.cx, entry.cy));
+      const npc = c && c.npcs.find(n => n.uid === entry.uid);
+      if (npc && npc.alive) {
+        anyLeft = true; lastX = npc.x; lastY = npc.y;
+        npc.warKingdom = null; npc.aiState = 'patrol'; npc.alive = false; npc.hp = 0; // withdrawal, not a kill credit -- they simply leave the field
+      }
+    }
+    if (anyLeft && lastX !== null && posVisibleToPlayer(lastX, lastY)) {
+      log(`The remaining soldiers of ${wp.warKingdom} sound a withdrawal and fall back.`);
+    }
+  }
+  activeWarParties = stillActive;
+}
+
+const EVENT_MONSTER_POOLS = {
+  undead: ['zombie', 'skeleton', 'skeleton_archer', 'skeleton_warrior', 'zombie_crawler', 'crypt_stalker'],
+  beasts: ['wolf', 'bear', 'boar', 'savanna_lion', 'taiga_lynx', 'jackal'],
+  bandits: ['bandit', 'cultist'],
+  demons: ['imp', 'lesser_imp', 'hellhound', 'tormented_soul'],
+  void: ['void_drifter', 'fold_wraith', 'angle_eater', 'still_walker', 'null_sentinel'],
+  plague: ['plague_zombie', 'zombie_crawler', 'crypt_stalker'],
+  eldritch: ['star_leech', 'static_wraith', 'husk_drone'],
+  dream: ['figment', 'echo_child', 'night_terror', 'unraveled_thing'],
+};
+// A pool only fires if every monster id in it actually exists in MONSTER_BASES -- checked once,
+// lazily, the first time the event system needs a pool, so a typo or a since-renamed monster id
+// quietly drops that one pool from rotation instead of throwing mid-game.
+let _validatedEventPools = null;
+function validEventPool(poolName) {
+  if (!_validatedEventPools) {
+    _validatedEventPools = {};
+    for (const k in EVENT_MONSTER_POOLS) {
+      _validatedEventPools[k] = EVENT_MONSTER_POOLS[k].filter(id => MONSTER_BASES[id]);
+    }
+  }
+  const p = _validatedEventPools[poolName];
+  return (p && p.length) ? p : null;
+}
+function spawnEventMonsters(poolName, count, opts) {
+  const pool = validEventPool(poolName);
+  if (!pool) return 0;
+  opts = opts || {};
+  const scale = depthScaleForPlayerLevel(player.level) * (opts.scaleMult || 1);
+  let spawned = 0;
+  for (let i = 0; i < count; i++) {
+    for (let tries = 0; tries < 8; tries++) {
+      const dx = randInt(Math.random, -8, 8), dy = randInt(Math.random, -8, 8);
+      if (Math.abs(dx) < 2 && Math.abs(dy) < 2) continue;
+      const x = player.x + dx, y = player.y + dy;
+      if (!curWalkable(x, y) || entityAt(x, y)) continue;
+      const id = choice(Math.random, pool);
+      const m = makeMonster(id, x, y, scale, Math.random);
+      if (opts.tagInterstitial) m.interstitial = true;
+      addMonsterToWorld(m);
+      spawned++;
+      break;
+    }
+  }
+  return spawned;
+}
+
+// ---------------------------------------------------------------- EFFECT DISPATCH ----
+function worldEventMultiplier(kind) {
+  let mult = 1;
+  for (const ev of activeWorldEvents) {
+    if (ev.def.multipliers && ev.def.multipliers[kind]) mult *= ev.def.multipliers[kind];
+  }
+  return mult;
+}
+const WORLD_EVENT_HANDLERS = {
+  flavor(def) { log(def.msg); },
+  // Design pass (fairness = avoidable, not weak): damage is no longer numerically capped -- a
+  // fresh character CAN die to a disaster event, and that's correct, because every damagePlayer
+  // event now has a real, telegraphed way to avoid it entirely (see fleeDistance in
+  // resolvePendingWorldEvent below): move far enough from where you were warned before the timer
+  // runs out and you take nothing, not a reduced hit -- nothing. Fail to move, and the disaster is
+  // exactly as dangerous as its numbers say. That's the actual fairness contract: read the
+  // warning, react, survive; ignore it, and the stakes are real.
+  damagePlayer(def) {
+    const dmg = randInt(Math.random, def.dmg[0], def.dmg[1]);
+    player.hp -= dmg; lastDamageSource = def.dmgSource || 'the disaster';
+    log(`${def.msg} (${dmg} damage)`);
+    if (player.hp <= 0) onDeath(player, null);
+  },
+  healPlayer(def) {
+    const heal = randInt(Math.random, def.heal[0], def.heal[1]);
+    player.hp = Math.min(player.maxHp, player.hp + heal);
+    log(def.msg);
+  },
+  grantGold(def) {
+    const amt = randInt(Math.random, def.gold[0], def.gold[1]);
+    player.gold = Math.max(0, player.gold + amt);
+    log(`${def.msg}${amt >= 0 ? ` (+${amt} gold)` : ` (${amt} gold)`}`);
+  },
+  grantXp(def) { log(def.msg); gainXP(randInt(Math.random, def.xp[0], def.xp[1])); },
+  buffPlayer(def) { applyBuffQuiet(def.stat, def.power, def.turns); log(def.msg); },
+  debuffStatus(def) { player[def.status] = Math.max(player[def.status] || 0, def.power); log(def.msg); },
+  igniteAround(def) {
+    if (!curIsDungeon()) igniteArea(player.x + randInt(Math.random, -3, 3), player.y + randInt(Math.random, -3, 3), def.radius || 3);
+    log(def.msg);
+  },
+  scorchAround(def) { if (!curIsDungeon()) scorchArea(player.x, player.y, def.radius || 4); log(def.msg); },
+  gasAround(def) {
+    if (!curIsDungeon()) {
+      const dx = randInt(Math.random, -3, 3), dy = randInt(Math.random, -3, 3);
+      const t = curTileAt(player.x + dx, player.y + dy);
+      if (t && t.walkable) addGasCloud(player.x + dx, player.y + dy, def.turns || 8, def.power || 3, def.gasKind || 'poison');
+    }
+    log(def.msg);
+  },
+  // Design pass: the instant/debug path still goes through a real (if minimal) 1-turn mark-then-
+  // strike beat rather than a same-frame guaranteed hit -- see scheduleLightningStrike below.
+  // The organic, telegraphed path (scheduleOrApplyWorldEvent) marks these for the full warning
+  // window instead of just 1 turn; see the lightningBarrage special-case there.
+  lightningBarrage(def) {
+    log(def.msg);
+    for (let i = 0; i < (def.count || 3); i++) {
+      const x = player.x + randInt(Math.random, -7, 7), y = player.y + randInt(Math.random, -7, 7);
+      scheduleLightningStrike(x, y, 1, def.strikeDmg || [6, 14], def.dmgSource || 'a lightning strike', null, false);
+    }
+  },
+  forceWeather(def) {
+    const st = ensureWeather(zoneKey());
+    st.id = def.weatherId; st.turnsRemaining = def.turns || weatherDuration(def.weatherId);
+    log(def.msg);
+  },
+  spawnWave(def) { const n = spawnEventMonsters(def.pool, def.count || 3, def.spawnOpts); if (n) log(def.msg); },
+  // War Between Settlements: spawns a real detachment of rival-kingdom guard NPCs at the nearest
+  // discovered settlement instead of a generic hostile monster wave -- see spawnWarParty above
+  // for how they actually end up fighting the local defenders using the game's existing NPC AI.
+  // Gracefully no-ops (falls through to the flavor message with no mechanical effect) if the
+  // player hasn't discovered any settlement yet -- there's nothing to raid.
+  warParty(def) {
+    const result = spawnWarParty(def.count || 4, def.warDuration || 200);
+    if (result && result.count) {
+      log(`${def.msg} Soldiers of ${result.rivalName} have moved on ${result.settlementName}, and ${result.defenderName}'s guards are moving to meet them.`);
+    } else {
+      log(def.msg);
+    }
+  },
+  corruptionShift(def) { player.corruption = Math.max(0, (player.corruption || 0) + def.amount); log(def.msg); },
+  freezeNearby(def) {
+    if (!curIsDungeon()) {
+      for (let i = 0; i < (def.count || 2); i++) {
+        const dx = randInt(Math.random, -6, 6), dy = randInt(Math.random, -6, 6);
+        const t = curTileAt(player.x + dx, player.y + dy);
+        if (t && isWaterTile(t) && !t.frozenTurns) {
+          t.walkable = true; t.feature = 'ice'; t.glyph = '='; t.color = '#bfe8f5'; t.bg = '#0d1c22'; t.frozenTurns = 60;
+          trackFxTile(t, player.x + dx, player.y + dy);
+        }
+      }
+    }
+    log(def.msg);
+  },
+  blinkPlayer(def) {
+    const spots = [];
+    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+      if (!dx && !dy) continue;
+      const nx = player.x + dx, ny = player.y + dy;
+      if (curWalkable(nx, ny) && !entityAt(nx, ny)) spots.push([nx, ny]);
+    }
+    if (spots.length) { const [nx, ny] = choice(Math.random, spots); player.x = nx; player.y = ny; }
+    log(def.msg);
+  },
+  pullIntoInterstice(def) { pullPlayerIntoInterstice(); },
+};
+function applyWorldEvent(def) {
+  const handler = WORLD_EVENT_HANDLERS[def.type];
+  if (!handler) return;
+  handler(def);
+  if (def.duration) activeWorldEvents.push({ def, turnsLeft: def.duration });
+}
+// ---------------------------------------------------------------- FAIRNESS: TELEGRAPHING & AVOIDABILITY ----
+// Design pass: an event with a `telegraph` (turns) field doesn't fire immediately when rolled --
+// it logs `warnMsg` right away and only actually resolves once that many turns have passed. On
+// its own that's still not truly *fair* if the damage is unavoidable once warned about, so every
+// event that can hurt the player also declares exactly how to dodge it:
+//   - `fleeDistance: N` (local/positional disasters -- rockslide, tornado, tsunami, stampede,
+//     sinkhole, avalanche, deep current, gear jam): the danger is tied to where the player WAS
+//     standing when warned. Put at least N tiles between yourself and that spot before the timer
+//     runs out and the disaster fizzles around you, no damage at all. Stay put (or not move far
+//     enough), and it hits for its full, real, uncapped -- potentially lethal -- damage.
+//   - `type: 'lightningBarrage'` events instead mark the *exact* tiles that are going to be
+//     struck (see the special-case below) for the whole warning window, via the shared
+//     pendingLightningStrikes system -- stand somewhere else when the timer runs out and that
+//     particular strike does nothing.
+// Events without a telegraph (flavor, small gold/heal/xp, minor debuffs, buffs) still fire
+// instantly, on purpose -- warning about a shooting star or a dropped coin purse would just be
+// noise. Events that CAN deal real damage but have neither fleeDistance nor are a lightningBarrage
+// don't exist in the registry below by design -- if it can hurt you, it must be dodgeable.
+let pendingWorldEvents = []; // [{ def, turnsLeft, originX, originY }]
+function scheduleOrApplyWorldEvent(def) {
+  if (def.type === 'lightningBarrage' && def.telegraph) {
+    // Marked for the FULL warning window (not just 1 turn like ambient/instant strikes) so a
+    // multi-turn barrage is something the player can actually read and route around, not just
+    // react to at the last second.
+    log(def.warnMsg || def.msg);
+    const zk = zoneKey();
+    for (let i = 0; i < (def.count || 3); i++) {
+      const x = player.x + randInt(Math.random, -7, 7), y = player.y + randInt(Math.random, -7, 7);
+      scheduleLightningStrike(x, y, def.telegraph, def.strikeDmg || [6, 14], def.dmgSource || 'a lightning strike', zk, false);
+    }
+    return;
+  }
+  if (def.telegraph) {
+    log(def.warnMsg || def.msg);
+    pendingWorldEvents.push({ def, turnsLeft: def.telegraph, originX: player.x, originY: player.y });
+  } else {
+    applyWorldEvent(def);
+  }
+}
+function tickPendingWorldEvents() {
+  if (!pendingWorldEvents.length) return;
+  for (const p of pendingWorldEvents) p.turnsLeft--;
+  const ready = pendingWorldEvents.filter(p => p.turnsLeft <= 0);
+  pendingWorldEvents = pendingWorldEvents.filter(p => p.turnsLeft > 0);
+  for (const p of ready) resolvePendingWorldEvent(p);
+}
+function resolvePendingWorldEvent(p) {
+  if (!player.alive) return;
+  const def = p.def;
+  if (def.fleeDistance) {
+    const dist = Math.max(Math.abs(player.x - p.originX), Math.abs(player.y - p.originY));
+    if (dist >= def.fleeDistance) {
+      log(def.escapeMsg || "You got clear before it hit -- close, but you made it.");
+      return; // genuinely avoided: no damage, no partial/reduced effect either
+    }
+  }
+  applyWorldEvent(def);
+}
+// How many turns remain until the soonest telegraphed threat resolves, or null if none are
+// pending -- used by the sidebar to show a persistent, impossible-to-miss countdown rather than
+// relying on the player having noticed a single line in a busy scrolling log.
+function nearestPendingEventTurns() {
+  const times = pendingWorldEvents.map(p => p.turnsLeft).concat(pendingLightningStrikes.map(p => p.turnsLeft));
+  if (!times.length) return null;
+  return Math.min(...times);
+}
+
+// ---------------------------------------------------------------- EVENT REGISTRY ----
+// rarity weights: how often each tier is rolled from, relative to the others.
+const EVENT_RARITY_WEIGHT = { common: 60, uncommon: 28, rare:10, legendary: 2 };
+// scope: 'overworld' | 'any' | explicit array of dimension ids. 'any' still respects minDay/
+// player-level gating below. `duration` (turns) makes an event persist and tick down via
+// activeWorldEvents/tickWorldEvents rather than firing once and being done.
+const WORLD_EVENTS = [
+  // ---------------------------------------------------------- COMMON: everyday texture ----
+  { id:'ev_shooting_star', name:'Shooting Star', rarity:'common', scope:'any', type:'flavor', msg:'A shooting star arcs overhead. You make a wish out of habit more than hope.' },
+  { id:'ev_stray_cat', name:'Stray Animal', rarity:'common', scope:'overworld', type:'flavor', msg:'A stray dog trots past, gives you a once-over, and decides you are not interesting.' },
+  { id:'ev_gentle_breeze', name:'Gentle Breeze', rarity:'common', scope:'overworld', type:'flavor', msg:'A pleasant breeze rolls through, carrying the smell of distant woodsmoke.' },
+  { id:'ev_found_coin', name:'Dropped Coin Purse', rarity:'common', scope:'overworld', type:'grantGold', gold:[3,12], msg:'You spot a small coin purse someone dropped in the road.' },
+  { id:'ev_wildflowers', name:'Wildflower Bloom', rarity:'common', scope:'overworld', type:'flavor', msg:'A patch of wildflowers has burst open early, bright against the dull ground.' },
+  { id:'ev_birdsong', name:'Dawn Chorus', rarity:'common', scope:'overworld', type:'flavor', msg:'The local birdlife strikes up all at once, loud enough to be its own kind of silence.' },
+  { id:'ev_lucky_step', name:'Lucky Footing', rarity:'common', scope:'any', type:'buffPlayer', stat:'evasion', power:0.05, turns:30, msg:'You feel unusually sure-footed for a while.' },
+  { id:'ev_minor_ache', name:'Old Wound Aches', rarity:'common', scope:'any', type:'debuffStatus', status:'statusSlow', power:1, msg:'An old wound twinges. Nothing serious, just slower going for now.' },
+  { id:'ev_passing_caravan', name:'Passing Caravan', rarity:'common', scope:'overworld', type:'flavor', msg:'A merchant caravan passes at a distance, wheels creaking, guards barely glancing your way.' },
+  { id:'ev_distant_bell', name:'Distant Bell', rarity:'common', scope:'overworld', type:'flavor', msg:'A bell tolls somewhere far off -- a settlement marking the hour, probably.' },
+  { id:'ev_scavenged_scrap', name:'Scavenged Scrap', rarity:'common', scope:'overworld', type:'grantGold', gold:[1,6], msg:'You pick through some roadside debris and salvage a little something.' },
+  { id:'ev_windfall_apple', name:'Windfall Fruit', rarity:'common', scope:'overworld', type:'healPlayer', heal:[1,4], msg:'You find a bruised but edible piece of fruit knocked loose by the wind.' },
+  { id:'ev_rumor_spreads', name:'A Rumor Spreads', rarity:'common', scope:'overworld', type:'flavor', msg:'You overhear two travelers trading a rumor you cannot quite make out the shape of.' },
+  { id:'ev_stiff_joints', name:'Stiff Joints', rarity:'common', scope:'any', type:'debuffStatus', status:'statusSlow', power:1, msg:'The cold has gotten into your joints. You move a little stiffly.' },
+  { id:'ev_good_omen', name:'Good Omen', rarity:'common', scope:'any', type:'grantXp', xp:[3,8], msg:'Something about the moment feels significant, in a small, private way.' },
+  { id:'ev_market_chatter', name:'Market Chatter', rarity:'common', scope:'overworld', type:'flavor', msg:'Vendors somewhere nearby are arguing loudly about prices. Business as usual.' },
+  { id:'ev_quiet_moment', name:'A Quiet Moment', rarity:'common', scope:'any', type:'healPlayer', heal:[1,3], msg:'You take a moment to just breathe. It helps, a little.' },
+  { id:'ev_creaking_timber', name:'Creaking Timber', rarity:'common', scope:'overworld', type:'flavor', msg:'Something wooden groans nearby -- a sign, a cart, a gallows. You decide not to look too closely.' },
+  { id:'ev_stray_thought', name:'Intrusive Memory', rarity:'common', scope:'any', type:'flavor', msg:'A memory surfaces, unbidden and out of context, then sinks again before you can place it.' },
+  { id:'ev_local_gossip', name:'Local Gossip', rarity:'common', scope:'overworld', type:'flavor', msg:'You catch a fragment of gossip about someone whose name means nothing to you yet.' },
+
+  // ---------------------------------------------------------- UNCOMMON: real texture ----
+  { id:'ev_traveling_merchant', name:'Traveling Merchant', rarity:'uncommon', scope:'overworld', type:'grantGold', gold:[8,20], msg:'A traveling peddler pays you a fair price for a trinket you\u2019d forgotten you were carrying.' },
+  { id:'ev_lost_child', name:'A Child\u2019s Cry', rarity:'uncommon', scope:'overworld', type:'grantXp', xp:[10,20], msg:'You help a frightened, lost child find the road back toward the nearest settlement.' },
+  { id:'ev_bountiful_harvest', name:'Bountiful Harvest', rarity:'uncommon', scope:'overworld', type:'grantGold', gold:[10,25], msg:'A local field is bursting with an unusually good harvest, and the farmer is glad for the extra hands.', duration:60, multipliers:{ gold:1.1 } },
+  { id:'ev_wandering_minstrel', name:'Wandering Minstrel', rarity:'uncommon', scope:'overworld', type:'buffPlayer', stat:'crit', power:1, turns:80, msg:'A minstrel\u2019s song follows you down the road, and somehow it puts a spring back in your step.' },
+  { id:'ev_market_crash', name:'Market Crash', rarity:'uncommon', scope:'overworld', type:'flavor', msg:'Word spreads that prices have cratered in a nearby settlement -- a bad week to be selling, a good one to be buying.', duration:120, multipliers:{ gold:0.85 } },
+  { id:'ev_bumper_crop', name:'Prices Spike', rarity:'uncommon', scope:'overworld', type:'flavor', msg:'Scarcity has driven prices up sharply across the region.', duration:120, multipliers:{ gold:1.2 } },
+  { id:'ev_double_xp_hour', name:'A Teaching Moment', rarity:'uncommon', scope:'any', type:'flavor', msg:'Something about your recent close calls has sharpened your focus -- you\u2019re learning faster than usual.', duration:150, multipliers:{ xp:1.25 } },
+  { id:'ev_bandit_ambush', name:'Bandit Ambush', rarity:'uncommon', scope:'overworld', type:'spawnWave', pool:'bandits', count:2, msg:'Figures step out of the treeline, blades already drawn.' },
+  { id:'ev_wolf_pack', name:'Wolf Pack', rarity:'uncommon', scope:'overworld', type:'spawnWave', pool:'beasts', count:3, msg:'A pack of wolves has caught your scent, and they are not shy about it.' },
+  { id:'ev_grave_unrest', name:'Grave Unrest', rarity:'uncommon', scope:'overworld', type:'spawnWave', pool:'undead', count:2, msg:'The ground nearby has not stayed as settled as it should have.' },
+  { id:'ev_prison_break', name:'Prison Break', rarity:'uncommon', scope:'overworld', type:'spawnWave', pool:'bandits', count:2, msg:'A commotion in the distance suggests someone\u2019s custody didn\u2019t hold.' },
+  { id:'ev_refugee_wave', name:'Refugee Wave', rarity:'uncommon', scope:'overworld', type:'grantXp', xp:[8,15], msg:'A small group of refugees passes through, thin and wary, grateful for any directions you can offer.' },
+  { id:'ev_tax_collectors', name:'Tax Collectors', rarity:'uncommon', scope:'overworld', type:'grantGold', gold:[-8,-2], msg:'A pair of tax collectors catch up with you and insist on a \u201cfair contribution.\u201d' },
+  { id:'ev_festival_underway', name:'Festival Underway', rarity:'uncommon', scope:'overworld', type:'healPlayer', heal:[5,10], msg:'You stumble into a local festival in full swing -- free food, loud music, and a warm welcome.' },
+  { id:'ev_haunted_feeling', name:'A Watched Feeling', rarity:'uncommon', scope:'any', type:'debuffStatus', status:'statusFear', power:1, msg:'The unmistakable sense of being watched settles over you and refuses to leave.' },
+  { id:'ev_falling_rocks', telegraph:3, warnMsg:'Small stones start skittering down the slope above you.', fleeDistance:2, escapeMsg:'You scramble clear just as the slide lets go behind you.', name:'Rockslide', rarity:'uncommon', scope:'overworld', type:'damagePlayer', dmg:[2,6], dmgSource:'a rockslide', msg:'The rockslide finally lets go.' },
+  { id:'ev_migrating_herd', name:'Migrating Herd', rarity:'uncommon', scope:'overworld', type:'flavor', msg:'A herd of grazing animals thunders past at a respectful distance, kicking up a wall of dust.' },
+  { id:'ev_strange_static', name:'Strange Static', rarity:'uncommon', scope:'any', type:'flavor', msg:'The air itself seems to hum for a moment, like a held breath, then settles.' },
+  { id:'ev_bounty_notice', name:'Bounty Notice', rarity:'uncommon', scope:'overworld', type:'flavor', msg:'A freshly posted bounty notice catches your eye. Might be worth remembering.' },
+  { id:'ev_second_wind', name:'Second Wind', rarity:'uncommon', scope:'any', type:'healPlayer', heal:[8,16], msg:'Something -- luck, willpower, spite -- gives you a real burst of renewed strength.' },
+  { id:'ev_landslide_loot', name:'Exposed Cache', rarity:'uncommon', scope:'overworld', type:'grantGold', gold:[15,30], msg:'Recent erosion has exposed a small, long-buried cache someone never came back for.' },
+  { id:'ev_swarm_of_insects', name:'Insect Swarm', rarity:'uncommon', scope:'overworld', type:'debuffStatus', status:'statusPoison', power:2, msg:'A dense swarm of biting insects descends on you before you can get clear.' },
+
+  // ---------------------------------------------------------- RARE: dramatic, memorable ----
+  { id:'ev_meteor_shower', telegraph:2, warnMsg:'Faint streaks of light are starting to multiply overhead.', name:'Meteor Shower', rarity:'rare', scope:'any', type:'lightningBarrage', count:4, msg:'The sky tears open with streaks of fire, and not all of them stay in the sky.' },
+  { id:'ev_earthquake', telegraph:2, warnMsg:'A low rumble builds steadily underfoot.', name:'Earthquake', rarity:'rare', scope:'overworld', type:'scorchAround', radius:5, msg:'The ground bucks hard underfoot, and something structural nearby doesn\u2019t survive it.' },
+  { id:'ev_tornado', telegraph:5, warnMsg:'The sky turns a sickly green, and the wind starts pulling instead of pushing.', fleeDistance:4, escapeMsg:'You get behind solid cover just as the funnel tears past.', minDay:2, name:'Tornado', rarity:'rare', scope:'overworld', type:'damagePlayer', dmg:[4,10], dmgSource:'a tornado', msg:'The funnel cloud rips through, throwing debris everywhere.' },
+  { id:'ev_tsunami', telegraph:5, warnMsg:'The water along the shoreline pulls back much further than it should.', fleeDistance:4, escapeMsg:'You make it to higher ground just ahead of the water.', minDay:2, name:'Tsunami', rarity:'rare', scope:'overworld', type:'damagePlayer', dmg:[6,14], dmgSource:'a flash flood', msg:'A wall of water slams through the low ground.' },
+  { id:'ev_wildfire', telegraph:3, warnMsg:'You catch the smell of smoke on the wind, faint but getting stronger.', name:'Wildfire', rarity:'rare', scope:'overworld', type:'igniteAround', radius:4, msg:'The wildfire catches up to you, racing across the dry ground.', duration:40, multipliers:{} },
+  { id:'ev_firestorm', telegraph:3, warnMsg:'The heat haze on the horizon is starting to look less like haze and more like fire.', name:'Firestorm', rarity:'rare', scope:['abyssal_wastes','wyrmreach'], type:'igniteAround', radius:5, msg:'The firestorm rolls in, a wall of flame across the wastes.' },
+  { id:'ev_zombie_outbreak', telegraph:3, warnMsg:'A low, wrong moaning drifts across the graveyard on the wind.', minDay:3, name:'Undead Outbreak', rarity:'rare', scope:'overworld', type:'spawnWave', pool:'undead', count:5, spawnOpts:{ scaleMult:1.1 }, msg:'The dead finally claw their way up, and there are more of them than expected.' },
+  { id:'ev_settlement_raid', telegraph:4, warnMsg:'Distant warhorns sound, and smoke is starting to rise from somewhere too close.', minDay:3, name:'Raiding Warband', rarity:'rare', scope:'overworld', type:'spawnWave', pool:'bandits', count:4, spawnOpts:{ scaleMult:1.15 }, msg:'The warband arrives in force.' },
+  { id:'ev_plague_outbreak', telegraph:3, warnMsg:'A sickly-sweet smell starts creeping into the air.', name:'Plague Outbreak', rarity:'rare', scope:'overworld', type:'gasAround', turns:20, power:3, gasKind:'poison', msg:'The contagion finally takes hold nearby.', duration:0 },
+  { id:'ev_frenzy', telegraph:2, warnMsg:'Every animal nearby has gone eerily quiet, all at once.', minDay:2, name:'Blood Frenzy', rarity:'rare', scope:'overworld', type:'spawnWave', pool:'beasts', count:4, spawnOpts:{ scaleMult:1.1 }, msg:'Something snaps, and every wild animal for a mile goes mad at once.' },
+  { id:'ev_solar_flare', name:'Solar Flare', rarity:'rare', scope:['overworld','neo_kalyx','wyrmreach'], type:'forceWeather', weatherId:'heatwave', turns:80, msg:'The sun itself seems to swell for a moment, and the heat that follows is unnatural.' },
+  { id:'ev_cold_snap', name:'Sudden Cold Snap', rarity:'rare', scope:['overworld','the_boneyard'], type:'forceWeather', weatherId:'blizzard', turns:60, msg:'The temperature drops so fast it feels like a physical blow.' },
+  { id:'ev_rift_tremor', name:'Rift Tremor', rarity:'rare', scope:['lucid_expanse','the_drift','fourth_corridor','corrupted_kernel'], type:'blinkPlayer', msg:'Reality hiccups, and for a moment you are somewhere slightly different than where you were standing.' },
+  { id:'ev_ash_eruption', name:'Ash Eruption', rarity:'rare', scope:['abyssal_wastes','wyrmreach'], type:'forceWeather', weatherId:'ashfall', turns:100, msg:'Somewhere unseen, something enormous just exhaled, and the sky is full of ash for it.' },
+  { id:'ev_deep_current', telegraph:4, warnMsg:'The water around you starts pulling with real force.', fleeDistance:3, escapeMsg:'You fight clear of the current before it can drag you under.', minDay:2, name:'Deep Current', rarity:'rare', scope:['the_undertow'], type:'damagePlayer', dmg:[3,8], dmgSource:'a crushing current', msg:'The current finally overwhelms you.' },
+  { id:'ev_corrupted_surge', name:'Corruption Surge', rarity:'rare', scope:'any', type:'corruptionShift', amount:3, msg:'Something old and wrong presses briefly against the inside of your skull.' },
+  { id:'ev_blessed_rain', name:'Blessed Rain', rarity:'rare', scope:['overworld','gilded_choir'], type:'healPlayer', heal:[15,25], msg:'The rain that starts falling feels warm, gentle, and entirely too kind to be ordinary weather.' },
+  { id:'ev_stampede', telegraph:4, warnMsg:'You feel the ground start to tremble with distant hoofbeats.', fleeDistance:3, escapeMsg:'You throw yourself clear as the herd thunders past.', name:'Stampede', rarity:'rare', scope:'overworld', type:'damagePlayer', dmg:[3,9], dmgSource:'a stampede', msg:'The stampede breaks around the bend, and there is no time left to move.' },
+  { id:'ev_sinkhole', telegraph:3, warnMsg:'The ground underfoot sounds oddly hollow.', fleeDistance:2, escapeMsg:'You feel the ground start to give and scramble back in time.', name:'Sudden Sinkhole', rarity:'rare', scope:'overworld', type:'damagePlayer', dmg:[3,8], dmgSource:'a sinkhole', msg:'The ground gives way beneath you.' },
+  { id:'ev_avalanche', telegraph:5, warnMsg:'You hear a distant crack, and the whole slope shudders.', fleeDistance:4, escapeMsg:'You outrun the slide, snow spraying past just behind you.', minDay:2, name:'Avalanche', rarity:'rare', scope:['overworld','the_boneyard'], type:'damagePlayer', dmg:[5,12], dmgSource:'an avalanche', msg:'The slope lets go all at once, snow and rock together.' },
+  { id:'ev_thundersnow', name:'Thundersnow', rarity:'rare', scope:'overworld', type:'forceWeather', weatherId:'blizzard', turns:70, msg:'Lightning flashes through a wall of falling snow, an unsettling combination.' },
+  { id:'ev_mass_hysteria', name:'Mass Hysteria', rarity:'rare', scope:'overworld', type:'debuffStatus', status:'statusFear', power:3, msg:'A wave of unreasoning panic seems to move through the area like weather of its own.' },
+  { id:'ev_gravity_anomaly', name:'Gravity Anomaly', rarity:'rare', scope:['the_drift','fourth_corridor','the_interstice'], type:'blinkPlayer', msg:'Down stops meaning anything in particular for a few disorienting seconds.' },
+  { id:'ev_time_loop_stutter', name:'Time Stutter', rarity:'rare', scope:['fourth_corridor'], type:'flavor', msg:'You take a step you are almost certain you already took. The Corridor does not explain itself.' },
+  { id:'ev_spore_surge', telegraph:2, warnMsg:'The Bloom\u2019s canopy starts trembling, all at once.', name:'Spore Surge', rarity:'rare', scope:['the_bloom'], type:'gasAround', turns:15, power:2, gasKind:'confuse', msg:'The Bloom exhales all at once, and the air thickens with drifting spores.' },
+  { id:'ev_signal_storm', telegraph:2, warnMsg:'Every screen and streetlight nearby starts flickering out of sync.', name:'Signal Storm', rarity:'rare', scope:['neo_kalyx','corrupted_kernel'], type:'lightningBarrage', count:3, msg:'Every screen and streetlight for blocks flickers in perfect unison, then arcs.' },
+  { id:'ev_gear_jam', telegraph:4, warnMsg:'Something enormous, deep in the machinery, starts grinding in a way it shouldn\u2019t.', fleeDistance:3, escapeMsg:'You get clear of the machinery before the shrapnel reaches you.', minDay:2, name:'Grand Jam', rarity:'rare', scope:['clockwork_expanse'], type:'damagePlayer', dmg:[3,8], dmgSource:'flying shrapnel', msg:'The jam finally lets go, and shrapnel scatters everywhere.' },
+  { id:'ev_choir_dissonance', name:'A Note Goes Wrong', rarity:'rare', scope:['gilded_choir'], type:'debuffStatus', status:'statusConfuse', power:2, msg:'For one instant the endless, distant singing goes badly, unmistakably wrong.' },
+  { id:'ev_hoard_shift', name:'The Hoard Shifts', rarity:'rare', scope:['wyrmreach'], type:'grantGold', gold:[20,50], msg:'Somewhere close, an enormous pile of gold resettles with a sound like a landslide, and a little of it rolls your way.' },
+
+  // ---------------------------------------------------------- LEGENDARY: rare, dramatic, world-shaking ----
+  { id:'ev_zombie_apocalypse', telegraph:4, warnMsg:'*** The moaning from the graveyard has spread to every corner of the region, and it\u2019s getting louder. ***', name:'Undead Apocalypse', rarity:'legendary', scope:'overworld', type:'spawnWave', pool:'undead', count:8, spawnOpts:{ scaleMult:1.25 }, minDay:5, msg:'*** This is not a local outbreak anymore. The dead are rising for miles in every direction. ***' },
+  { id:'ev_settlement_war', telegraph:4, warnMsg:'*** War drums are audible from multiple directions now, and they are converging. ***', name:'War Between Settlements', rarity:'legendary', scope:'overworld', type:'warParty', count:6, warDuration:250, minDay:5, msg:'*** Two banners you recognize are on a collision course, and neither side looks interested in retreating. ***' },
+  { id:'ev_demon_invasion', telegraph:4, warnMsg:'*** The air itself starts to smell of sulfur, and the ground is warm to the touch. ***', name:'Invasion from Below', rarity:'legendary', scope:'overworld', type:'spawnWave', pool:'demons', count:5, spawnOpts:{ scaleMult:1.2 }, minDay:6, msg:'*** A tear opens in the world, and something with far too many teeth starts climbing out of it. ***' },
+  { id:'ev_dimensional_incursion', telegraph:4, warnMsg:'*** The stars overhead are flickering to the wrong colors. ***', name:'Dimensional Incursion', rarity:'legendary', scope:'overworld', type:'spawnWave', pool:'void', count:5, spawnOpts:{ scaleMult:1.2 }, minDay:6, msg:'*** The sky briefly shows the wrong stars, and things that do not belong here start walking out of the gap. ***' },
+  { id:'ev_great_meteor_storm', telegraph:3, warnMsg:'*** The whole sky is starting to streak with light, more with every passing minute. ***', name:'Great Meteor Storm', rarity:'legendary', scope:'any', type:'lightningBarrage', count:9, minDay:4, msg:'*** The sky is on fire, and it does not look like it plans to stop for a while. ***' },
+  { id:'ev_the_long_night', telegraph:3, warnMsg:'*** The sun is taking noticeably longer to rise than it should. ***', name:'The Long Night', rarity:'legendary', scope:'overworld', type:'forceWeather', weatherId:'fog', turns:400, minDay:6, msg:'*** Dawn simply doesn\u2019t come. The fog swallows the horizon and holds it. ***' },
+  { id:'ev_dimensional_tear', telegraph:3, warnMsg:'*** The ground beneath you has started to feel less like ground and more like a suggestion. ***', name:'A Tear Opens Beneath You', rarity:'legendary', scope:'overworld', type:'pullIntoInterstice', minDay:4, msg:'*** The ground gives way, not into stone, but into something between places entirely. ***' },
+  { id:'ev_great_plague', telegraph:4, warnMsg:'*** The smell reaches you from what must be miles off, and it is getting worse by the hour. ***', name:'The Great Plague', rarity:'legendary', scope:'overworld', type:'spawnWave', pool:'plague', count:6, spawnOpts:{ scaleMult:1.15 }, minDay:5, msg:'*** Whatever started as a rumor of sickness has become something you can smell from a mile off. ***' },
+  { id:'ev_wyrm_stirs', telegraph:3, warnMsg:'*** A deep vibration runs through the ground, slow and enormous, like breathing. ***', name:'A Wyrm Stirs', rarity:'legendary', scope:['wyrmreach'], type:'lightningBarrage', count:5, minDay:5, msg:'*** Somewhere deep in the hoard, something ancient rolls over in its sleep, and the whole realm feels it. ***' },
+  { id:'ev_choir_falls_silent', name:'The Choir Falls Silent', rarity:'legendary', scope:['gilded_choir'], type:'debuffStatus', status:'statusFear', power:4, minDay:5, msg:'*** For the first time since you arrived, the endless singing simply... stops. The silence is far worse. ***' },
+  { id:'ev_kernel_crash', telegraph:3, warnMsg:'*** Error messages are bleeding through the walls now, faster and faster. ***', name:'Kernel Crash', rarity:'legendary', scope:['corrupted_kernel'], type:'spawnWave', pool:'eldritch', count:6, spawnOpts:{ scaleMult:1.2 }, minDay:5, msg:'*** Something fundamental just failed to catch its own exception, and the error is spreading. ***' },
+  { id:'ev_recursion_collapse', telegraph:3, warnMsg:'*** The hallway is starting to repeat itself twice per step instead of once. ***', name:'Recursion Collapse', rarity:'legendary', scope:['fourth_corridor'], type:'spawnWave', pool:'void', count:6, spawnOpts:{ scaleMult:1.2 }, minDay:5, msg:'*** Every version of this hallway you have ever walked seems to be trying to occupy the same space at once. ***' },
+
+  // ---------------------------------------------------------- more COMMON/UNCOMMON to round the pools out (dimension-flavored) ----
+  { id:'ev_ash_drizzle', name:'Ash Drizzle', rarity:'common', scope:['abyssal_wastes','wyrmreach'], type:'flavor', msg:'A light dusting of warm ash settles over everything, like grey snow that never melts.' },
+  { id:'ev_ember_wind', name:'Ember Wind', rarity:'common', scope:['abyssal_wastes'], type:'flavor', msg:'A hot wind carries a scatter of drifting embers past, none quite close enough to catch anything.' },
+  { id:'ev_dream_echo', name:'Dream Echo', rarity:'common', scope:['lucid_expanse'], type:'flavor', msg:'You hear your own voice say something you don\u2019t remember saying, from somewhere just out of sight.' },
+  { id:'ev_floating_debris', name:'Floating Debris', rarity:'common', scope:['lucid_expanse'], type:'flavor', msg:'A perfectly ordinary chair drifts past at head height, unbothered by gravity.' },
+  { id:'ev_choir_hums', name:'The Choir Hums', rarity:'common', scope:['gilded_choir'], type:'healPlayer', heal:[2,5], msg:'The distant singing swells for a moment, and you feel unaccountably better for it.' },
+  { id:'ev_light_shifts', name:'The Light Shifts', rarity:'common', scope:['gilded_choir'], type:'flavor', msg:'The shadowless light around you shifts half a shade warmer, for no reason you can see.' },
+  { id:'ev_stars_hold_still', name:'The Stars Hold Still', rarity:'common', scope:['the_drift'], type:'flavor', msg:'You could swear one of the "stars" just blinked. It has stopped doing that by the time you focus on it.' },
+  { id:'ev_debris_field', name:'Debris Field', rarity:'common', scope:['the_drift'], type:'grantGold', gold:[2,10], msg:'You drift past enough salvageable wreckage to strip a little value off it.' },
+  { id:'ev_deja_vu', name:'D\u00e9j\u00e0 Vu', rarity:'common', scope:['fourth_corridor'], type:'flavor', msg:'This exact moment feels like it has already happened. It probably has.' },
+  { id:'ev_wrong_turn', name:'A Turn That Wasn\u2019t There', rarity:'common', scope:['fourth_corridor'], type:'flavor', msg:'You glance back the way you came, and the corridor has quietly rearranged itself behind you.' },
+  { id:'ev_bioluminescence', name:'Bioluminescent Flicker', rarity:'common', scope:['the_undertow'], type:'flavor', msg:'Something small and glowing drifts past in the current, gone before you can get a good look.' },
+  { id:'ev_pressure_pop', name:'Pressure Pop', rarity:'common', scope:['the_undertow'], type:'flavor', msg:'Your ears pop hard as the pressure shifts, and then, just as suddenly, settles.' },
+  { id:'ev_gear_chime', name:'Gear Chime', rarity:'common', scope:['clockwork_expanse'], type:'flavor', msg:'Somewhere close, a hundred small gears all click into place at once, a sound like distant applause.' },
+  { id:'ev_oil_slick', name:'Oil Slick', rarity:'common', scope:['clockwork_expanse'], type:'debuffStatus', status:'statusSlow', power:1, msg:'You step in a patch of leaked machine oil and nearly go down.' },
+  { id:'ev_spore_puff', name:'Spore Puff', rarity:'common', scope:['the_bloom'], type:'flavor', msg:'A nearby growth releases a small, harmless puff of spores as you pass.' },
+  { id:'ev_root_shift', name:'Roots Shift', rarity:'common', scope:['the_bloom'], type:'flavor', msg:'The ground itself seems to flex slightly, like something enormous just adjusted underneath it.' },
+  { id:'ev_process_hiccup', name:'Process Hiccup', rarity:'common', scope:['corrupted_kernel'], type:'flavor', msg:'The world stutters for a single visible frame, then resumes as if nothing happened.' },
+  { id:'ev_stray_packet', name:'Stray Packet', rarity:'common', scope:['corrupted_kernel'], type:'grantGold', gold:[2,8], msg:'A loose fragment of corrupted data resolves, unexpectedly, into something you can actually spend.' },
+  { id:'ev_neon_flicker', name:'Neon Flicker', rarity:'common', scope:['neo_kalyx'], type:'flavor', msg:'A sign somewhere above buzzes, flickers, and stabilizes on an advertisement for something that no longer exists.' },
+  { id:'ev_gridlock', name:'Gridlock', rarity:'common', scope:['neo_kalyx'], type:'flavor', msg:'Distant traffic noise swells into full gridlock, then, just as inexplicably, clears.' },
+  { id:'ev_bone_chime', name:'Bone Wind Chime', rarity:'common', scope:['the_boneyard'], type:'flavor', msg:'The wind finds something hollow to whistle through, an almost-musical sound you decide not to think about too hard.' },
+  { id:'ev_patient_dead', name:'The Patient Dead', rarity:'common', scope:['the_boneyard'], type:'flavor', msg:'Something unmoving nearby watches you pass without any particular urgency.' },
+  { id:'ev_hoard_glint', name:'A Glint in the Sand', rarity:'uncommon', scope:['wyrmreach'], type:'grantGold', gold:[5,15], msg:'Something gold catches the light half-buried in the sand. You decide it\u2019s worth the detour.' },
+  { id:'ev_scale_shed', name:'Shed Scale', rarity:'uncommon', scope:['wyrmreach'], type:'flavor', msg:'You find a single shed scale, the size of a shield, resting against a dune. Whatever left it is not nearby. You hope.' },
+  { id:'ev_current_shift', name:'Current Shift', rarity:'uncommon', scope:['the_undertow'], type:'blinkPlayer', msg:'A sudden shift in the current carries you sideways before you can brace against it.' },
+  { id:'ev_seedvault_pulse', name:'Seedvault Pulse', rarity:'uncommon', scope:['the_bloom'], type:'healPlayer', heal:[6,12], msg:'A slow pulse moves through the Bloom\u2019s root network, and you feel it pass through you too, oddly nourishing.' },
+  { id:'ev_assembly_surge', name:'Assembly Surge', rarity:'uncommon', scope:['clockwork_expanse'], type:'buffPlayer', stat:'armor', power:2, turns:60, msg:'A passing maintenance swarm mistakes you for machinery and tightens a few loose fittings before moving on.' },
+  { id:'ev_server_glitch', name:'Server Glitch', rarity:'uncommon', scope:['neo_kalyx'], type:'grantXp', xp:[6,14], msg:'You exploit a momentary glitch in a public terminal for a small windfall of useful information.' },
+];
+
+// ---------------------------------------------------------------- SCHEDULER ----
+let activeWorldEvents = []; // [{ def, turnsLeft }]
+let lastEventCheckDay = -1;
+// Fairness/QA pass: hard floor on how close together two events can roll, regardless of how the
+// probability happens to land. 120 turns is a small fraction of a day (DAY_LENGTH=1440) -- short
+// enough that it never meaningfully suppresses the intended ~1-1.5 events/day pace, long enough
+// that "two disasters back to back" simply cannot happen by bad luck.
+let lastWorldEventTurn = -99999;
+const MIN_EVENT_GAP = 120;
+function eligibleEventsFor(zk) {
+  const day = getTimeInfo().day;
+  return WORLD_EVENTS.filter(e => {
+    if (e.minDay && day < e.minDay) return false;
+    if (e.scope === 'overworld') return zk === 'overworld';
+    if (e.scope === 'any') return true;
+    if (Array.isArray(e.scope)) return e.scope.includes(zk);
+    return false;
+  });
+}
+function rollWorldEvent(zk) {
+  const pool = eligibleEventsFor(zk);
+  if (!pool.length) return null;
+  const total = pool.reduce((s, e) => s + (EVENT_RARITY_WEIGHT[e.rarity] || 1), 0);
+  let r = Math.random() * total;
+  for (const e of pool) { r -= (EVENT_RARITY_WEIGHT[e.rarity] || 1); if (r <= 0) return e; }
+  return pool[0];
+}
+// Design pass: overlapping events. Rather than a hard wall that makes a second event flatly
+// impossible once N are already running, each currently in-flight event (an active duration
+// buff/debuff, or a threat still in its warning window) multiplies the odds of a NEW one landing
+// by DECAY_PER_CONCURRENT_EVENT. One thing happening barely dents the odds of another; two things
+// happening at once makes a third genuinely rare; a fourth is a real "everything happened at
+// once" story rather than routine noise. Never literally zero, just rarer with every additional
+// overlap -- geometric decay, not a cliff. ABSOLUTE_MAX_CONCURRENT_EVENTS is a pure safety valve
+// against pathological runaway stacking over an extremely long save, not a design target; the
+// decay below should make reaching it vanishingly unlikely in ordinary play.
+const DECAY_PER_CONCURRENT_EVENT = 0.35;
+const ABSOLUTE_MAX_CONCURRENT_EVENTS = 6;
+function concurrentEventLoad() { return activeWorldEvents.length + pendingWorldEvents.length; }
+function concurrentEventLoadFactor() { return Math.pow(DECAY_PER_CONCURRENT_EVENT, concurrentEventLoad()); }
+function tickWorldEvents() {
+  if (!player.alive) return;
+  // duration-based events already running: count down and clean up. Left unconditional (not
+  // gated behind the dungeon check below) -- the world keeps moving even while the player is off
+  // in a dungeon instance, the same way a real festival wouldn't just pause because you ducked
+  // into a cave.
+  if (activeWorldEvents.length) {
+    for (const ev of activeWorldEvents) ev.turnsLeft--;
+    activeWorldEvents = activeWorldEvents.filter(ev => ev.turnsLeft > 0);
+  }
+  // Telegraphed threats already warned about keep counting down and resolving regardless of
+  // dungeon state too -- see scheduleOrApplyWorldEvent/tickPendingWorldEvents above. Marked
+  // lightning strikes tick the same way -- see resolveLightningStrike's own zone-mismatch guard.
+  tickPendingWorldEvents();
+  if (!player.alive) return;
+  tickLightningStrikes();
+  if (!player.alive) return;
+  // Rolling brand-new events is gated behind curIsDungeon(), though: zoneKey() only ever
+  // recognizes 'overworld' or a dimension id, so without this guard it would silently misreport
+  // 'overworld' while the player is actually standing in a dungeon instance -- letting
+  // overworld-scoped events (wildfires, raids, weather changes) roll and apply their real,
+  // unguarded effects against dungeon terrain/monsters that were never meant to be in scope.
+  // Dungeons are meant to be self-contained instances; nothing about "a meteor shower" or "a
+  // bandit raid" should be reaching in from outside one.
+  //
+  // Also gated behind MIN_EVENT_GAP, a hard cooldown measured from the last time an event
+  // actually rolled successfully (not just any tick). The per-turn and daily probabilities below
+  // already average out to roughly one to one and a half events per in-game day on their own --
+  // perfectly reasonable pacing -- but probability alone can still get unlucky and cluster two
+  // hits close together. This cooldown makes that structurally impossible rather than just
+  // unlikely, which is what actually guarantees "never annoying" instead of merely "usually
+  // fine." concurrentEventLoadFactor() layers the rare-overlap possibility back in on top of that
+  // floor: even within the same MIN_EVENT_GAP-respecting cadence, a second/third thing landing
+  // while the first is still resolving gets rarer with each one already in flight, never
+  // impossible.
+  if (!curIsDungeon() && (turnCount - lastWorldEventTurn) >= MIN_EVENT_GAP) {
+    const zk = zoneKey();
+    const loadFactor = concurrentEventLoadFactor();
+    // small constant per-turn chance, so events aren't strictly bound to day boundaries
+    if (Math.random() < 0.0008 * loadFactor) {
+      const def = rollWorldEvent(zk);
+      if (def && concurrentEventLoad() < ABSOLUTE_MAX_CONCURRENT_EVENTS) { scheduleOrApplyWorldEvent(def); lastWorldEventTurn = turnCount; }
+    }
+    // guaranteed roll-opportunity on a new day
+    const day = getTimeInfo().day;
+    if (day !== lastEventCheckDay) {
+      lastEventCheckDay = day;
+      if (Math.random() < 0.35 * loadFactor) {
+        const def = rollWorldEvent(zk);
+        if (def && concurrentEventLoad() < ABSOLUTE_MAX_CONCURRENT_EVENTS) { scheduleOrApplyWorldEvent(def); lastWorldEventTurn = turnCount; }
+      }
+    }
+  }
+  if (player.alive) tickInterstice();
+  tickWarParties();
+}
+
+// ============================================================================
+// ---- THE INTERSTICE: pocket dimension for the "pulled into another dimension" event ----
+// Not reached through the normal rift/key mechanic every other dimension uses -- this one only
+// ever opens underneath the player, involuntarily, as the payoff of ev_dimensional_tear. Getting
+// back out is an active objective, not a wait-it-out timer alone: unbound things wander in from
+// the seams and killing them visibly weakens the tear (walks turnsLeft down faster), while a
+// guaranteed backstop timer means the player is never permanently stranded even if they never
+// find a fight. Matches the shape of every other dimension (its own biome table + classify fn,
+// its own tint/entryFlavor) rather than being a bare arena.
+// ============================================================================
+const INTERSTICE_BIOMES = {
+  unwoven_expanse: { name:'Unwoven Expanse', walkable:true, glyph:'.', color:'#9a70e0', bg:'#100a1c', encounter:[['void_drifter',4],['still_walker',3]] },
+  seam_light:      { name:'Seam Light',      walkable:true, glyph:'"', color:'#e0c0ff', bg:'#160f28', encounter:[['fold_wraith',4],['angle_eater',3]] },
+  shattered_null:  { name:'Shattered Null',  walkable:false, glyph:'\u2248', color:'#2a1a40', bg:'#050308', encounter:[] },
+};
+function classifyInterstitceBiome(elev, heat) {
+  if (elev > 0.7) return 'shattered_null';
+  if (heat > 0.55) return 'seam_light';
+  return 'unwoven_expanse';
+}
+// NOTE: DIMENSIONS.the_interstice itself is registered further down, right after the main
+// DIMENSIONS object literal closes (const DIMENSIONS is declared later in the file, so assigning
+// onto it up here at top-level would run before that declaration executes).
+function pullPlayerIntoInterstice() {
+  if (curIsDimension() && player.dimensionId === 'the_interstice') return; // already here
+  if (!player.dimensionReturn) {
+    player.dimensionReturn = { mode: player.mode, x: player.x, y: player.y, dungeonId: player.dungeonId, dungeonDepth: player.dungeonDepth };
+  }
+  player.mode = 'dimension'; player.dimensionId = 'the_interstice';
+  const a = DIMENSIONS.the_interstice.arrival;
+  player.x = a.cx * CH + a.lx; player.y = a.cy * CH + a.ly;
+  player.interstice = { turnsLeft: 70 };
+  Sound.play('gate');
+  log(`*** ${DIMENSIONS.the_interstice.entryFlavor} ***`);
+}
+function returnFromInterstice(msg) {
+  const r = player.dimensionReturn || { mode: 'overworld', x: player.x, y: player.y };
+  player.mode = r.mode; player.dungeonId = r.dungeonId || null; player.dungeonDepth = r.dungeonDepth || 0;
+  player.x = r.x; player.y = r.y; player.dimensionId = null;
+  player.dimensionReturn = null;
+  player.interstice = null;
+  Sound.play('gate');
+  log(msg || '*** The seam finally gives way, and the world spits you back out where you started. ***');
+}
+function tickInterstice() {
+  if (!player.alive || !(curIsDimension() && player.dimensionId === 'the_interstice' && player.interstice)) return;
+  player.interstice.turnsLeft--;
+  if (Math.random() < 0.03) spawnEventMonsters('void', 1, { tagInterstitial:true, scaleMult:1.1 });
+  if (player.interstice.turnsLeft <= 0) returnFromInterstice();
+}
+
 let logMessages = [];
 // ---- v3: death log/death screen support -- tracks what most recently hurt the player so a
 // non-combat death (poison, fire, falling, drowning, a trap) still gets an accurate cause on the
@@ -9534,10 +10759,20 @@ function isFlammableTile(t) {
          t.feature === 'door' || t.feature === 'tentwall' || t.feature === 'grass' || t.feature === 'woodbridge';
 }
 function trackFxTile(t, x, y) { if (!t._fxTracked) { t._fxTracked = true; activeFxTiles.push({ t, x, y }); } }
-function igniteTile(x, y, turns) {
+function igniteTile(x, y, turns, force) {
   const t = curTileAt(x, y);
   if (!t || !t.walkable) return false;
   if (isWaterTile(t)) { steamBurst(x, y); return false; } // fire meets water -> scalding steam, no burning
+  // Weather/Climate overhaul: rain/snow/blizzard make things much harder (or, at the extreme,
+  // outright impossible) to set alight; drought/heatwave make it easier. `force` (a direct
+  // lightning strike) bypasses the wetness gate but still respects an outright downpour, since
+  // even a bolt doesn't ignite something already drenched.
+  if (typeof weatherIgniteChanceMult === 'function') {
+    const wetMult = weatherIgniteChanceMult();
+    if (wetMult <= 0) return false;
+    if (!force && wetMult < 1 && Math.random() > wetMult) return false;
+    turns = Math.round(turns * (wetMult > 1 ? wetMult : 1));
+  }
   t.fireTurns = Math.max(t.fireTurns || 0, turns);
   trackFxTile(t, x, y);
   return true;
@@ -10069,6 +11304,8 @@ function getActiveStatusEffects(e) {
   if (e.statusFear > 0) out.push({ label: 'Afraid', turns: e.statusFear, kind: 'debuff' });
   if (e.statusConfuse > 0) out.push({ label: 'Confused', turns: e.statusConfuse, kind: 'debuff' });
   if (e.statusSlow > 0) out.push({ label: 'Slowed', turns: e.statusSlow, kind: 'debuff' });
+  if (e === player && e.statusChill > 0) out.push({ label: e.statusChill >= 14 ? 'Freezing' : 'Chilled', turns: e.statusChill, kind: 'debuff' });
+  if (e === player && e.statusHeat > 0) out.push({ label: e.statusHeat >= 14 ? 'Overheating' : 'Sweltering', turns: e.statusHeat, kind: 'debuff' });
   if (e.berserked) out.push({ label: 'Berserk (empowered)', turns: null, kind: 'buff' });
   if (e.burrowed) out.push({ label: 'Burrowed underground', turns: e.burrowTimer || null, kind: 'buff' });
   return out;
@@ -10162,10 +11399,14 @@ function repairItem(it, amount) {
 }
 
 // ---------------- combat ----------------
-function rollHit(att, def) {
+function rollHit(att, def, ranged) {
   let chance = 0.6 + (effDex(att) - effDex(def)) * 0.025;
   if (att === player) chance -= weaponStrDeficit() * 0.02;
   if (def === player) chance += armorStrDeficit() * 0.015; // over-encumbered defenders are easier to hit
+  // Weather/Climate overhaul: wind, storms, and low visibility make ranged attacks specifically
+  // less reliable (a thrown weapon or arrow drifts, a sandstorm blots out the target) -- melee is
+  // unaffected since it doesn't rely on a flight path.
+  if (ranged) chance += weatherRangedAccuracyMod();
   chance = Math.max(0.1, Math.min(0.95, chance));
   return Math.random() < chance;
 }
@@ -10197,7 +11438,7 @@ function recommendedLevelForPower(power) { return Math.max(1, Math.round(3 + (po
 
 function gainXP(amount) {
   if (player.level >= LEVEL_CAP) return;
-  amount = Math.round(amount * (1 + (player.xpBonus || 0)));
+  amount = Math.round(amount * (1 + (player.xpBonus || 0)) * worldEventMultiplier('xp'));
   player.xp += amount; log(`You gain ${amount} XP.`);
   while (player.level < LEVEL_CAP && player.xp >= player.xpNext) { player.xp -= player.xpNext; levelUp(); }
   if (player.level >= LEVEL_CAP) { player.xp = 0; player.xpNext = 0; }
@@ -11051,6 +12292,7 @@ function currentVisRadius() {
   radius += player.visionBonus || 0;
   if (curIsDungeon() && player.permaNightVision) radius += 3;
   if (getBuff('nightvision') > 0) radius += 5;
+  radius += weatherVisRadiusDelta();
   return Math.max(3, radius);
 }
 function markSeen() {
@@ -13458,6 +14700,20 @@ function render() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const visRadius = currentVisRadius();
+  // Design pass: precompute a lookup of any marked lightning-strike tiles in the CURRENT zone so
+  // the main per-tile loop below can flag them cheaply (O(1) per tile) rather than scanning the
+  // whole pendingLightningStrikes list per tile. This is what actually makes a telegraphed strike
+  // avoidable in practice, not just in theory -- the player can see exactly which tiles to stay
+  // off of, for the entire warning window, not just infer it from a log message.
+  let dangerZoneLookup = null;
+  if (pendingLightningStrikes.length) {
+    const curZk = curIsDungeon() ? null : zoneKey();
+    if (curZk) {
+      dangerZoneLookup = new Map();
+      for (const p of pendingLightningStrikes) { if (p.zk === curZk) dangerZoneLookup.set(p.x + ',' + p.y, p); }
+      if (!dangerZoneLookup.size) dangerZoneLookup = null;
+    }
+  }
 
   for (let sy = 0; sy < v.h; sy++) {
     for (let sx = 0; sx < v.w; sx++) {
@@ -13502,6 +14758,23 @@ function render() {
           ctx.fillStyle = pendingTarget.kind === 'blink' ? '#5ae0ff' : (pendingTarget.kind === 'throw' ? '#e0a850' : (pendingTarget.kind === 'companion_goto' ? '#6ae06a' : '#e05a5a'));
           ctx.fillRect(sx*v.ts, sy*v.ts, v.ts, v.ts);
           ctx.restore();
+        }
+        // Design pass: the actual "you can see exactly where not to stand" half of the lightning
+        // fairness contract -- a pulsing red warning tile plus a bright '!' glyph, visible for
+        // the strike's entire remaining countdown, not just the instant before it lands.
+        if (dangerZoneLookup) {
+          const marked = dangerZoneLookup.get(wx + ',' + wy);
+          if (marked) {
+            ctx.save();
+            ctx.globalAlpha = 0.32 + 0.24 * (settings.reduceMotion ? 0 : Math.abs(Math.sin(turnCount * 2.2 + sx + sy)));
+            ctx.fillStyle = '#ff3a2a';
+            ctx.fillRect(sx*v.ts, sy*v.ts, v.ts, v.ts);
+            ctx.restore();
+            ctx.save();
+            ctx.fillStyle = '#ffe860';
+            ctx.fillText('!', px, py);
+            ctx.restore();
+          }
         }
       } else if (t.seen) {
         ctx.fillStyle = '#0a0a0a';
@@ -13601,6 +14874,7 @@ function render() {
       ctx.restore();
     }
   }
+  renderWeatherOverlay();
 
   updateSidebar();
 }
@@ -13708,7 +14982,7 @@ function dropLoot(def) {
   // Anything a purpose-built throwing weapon stuck into this entity while it was still alive
   // (see resolveThrownWeapon) comes loose and drops with the body now.
   if (def.stuckItems && def.stuckItems.length) def.stuckItems.forEach(it => addItemToList(items, it));
-  const goldMult = 1 + (player.goldBonus || 0);
+  const goldMult = (1 + (player.goldBonus || 0)) * worldEventMultiplier('gold');
   if (def.guaranteedDrops && def.guaranteedDrops.length) def.guaranteedDrops.forEach(it => addItemToList(items, it));
   // Boss-specific unique weapon/accessory (a chance roll, independent of any guaranteedDrops the
   // boss might also carry -- e.g. Hollow Signal can drop both its Ignition Core key item AND,
@@ -13854,7 +15128,7 @@ function onDeath(def, killer) {
   if (isPlayerOwnedKiller(killer) || def.harmedByPlayer) {
     gainXP(def.xp || 1);
     if (def.kind === 'monster') { player.killCounts[def.monsterId] = (player.killCounts[def.monsterId] || 0) + 1; checkBountyQuests(def.monsterId); checkChoirDiscord(def); checkInfernalDominance(def); checkWyrmreachHunter(def); checkGuardianCollection(def); }
-    if (def.kind === 'npc' && !curIsDungeon()) { commitCrime(getRegionKey(def.x, def.y), bountyValueFor(def)); }
+    if (def.kind === 'npc' && !curIsDungeon() && !isInActiveWar(def)) { commitCrime(getRegionKey(def.x, def.y), bountyValueFor(def)); }
   } else if (killer && killer.kind === 'npc' && def.kind === 'monster' && (NPC_DEFENDER_ROLES.has(killer.roleId) || NPC_HUNTER_ROLES.has(killer.roleId))) {
     // the town defended itself while you weren't the one swinging the sword -- see the settlement
     // defense memory system near NPC_DEFENDER_ROLES for how this later surfaces as a rumor.
@@ -14182,7 +15456,7 @@ function openDialogue(npc) {
       { key: 'b', label: 'Attack', action: () => {
         const wasHostile = npc.hostile;
         npc.hostile = true; closeModal(); doAttack(player, npc);
-        if (!wasHostile && !curIsDungeon()) commitCrime(getRegionKey(npc.x, npc.y), 5);
+        if (!wasHostile && !curIsDungeon() && !isInActiveWar(npc)) commitCrime(getRegionKey(npc.x, npc.y), 5);
         endTurn();
       }},
       { key: 'c', label: 'Leave', action: () => closeModal() },
@@ -14287,7 +15561,7 @@ function openDialogue(npc) {
   opts.push({ key: nextKey(), label: 'Attack', action: () => {
     const wasHostile = npc.hostile;
     npc.hostile = true; closeModal(); doAttack(player, npc);
-    if (!wasHostile && !curIsDungeon()) commitCrime(getRegionKey(npc.x, npc.y), 5);
+    if (!wasHostile && !curIsDungeon() && !isInActiveWar(npc)) commitCrime(getRegionKey(npc.x, npc.y), 5);
     endTurn();
   }});
   opts.push({ key: nextKey(), label: 'Leave', action: () => closeModal() });
@@ -15187,7 +16461,7 @@ function paySpellCost(ability) {
 // ---- extended effect application: confuse status, blinklike (shared by phantom step / time skip /
 // cyber blink implants / mutation warp step), and environment destruction on fire-flagged abilities ----
 function applyEffectToTarget(spell, t) {
-  const dmgMult = (1 + (player.spellDmgBonus || 0) + (abilityPoolOf(spell.id) === 'technique' ? (player.techniqueDmgBonus || 0) : 0) + (abilityPoolOf(spell.id) === 'mutation' ? (player.mutationDmgBonus ? player.mutationDmgBonus/20 : 0) + (player.eldritchDmgBonus || 0) : 0)) * abilityPenaltyFactor(abilityRequirementDeficit(spell)) * playerLevelPowerMult(player.level);
+  const dmgMult = (1 + (player.spellDmgBonus || 0) + (abilityPoolOf(spell.id) === 'technique' ? (player.techniqueDmgBonus || 0) : 0) + (abilityPoolOf(spell.id) === 'mutation' ? (player.mutationDmgBonus ? player.mutationDmgBonus/20 : 0) + (player.eldritchDmgBonus || 0) : 0)) * abilityPenaltyFactor(abilityRequirementDeficit(spell)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell);
   // martial techniques push the wielded weapon far past normal use -- unlike plain attacks,
   // these do chip away at durability (see doAttack() for the equivalent crit-only weapon wear).
   if (abilityPoolOf(spell.id) === 'technique' && ['damage','execute','smite','drain'].includes(spell.type) && player.equipment.hand) {
@@ -15562,7 +16836,7 @@ function resolveSpellAtTile(spell, wx, wy) {
     log(hitCount ? `${spell.name} erupts, catching ${hitCount} in the blast!` : `${spell.name} erupts against empty ground.`);
     if (spell.knockback) hitEntities.forEach(e => knockbackEntity(e, wx, wy, spell.knockback));
     if (spell.gravityPull) hitEntities.forEach(e => gravityPullEntity(e, wx, wy, spell.gravityPull));
-    if (spell.chainLightning && hitEntities.length) chainLightningFrom(spell, hitEntities[0].x, hitEntities[0].y, new Set(hitEntities), 3, (1 + (player.spellDmgBonus||0)) * playerLevelPowerMult(player.level) * 0.65);
+    if (spell.chainLightning && hitEntities.length) chainLightningFrom(spell, hitEntities[0].x, hitEntities[0].y, new Set(hitEntities), 3, (1 + (player.spellDmgBonus||0)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell) * 0.65);
     return;
   }
   if (spell.pierceLine) {
@@ -15584,7 +16858,7 @@ function resolveSpellAtTile(spell, wx, wy) {
     if (e.alive !== false && e.hp > 0) {
       if (spell.knockback) knockbackEntity(e, player.x, player.y, spell.knockback);
       if (spell.gravityPull) gravityPullEntity(e, player.x, player.y, spell.gravityPull);
-      if (spell.chainLightning) chainLightningFrom(spell, e.x, e.y, new Set([e]), 3, (1 + (player.spellDmgBonus||0)) * playerLevelPowerMult(player.level) * 0.65);
+      if (spell.chainLightning) chainLightningFrom(spell, e.x, e.y, new Set([e]), 3, (1 + (player.spellDmgBonus||0)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell) * 0.65);
     }
   }
   else log(`${spell.name} strikes empty ground.`);
@@ -15707,7 +16981,7 @@ function doAttack(att, def) {
   // just the player -- plus the player's own buff/encumbrance modifiers layered on top when it's them.
   const dodgeChance = (def.dodgeChance || 0) + (def === player ? getBuff('evasion') - armorStrDeficit() * 0.01 : 0);
   if (dodgeChance > 0 && Math.random() < dodgeChance) { log(`${defName === 'you' ? 'You' : def.name} nimbly dodge${defName === 'you' ? '' : 's'} ${attName === 'You' ? 'the' : att.name + "'s"} attack!`); return; }
-  if (!rollHit(att, def)) {
+  if (!rollHit(att, def, !!(weapon && weapon.ranged))) {
     Sound.play(isPlayer ? 'miss' : 'enemyMiss');
     log(`${attName} miss${isPlayer ? '' : 'es'} ${defName}.`);
     if (settings.showDamageNumbers) spawnFloatingText(def.x, def.y, 'Miss', '#8a7f6a');
@@ -15778,6 +17052,9 @@ function doAttack(att, def) {
   if (def === player && curIsDimension() && player.dimensionId === 'wyrmreach' && att.faction === 'dragon') {
     dmg = Math.round(dmg * (1 - wyrmreachRestraintReduction()));
   }
+  // Weather/Climate & Day-Night overhaul: nocturnal/celestial factions swing with time of day,
+  // same multiplicative slot as the dimension mechanics just above.
+  dmg *= timeOfDayDamageMult(att.faction);
   let crit = false;
   const critChance = 0.08 + (att.critBonus || 0) + (isPlayer ? getBuff('crit') : 0);
   if (Math.random() < critChance) { dmg *= (2 + (isPlayer ? (player.critDmgBonus || 0) : 0)); crit = true; }
@@ -15972,6 +17249,16 @@ function isHostileTo(a, b) {
   if (a.kind === 'monster' && a.behavior === 'flee') return false; // prey/passive creatures never start a fight
   if (a.grudgeAgainst instanceof Set && a.grudgeAgainst.has(b)) return true;
 
+  // War Between Settlements: real NPC-vs-NPC warfare, not a spawned-monster stand-in. An invading
+  // war party is tagged with `.warKingdom` when spawned (see spawnWarParty below). Any two
+  // settlement-faction NPCs with DIFFERING warKingdom tags are hostile to each other regardless
+  // of the normal "same faction never fights itself" rule further down -- this is what lets two
+  // groups of ordinary town guards actually fight each other using the exact same AI
+  // (pickHostileTarget, doAttack, alertNearbyAllies) that already drives every other NPC fight in
+  // the game, with zero new combat code required. An invader (tag set) against an ordinary local
+  // guard (tag unset) still reads as hostile, since undefined !== 'SomeKingdom'.
+  if (a.kind === 'npc' && b.kind === 'npc' && (a.warKingdom || b.warKingdom) && a.warKingdom !== b.warKingdom) return true;
+
   if (a === player || b === player) {
     const mon = a === player ? b : a;
     if (mon.kind === 'npc') return !!mon.hostile;
@@ -16104,6 +17391,7 @@ function monsterCastAt(caster, ab, target) {
     case 'bolt': case 'drain': {
       let dmg = randInt(Math.random, ab.power[0], ab.power[1]);
       dmg = Math.round(dmg * (0.4 + 0.6 * (caster.powerScale || 1))); // gentler than raw powerScale so casters don't dwarf melee at high depth
+      dmg = Math.round(dmg * weatherElementMultiplier(ab)); // Weather/Climate overhaul: monster bolts respect the same elemental weather swings player spells do
       dmg = Math.max(1, dmg - Math.floor(getArmorOf(target) / 2));
       if (target === player) {
         if (ab.element === 'fire' && player.fireDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - player.fireDmgReduction)));
@@ -17370,6 +18658,21 @@ const DIMENSIONS = {
     outpost: { cx: -2, cy: 1, lx: 12, ly: 12 },
     entryFlavor: "The air is hot enough to taste, and everywhere you look, something is glinting -- gold, mostly, though not exclusively, and none of it stacked by anyone who was ever in a hurry.",
   },
+};
+// ---- the Interstice: registered onto DIMENSIONS here (rather than up where INTERSTICE_BIOMES/
+// classifyInterstitceBiome are defined) purely so this assignment runs after the const DIMENSIONS
+// object literal above has actually been created. See the Weather/Climate/World Events overhaul,
+// pullPlayerIntoInterstice().
+DIMENSIONS.the_interstice = {
+  id: 'the_interstice', name: 'the Interstice', tint: '#9a70e0',
+  biomes: INTERSTICE_BIOMES, classify: classifyInterstitceBiome, noiseSalt: 111319, fillBiome: 'unwoven_expanse',
+  arrival: { cx: 0, cy: 0, lx: 12, ly: 12 },
+  // No sub-dungeon of its own -- this pocket dimension only ever exists for the short, forced
+  // visit ev_dimensional_tear triggers, not as a place to be explored at leisure like the other
+  // twelve. generateDimensionChunk still iterates dim.subDungeons unconditionally, so this needs
+  // to be present (just empty) rather than omitted.
+  subDungeons: [],
+  entryFlavor: 'There is no floor, exactly, just the memory of one, and no sky either, just the idea that up used to mean something. You are between places, and the seam is already starting to notice you.',
 };
 
 // Guarantees a given point in a dimension chunk can actually reach open ground beyond the
@@ -21399,7 +22702,7 @@ function movePlayer(dx, dy, forceAttack) {
           const wasHostile = target.hostile;
           target.hostile = true;
           doAttack(player, target);
-          if (!wasHostile && !curIsDungeon()) commitCrime(getRegionKey(target.x, target.y), 5);
+          if (!wasHostile && !curIsDungeon() && !isInActiveWar(target)) commitCrime(getRegionKey(target.x, target.y), 5);
           endTurn();
         } },
         { label: 'No, never mind', action: () => {} },
@@ -21707,6 +23010,10 @@ function endTurn() {
   processTerrainEffects();
   if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
   applyBiomeEnvironmentalEffect();
+  if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
+  tickWeather();
+  if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
+  tickWorldEvents();
   if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
   tickChoirDiscord();
   if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
@@ -22796,6 +24103,28 @@ function updateSidebar() {
     document.getElementById('corruption-text').textContent = `Corruption ${Math.round(player.corruption)}/100 · Mutations ${player.mutations.length}`;
     corruptionRow.classList.remove('hidden');
   } else corruptionRow.classList.add('hidden');
+  const weatherRow = document.getElementById('weather-row');
+  if (weatherRow) {
+    if (curIsDungeon()) {
+      weatherRow.classList.add('hidden');
+    } else {
+      const wdef = currentWeatherDef();
+      const temp = currentTemperature();
+      const activeEventNames = activeWorldEvents.map(ev => ev.def.name);
+      let txt = `<span style="color:${wdef.color}">${wdef.name}</span> · ${temperatureLabel(temp)}`;
+      if (player.interstice) txt += ` · <span style="color:#c060ff">Tear closing in ${player.interstice.turnsLeft}</span>`;
+      else if (activeEventNames.length) txt += ` · <span style="color:#e0a020">${activeEventNames.join(', ')}</span>`;
+      // Fairness/QA pass: a persistent, hard-to-miss reminder that something telegraphed is
+      // still counting down, without naming it -- the log line already gave the specific
+      // warning; this is just so a player who scrolled past it (or tabbed away) doesn't get
+      // blindsided anyway. Kept deliberately vague ("something's coming") rather than showing
+      // the event name, so the tension of not knowing exactly what stays intact.
+      const pendingTurns = nearestPendingEventTurns();
+      if (pendingTurns !== null) txt += ` · <span style="color:#e0603a">\u26a0 something's coming (${pendingTurns})</span>`;
+      weatherRow.innerHTML = `<div class="bar-text" id="weather-text" style="line-height:1.5">${txt}</div>`;
+      weatherRow.classList.remove('hidden');
+    }
+  }
   document.getElementById('level-text').textContent = `Lv ${player.level}`;
   document.getElementById('xp-text').textContent = `XP ${player.xp}/${player.xpNext}`;
   document.getElementById('gold-text').textContent = `Gold: ${player.gold}${player.talentPoints?` · Talent pts: ${player.talentPoints}`:''}`;
@@ -22822,7 +24151,7 @@ function updateSidebar() {
     const k = getKingdom(Math.floor(player.x/CH), Math.floor(player.y/CH));
     base = `${place} — ${k.name}`;
   }
-  document.getElementById('loc-text').textContent = base + (curIsDungeon() || curIsDimension() ? '' : ` · ${formatTimeInfo()}`);
+  document.getElementById('loc-text').textContent = base + (curIsDungeon() ? '' : ` · ${formatTimeInfo()}`);
   document.getElementById('pos-text').textContent = `(${player.x}, ${player.y}) · zoom ${zoomIndex+1}/${ZOOM_LEVELS.length}${settings.showTurnCounter ? ` · Turn ${turnCount}` : ''}`;
 
   const questCount = player.quests.filter(q => !q.done).length;
@@ -22883,6 +24212,28 @@ function getSaveData() {
     // just save every dungeon (and every depth of it) that's been entered so far, in full.
     dungeonRegistry: Array.from(dungeonRegistry.entries()),
     dimensionSubDungeons: DIMENSION_SUBDUNGEONS.slice(),
+    // Weather/Climate & World Events overhaul: weatherState is small (one entry per zone ever
+    // visited) so it's saved in full rather than dirty-filtered; activeWorldEvents is saved as
+    // just {id, turnsLeft} pairs (not the def objects themselves) so it always resolves back
+    // against the live WORLD_EVENTS registry on load, the same single-source-of-truth pattern
+    // dungeonRegistry/worldChunks use above.
+    weatherState,
+    activeWorldEvents: activeWorldEvents.map(ev => ({ id: ev.def.id, turnsLeft: ev.turnsLeft })),
+    lastEventCheckDay,
+    // Fairness/QA pass additions: pendingWorldEvents are telegraphed threats the player has
+    // already been warned about but that haven't resolved yet -- these have to survive a save/
+    // load or reloading mid-warning would silently cancel the very disaster the player was
+    // told to brace for. lastWorldEventTurn preserves the pacing cooldown across a reload too.
+    pendingWorldEvents: pendingWorldEvents.map(p => ({ id: p.def.id, turnsLeft: p.turnsLeft })),
+    lastWorldEventTurn,
+    // Design pass additions: pendingLightningStrikes are plain data (no def reference to
+    // resolve), so they save/load directly. activeWarParties is the cleanup bookkeeping for the
+    // War Between Settlements system -- the actual hostility state lives on the NPC objects
+    // themselves (.warKingdom/.warExpire, saved automatically as part of their chunk), but
+    // without this the expiry ticker would lose track of an in-progress war across a reload and
+    // the invaders would linger forever instead of eventually withdrawing.
+    pendingLightningStrikes,
+    activeWarParties,
   };
 }
 function saveGame(isAuto) {
@@ -22930,6 +24281,25 @@ function applyLoadedSave(data) {
   if (data.dimensionChunks) for (const [key, c] of data.dimensionChunks) dimensionChunks.set(key, c);
   if (data.dungeonRegistry) for (const [id, dg] of data.dungeonRegistry) dungeonRegistry.set(id, dg);
   if (data.dimensionSubDungeons) DIMENSION_SUBDUNGEONS.push(...data.dimensionSubDungeons);
+  // Weather/Climate & World Events overhaul: restore weather-per-zone and any events still
+  // ticking down. Old saves made before this feature simply won't have these fields, and that's
+  // fine -- weatherState repopulates lazily (see ensureWeather) and activeWorldEvents just starts
+  // empty, same graceful-fallback pattern kingdomRelationScores already uses above.
+  if (data.weatherState) weatherState = data.weatherState;
+  if (data.activeWorldEvents) {
+    activeWorldEvents = data.activeWorldEvents
+      .map(e => ({ def: WORLD_EVENTS.find(d => d.id === e.id), turnsLeft: e.turnsLeft }))
+      .filter(e => e.def);
+  }
+  if (typeof data.lastEventCheckDay === 'number') lastEventCheckDay = data.lastEventCheckDay;
+  if (data.pendingWorldEvents) {
+    pendingWorldEvents = data.pendingWorldEvents
+      .map(p => ({ def: WORLD_EVENTS.find(d => d.id === p.id), turnsLeft: p.turnsLeft }))
+      .filter(p => p.def);
+  }
+  if (typeof data.lastWorldEventTurn === 'number') lastWorldEventTurn = data.lastWorldEventTurn;
+  if (data.pendingLightningStrikes) pendingLightningStrikes = data.pendingLightningStrikes;
+  if (data.activeWarParties) activeWarParties = data.activeWarParties;
   // The Living World AI framework (see near monsterAI) lets entities target each other directly by
   // object reference. A fresh `player` object is about to be created below, so any monster/NPC that
   // was saved mid-fight with the player is now pointing at a stale clone -- harmless (it just wanders
@@ -23628,6 +24998,120 @@ function debugResetAllFlags() {
   if (gameState === 'settings') renderSettingsTab('debug');
 }
 
+// ---------------- debug: weather & world events (playtesting) ----------------
+// Same "read the live registry, no separate index" pattern as debugRegistrySearch and
+// debugDestinationSearch above: this reads WEATHER_TYPES and WORLD_EVENTS directly, so any
+// weather type or event added to either of those tables anywhere else in the file shows up here
+// automatically, correctly grouped and searchable, with zero further changes ever needed in this
+// section -- the whole point, same as the item/spell search and the dimension/dungeon teleporter.
+function debugWeatherEventSearch(query) {
+  const q = (query || '').trim().toLowerCase();
+  const weathers = Object.keys(WEATHER_TYPES)
+    .map(id => ({ id, name: WEATHER_TYPES[id].name }))
+    .filter(w => !q || w.id.toLowerCase().includes(q) || w.name.toLowerCase().includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const events = WORLD_EVENTS
+    .filter(e => !q || e.id.toLowerCase().includes(q) || e.name.toLowerCase().includes(q))
+    .map(e => ({ id: e.id, name: e.name, rarity: e.rarity, scope: e.scope, telegraph: e.telegraph || 0 }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { weathers, events };
+}
+const DEBUG_RARITY_COLORS = { common: '#8fa0b0', uncommon: '#5ac97a', rare: '#5a9ae0', legendary: '#e0a020' };
+function debugScopeLabel(scope) {
+  if (scope === 'overworld') return 'Overworld only';
+  if (scope === 'any') return 'Any zone';
+  if (Array.isArray(scope)) return scope.length === 1 ? scope[0] : `${scope.length} dimensions`;
+  return 'Unknown scope';
+}
+function renderDebugWeatherEventResults(query) {
+  const { weathers, events } = debugWeatherEventSearch(query);
+  if (!weathers.length && !events.length) return `<div class="npcline dim">No matches for "${escapeHtml(query)}".</div>`;
+  let html = '';
+  if (weathers.length) {
+    html += `<div class="trade-col-title">Weather (${weathers.length})</div>`;
+    html += weathers.map(w => `<div class="modal-opt" onclick="debugForceWeather('${w.id}')">${escapeHtml(w.name)} <span class="dim">(${w.id}) — click to force in the current zone</span></div>`).join('');
+  }
+  if (events.length) {
+    html += `<div class="trade-col-title">World Events (${events.length})</div>`;
+    // Fairness/QA pass: events with a telegraph now get two actions instead of one -- "Now"
+    // still bypasses the warning entirely (fast iteration on the actual effect while testing),
+    // and "With Warning" runs the exact same scheduleOrApplyWorldEvent() path a real organic
+    // roll would use, so a tester can verify the warning message, the sidebar countdown, and the
+    // delayed payoff all actually work together, not just the end effect in isolation.
+    html += events.map(e => {
+      const label = `<span style="color:${DEBUG_RARITY_COLORS[e.rarity] || '#fff'}">${escapeHtml(e.name)}</span> <span class="dim">(${e.rarity} · ${escapeHtml(debugScopeLabel(e.scope))}${e.telegraph ? ` · ${e.telegraph}t warning` : ''})</span>`;
+      if (e.telegraph) {
+        return `<div class="modal-opt">${label} — <span onclick="debugTriggerEvent('${e.id}')" style="text-decoration:underline;cursor:pointer;">now</span> / <span onclick="debugScheduleEvent('${e.id}')" style="text-decoration:underline;cursor:pointer;">with warning</span></div>`;
+      }
+      return `<div class="modal-opt" onclick="debugTriggerEvent('${e.id}')">${label} — click to trigger now</div>`;
+    }).join('');
+  }
+  return html;
+}
+// Only re-renders the results list, never the search box itself, same reasoning as
+// debugSearchInput/debugDestinationSearchInput above.
+function debugWeatherEventSearchInput(val) {
+  const el = document.getElementById('debug-weather-event-results');
+  if (el) el.innerHTML = renderDebugWeatherEventResults(val);
+}
+// Forces the named weather into whatever zone the player is currently standing in (overworld or
+// a dimension) for the number of turns in the duration field, bypassing the normal rarity roll,
+// soft-transition chain, and duration formula entirely -- a playtester wants that weather NOW and
+// for as long as they say, not "eventually, maybe, for a while".
+function debugForceWeather(id) {
+  if (!WEATHER_TYPES[id]) { debugLog(`Unknown weather id: ${id}`); return; }
+  if (curIsDungeon()) { debugLog("Weather doesn't apply underground -- travel to the overworld or a dimension first."); return; }
+  const durEl = document.getElementById('debug-weather-duration');
+  const dur = Math.max(1, parseInt(durEl && durEl.value, 10) || 200);
+  const st = ensureWeather(zoneKey());
+  st.id = id; st.turnsRemaining = dur;
+  debugLog(`Forced weather to ${WEATHER_TYPES[id].name} for ${dur} turns.`);
+  updateSidebar();
+}
+// Fires the named event immediately via the same applyWorldEvent() dispatcher the real scheduler
+// uses, so it's the exact same code path as an organic trigger (correct effects, correct message,
+// correctly registered in activeWorldEvents if it has a duration) -- just skipping the rarity
+// weighting, zone-scope check, and minDay gate, since a playtester picking it by name has already
+// made those decisions on purpose.
+function debugTriggerEvent(id) {
+  const def = WORLD_EVENTS.find(e => e.id === id);
+  if (!def) { debugLog(`Unknown event id: ${id}`); return; }
+  applyWorldEvent(def);
+  debugLog(`Triggered event: ${def.name} (instant, bypassing its telegraph if it has one).`);
+  updateSidebar();
+}
+// Fairness/QA pass: routes through scheduleOrApplyWorldEvent() instead of applyWorldEvent()
+// directly, so a telegraphed event actually telegraphs -- logs the warning now, then resolves
+// for real after its normal delay. Lets a tester confirm the full warn-then-resolve experience a
+// real player would get, not just the instant end effect debugTriggerEvent shows.
+function debugScheduleEvent(id) {
+  const def = WORLD_EVENTS.find(e => e.id === id);
+  if (!def) { debugLog(`Unknown event id: ${id}`); return; }
+  if (!def.telegraph) { debugLog(`${def.name} has no telegraph -- triggering instantly instead.`); applyWorldEvent(def); updateSidebar(); return; }
+  scheduleOrApplyWorldEvent(def);
+  debugLog(`Scheduled event: ${def.name} (warning now, resolves in ${def.telegraph} turn${def.telegraph === 1 ? '' : 's'}).`);
+  updateSidebar();
+}
+function debugClearActiveEvents() {
+  const n = activeWorldEvents.length;
+  activeWorldEvents = [];
+  debugLog(`Cleared ${n} active timed event${n === 1 ? '' : 's'}.`);
+  updateSidebar();
+}
+function debugClearPendingEvents() {
+  const n = pendingWorldEvents.length;
+  pendingWorldEvents = [];
+  debugLog(`Cleared ${n} pending (telegraphed) event${n === 1 ? '' : 's'} before they could resolve.`);
+  updateSidebar();
+}
+function debugClearWeather() {
+  if (curIsDungeon()) { debugLog("No weather to clear underground."); return; }
+  const st = ensureWeather(zoneKey());
+  st.id = 'clear'; st.turnsRemaining = randInt(Math.random, 60, 140);
+  debugLog('Weather reset to clear.');
+  updateSidebar();
+}
+
 // ---------------- settings screen ----------------
 const SETTINGS_TABS = [
   { id: 'audio', label: 'Audio' },
@@ -23811,6 +25295,17 @@ function renderDebugTab() {
   </div>`;
   html += `<div id="debug-destination-results" style="max-height:260px;overflow-y:auto;border:1px solid var(--line);padding:6px;">${renderDebugDestinationResults('')}</div>`;
 
+  html += `<div class="trade-col-title" style="margin-top:14px;">Weather &amp; World Events</div>`;
+  html += `<div class="npcline dim" style="margin-bottom:6px;">Search every weather type and world event by name — read live off WEATHER_TYPES and WORLD_EVENTS, so anything added to either table shows up here automatically. Forcing a weather overrides whatever the current zone is doing for the duration below; triggering an event fires it immediately through the same code path the real scheduler uses, skipping only the rarity roll and zone/day gating.</div>`;
+  html += `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+    <input type="text" placeholder="Search weather or events…" oninput="debugWeatherEventSearchInput(this.value)" style="flex:1;min-width:180px;background:var(--panel);border:1px solid var(--line);color:var(--text);padding:6px 8px;font-family:inherit;font-size:1.1rem;">
+    <label class="dim">Weather duration <input type="number" id="debug-weather-duration" value="200" min="1" max="9999" style="width:70px;background:var(--panel);border:1px solid var(--line);color:var(--text);padding:4px;font-family:inherit;"> turns</label>
+    <span class="settings-btn" onclick="debugClearWeather()">Clear Weather</span>
+    <span class="settings-btn" onclick="debugClearActiveEvents()">Clear Active Events</span>
+    <span class="settings-btn" onclick="debugClearPendingEvents()">Clear Pending Warnings</span>
+  </div>`;
+  html += `<div id="debug-weather-event-results" style="max-height:260px;overflow-y:auto;border:1px solid var(--line);padding:6px;">${renderDebugWeatherEventResults('')}</div>`;
+
   html += `<div style="margin-top:14px;">
     <span class="settings-btn" style="border-color:#8a3a3a;color:#e08a7a" onclick="debugResetAllFlags()">Reset All Debug Toggles</span>
   </div>`;
@@ -23842,6 +25337,11 @@ function clearWorldRegistries() {
   worldChunks.clear(); dungeonRegistry.clear(); kingdomRegistry.clear(); dimensionChunks.clear(); kingdomRelationScores.clear();
   DIMENSION_SUBDUNGEONS.length = 0;
   activeFxTiles = []; activeDecoys = [];
+  // Weather/Climate & World Events overhaul: reset per-session state so a fresh game (or a
+  // loaded save) never inherits leftover weather/events from whatever was running before.
+  weatherState = {}; activeWorldEvents = []; lastEventCheckDay = -1;
+  pendingWorldEvents = []; lastWorldEventTurn = -99999;
+  pendingLightningStrikes = []; activeWarParties = [];
 }
 function resetWorldState() {
   clearWorldRegistries();
@@ -24531,6 +26031,48 @@ const GUIDE_SECTIONS = [
     gatekeeper), and <b>Aurelith, Warden of the Reach</b> (dragon gatekeeper). A wandering optional boss, <b>the
     Recursion</b>, roams the surface world itself rather than guarding a dungeon. Expect multiple phases as HP
     drops on the scripted ones. More join this roster in future updates.</div>` },
+  { id:'weatherevents', label:'Weather & World Events', html: () => `
+    <div class="modal-opt"><b>Weather &amp; Climate.</b> Every zone -- the overworld and each of the twelve
+    dimensions -- has its own weather that changes over time and reaches into the systems around it, not just the
+    screen tint. Rain and snow weaken fire and actively put out burning ground; storms empower shock damage and can
+    strike real lightning; heatwaves and drought make things far more flammable; blizzards freeze water and slow you
+    down. The overworld's weather leans toward whatever the local biome suggests (deserts skew toward sandstorms and
+    heatwaves, tundra toward blizzards and frost); each dimension has its own hand-picked table instead, sharing some
+    weather with the overworld and keeping others -- ashfall, void flux, bioluminescent tides -- entirely to itself.
+    Extreme cold or heat builds up a real Chilled/Overheating status over several turns if you're exposed without
+    resistance, visible right in your status list before it starts costing hp.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Day &amp; Night.</b> Vision and the screen's darkness now blend
+    continuously through dawn and dusk instead of snapping at fixed hours, night runs colder, and undead/dream/
+    eldritch/demonic things hit a little harder after dark while celestial things hit a little harder by day. Not
+    every dimension runs on the overworld's solar clock, either -- some (the Abyssal Wastes, the Drift, the
+    Boneyard, the Corrupted Kernel) are locked permanently in one signature phase, and others (the Undertow, the
+    Clockwork Expanse, the Lucid Expanse, the Fourth Corridor) run on their own named, non-solar rhythm entirely.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>World Events.</b> Well over a hundred random events can occur
+    while you play, from a passing shooting star up through meteor showers, wildfires, plagues, and full-scale
+    invasions from other dimensions -- scoped so some are overworld-only, some are shared across every zone, and
+    some belong to exactly one dimension. Pacing is deliberately gentle: expect roughly one to one and a half a day
+    on average, with a hard floor that makes two events landing back-to-back structurally impossible, and any
+    additional event already in flight makes a further one progressively rarer (never impossible) rather than a hard
+    wall. Most rolled events are common, harmless flavor; only a minority can actually threaten you.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Fair warning, real stakes.</b> Anything genuinely dangerous
+    telegraphs first -- you'll get an in-fiction warning line (and a persistent, non-spoilery sidebar countdown) a
+    few turns before it actually lands, and it always comes with a real way to avoid it entirely: local disasters
+    (tornadoes, tsunamis, avalanches, and the like) can be outrun -- put enough distance between yourself and where
+    you were warned before the timer runs out and it does nothing at all. Lightning -- from storms or from a
+    telegraphed meteor barrage alike -- marks the exact tile(s) it's going to strike with a pulsing red warning for
+    the whole countdown; stand somewhere else and it's harmless. Damage is never artificially capped, though --
+    dodge and you take nothing, fail to and it's exactly as dangerous as it looks, including lethal. That trade is
+    the whole point: read the warning, react, and you're fine.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>War Between Settlements.</b> A rare, dramatic event can raise a
+    real detachment of soldiers under a rival kingdom's banner and march them on the nearest settlement you've
+    actually discovered -- not a generic monster wave standing in for it, but real named NPCs who autonomously fight
+    the town's own defenders using the same AI and combat resolution as any other fight in the game. You're free to
+    wade into it on whichever side you like, or leave it entirely alone; a settlement mid-war doesn't apply the
+    normal "attacked a peaceful bystander" crime penalty either way. It burns itself out on its own after a while --
+    survivors on the losing side simply withdraw.</div>
+    <div class="modal-opt" style="margin-top:6px">Curious what's possible, or want to test a specific weather or
+    event for yourself? The Debug tab in Settings has a full, always-current search across every weather type and
+    every event by name.</div>` },
   { id:'dimensions', label:'Dimensions', html: () => `
     <div class="modal-opt">The world isn't the only world, and there's more than one way in. A rare "Demon Gate"
     dungeon holds <b>Malphegor, the Rift-Warden</b> at the bottom -- defeat him and the gate tears open into
