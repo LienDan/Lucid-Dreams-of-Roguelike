@@ -476,7 +476,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.35.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.36.0-alpha</div>
     </div>
   </div>
 
@@ -516,12 +516,23 @@
 //    4-tier Throwing talent line (deadaim/bladedancer/quiverofmany/masterofblades) with real
 //    mechanical hooks actually read by resolveThrownWeapon: throwAccuracyBonus, throwCritBonus,
 //    throwRecoverChance (stuck throws have a chance to snap back to inventory instead), throwNoWear.
+//  - Enemy AI variety: before this pass, 154 of ~440 monster templates (over a third) shared one
+//    generic behavior:'aggressive' walk-and-hit AI regardless of theme -- a mindless slime moved
+//    exactly like a cosmic horror moved exactly like a zombie. Added four new distinct combat
+//    behaviors to runCombatState (relentless: shambling undead that can't be outpaced and grips on
+//    hit; erratic: cosmic/nonEuclid/eldritch/dream things that fold space instead of walking and
+//    can scramble senses on a hit; engulf: oozes, genuinely half-speed but stack a worsening slow
+//    the longer you stay adjacent; stalker: wild predators that flank instead of beelining and
+//    land a real bonus-damage pounce on the first hit after closing from range). Reassignment is a
+//    faction-keyed data pass (AI_VARIETY_FACTION_MAP + the predator flag), not a hand-edit of 150
+//    individual entries, so new roster additions inherit sensible tactics automatically. Left
+//    every monster with an already-authored specific behavior (ranged/charger/turret/kiter/
+//    gascloud/swarm/flee) and every scriptedAI boss completely untouched.
 //
 // NOT YET DONE (found during audit, real gaps, ordered roughly by how load-bearing they are):
-//  - Enemy AI variety: most non-boss monsters share a small set of AI behaviors despite the roster
-//    having grown to ~150+ entries across very different themes (see MONSTER EXPANSION PACK,
-//    MONSTER_BASES). Needs more distinct behavior patterns (pack coordination, ranged-kiting,
-//    ambush/stealth, terrain-use, fear/morale routing) tied to monster theme, not just stat scaling.
+//  - Enemy AI still has room to grow: no dedicated behavior yet for constructs/virus (currently
+//    fall back to plain aggressive or whatever was individually authored), and the new archetypes
+//    above could use 1-2 more example monsters each actually testing the numbers in practice.
 //  - Lore & books (see LORE & BOOKS, ~line 1753): written early, before several major systems
 //    (weather/climate overhaul, settlement v2-v6, relationship overhaul, cybernetics/mutation
 //    expansions) existed. Needs an audit for which newer systems have zero in-world text
@@ -7284,6 +7295,25 @@ for (const _mid in MONSTER_BASES) {
   // queuing single-file, retreat to regroup when cut off from their own kind) instead of just
   // instinctively closing distance the way an animal or mindless undead does. --
   if (base.intelligent === undefined) base.intelligent = ['outlaw'].includes(align) || !!base.abilities;
+}
+
+// ---- AI variety pass: 'aggressive' was never meant as a real archetype -- it was the copy-paste
+// default every monster got before it had a specific behavior authored, and by the time the
+// roster grew past 150 entries roughly that many things were doing pure walk-and-hit with zero
+// tactical distinction regardless of whether they were a mindless slime or a cosmic horror. This
+// reassigns that placeholder to one of four new behaviors (see runCombatState: relentless/erratic/
+// engulf/stalker) purely by faction/temperament, so every monster still authored with a *specific*
+// behavior (ranged/charger/turret/kiter/gascloud/swarm/flee) is left completely untouched, and so
+// is anything with scriptedAI (bespoke boss phases already override the whole turn regardless of
+// base.behavior). Deliberately data-driven and faction-keyed rather than one-off per monster ID,
+// so a new faction member added later inherits sensible tactics automatically instead of needing
+// this list touched again.
+const AI_VARIETY_FACTION_MAP = { undead:'relentless', ooze:'engulf', eldritch:'erratic', cosmic:'erratic', nonEuclid:'erratic', dream:'erratic' };
+for (const _mid in MONSTER_BASES) {
+  const base = MONSTER_BASES[_mid];
+  if (base.behavior !== 'aggressive' || base.scriptedAI) continue;
+  if (AI_VARIETY_FACTION_MAP[base.faction]) { base.behavior = AI_VARIETY_FACTION_MAP[base.faction]; continue; }
+  if (base.predator && base.faction !== 'plant') base.behavior = 'stalker';
 }
 
 
@@ -17831,6 +17861,98 @@ function runCombatState(m, vision) {
         m.atk = orig;
       } else doAttack(m, target);
     } else stepToward(m, target.x, target.y);
+    return;
+  }
+
+  // ---- relentless: shambling, unbreakable pursuit (undead's default AI signature). Never
+  // out-paced by a target that steps back -- if the gap didn't close as much as a normal step
+  // should have, it lurches an extra tile to compensate, representing something that simply does
+  // not tire and does not lose interest. On a solid hit it has a chance to lock its grip, briefly
+  // rooting the target in place (reuses statusSlow, same field ranged/frost effects already set).
+  if (m.behavior === 'relentless') {
+    if (dist <= 1) {
+      const beforeHp = target.hp;
+      doAttack(m, target);
+      if (target.hp < beforeHp && target.hp > 0 && Math.random() < 0.18) {
+        target.statusSlow = Math.max(target.statusSlow || 0, 2);
+        log(`${m.name}'s grip locks tight -- ${target === player ? 'you are' : target.name + ' is'} held fast!`);
+      }
+      return;
+    }
+    const preDist = dist;
+    stepToward(m, target.x, target.y);
+    const postDist = chebyshev(m.x, m.y, target.x, target.y);
+    if (postDist >= preDist && postDist > 1) stepToward(m, target.x, target.y); // the gap didn't close -- lurch again
+    return;
+  }
+
+  // ---- erratic: reality doesn't sit still around these things (cosmic/nonEuclid/eldritch/dream).
+  // Most turns it behaves like a normal attacker, but it periodically folds space instead of
+  // walking through it, and a solid hit can leave the target's senses briefly scrambled even
+  // without an explicit causesConfuse flag -- representing proximity to something that shouldn't
+  // parse correctly rather than a deliberate attack.
+  if (m.behavior === 'erratic') {
+    if (dist > 1 && seesTarget && Math.random() < 0.3) {
+      const midX = Math.round((m.x + target.x) / 2), midY = Math.round((m.y + target.y) / 2);
+      const spot = findOpenAdjacent(midX, midY) || findOpenAdjacent(target.x, target.y);
+      if (spot) { m.x = spot.x; m.y = spot.y; log(`${m.name} folds through the space between you.`); return; }
+    }
+    if (dist <= 1) {
+      const beforeHp = target.hp;
+      doAttack(m, target);
+      if (target.hp < beforeHp && target.hp > 0 && !m.causesConfuse && Math.random() < 0.12) {
+        target.statusConfuse = Math.max(target.statusConfuse || 0, 3);
+        log(`${target === player ? 'Your' : target.name + "'s"} sense of the room briefly comes apart.`);
+      }
+      return;
+    }
+    stepToward(m, target.x, target.y);
+    return;
+  }
+
+  // ---- engulf: oozes/slimes. Genuinely slow (only actually moves on every other turn) so it's
+  // never the thing chasing you down, but staying adjacent to one is a mistake that compounds --
+  // each hit taken while engulfed stacks a slow that only fades once you actually break contact.
+  if (m.behavior === 'engulf') {
+    if (dist <= 1) {
+      const beforeHp = target.hp;
+      doAttack(m, target);
+      if (target.hp < beforeHp && target.hp > 0) {
+        m.engulfStacks = Math.min(4, (m.engulfStacks || 0) + 1);
+        target.statusSlow = Math.max(target.statusSlow || 0, m.engulfStacks);
+        if (m.engulfStacks >= 3) log(`You're bogged down, half-swallowed by ${m.name}!`);
+      }
+      return;
+    }
+    m.engulfStacks = 0;
+    m.engulfSkip = !m.engulfSkip;
+    if (m.engulfSkip) return; // moves at half speed
+    stepToward(m, target.x, target.y);
+    return;
+  }
+
+  // ---- stalker: wild predators (wolves, cats, anything with predator:true that isn't a pure
+  // fleeing prey animal). Circles toward a flanking approach rather than beelining, and the first
+  // hit after closing distance from beyond melee range lands as a genuine pounce -- a real damage
+  // spike, not a flavor label, meant to reward the player for spotting and dealing with it at
+  // range before it gets its opener.
+  if (m.behavior === 'stalker') {
+    if (dist <= 1) {
+      if (m.stalkerPounceReady) {
+        const orig = m.atk;
+        m.atk = [Math.round(orig[0] * 1.8), Math.round(orig[1] * 1.8)];
+        log(`${m.name} pounces!`);
+        doAttack(m, target);
+        m.atk = orig;
+        m.stalkerPounceReady = false;
+      } else {
+        doAttack(m, target);
+      }
+      return;
+    }
+    m.stalkerPounceReady = dist > 2; // still closing from a real distance -- next contact is a pounce
+    const spot = pickApproachSpot(m, target);
+    stepToward(m, spot.x, spot.y);
     return;
   }
 
