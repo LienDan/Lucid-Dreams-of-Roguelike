@@ -476,7 +476,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.34.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.35.0-alpha</div>
     </div>
   </div>
 
@@ -490,6 +490,51 @@
 // asked for: they want to be told explicitly and unprompted the moment that happens, and not
 // before. Don't self-assess 100% lightly; check actual coverage against the original request
 // (full text preserved in project handoff notes from earlier sessions) before ever claiming it.
+//
+// ---- CROSS-SYSTEM INTEGRATION PASS (started 2026-08-14, v0.35.0) ----
+// Player request this pass: audit the whole game for features that were bolted on in isolation
+// (talents added before throwing/races existed, lore/notes never written for newer systems,
+// limited enemy AI variety, weather that was purely passive) and make every system reach into
+// every other one, the way Caves of Qud/ToME/CDDA/Brogue/DCSS do. This is explicitly an
+// open-ended, multi-session effort -- the player said so directly and doesn't want it rushed.
+// Track real progress here across sessions instead of re-auditing from scratch each time.
+//
+// DONE this pass:
+//  - Weather is now something the player can *cause*, not just react to. New playerControlWeather()
+//    (search: PLAYER WEATHER CONTROL) rides the existing WEATHER_TYPES/ZONE_CLIMATE machinery, so
+//    a forced change gets correct elementMods/tempShift/visMod for free. Wired into castSpell() via
+//    a new type:'weather' branch. Added across every ability pool that logically could touch the
+//    sky: Storm Magic (callthestorm, stormcalming), Elemental Mastery (sunbreak, winterscall),
+//    Nature (calltherain, clearingbreath), eldritch/mutations (skywound, witherbloom), cyberware
+//    (atmosregulator, stormbatteryarray). Confirmed these auto-surface through the existing
+//    generic trainer/loot/mutation-roll pools (SPELLS.filter/choice(rng,MUTATIONS)/etc.) with no
+//    extra plumbing needed.
+//  - Throwing had zero technique-tree presence despite being a full item-based combat system
+//    (canThrowItem/resolveThrownWeapon/THROWN_WEAPON_IDS) -- every other combat style (Archery,
+//    Swordsmanship, Daggers, etc.) had a 5-tier technique school and Throwing didn't. Added one
+//    (quickdraw through deathfromabove), registered it as a DEX school, and added a matching
+//    4-tier Throwing talent line (deadaim/bladedancer/quiverofmany/masterofblades) with real
+//    mechanical hooks actually read by resolveThrownWeapon: throwAccuracyBonus, throwCritBonus,
+//    throwRecoverChance (stuck throws have a chance to snap back to inventory instead), throwNoWear.
+//
+// NOT YET DONE (found during audit, real gaps, ordered roughly by how load-bearing they are):
+//  - Enemy AI variety: most non-boss monsters share a small set of AI behaviors despite the roster
+//    having grown to ~150+ entries across very different themes (see MONSTER EXPANSION PACK,
+//    MONSTER_BASES). Needs more distinct behavior patterns (pack coordination, ranged-kiting,
+//    ambush/stealth, terrain-use, fear/morale routing) tied to monster theme, not just stat scaling.
+//  - Lore & books (see LORE & BOOKS, ~line 1753): written early, before several major systems
+//    (weather/climate overhaul, settlement v2-v6, relationship overhaul, cybernetics/mutation
+//    expansions) existed. Needs an audit for which newer systems have zero in-world text
+//    acknowledging them, then targeted new entries -- not a wholesale rewrite.
+//  - Talents vs. newer mechanics generally: TALENTS_V2 (line ~2196) predates throwing (partially
+//    addressed above), races/origins if any exist as a system, and some later power systems. Needs
+//    a full pass checking every major mechanic added since has at least one talent that meaningfully
+//    interacts with it, not just raw stat sticks.
+//  - Systems worth double-checking for "menu with no world interaction" smell per the player's
+//    explicit ask: anything that's a stat-only unlock with no in-world verb attached to it should
+//    either get one or be judged not to need one -- don't hardcode edge cases, extend the existing
+//    generic dispatchers (applyEffectToTarget/castSpell's type switch, THROWABLE_EFFECTS, etc.)
+//    the way the weather and throwing work above did.
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
 // external audio files. This keeps the game a single portable HTML file and
@@ -2686,6 +2731,8 @@ SPELLS.push(
   { id:'thornwhip', name:'Thorn Whip', mp:5, type:'damage', power:[5,10], range:5, school:'Nature', desc:'A lash of thorned vines.' },
   { id:'calloftheWild', name:'Call of the Wild', mp:13, type:'summon', summonId:'bear', duration:60, range:0, school:'Nature', desc:'A great bear answers your call to fight at your side.' },
   { id:'barkskin', name:'Barkskin', mp:7, type:'buff', stat:'armor', power:7, dur:15, range:0, school:'Nature', desc:'Your skin toughens like bark.' },
+  { id:'calltherain', name:'Call the Rain', mp:11, type:'weather', weatherTarget:['rain','drizzle'], weatherDur:100, range:0, school:'Nature', tier:1, desc:'You coax rain out of the sky -- handy for dousing a fire you started, or one you did not.' },
+  { id:'clearingbreath', name:'Clearing Breath', mp:9, type:'weather', weatherTarget:['clear','partly_cloudy'], weatherDur:110, range:0, school:'Nature', tier:1, desc:'A slow, patient breath, and the sky answers by settling.' },
 
   { id:'temporalslow', name:'Temporal Slow', mp:10, type:'debuff', stat:'dex', power:-6, dur:10, range:5, aoe:true, aoeRadius:2, school:'Chronomancy', desc:'Time itself drags around your foes.' },
   { id:'rewindwounds', name:'Rewind Wounds', mp:11, type:'heal', power:[20,32], range:0, school:'Chronomancy', desc:'Unwinds the last few moments of harm done to you.' },
@@ -2712,6 +2759,22 @@ const TECHNIQUES = [
   { id:'rapidvolley', name:'Rapid Volley', resource:'stamina', mp:16, type:'damage', power:[5,10], range:6, aoe:true, aoeRadius:2, school:'Archery', desc:'A hail of arrows loosed in quick succession.' },
   { id:'cripplingshot', name:'Crippling Shot', resource:'stamina', mp:10, type:'debuff', stat:'dex', power:-7, dur:10, range:6, school:'Archery', desc:'An arrow aimed to hobble, not to kill outright.' },
   { id:'eagleeye', name:'Eagle Eye', resource:'stamina', mp:8, type:'buff', stat:'crit', power:0.15, dur:15, range:0, school:'Archery', desc:'Your vision sharpens to inhuman clarity.' },
+  // Throwing -- previously the only combat style in the game with no technique tree at all,
+  // despite thrown weapons/bombs being a full item-based subsystem (see resolveThrownWeapon,
+  // THROWN_WEAPON_IDS, canThrowItem). These are trained maneuvers, same as Archery's abilities
+  // don't require a bow equipped -- you're drawing from a kit, not consuming a specific inventory
+  // item. player.throwAccuracyBonus/throwCritBonus (new) and the existing throwDmgBonus/
+  // throwRadiusBonus all read straight into resolveThrownWeapon() and the grenade-throw path, so
+  // these techniques (and the matching Throwing talents below) buff actual thrown items too, not
+  // just themselves.
+  { id:'quickdraw', name:'Quick Draw', resource:'stamina', mp:7, type:'damage', power:[8,15], range:5, school:'Throwing', desc:'A blade leaves your hand before the target even registers the motion.' },
+  { id:'fanofknives', name:'Fan of Knives', resource:'stamina', mp:15, type:'damage', power:[5,9], range:4, aoe:true, aoeRadius:2, school:'Throwing', desc:'A spread of blades loosed in a single motion.' },
+  { id:'pinningthrow', name:'Pinning Throw', resource:'stamina', mp:10, type:'debuff', stat:'dex', power:-8, dur:10, range:5, school:'Throwing', desc:'A throw aimed at tendon and joint, not the kill.' },
+  { id:'huntersfocus', name:"Hunter's Focus", resource:'stamina', mp:8, type:'buff', stat:'crit', power:0.15, dur:15, range:0, school:'Throwing', desc:'Your grip steadies and your next several throws will not miss by chance.' },
+  { id:'ricochetstrike', name:'Ricochet Strike', resource:'stamina', mp:18, type:'damage', power:[10,17], range:6, chainLightning:true, school:'Throwing', tier:2, desc:'A weighted throw that bounces from foe to foe, guided as much by will as by aim.' },
+  { id:'weightedbarrage', name:'Weighted Barrage', resource:'stamina', mp:22, type:'damage', power:[16,26], range:6, school:'Throwing', tier:3, desc:'Three blades, thrown in the time it takes most people to throw one.' },
+  { id:'stormofthrownblades', name:'Storm of Thrown Blades', resource:'stamina', mp:34, type:'damage', power:[13,22], range:6, aoe:true, aoeRadius:3, school:'Throwing', tier:4, desc:'You empty your entire kit into the air at once, and somehow every piece finds a target.' },
+  { id:'deathfromabove', name:'Death From Above', resource:'stamina', mp:42, type:'execute', power:[28,44], range:7, school:'Throwing', tier:5, desc:'A single perfect throw, weighted and released to end a fight that has already gone on too long.' },
   // Unarmed / Brawling
   { id:'ironfist', name:'Iron Fist', resource:'stamina', mp:8, type:'damage', power:[7,14], range:1, school:'Brawling', desc:'A punch thrown with bone-jarring force.' },
   { id:'sweepingkick', name:'Sweeping Kick', resource:'stamina', mp:12, type:'damage', power:[5,10], range:1, aoe:true, aoeRadius:1, school:'Brawling', desc:'A spinning kick that catches every foe in reach.' },
@@ -2878,6 +2941,8 @@ const CYBERNETICS = [
   { id:'warprelay', name:'Warp Relay Implant', category:'Exotic', activation:'active', resource:'charge', mp:20, type:'travelbypass', power:0, range:0, desc:'Pings the waystone network and lets you jump to any known site from anywhere.' },
   { id:'railgunarm', name:'Railgun Arm', category:'Exotic', activation:'active', resource:'charge', mp:26, type:'damage', power:[20,32], range:8, pierceLine:true, desc:'Replaces your forearm with a rail-accelerated slug thrower.' },
   { id:'overloaddischarge', name:'Neural Overload Discharge', category:'Exotic', activation:'active', resource:'charge', mp:24, type:'damage', power:[10,18], range:5, aoe:true, aoeRadius:2, chainLightning:true, desc:'Discharges raw current through anything nearby.' },
+  { id:'atmosregulator', name:'Atmospheric Regulator Rig', category:'Exotic', activation:'active', resource:'charge', mp:18, type:'weather', weatherTarget:['clear','partly_cloudy'], weatherDur:100, range:0, desc:'A prototype rig that seeds the local air with charged particulate, pushing the sky toward calm.' },
+  { id:'stormbatteryarray', name:'Storm Battery Array', category:'Exotic', activation:'active', resource:'charge', mp:26, type:'weather', weatherTarget:['static_storm','thunderstorm','gear_squall'], weatherDur:80, range:0, desc:'Discharges banked static into the upper air, seeding a storm you can harvest current from.' },
 ];
 
 // ===================== CYBERNETICS EXPANSION: fill existing categories + 4 new ones, full tier progression =====================
@@ -3051,6 +3116,11 @@ MUTATIONS.push(
   { id:'hivecall', name:'Hive Call', category:'Symbiotic', activation:'active', corruptionReq:35, resource:'hp', selfCost:14, type:'summon', summonId:'nanite_swarm', duration:50, range:0, desc:'You call forth a swarm bonded to your own biology.' },
   { id:'symbiotearmor', name:'Symbiote Armor', category:'Symbiotic', activation:'passive', corruptionReq:40, desc:'A living second skin has grown to protect you.', apply:()=>{ player.mutationArmor=(player.mutationArmor||0)+5; player.mutationRegen=(player.mutationRegen||0)+1; } },
   { id:'greatersymbiosis', name:'Greater Symbiosis', category:'Symbiotic', activation:'passive', corruptionReq:55, desc:'You and your passenger have become nearly impossible to tell apart.', apply:()=>{ player.maxHp+=30; player.mutationRegen=(player.mutationRegen||0)+2; } },
+  // ---- weather control, eldritch-flavored: the corrupted/cosmic categories are the thematic home
+  // for reality bending the local sky rather than just calling down damage. Uses the same
+  // type:'weather' branch every weather ability shares (see playerControlWeather()).
+  { id:'skywound', name:'Sky Wound', category:'Void/Cosmic', activation:'active', corruptionReq:20, resource:'hp', mp:9, type:'weather', weatherTarget:['void_flux','eternal_haze','static_storm'], weatherDur:70, range:0, desc:'You tear a small hole in the sky. Something wrong leaks out through it.' },
+  { id:'witherbloom', name:'Wither Bloom', category:'Plague', activation:'active', corruptionReq:20, resource:'hp', mp:8, type:'weather', weatherTarget:['spore_bloom','toxic_smog','ashfall'], weatherDur:70, range:0, desc:'Spores erupt from your pores and rise on the wind, thickening the air for a long way around.' },
 );
 
 // ===================== MUTATION EXPANSION PART 2: low-tier entries so every category has an accessible entry point =====================
@@ -3140,6 +3210,14 @@ TALENTS_V2.push(
   { id:'spicehand', name:'Spice Hand', category:'cooking', desc:'Stat buffs from food last 30% longer', tier:1, requires:null, apply:()=>{ player.cookingDurBonus=(player.cookingDurBonus||0)+0.3; } },
   { id:'herbalist', name:'Herbalist', category:'alchemy', desc:'+25% potency on all potions and elixirs you drink', tier:1, requires:null, apply:()=>{ player.alchemyPotencyBonus=(player.alchemyPotencyBonus||0)+0.25; } },
   { id:'steadyhands', name:'Steady Hands', category:'alchemy', desc:'Thrown grenades/bombs deal 20% more damage', tier:1, requires:null, apply:()=>{ player.throwDmgBonus=(player.throwDmgBonus||0)+0.2; } },
+  // ---- Throwing talents: a dedicated line for the thrown-weapon combat style (knives, axes,
+  // stars -- anything canThrowItem() covers), distinct from the alchemy line above which is
+  // specifically about grenades/bombs. Both feed the same player.throwDmgBonus so they stack
+  // cleanly with each other and with the new Throwing technique school (see TECHNIQUES).
+  { id:'deadaim', name:'Dead Aim', category:'Throwing', desc:'+10% chance to hit with thrown weapons', tier:1, requires:null, apply:()=>{ player.throwAccuracyBonus=(player.throwAccuracyBonus||0)+0.1; } },
+  { id:'bladedancer', name:'Bladedancer', category:'Throwing', desc:'+15% critical hit chance with thrown weapons', tier:2, requires:{level:5, talent:'deadaim'}, apply:()=>{ player.throwCritBonus=(player.throwCritBonus||0)+0.15; } },
+  { id:'quiverofmany', name:'Quiver of Many', category:'Throwing', desc:'Thrown weapons that stick in a foe have a chance to be recovered instantly instead of staying stuck', tier:3, requires:{level:10, talent:'bladedancer'}, apply:()=>{ player.throwRecoverChance=(player.throwRecoverChance||0)+0.35; } },
+  { id:'masterofblades', name:'Master of Blades', category:'Throwing', desc:'+25% thrown weapon damage; thrown weapons never break from the throw itself', tier:4, requires:{level:15, talent:'quiverofmany'}, apply:()=>{ player.throwDmgBonus=(player.throwDmgBonus||0)+0.25; player.throwNoWear=true; } },
   { id:'tidewalker', name:'Tidewalker', category:'survival', desc:'+3 DEX while in water', tier:1, requires:null, apply:()=>{ player.waterDexBonus=(player.waterDexBonus||0)+3; } },
   { id:'pathfinder', name:'Pathfinder', category:'survival', desc:'See slightly further in the overworld', tier:1, requires:null, apply:()=>{ player.visionBonus=(player.visionBonus||0)+2; } },
   { id:'quickfingers', name:'Quick Fingers', category:'combat', desc:'+5% critical hit chance', tier:1, requires:null, apply:()=>{ player.critBonus=(player.critBonus||0)+0.05; } },
@@ -4152,6 +4230,8 @@ SPELLS.push(
   { id:'glacialburst', name:'Glacial Burst', mp:22, type:'damage', power:[18,30], range:5, aoe:true, aoeRadius:2, frost:true, school:'Elemental Mastery', tier:3, desc:'A sudden eruption of ice and freezing wind.' },
   { id:'absolutezero', name:'Absolute Zero', mp:38, type:'damage', power:[30,48], range:6, aoe:true, aoeRadius:3, frost:true, school:'Elemental Mastery', tier:4, desc:'You draw all warmth from the air itself.' },
   { id:'thelongwinter', name:'The Long Winter', mp:65, type:'damage', power:[52,80], range:7, aoe:true, aoeRadius:4, frost:true, school:'Elemental Mastery', tier:5, desc:'A localized, brief ice age, over almost as soon as it began.' },
+  { id:'sunbreak', name:'Sunbreak', mp:20, type:'weather', weatherTarget:['heatwave','drought'], weatherDur:70, range:0, school:'Elemental Mastery', tier:2, desc:'You burn the clouds away and let the sun through in force. Empowers your fire spells, but the heat cuts both ways.' },
+  { id:'winterscall', name:"Winter's Call", mp:26, type:'weather', weatherTarget:['snow','blizzard','frost'], weatherDur:70, range:0, school:'Elemental Mastery', tier:3, desc:'You drag the season backward, and the air turns to ice around you.' },
   { id:'chainlightning', name:'Chain Lightning', mp:16, type:'damage', power:[14,24], range:6, aoe:true, aoeRadius:2, chainLightning:true, school:'Elemental Mastery', tier:2, desc:'Lightning that arcs from foe to foe.' },
   { id:'thunderstrike', name:'Thunderstrike', mp:26, type:'damage', power:[22,36], range:6, chainLightning:true, school:'Elemental Mastery', tier:3, desc:'A single, devastating bolt from a clear sky.' },
   // ---- Storm Magic (NEW school) ----
@@ -4163,6 +4243,12 @@ SPELLS.push(
   { id:'hurricaneforce', name:'Hurricane Force', mp:44, type:'damage', power:[32,50], range:6, aoe:true, aoeRadius:3, knockback:3, school:'Storm Magic', tier:4, desc:'A miniature hurricane, called and released in a single moment.' },
   { id:'eyeofthestorm', name:'Eye of the Storm', mp:68, type:'damage', power:[54,82], range:7, aoe:true, aoeRadius:4, knockback:3, chainLightning:true, school:'Storm Magic', tier:5, desc:'You become the calm center of a storm that annihilates everything around it.' },
   { id:'staticfield_spell', name:'Static Field', mp:16, type:'buff', stat:'armor', power:9, dur:12, range:0, school:'Storm Magic', tier:2, desc:'A crackling personal ward of contained electricity.' },
+  // ---- weather control: uses playerControlWeather() via castSpell's type:'weather' branch, which
+  // rides the existing WEATHER_TYPES/ZONE_CLIMATE machinery (elementMods, tempShift, visMod all
+  // apply exactly as if the weather had rolled naturally) rather than faking the effect locally.
+  // No effect underground -- see canControlWeather() -- so these fail loudly, not silently.
+  { id:'callthestorm', name:'Call the Storm', mp:22, type:'weather', weatherTarget:['thunderstorm','static_storm','pressure_swell'], weatherDur:80, range:0, school:'Storm Magic', tier:2, desc:'You reach up and pull a storm down out of a clear sky. Empowers your shock damage while it lasts, but also everyone else\'s.' },
+  { id:'stormcalming', name:'Storm Calming', mp:16, type:'weather', weatherTarget:['clear'], weatherDur:120, range:0, school:'Storm Magic', tier:1, desc:'You still the wind and scatter the clouds, clearing the sky overhead.' },
   // ---- Alchemy: real gas/poison tier progression (Caustic Gas already fixed to be a real cloud) ----
   { id:'toxicbloom', name:'Toxic Bloom', mp:16, type:'debuff', stat:'poison', power:6, dur:8, range:5, aoe:true, aoeRadius:2, gasCloud:true, gasKind:'poison', school:'Alchemy', tier:2, desc:'A billowing, larger cloud of concentrated toxin.' },
   { id:'plaguetide', name:'Plague Tide', mp:28, type:'debuff', stat:'poison', power:10, dur:10, range:6, aoe:true, aoeRadius:3, gasCloud:true, gasKind:'poison', school:'Alchemy', tier:3, desc:'A rolling tide of virulent, lingering plague.' },
@@ -4231,7 +4317,7 @@ SPELLS.push(
 // the requirement doesn't lock the ability out (see castSpell()/applyEffectToTarget()) -- it
 // instead risks a fizzle and pulls damage down, which is enough of a tax that min-maxing into
 // an off-stat ability stops being free without forbidding experimentation or multiclassing.
-const TECHNIQUE_DEX_SCHOOLS = new Set(['Daggers', 'Dual Wielding', 'Archery', 'Monastic Arts']);
+const TECHNIQUE_DEX_SCHOOLS = new Set(['Daggers', 'Dual Wielding', 'Archery', 'Monastic Arts', 'Throwing']);
 (function finalizeAbilityRequirements() {
   SPELLS.forEach(s => { s.reqStat = 'int'; s.req = 8 + Math.round((s.mp || 8) * 0.75); });
   TECHNIQUES.forEach(t => {
@@ -9536,6 +9622,39 @@ function weatherElementMultiplier(spellLike) {
 function weatherVisRadiusDelta() { if (curIsDungeon()) return 0; return currentWeatherDef().visMod || 0; }
 function weatherRangedAccuracyMod() { if (curIsDungeon()) return 0; return currentWeatherDef().rangedAccuracyMod || 0; }
 function weatherIgniteChanceMult() { if (curIsDungeon()) return 1; return currentWeatherDef().igniteMult ?? 1; }
+
+// ---------------------------------------------------------------- PLAYER WEATHER CONTROL ----
+// Real (non-debug) hook for any ability -- spell, eldritch power, or cyberware -- that lets the
+// player push local weather toward an outcome, rather than only ever rolling it passively.
+// Reuses the exact weatherState/ensureWeather plumbing the passive scheduler uses, so a forced
+// change rides the same soft-transition and elementMods/tempShift/visMod machinery automatically
+// (see WEATHER_TYPES, weatherElementMultiplier, currentTemperature) instead of needing its own
+// parallel bookkeeping.
+function canControlWeather() { return !curIsDungeon(); }
+// Every weather-control ability declares `weatherTarget` as either a single id or an array of
+// candidate ids (a general storm-calling ability rolls among a themed set rather than forcing one
+// exact outcome -- see SPELL/ELDRITCH/CYBERWARE entries with type:'weather').
+function playerControlWeather(spell) {
+  if (!canControlWeather()) { log("The weather doesn't answer to you underground."); return false; }
+  const zk = zoneKey();
+  const table = zoneClimate(zk).weatherTable.map(e => e[0]);
+  let candidates = Array.isArray(spell.weatherTarget) ? spell.weatherTarget : [spell.weatherTarget];
+  // prefer a candidate this zone can naturally roll, so a generic "Call Storm" cast in the
+  // Undertow reaches for pressure_swell/static_storm instead of forcing something alien to the
+  // biome; falls back to the first declared candidate if none fit the local climate table.
+  candidates = candidates.filter(id => WEATHER_TYPES[id]);
+  let pick = candidates.find(id => table.includes(id)) || candidates[0];
+  if (!pick) return false;
+  const st = ensureWeather(zk);
+  const from = st.id;
+  st.id = pick;
+  st.turnsRemaining = spell.weatherDur || weatherDuration(pick);
+  if (from !== pick) announceWeatherChange(zk, from, pick);
+  else log(`${WEATHER_TYPES[pick].name} holds, reinforced by your will.`);
+  renderWeatherOverlay();
+  updateSidebar();
+  return true;
+}
 
 // ---------------------------------------------------------------- TERRAIN / PLAYER TICK ----
 function handleTemperatureExposure(temp) {
@@ -16703,6 +16822,12 @@ function castSpell(spellId) {
     applyBuff(spell.stat, power, spell.dur);
     endTurn(); return;
   }
+  if (spell.type === 'weather') {
+    if (!canControlWeather()) { log("The weather doesn't answer to you underground."); return; }
+    if (!paySpellCost(spell)) { log(spell.resource === 'charge' ? 'Not enough charge.' : (spell.resource === 'stamina' ? 'Not enough stamina.' : 'Not enough mana.')); return; }
+    playerControlWeather(spell);
+    endTurn(); return;
+  }
   if (spell.type === 'corpseblast') {
     const corpse = findNearestCorpse(spell.range);
     if (!corpse) { log('No corpse nearby to detonate.'); return; }
@@ -23557,7 +23682,7 @@ function resolveThrownWeapon(it, wx, wy, target) {
     return;
   }
   const dist = chebyshev(player.x, player.y, wx, wy);
-  let chance = 0.62 + (purposeBuilt ? 0.08 : -0.1) + (effDex(player) - effDex(target)) * 0.02 - Math.max(0, dist - 3) * 0.03;
+  let chance = 0.62 + (purposeBuilt ? 0.08 : -0.1) + (effDex(player) - effDex(target)) * 0.02 - Math.max(0, dist - 3) * 0.03 + (player.throwAccuracyBonus || 0);
   chance = Math.max(0.15, Math.min(0.92, chance));
   if (Math.random() >= chance) {
     log(`Your thrown ${it.name} misses ${target.name}.`);
@@ -23577,7 +23702,7 @@ function resolveThrownWeapon(it, wx, wy, target) {
   if (it.armorPierce) defArmor = Math.max(0, defArmor - it.armorPierce);
   dmg -= defArmor;
   let crit = false;
-  if (Math.random() < 0.08 + (purposeBuilt ? 0.05 : 0)) { dmg *= 2; crit = true; }
+  if (Math.random() < 0.08 + (purposeBuilt ? 0.05 : 0) + (player.throwCritBonus || 0)) { dmg *= 2; crit = true; }
   dmg = Math.max(1, Math.round(dmg));
   target.hp -= dmg;
   if (target === player) lastDamageSource = 'a thrown weapon'; else target.harmedByPlayer = true;
@@ -23588,7 +23713,7 @@ function resolveThrownWeapon(it, wx, wy, target) {
   // durability: purpose-built throwing weapons barely notice the impact; an improvised throw of
   // your actual melee weapon is rougher on it. Wear alone never destroys/vanishes the item --
   // worst case it eventually goes 'broken' the same way normal use would, same as everywhere else.
-  if (it.maxDurability !== undefined && it.maxDurability !== Infinity) wearItem(it, purposeBuilt ? 1 : 3);
+  if (it.maxDurability !== undefined && it.maxDurability !== Infinity && !player.throwNoWear) wearItem(it, purposeBuilt ? 1 : 3);
   if (target.hp <= 0) {
     onDeath(target, player);
     placeItemAt(wx, wy, it); // drops with the body -- always recoverable off the corpse
@@ -23600,7 +23725,10 @@ function resolveThrownWeapon(it, wx, wy, target) {
   // die (see dropLoot()) or you extend this with a way to pull it free early. Blunt/improvised
   // throws (a sword, a mace, a shield) just bounce off and fall where they landed.
   const stickChance = purposeBuilt ? 0.5 : 0.05;
-  if (Math.random() < stickChance) {
+  if (player.throwRecoverChance && Math.random() < player.throwRecoverChance) {
+    player.inventory.push(it);
+    log(`${it.name} snaps back into your grip as if it never left.`);
+  } else if (Math.random() < stickChance) {
     target.stuckItems = target.stuckItems || [];
     target.stuckItems.push(it);
     log(`${it.name} sticks fast in ${target.name}!`);
