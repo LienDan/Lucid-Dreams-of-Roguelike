@@ -476,7 +476,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.36.5-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.36.8-alpha</div>
     </div>
   </div>
 
@@ -581,16 +581,64 @@
 //    Reassignment excludes boss:true this time (not just scriptedAI) -- their special moves still
 //    fire via tryMonsterCast regardless, but their tuned baseline melee is left as originally
 //    authored rather than swept into a new archetype without a balance pass.
+//  - Talents vs. mutation categories, completed: added Plague (Patient Zero -> Walking Epidemic)
+//    and Void/Cosmic (Starborn Calculus -> Apex Singularity) branches, same shape as the Predatory/
+//    Symbiotic branches from last pass. All four mutation-category specialization lines now exist.
+//  - CRITICAL BUG FOUND AND FIXED while wiring these up: paySpellCost() only ever read
+//    ability.selfCost for type:'lifetap'/'bloodarmor', and separately only read ability.mp for
+//    everything else. Two real consequences this had before the fix: (1) Crimson Lance (a Blood
+//    Magic spell, type:'lifetap', but using mp:18 instead of selfCost) computed cost as `undefined`,
+//    so `player.hp -= undefined` set player.hp to NaN on every single cast -- a silent, permanent
+//    HP corruption bug. (2) The large majority of active eldritch mutations (resource:'hp',
+//    selfCost:X, type:'damage'/'debuff'/'blinklike'/'summon'/'execute') never matched either
+//    branch, fell to the generic mp-based cost path, read an undefined ability.mp, and cost
+//    nothing -- meaning nearly every active mutation in the game was effectively free to spam
+//    with no resource cost at all. Rewrote paySpellCost to key off resource==='hp' generally with
+//    a real fallback chain (selfCost, then mp, then 0), fixing both problems at once and making
+//    every HP-cost-reduction talent (mutationHpCostReduction, the new mutationBlinkCostReduction)
+//    actually apply to a real, non-zero cost for the first time.
 //
 // NOT YET DONE (found during audit, real gaps, ordered roughly by how load-bearing they are):
-//  - Plague and Void/Cosmic mutation categories still lack their own specialization branch the way
-//    Predatory/Symbiotic now have one (MUTATION_CATEGORY_DMG_FIELD already has entries reserved
-//    for plagueDmgBonus/voidCosmicDmgBonus/aberrantDmgBonus -- just needs the talent branches).
 //  - Enemy AI: demonic/human/goblinoid/orc/giantkin/settlement/celestial factions and plants still
 //    fall back to plain 'aggressive' by design (either already covered by squad tactics via the
 //    'intelligent' flag, or -- for plants -- genuinely shouldn't have mobile tactics). Worth a
 //    second look at demonic specifically, which doesn't have squad tactics and isn't obviously
 //    served by any of the six new archetypes as-is -- may want its own behavior eventually.
+//  - Given how serious the paySpellCost bug was, worth a broader pass checking other cost/resource
+//    paths (item consumption, cyberware charge costs, technique stamina costs) for the same class
+//    of "field the code assumes exists but isn't actually always present" mistake.
+//  - Audited that broader pass this session: checked every TECHNIQUES/CYBERNETICS/MUTATIONS entry
+//    for a missing mp/selfCost field (none found -- all 128 techniques, 103 cyberware, and every
+//    active mutation have one), and spot-checked useItem()'s consumable-effect switch and
+//    resolveThrowAtTile()'s grenade/scroll switch for the same "assumes a field is present" pattern
+//    (both already defensively guarded with fallbacks -- clean). No further instances of the bug
+//    found; the paySpellCost fix appears to have been the one real occurrence of this class.
+//  - Found another real gap matching the player's original examples exactly: a full SPECIES/race
+//    system exists (13 peoples -- Human/Elf/Dwarf/Orc/Skarath/Vulkari/Thalassi/Corvashi/Nyxari/
+//    Ashkari/Construct/Goblin/Troll -- with real statMods, unique traits, and NPC-affinity
+//    integration via speciesAffinityScore) but had zero lore coverage -- no book anywhere ever
+//    mentioned any of these peoples existed. Added two entries: a scholar's working ethnography
+//    covering all 13 (research_peoples) and a diary entry dramatizing the Skarath/Vulkari rivalry
+//    that's already coded into their affinity table (diary_skarath_vulkari) but was otherwise
+//    invisible to the player. Species also has zero talent-tree synergy (no talent amplifies or
+//    interacts with a species trait the way the new mutation-category branches do) -- flagged as
+//    the next natural item in this vein, same shape as the mutation-category work.
+//  - Talents vs. species, done: added a single Ancestral Heritage talent rather than 11 separate
+//    branches, built the way SPECIES itself says it wants to be extended (see the framework
+//    comment above const SPECIES) -- each species entry now carries its own heritageBoost(p) hook,
+//    amplifying that species' actual signature trait (Corvashi fall damage, Nyxari corruption
+//    threshold, Construct cyber slots, etc.), and the talent just calls whichever hook matches
+//    player.species. A new species added later only needs its own heritageBoost -- this talent
+//    doesn't need touching. All 11 playable species now have one.
+//
+// NOT YET DONE (found during audit, real gaps, ordered roughly by how load-bearing they are):
+//  - Enemy AI: demonic monsters still fall back to plain 'aggressive' -- not obviously served by
+//    any of the six existing archetypes, may want its own behavior eventually (a menacing/fear-
+//    inducing pattern was the working idea, never built).
+//  - Species/lore: only 2 of the 11 species have their affinity-table rivalries or alliances
+//    dramatized in lore (Skarath/Vulkari now covered) -- Elf/Orc, Elf/Nyxari, Orc/Dwarf, Thalassi/
+//    Ashkari, and Orc/Nyxari's friendlier tilt are all real coded affinity numbers with no in-world
+//    story behind them yet.
 //  - Lore still has room to grow: relationships beyond courtship/marriage (gift decay, rivalry?),
 //    the notes/rumor-scrap system covering itself, and companion/ally mechanics if they exist as
 //    their own system, all still have zero in-world text.
@@ -2157,6 +2205,11 @@ const BOOKS_MANUAL = [
 // ---------------------------------------------------------------- MARTIAL TRAINING, BEYOND THE OBVIOUS ----
 { id:'guide_martial_disciplines', title:'On Choosing a Discipline, and Why Most People Choose Wrong', author:'Retired Blade Orin Vask', date:'personal notes, shared freely', category:'guide', tags:['talents'],
   body:"Most recruits pick a weapon because it looks impressive and spend years discovering it doesn't suit them. A few things worth knowing before you commit: the monk's empty-handed disciplines take longer to pay off than any weapon but eventually stop caring what's in your hands at all, which matters more than it sounds like it does the day your weapon breaks mid-fight. Dual wielding rewards a mind that can genuinely track two things at once and punishes one that can't, badly -- it is not simply 'two weapons instead of one,' it is an entirely different rhythm of thought. And the disciplines built around controlled fury, the berserker traditions, ask you to trust yourself at your most dangerous, which is a harder thing to learn than any stance or footwork.\n\nWatch a veteran of each discipline fight before you choose. You'll learn more from thirty seconds of watching than from a season of lectures, mine included." },
+// ---------------------------------------------------------------- THE MANY PEOPLES OF THE REALM ----
+{ id:'research_peoples', title:'A Working Ethnography, Incomplete by Necessity', author:'Wandering Scholar Idris Thorne', date:'field journal, several regions', category:'research', tags:['species'],
+  body:"I set out years ago to catalogue every people I encountered on my travels and I have since abandoned any hope of finishing. What I can offer instead is a working sketch, useful to a traveler even if it insults a specialist.\n\nThe scaled Skarath of the swamps and deserts are hard to poison and harder to frighten, and just as hard to get to know -- they keep to themselves by temperament, not hostility, though I've heard their old rivalry with the half-animal Vulkari runs deep enough that the two rarely settle the same town without friction. The Vulkari themselves move like they were born already mid-hunt, fast and sharp-sensed and visibly impatient with anyone who wants to sit still and study something. The amphibious Thalassi never tire in water and never quite settle on land, which shows in how briefly they linger anywhere without a coastline. The Corvashi, bird-boned and light, treat heights the rest of us fear as simply more room to move.\n\nThree peoples I approach more carefully. The Nyxari carry whatever they brushed against out there closer to the surface than they'd like anyone to notice, and it shows in how comfortable they are around things that unsettle the rest of us. The Ashkari run warm enough that open flame barely troubles them and open water very much does. And the constructs -- I hesitate even to call them a people in my notes, and then I remember that hesitation is exactly the kind of thing they'd have opinions about, if asked." },
+{ id:'diary_skarath_vulkari', title:'A Trading-Post Ledger-Keeper\'s Aside', author:'Ledger-Keeper Ansel Rook', date:'personal margin notes, not for the official record', category:'diary', tags:['species'],
+  body:"Had a Skarath caravan and a Vulkari hunting party both want the same stretch of the yard to make camp in tonight, and neither one would say out loud why they wouldn't just share it the way any two strangers would. Old feud, the Skarath trader admitted eventually, once the Vulkari were out of earshot -- goes back further than anyone currently alive, over grazing rights or hunting rights or something equally practical that's long since calcified into something neither side examines anymore.\n\nI split the yard down the middle with a rope and charged them both double for the inconvenience. Neither complained about the price. Both complained about the rope. I've decided that's the most honest transaction I've had all season." },
 ];
 
 
@@ -2601,6 +2654,7 @@ const SPECIES = [
       { name:'Adaptable', desc:'Starts with one extra unspent stat point to place anywhere.', apply:(p)=>{ p.statPoints = (p.statPoints||0) + 1; } },
       { name:'Common Tongue', desc:'Easy to get along with -- NPCs warm up to you a little faster regardless of their species.', apply:(p)=>{ p.affectionBonus=(p.affectionBonus||0)+0.1; } },
     ],
+    heritageBoost:(p)=>{ p.statPoints=(p.statPoints||0)+1; p.affectionBonus=(p.affectionBonus||0)+0.15; },
     kingdomTraitWeights:{ militaristic:2, mercantile:4, scholarly:2, isolationist:0, pious:2, lawless:2 },
     biomeWeights:{}, flavorAffinity:['standard','farming','trading','military','monastery'],
     affinity:{} },
@@ -2612,6 +2666,7 @@ const SPECIES = [
       { name:'Keen Sight', desc:'See noticeably further across the overworld.', apply:(p)=>{ p.visionBonus=(p.visionBonus||0)+2; } },
       { name:'Old Magic', desc:'HP and MP trickle back faster between fights.', apply:(p)=>{ p.regenBonus=true; } },
     ],
+    heritageBoost:(p)=>{ p.visionBonus=(p.visionBonus||0)+2; p.mutationRegen=(p.mutationRegen||0)+1; },
     kingdomTraitWeights:{ scholarly:6, isolationist:4, pious:2, militaristic:-2, lawless:-3 },
     biomeWeights:{ forest:6, denseforest:8, plains:1 }, flavorAffinity:['elven'],
     affinity:{ orc:-1, nyxari:-0.5 } },
@@ -2623,6 +2678,7 @@ const SPECIES = [
       { name:'Stonehide', desc:'Naturally tougher skin grants a small passive armor bonus.', apply:(p)=>{ p.talentArmor=(p.talentArmor||0)+1; } },
       { name:'Iron Stomach', desc:'Resists a large portion of poison damage.', apply:(p)=>{ p.poisonDmgReduction=Math.min(0.9,(p.poisonDmgReduction||0)+0.3); } },
     ],
+    heritageBoost:(p)=>{ p.talentArmor=(p.talentArmor||0)+2; p.poisonDmgReduction=Math.min(0.95,(p.poisonDmgReduction||0)+0.2); },
     kingdomTraitWeights:{ militaristic:4, mercantile:2, isolationist:3, lawless:-2 },
     biomeWeights:{ mountain:8, tundra:2 }, flavorAffinity:['dwarven','mining'],
     affinity:{ orc:-1 } },
@@ -2634,6 +2690,7 @@ const SPECIES = [
       { name:'Bloodfury', desc:'Hits noticeably harder once badly wounded (below ~35% HP).', apply:(p)=>{ p.lowHpDmgBonus=(p.lowHpDmgBonus||0)+0.3; } },
       { name:'Thick Hide', desc:'Naturally tougher skin grants a small passive armor bonus.', apply:(p)=>{ p.talentArmor=(p.talentArmor||0)+1; } },
     ],
+    heritageBoost:(p)=>{ p.lowHpDmgBonus=(p.lowHpDmgBonus||0)+0.2; p.talentArmor=(p.talentArmor||0)+1; },
     kingdomTraitWeights:{ militaristic:6, lawless:5, mercantile:-2, scholarly:-3, pious:-2 },
     biomeWeights:{ mountain:3, plains:2, desert:2, swamp:2 }, flavorAffinity:['nomad','military'],
     affinity:{ elf:-1, dwarf:-1, nyxari:0.5 } },
@@ -2645,6 +2702,7 @@ const SPECIES = [
       { name:'Scaled Hide', desc:'Thick natural scales resist a large portion of poison damage and add armor.', apply:(p)=>{ p.poisonDmgReduction=Math.min(0.95,(p.poisonDmgReduction||0)+0.6); p.talentArmor=(p.talentArmor||0)+1; } },
       { name:'Cold Blood', desc:'Steady nerves -- much less likely to be gripped by fear.', apply:(p)=>{ p.fearResistBonus=(p.fearResistBonus||0)+0.5; } },
     ],
+    heritageBoost:(p)=>{ p.poisonDmgReduction=Math.min(0.97,(p.poisonDmgReduction||0)+0.2); p.fearResistBonus=(p.fearResistBonus||0)+0.3; },
     kingdomTraitWeights:{ isolationist:4, lawless:3, scholarly:-2 },
     biomeWeights:{ swamp:8, desert:3 }, flavorAffinity:[],
     affinity:{ vulkari:-0.5 } },
@@ -2656,6 +2714,7 @@ const SPECIES = [
       { name:"Predator's Instinct", desc:'Much less likely to trigger hidden traps.', apply:(p)=>{ p.trapAvoidBonus=(p.trapAvoidBonus||0)+0.25; } },
       { name:'Fleet-Footed', desc:'Swimming and running drain stamina more slowly.', apply:(p)=>{ p.staminaDrainReduction=Math.min(0.9,(p.staminaDrainReduction||0)+0.25); } },
     ],
+    heritageBoost:(p)=>{ p.trapAvoidBonus=(p.trapAvoidBonus||0)+0.2; p.staminaDrainReduction=Math.min(0.95,(p.staminaDrainReduction||0)+0.15); },
     kingdomTraitWeights:{ lawless:3, militaristic:2, scholarly:-2 },
     biomeWeights:{ forest:5, plains:4, tundra:2 }, flavorAffinity:['nomad'],
     affinity:{ skarath:-0.5 } },
@@ -2668,6 +2727,7 @@ const SPECIES = [
       { name:"Water's Grace", desc:'A little harder to hit in a fight.', apply:(p)=>{ p.dodgeChance=(p.dodgeChance||0)+0.05; } },
       { name:'Landsick', desc:'Ill-suited to dry ground -- stamina regenerates slower while out of water.', apply:(p)=>{ p.staminaRegenPenalty=(p.staminaRegenPenalty||0)+1; } },
     ],
+    heritageBoost:(p)=>{ p.dodgeChance=(p.dodgeChance||0)+0.06; p.staminaRegenPenalty=Math.max(0,(p.staminaRegenPenalty||0)-1); },
     kingdomTraitWeights:{ mercantile:3, isolationist:2, militaristic:-2 },
     biomeWeights:{ beach:8, swamp:3, ocean:5 }, flavorAffinity:['fishing','pirate'],
     affinity:{ ashkari:-1 } },
@@ -2679,6 +2739,7 @@ const SPECIES = [
       { name:'Windborne', desc:'Falls (chasms and the like) do much less damage.', apply:(p)=>{ p.fallDamageReduction=Math.max(p.fallDamageReduction||0,0.6); } },
       { name:'Sharp Eyes', desc:'See noticeably further across the overworld.', apply:(p)=>{ p.visionBonus=(p.visionBonus||0)+3; } },
     ],
+    heritageBoost:(p)=>{ p.fallDamageReduction=Math.max(p.fallDamageReduction||0,0.85); p.visionBonus=(p.visionBonus||0)+2; },
     kingdomTraitWeights:{ scholarly:2, mercantile:2, isolationist:1 },
     biomeWeights:{ mountain:6, plains:2, tundra:3 }, flavorAffinity:[],
     affinity:{} },
@@ -2690,6 +2751,7 @@ const SPECIES = [
       { name:'Nightborn', desc:'Eldritch mutations become accessible at lower corruption.', apply:(p)=>{ p.corruptionReqReduction=(p.corruptionReqReduction||0)+10; } },
       { name:'Shadowstep', desc:'Slightly higher critical hit chance.', apply:(p)=>{ p.critBonus=(p.critBonus||0)+0.05; } },
     ],
+    heritageBoost:(p)=>{ p.corruptionReqReduction=(p.corruptionReqReduction||0)+8; p.critBonus=(p.critBonus||0)+0.05; },
     kingdomTraitWeights:{ lawless:4, isolationist:2, scholarly:1, pious:-3 },
     biomeWeights:{ denseforest:5, swamp:3, mountain:2 }, flavorAffinity:['cult'],
     affinity:{ elf:-0.5, orc:0.5 } },
@@ -2702,6 +2764,7 @@ const SPECIES = [
       { name:'Warm Blood', desc:'Recovers stamina faster.', apply:(p)=>{ p.staminaRegenBonus=true; } },
       { name:'Steam-Shy', desc:'Swimming is exhausting and briefly hisses/steams -- costs much more stamina and chips a fair bit of HP each time you enter water.', apply:(p)=>{ p.waterStaminaPenalty=(p.waterStaminaPenalty||0)+1; p.waterEntryDmg=Math.max(p.waterEntryDmg||0,3); } },
     ],
+    heritageBoost:(p)=>{ p.fireDmgReduction=Math.min(0.95,(p.fireDmgReduction||0)+0.15); p.waterEntryDmg=Math.max(0,(p.waterEntryDmg||0)-1); },
     kingdomTraitWeights:{ militaristic:2, pious:2, scholarly:1 },
     biomeWeights:{ desert:6, mountain:3 }, flavorAffinity:[],
     affinity:{ thalassi:-1 } },
@@ -2714,6 +2777,7 @@ const SPECIES = [
       { name:'No Nervous System', desc:'Immune to poison damage; healing magic and potions restore noticeably less HP.', apply:(p)=>{ p.poisonDmgReduction=1; p.healingReceivedMult=Math.min((p.healingReceivedMult!==undefined?p.healingReceivedMult:1), 0.6); } },
       { name:'Water-Sensitive Chassis', desc:'Water plays havoc with your internals -- swimming costs noticeably more stamina and sparks/corrodes you a little each time you enter water.', apply:(p)=>{ p.waterStaminaPenalty=(p.waterStaminaPenalty||0)+0.6; p.waterEntryDmg=Math.max(p.waterEntryDmg||0,2); } },
     ],
+    heritageBoost:(p)=>{ p.cyberSlots=(p.cyberSlots||3)+1; p.cyberCostReduction=(p.cyberCostReduction||0)+0.1; },
     kingdomTraitWeights:{ scholarly:3, militaristic:1, mercantile:1, pious:-4, isolationist:-1 },
     biomeWeights:{}, flavorAffinity:['tech'],
     affinity:{} },
@@ -3332,6 +3396,16 @@ TALENTS_V2.push(
   { id:'stormtoughened', name:'Storm-Toughened', category:'survival', desc:'Bad weather no longer worsens your vision or ranged accuracy', tier:3, requires:{level:10, talent:'heatadapted'}, apply:()=>{ player.weatherVisResist=1; player.weatherAccResist=1; } },
   { id:'seasonsteel', name:"Season's Steel", category:'survival', desc:'Full immunity to cold- and heat-exposure buildup', tier:4, requires:{level:15, talent:'stormtoughened'}, apply:()=>{ player.chillResist=1; player.heatResist=1; } },
   { id:'stormward_capstone', name:'Storm Ward', category:'survival', desc:'Completely unaffected by extreme weather and temperature; regenerate slightly faster while severe weather rages nearby', tier:5, requires:{level:20, talent:'seasonsteel'}, apply:()=>{ player.climateImmune=true; player.stormRegenBonus=true; } },
+  // ---- Ancestral Heritage: every one of the 11 playable SPECIES has real traits (statMods,
+  // world-state hooks) but none of them had any talent-tree presence -- the talent tree and the
+  // species system had simply never been connected. Built the same way SPECIES itself is built
+  // (see the framework comment above SPECIES): a heritageBoost(p) hook living on each species
+  // entry, read generically here rather than switched on player.species inline, so a new species
+  // added later just needs its own heritageBoost and this talent picks it up automatically with no
+  // changes here. Each boost amplifies that species' actual signature trait rather than being a
+  // generic flat stat -- a Corvashi gets much safer falls, a Nyxari gets easier access to
+  // mutations, a Construct gets another cyber slot, and so on.
+  { id:'ancestralheritage', name:'Ancestral Heritage', category:'survival', desc:'Your heritage runs deeper than most -- your species\' defining trait grows noticeably stronger', tier:2, requires:{level:5}, apply:()=>{ const sp = getSpecies(player.species); if (sp && sp.heritageBoost) sp.heritageBoost(player); } },
   { id:'pathfinder', name:'Pathfinder', category:'survival', desc:'See slightly further in the overworld', tier:1, requires:null, apply:()=>{ player.visionBonus=(player.visionBonus||0)+2; } },
   { id:'quickfingers', name:'Quick Fingers', category:'combat', desc:'+5% critical hit chance', tier:1, requires:null, apply:()=>{ player.critBonus=(player.critBonus||0)+0.05; } },
   { id:'thickhide', name:'Thick Hide', category:'survival', desc:'+2 Armor (innate)', tier:1, requires:null, apply:()=>{ player.talentArmor=(player.talentArmor||0)+2; } },
@@ -3419,7 +3493,21 @@ TALENTS_V2.push(
   { id:'passengersgrip', name:"Passenger's Grip", category:'eldritch', desc:'+8% damage from Symbiotic mutations; +1 mutation regeneration per turn', tier:2, requires:{level:5, talent:'whisperer'}, apply:()=>{ player.symbioticDmgBonus=(player.symbioticDmgBonus||0)+0.08; player.mutationRegen=(player.mutationRegen||0)+1; } },
   { id:'boundvitality', name:'Bound Vitality', category:'eldritch', desc:'+12% more damage from Symbiotic mutations; +20 Max HP', tier:3, requires:{level:10, talent:'passengersgrip'}, apply:()=>{ player.symbioticDmgBonus=(player.symbioticDmgBonus||0)+0.12; player.maxHp+=20; player.hp+=20; } },
   { id:'livingarmor', name:'Living Armor', category:'eldritch', desc:'+15% more damage from Symbiotic mutations; +1 more mutation regeneration; active mutations cost 15% less HP', tier:4, requires:{level:15, talent:'boundvitality'}, apply:()=>{ player.symbioticDmgBonus=(player.symbioticDmgBonus||0)+0.15; player.mutationRegen=(player.mutationRegen||0)+1; player.mutationHpCostReduction=(player.mutationHpCostReduction||0)+0.15; } },
-  { id:'trueunion', name:'True Union', category:'eldritch', desc:'+20% more damage from Symbiotic mutations; +2 more mutation regeneration; your passenger can absorb one additional killing blow before you rest', tier:5, requires:{level:20, talent:'livingarmor'}, apply:()=>{ player.symbioticDmgBonus=(player.symbioticDmgBonus||0)+0.2; player.mutationRegen=(player.mutationRegen||0)+2; player.secondWindMax=(player.secondWindMax||0)+1; player.secondWindCharges=(player.secondWindCharges||0)+1; } }
+  { id:'trueunion', name:'True Union', category:'eldritch', desc:'+20% more damage from Symbiotic mutations; +2 more mutation regeneration; your passenger can absorb one additional killing blow before you rest', tier:5, requires:{level:20, talent:'livingarmor'}, apply:()=>{ player.symbioticDmgBonus=(player.symbioticDmgBonus||0)+0.2; player.mutationRegen=(player.mutationRegen||0)+2; player.secondWindMax=(player.secondWindMax||0)+1; player.secondWindCharges=(player.secondWindCharges||0)+1; } },
+  // ---- Plague & Void/Cosmic specialization branches, completing the mutation-category coverage
+  // started with Predatory/Symbiotic. Both use MUTATION_CATEGORY_DMG_FIELD like those did. Plague's
+  // capstone adds a genuinely new mechanic (see onDeath: plagueSpreadOnKill) rather than just more
+  // flat damage; Void/Cosmic's line specifically amplifies the missing-HP scaling on execute-type
+  // mutations (see applyEffectToTarget's execute branch: voidExecuteBonus) since that's the part of
+  // their kit ("decay accelerates", "simply stops being real") the flat dmgMult doesn't touch.
+  { id:'patientzero', name:'Patient Zero', category:'eldritch', desc:'+8% damage from Plague mutations; +2 CON', tier:2, requires:{level:5, talent:'whisperer'}, apply:()=>{ player.plagueDmgBonus=(player.plagueDmgBonus||0)+0.08; player.con+=2; } },
+  { id:'endemicspread', name:'Endemic Spread', category:'eldritch', desc:'+12% more damage from Plague mutations; enemies you poisoned that die spread the infection to one nearby foe and mend you slightly', tier:3, requires:{level:10, talent:'patientzero'}, apply:()=>{ player.plagueDmgBonus=(player.plagueDmgBonus||0)+0.12; player.plagueSpreadOnKill=Math.max(1, player.plagueSpreadOnKill||0); } },
+  { id:'virulentstrain', name:'Virulent Strain', category:'eldritch', desc:'+15% more damage from Plague mutations; +3 CON', tier:4, requires:{level:15, talent:'endemicspread'}, apply:()=>{ player.plagueDmgBonus=(player.plagueDmgBonus||0)+0.15; player.con+=3; } },
+  { id:'walkingepidemic', name:'Walking Epidemic', category:'eldritch', desc:'+20% more damage from Plague mutations; infection now spreads to up to 2 nearby foes on kill', tier:5, requires:{level:20, talent:'virulentstrain'}, apply:()=>{ player.plagueDmgBonus=(player.plagueDmgBonus||0)+0.2; player.plagueSpreadOnKill=2; } },
+  { id:'starborncalculus', name:'Starborn Calculus', category:'eldritch', desc:'+8% damage from Void/Cosmic mutations; blink-type mutations cost 20% less HP', tier:2, requires:{level:5, talent:'whisperer'}, apply:()=>{ player.voidCosmicDmgBonus=(player.voidCosmicDmgBonus||0)+0.08; player.mutationBlinkCostReduction=(player.mutationBlinkCostReduction||0)+0.2; } },
+  { id:'gravitysense', name:'Gravity Sense', category:'eldritch', desc:'+12% more damage from Void/Cosmic mutations; their missing-HP execute bonus is 50% stronger', tier:3, requires:{level:10, talent:'starborncalculus'}, apply:()=>{ player.voidCosmicDmgBonus=(player.voidCosmicDmgBonus||0)+0.12; player.voidExecuteBonus=(player.voidExecuteBonus||0)+0.5; } },
+  { id:'eventhorizon', name:'Event Horizon', category:'eldritch', desc:'+15% more damage from Void/Cosmic mutations; +3 INT', tier:4, requires:{level:15, talent:'gravitysense'}, apply:()=>{ player.voidCosmicDmgBonus=(player.voidCosmicDmgBonus||0)+0.15; player.int+=3; } },
+  { id:'apexsingularity', name:'Apex Singularity', category:'eldritch', desc:'+20% more damage from Void/Cosmic mutations; their missing-HP execute bonus doubled again; +3 more INT', tier:5, requires:{level:20, talent:'eventhorizon'}, apply:()=>{ player.voidCosmicDmgBonus=(player.voidCosmicDmgBonus||0)+0.2; player.voidExecuteBonus=(player.voidExecuteBonus||0)+1.0; player.int+=3; } }
 );
 
 // ---- vessels: a data-driven water-travel framework. A "vessel" is just a carryable item (like
@@ -15429,6 +15517,19 @@ function onDeath(def, killer) {
     // defense memory system near NPC_DEFENDER_ROLES for how this later surfaces as a rumor.
     recordSettlementDefense(killer, def);
   }
+  // Plague talent line (Walking Epidemic capstone, see player.plagueSpreadOnKill): a target you
+  // poisoned yourself that dies while still infected has the infection leap to nearby hostiles
+  // instead of dying with it -- the epidemic outliving the host, which is the whole point of the
+  // capstone rather than just another flat damage number.
+  if (isPlayerOwnedKiller(killer) && def.kind === 'monster' && (def.statusPoison || 0) > 0 && player.plagueSpreadOnKill) {
+    const spreadTargets = hostilesWithinRadius(def.x, def.y, 2).filter(h => h !== def && h.alive !== false);
+    const n = Math.min(player.plagueSpreadOnKill, spreadTargets.length);
+    for (let i = 0; i < n; i++) {
+      spreadTargets[i].statusPoison = (spreadTargets[i].statusPoison || 0) + Math.min(4, def.statusPoison);
+      log(`The infection leaps from ${def.name}'s corpse to ${spreadTargets[i].name}!`);
+    }
+    if (n > 0) player.hp = Math.min(player.maxHp, player.hp + n); // "walking epidemic" thrives on its own spread
+  }
   // ---- splitting: oozes/slimes divide into smaller copies of themselves when killed ----
   if (def.splitInto && def.kind === 'monster') {
     const spawnN = def.splitCount || 2;
@@ -16739,11 +16840,27 @@ function abilityPoolOf(id) {
 }
 
 // ---- pay cost v2: HP-cost abilities (lifetap/bloodarmor/mutations) generalized with reductions ----
+// ---- pay cost v2: HP-cost abilities (lifetap/bloodarmor/mutations) generalized with reductions ----
+// BUG FIX: this used to only special-case ability.type ('lifetap'/'bloodarmor'), computing
+// cost from ability.selfCost unconditionally. Two real problems that caused: (1) Crimson Lance
+// (type:'lifetap') has no selfCost field at all -- only mp:18 -- so `cost` was `undefined`,
+// `player.hp <= undefined` is always false, and `player.hp -= undefined` set player.hp to NaN on
+// every cast, silently corrupting HP for the rest of the session. (2) The large majority of active
+// mutations (resource:'hp', selfCost:X, but type:'damage'/'debuff'/'blinklike'/'summon'/'execute'
+// rather than lifetap/bloodarmor) never hit this branch at all -- they fell to the generic path
+// below, which reads ability.mp (undefined for these), so effectiveCost() returned 0 and they cost
+// nothing. Nearly every active eldritch mutation in the game was effectively free. Now keyed off
+// resource==='hp' (covers all of the above) with a real fallback chain (selfCost, then mp, then 0)
+// instead of assuming one specific field is always present.
 function paySpellCost(ability) {
-  if (ability.type === 'lifetap' || ability.type === 'bloodarmor') {
-    let cost = ability.selfCost;
-    if (abilityPoolOf(ability.id) === 'mutation') cost = Math.max(1, Math.round(cost * (1 - (player.mutationHpCostReduction || 0))));
-    if (player.hp <= cost) return false;
+  if (ability.type === 'lifetap' || ability.type === 'bloodarmor' || ability.resource === 'hp') {
+    let cost = ability.selfCost != null ? ability.selfCost : (ability.mp || 0);
+    if (abilityPoolOf(ability.id) === 'mutation') {
+      cost = Math.round(cost * (1 - (player.mutationHpCostReduction || 0)));
+      if (ability.type === 'blinklike') cost = Math.round(cost * (1 - (player.mutationBlinkCostReduction || 0)));
+      cost = Math.max(cost > 0 ? 1 : 0, cost);
+    }
+    if (cost > 0 && player.hp <= cost) return false;
     player.hp -= cost; return true;
   }
   const resource = ability.resource || 'mp';
@@ -16781,8 +16898,12 @@ function applyEffectToTarget(spell, t) {
     return;
   }
   if (spell.type === 'execute') {
+    // Void/Cosmic talent line: missing-HP scaling on execute-type mutations (Entropy Touch, The
+    // Consuming) is amplified separately from dmgMult, since it's a distinct part of the formula
+    // ("decay accelerates" reads as literally true the lower the target's HP already is).
+    const execScale = (abilityPoolOf(spell.id) === 'mutation' && spell.category === 'Void/Cosmic') ? (1 + (player.voidExecuteBonus || 0)) : 1;
     const missingPct = 1 - (t.hp / t.maxHp);
-    let dmg = randInt(Math.random, spell.power[0], spell.power[1]) + Math.round(missingPct * 20);
+    let dmg = randInt(Math.random, spell.power[0], spell.power[1]) + Math.round(missingPct * 20 * execScale);
     dmg = Math.round(dmg * dmgMult);
     t.hp -= dmg;
     log(`Your ${spell.name} tears open old wounds on ${t.name} for ${dmg}.`);
