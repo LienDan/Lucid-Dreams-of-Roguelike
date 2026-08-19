@@ -521,413 +521,54 @@
 
 <script>
 // ===================== MAINTENANCE NOTE (read this first) =====================
-// This is an ongoing, multi-session project. Whenever an updated copy of this file is sent back
-// to the player, bump the version string in the title screen HTML (search for "title-version" in
-// the surrounding .html file, not in this script). Per the player's explicit instruction, bump the
-// PATCH number (the third value, e.g. 0.36.0 -> 0.36.1) for each update, not the minor number --
-// these are all incremental passes on one ongoing project, not separate releases. It stays
-// "-alpha" until the original request is fully, verifiably complete -- see the completion-tracking note the player
-// asked for: they want to be told explicitly and unprompted the moment that happens, and not
-// before. Don't self-assess 100% lightly; check actual coverage against the original request
-// (full text preserved in project handoff notes from earlier sessions) before ever claiming it.
+// Ongoing multi-session project. On each update: bump the PATCH number in the title-version string
+// in the surrounding HTML (0.36.0 -> 0.36.1, not the minor number). Stays "-alpha" until the
+// original request is verifiably complete -- tell the player unprompted the moment it is, but
+// don't self-assess 100% lightly; check real coverage first. Changelog below is factual history
+// only (what/where), not reasoning -- see git-style history in project handoff notes if needed.
 //
-// ---- CROSS-SYSTEM INTEGRATION PASS (started 2026-08-14, v0.35.0) ----
-// Player request this pass: audit the whole game for features that were bolted on in isolation
-// (talents added before throwing/races existed, lore/notes never written for newer systems,
-// limited enemy AI variety, weather that was purely passive) and make every system reach into
-// every other one, the way Caves of Qud/ToME/CDDA/Brogue/DCSS do. This is explicitly an
-// open-ended, multi-session effort -- the player said so directly and doesn't want it rushed.
-// Track real progress here across sessions instead of re-auditing from scratch each time.
+// ---- CHANGELOG (factual, condensed) ----
+// v0.35.0 Cross-system integration pass: every system reaches into every other one.
+//   - Weather: playerControlWeather() lets player-caused weather reuse WEATHER_TYPES/ZONE_CLIMATE;
+//     wired into castSpell() via type:'weather'. Added to Storm/Elemental/Nature/eldritch/cyberware pools.
+//   - Throwing: full DEX technique school (quickdraw->deathfromabove) + 4-tier talent line, read by
+//     resolveThrownWeapon (throwAccuracyBonus/throwCritBonus/throwRecoverChance/throwNoWear).
+//   - Enemy AI: 4 new behaviors in runCombatState (relentless/erratic/engulf/stalker) reassigned via
+//     AI_VARIETY_FACTION_MAP (data-driven, not hand-edited). Later: systematic (constructs), adaptive
+//     (virus), menacing (demonic - proximity fear buildup). Non-boss/scriptedAI monsters only.
+//   - Lore: 11 new BOOKS_MANUAL entries for previously-unacknowledged systems (weather, day/night,
+//     world events, throwing, lockpicking, fire physics, settlement growth, mutation categories,
+//     technique schools). Later: species affinity lore (research_peoples, letter_elf_orc_truce, etc).
+//   - Talents: Weathered line (temperature/weather resist, 5 tiers). Cyber line (Ferrocoating->
+//     Singularity Core, charge economy). Mutation-category lines: Predator's Edge, Passenger's Grip,
+//     Patient Zero (Plague), Starborn Calculus (Void/Cosmic) - via new MUTATION_CATEGORY_DMG_FIELD.
+//     Ancestral Heritage talent: species.heritageBoost(p) hook per species (extensible, no per-species
+//     branch needed for new species). Leadership line (v0.36.10): companionPowerBonus feeds
+//     scaleCompanionToPlayer; rescales companion immediately on taking a tier.
+//   - Bug fixes: paySpellCost() only read ability.mp OR ability.selfCost depending on type, causing
+//     Crimson Lance to set player.hp to NaN and making most active mutations free to cast. Fixed to key
+//     off resource==='hp' with fallback chain (selfCost -> mp -> 0). EMP confuse centralized into
+//     applyEmpConfuse() (reads empResist/empImmune) instead of 3 hardcoded call sites. Lifetap
+//     mutations now actually heal the caster (40% base, mutationLifetapBonus) as their text promised.
 //
-// DONE this pass:
-//  - Weather is now something the player can *cause*, not just react to. New playerControlWeather()
-//    (search: PLAYER WEATHER CONTROL) rides the existing WEATHER_TYPES/ZONE_CLIMATE machinery, so
-//    a forced change gets correct elementMods/tempShift/visMod for free. Wired into castSpell() via
-//    a new type:'weather' branch. Added across every ability pool that logically could touch the
-//    sky: Storm Magic (callthestorm, stormcalming), Elemental Mastery (sunbreak, winterscall),
-//    Nature (calltherain, clearingbreath), eldritch/mutations (skywound, witherbloom), cyberware
-//    (atmosregulator, stormbatteryarray). Confirmed these auto-surface through the existing
-//    generic trainer/loot/mutation-roll pools (SPELLS.filter/choice(rng,MUTATIONS)/etc.) with no
-//    extra plumbing needed.
-//  - Throwing had zero technique-tree presence despite being a full item-based combat system
-//    (canThrowItem/resolveThrownWeapon/THROWN_WEAPON_IDS) -- every other combat style (Archery,
-//    Swordsmanship, Daggers, etc.) had a 5-tier technique school and Throwing didn't. Added one
-//    (quickdraw through deathfromabove), registered it as a DEX school, and added a matching
-//    4-tier Throwing talent line (deadaim/bladedancer/quiverofmany/masterofblades) with real
-//    mechanical hooks actually read by resolveThrownWeapon: throwAccuracyBonus, throwCritBonus,
-//    throwRecoverChance (stuck throws have a chance to snap back to inventory instead), throwNoWear.
-//  - Enemy AI variety: before this pass, 154 of ~440 monster templates (over a third) shared one
-//    generic behavior:'aggressive' walk-and-hit AI regardless of theme -- a mindless slime moved
-//    exactly like a cosmic horror moved exactly like a zombie. Added four new distinct combat
-//    behaviors to runCombatState (relentless: shambling undead that can't be outpaced and grips on
-//    hit; erratic: cosmic/nonEuclid/eldritch/dream things that fold space instead of walking and
-//    can scramble senses on a hit; engulf: oozes, genuinely half-speed but stack a worsening slow
-//    the longer you stay adjacent; stalker: wild predators that flank instead of beelining and
-//    land a real bonus-damage pounce on the first hit after closing from range). Reassignment is a
-//    faction-keyed data pass (AI_VARIETY_FACTION_MAP + the predator flag), not a hand-edit of 150
-//    individual entries, so new roster additions inherit sensible tactics automatically. Left
-//    every monster with an already-authored specific behavior (ranged/charger/turret/kiter/
-//    gascloud/swarm/flee) and every scriptedAI boss completely untouched.
-//  - Lore & books: added 11 new hand-authored BOOKS_MANUAL entries (same voice/quality bar as the
-//    original ~90) covering systems that had zero in-world acknowledgment: weather/climate control
-//    (research_weather, diary_storm_chaser), day/night across dimensions (guide_daynight), world
-//    events (letter_evacuation, research_omens), throwing (guide_throwing), lockpicking
-//    (diary_locksmith), fire/terrain physics (research_wildfire), settlement growth/professions
-//    (guide_settlement_growth), the newer mutation categories -- Void/Cosmic, Predatory, Plague,
-//    Symbiotic (research_corruption_taxonomy), and the newer technique schools -- Monastic Arts,
-//    Dual Wielding, Berserker Arts, Tactics (guide_martial_disciplines). No placement plumbing
-//    needed -- maybeStockBookContainer() already seeds from BOOKS_MANUAL generically.
-//  - Talents vs. weather/temperature: the Survival talent line had a full 5-tier water-adaptation
-//    path (tidewalker->krakensbane) but nothing at all for the temperature-exposure hazard system
-//    (handleTemperatureExposure) or the weather-driven vision/ranged-accuracy penalties
-//    (weatherVisRadiusDelta/weatherRangedAccuracyMod), despite both being real, already-ticking
-//    mechanics. Added a mirrored 5-tier "Weathered" line: coldadapted/heatadapted reduce
-//    statusChill/statusHeat buildup, stormtoughened negates the vision/ranged-accuracy weather
-//    penalty (player.weatherVisResist/weatherAccResist, now read by those two functions),
-//    seasonsteel gives full temperature immunity, and the capstone Storm Ward adds a genuine
-//    passive heal-over-time while severe weather is actually raging around you (checked live via
-//    currentWeatherDef().visMod, not a flag set once) -- so committing to this line changes how a
-//    storm plays for you rather than just being a stat stick with weather-flavored text.
-//  - Talents vs. cybernetics: the 'cyber' category had exactly one entry (Gunslinger) despite a
-//    full slot/charge/cyberDmgBonus system existing; slot-count talents existed but were scattered
-//    uncategorized in the generic tier ladder. Added a proper 5-tier cyber line (Ferrocoating ->
-//    Singularity Core) covering charge economy (chargeRegenBonus, feeds the real per-turn charge
-//    tick) and cyberware damage. Also fixed a real design smell while in there: EMP attacks used to
-//    hardcode `player.statusConfuse += 3` separately at 3 different boss call sites with no
-//    resistance hook anywhere -- centralized into applyEmpConfuse() (reads new empResist/
-//    empImmune) and repointed all 3 sites at it, so EMP Dampeners/Singularity Core actually do
-//    something instead of being talents for a resistance nothing ever checked.
-//  - Talents vs. mutation categories: the 'eldritch' talent line (Whisperer->Elder God) is a
-//    complete 5-tier chain, but it's built entirely around confuse/fear/eldritch-damage, which
-//    fits Aberrant/Void-Cosmic/Plague mutations well and doesn't fit Predatory (physical hunting
-//    kit) or Symbiotic (a passenger sharing life with you) at all -- those two categories had
-//    real, distinct mutation kits with zero talent-tree support that spoke to them. Added two new
-//    branches off Whisperer: Predator's Edge->Apex Ascendant and Passenger's Grip->True Union.
-//    Required a real formula change, not just new talent objects: added MUTATION_CATEGORY_DMG_FIELD
-//    (a data-driven category->player-field map) into applyEffectToTarget's dmgMult so a
-//    category-specific bonus only applies to abilities actually tagged that category. Also fixed a
-//    real bug found in the process: every lifetap-type mutation's own flavor text promises vitality
-//    flowing back ("drawn back doubled", "shares back with you") but the code never actually
-//    healed the caster at all -- now it does (40% base return, boosted by the new
-//    mutationLifetapBonus field), so those abilities' text and mechanics finally agree.
-//  - Enemy AI, construct/virus: added the two behaviors this list previously flagged as missing.
-//    systematic (constructs) doesn't get scared or excited -- it locks onto a target and its
-//    accuracy calibrates upward the longer it stays in uninterrupted contact with that same
-//    target, resetting on a target switch. adaptive (virus) runs cost-benefit on the fight itself:
-//    hurt and behind it hardens (temporary armor, pulls its punches) instead of trading blows it's
-//    likely to lose, healthy with the target visibly hurt it commits fully (bonus damage) to close
-//    the opportunity out. Both fully self-contained in runCombatState, no new hooks elsewhere.
-//    Reassignment excludes boss:true this time (not just scriptedAI) -- their special moves still
-//    fire via tryMonsterCast regardless, but their tuned baseline melee is left as originally
-//    authored rather than swept into a new archetype without a balance pass.
-//  - Talents vs. mutation categories, completed: added Plague (Patient Zero -> Walking Epidemic)
-//    and Void/Cosmic (Starborn Calculus -> Apex Singularity) branches, same shape as the Predatory/
-//    Symbiotic branches from last pass. All four mutation-category specialization lines now exist.
-//  - CRITICAL BUG FOUND AND FIXED while wiring these up: paySpellCost() only ever read
-//    ability.selfCost for type:'lifetap'/'bloodarmor', and separately only read ability.mp for
-//    everything else. Two real consequences this had before the fix: (1) Crimson Lance (a Blood
-//    Magic spell, type:'lifetap', but using mp:18 instead of selfCost) computed cost as `undefined`,
-//    so `player.hp -= undefined` set player.hp to NaN on every single cast -- a silent, permanent
-//    HP corruption bug. (2) The large majority of active eldritch mutations (resource:'hp',
-//    selfCost:X, type:'damage'/'debuff'/'blinklike'/'summon'/'execute') never matched either
-//    branch, fell to the generic mp-based cost path, read an undefined ability.mp, and cost
-//    nothing -- meaning nearly every active mutation in the game was effectively free to spam
-//    with no resource cost at all. Rewrote paySpellCost to key off resource==='hp' generally with
-//    a real fallback chain (selfCost, then mp, then 0), fixing both problems at once and making
-//    every HP-cost-reduction talent (mutationHpCostReduction, the new mutationBlinkCostReduction)
-//    actually apply to a real, non-zero cost for the first time.
+// v0.36.11-12 In-game guide (GUIDE_SECTIONS) synced to match actual quest/item-set/boss-unique systems.
 //
-// DONE (continued):
-//  - Enemy AI: audited every faction still on plain 'aggressive' -- human/goblinoid/orc/giantkin/
-//    settlement/celestial already get squad tactics via the 'intelligent' flag, and plants
-//    genuinely shouldn't have mobile tactics, so those are staying aggressive by design, not by
-//    oversight. Demonic was the one real gap: added 'menacing' -- proximity itself builds dread (a
-//    per-turn fear-buildup check while adjacent, distinct from the existing per-attack causesFear
-//    flag some monsters already carry), respects fearResistBonus like every other fear source
-//    including the new species heritage hooks. All 8 non-boss demonic monsters reassigned.
-//  - Cost/resource audit: checked every TECHNIQUES/CYBERNETICS/MUTATIONS entry for a missing
-//    mp/selfCost field (none found -- all 128 techniques, 103 cyberware, and every active mutation
-//    have one), and spot-checked useItem()'s consumable-effect switch and resolveThrowAtTile()'s
-//    grenade/scroll switch for the same "assumes a field is present" pattern (both already
-//    defensively guarded with fallbacks). No further instances found -- the paySpellCost bug
-//    appears to have been the one real occurrence of this class, not a wider pattern.
-//  - Species/lore, completed: research_peoples + diary_skarath_vulkari (previous session) plus this
-//    session's letter_elf_orc_truce (a border-warden proposing a quiet unofficial truce --
-//    deliberately not the generic 'ancient hatred' framing) and research_lesser_tensions (rounding
-//    out Thalassi/Ashkari, Elf/Nyxari, Orc/Nyxari's one positive pairing, and Orc/Dwarf). Every
-//    coded species affinity number in the game now has an in-world story behind it.
-//  - Talents vs. species, done: added a single Ancestral Heritage talent rather than 11 separate
-//    branches, built the way SPECIES itself says it wants to be extended (see the framework
-//    comment above const SPECIES) -- each species entry now carries its own heritageBoost(p) hook,
-//    amplifying that species' actual signature trait (Corvashi fall damage, Nyxari corruption
-//    threshold, Construct cyber slots, etc.), and the talent just calls whichever hook matches
-//    player.species. A new species added later only needs its own heritageBoost -- this talent
-//    doesn't need touching. All 11 playable species now have one.
+// v0.37.0-0.37.5 Main/side quest overhaul.
+//   - Confirmed one true ending (God/AI reveal) with branching choices along the way; all 9
+//     MAIN_QUEST_PREMISES converge on the same final stages by design, verified via full stage-graph trace.
+//   - 6 quest chains total (QUEST_CHAINS), 7 resolution mechanics (combat/CHA/INT/gold/DEX/STR/WIL).
+//   - 'sabotage' radiant quests can be called off via resolveSabotageReconsider (mends relation instead
+//     of damaging it, reduced reward), bypasses completeQuest()'s war-pushing logic on purpose.
+//   - triggerWorldHazard(): overworld hazard landmarks (Cinder Rift = fire dmg, Rift Tear = statusConfuse
+//     chance) via t.hazardKind, fully separate from the dungeon-only hidden-trap system (triggerTrapAt).
+//   - spawnChainAntagonist(): chain antagonists become real makeNPC() NPCs on twist reveal, placed in
+//     nearest loaded settlement; talking to them offers the same resolveChainConfrontation choice as the
+//     giver route. onDeath hook -> resolveChainAntagonistDeath force-resolves the quest on harsher terms
+//     if the antagonist dies before confrontation (guarded by !q.done, safe against duplicate calls).
 //
-// NOT YET DONE: nothing carried over from a specific finding right now -- the working list built
-// up across this whole audit has been cleared out. Start the next pass fresh: re-scan the game the
-// same way this one started (grep for placeholder/thin-coverage patterns across talents, lore
-// tags, monster behaviors, and cost/resource paths) rather than assume any prior list was
-// exhaustive -- it never was meant to be a final checklist, just where the trail led each session.
-// Systems worth double-checking for "menu with no world interaction" smell per the player's
-// explicit original ask: anything that's a stat-only unlock with no in-world verb attached to it
-// should either get one or be judged not to need one -- don't hardcode edge cases, extend the
-// existing generic dispatchers (applyEffectToTarget/castSpell's type switch, THROWABLE_EFFECTS,
-// AI_VARIETY_FACTION_MAP, MUTATION_CATEGORY_DMG_FIELD, heritageBoost, etc.) the way every fix in
-// this log did, so the next addition is data, not a special case.
-//
-// ---- FRESH AUDIT PASS (2026-08-15, v0.36.10) ----
-// Player asked for another full look-through with no specific target -- same instruction as the
-// original request, applied again from scratch rather than assuming the log above was exhaustive.
-//  - Found: the companion system (recruit an NPC, they follow and fight, scaleCompanionToPlayer
-//    grows them with your level, charismaAllyMult already ties their combat power to CHA) had zero
-//    talent-tree presence and zero lore, exactly the same shape of gap as species and throwing
-//    before it. Added a 5-tier Leadership talent line (Born Leader -> Legendary Leader, category
-//    'survival') that folds a genuine companionPowerBonus into scaleCompanionToPlayer's existing
-//    formula (one line, alongside charismaAllyMult -- not a parallel system) plus CHA increases;
-//    each tier's apply() also immediately rescales any companion already traveling with you rather
-//    than waiting for their next level-up tick, so the talent has a felt effect the moment you take
-//    it. Added two lore entries: a caravan-master's practical guide connecting leadership quality
-//    to companion effectiveness (the exact mechanic the talent line encodes, stated in-world before
-//    the player ever opens the talent screen) and a farewell letter humanizing the bond.
-//  - Broader sweep this pass (grepped for TODO/FIXME/stub/placeholder markers across the whole
-//    file): nothing else turned up that wasn't already resolved by an earlier session's own fix
-//    comment. The codebase's own prior "v4 balance pass" note on WIL (search: "WIL was previously
-//    decorative") is worth knowing about as precedent -- this project has done this kind of
-//    "stat/system exists but nothing reads it" audit before, successfully, more than once.
-//
-// NOT YET DONE: nothing specific found this pass beyond what's listed above. Next session should
-// scan fresh again rather than treat this as a final list -- likely candidates worth a first look:
-// quest variety/depth, achievement coverage, and whether recently-added mechanics (companions,
-// species heritage, the six AI archetypes) show up in the in-game Guide/help text players actually
-// read, not just in BOOKS_MANUAL flavor text.
-//
-// ---- IN-GAME GUIDE SYNC PASS (2026-08-15, v0.36.11) ----
-// Checked the last item on the list above directly: the in-game Guide (press ? / the Help screen,
-// GUIDE_SECTIONS) is what a player actually reads mid-session, and it's a different surface from
-// BOOKS_MANUAL flavor text -- both needed checking independently. Found several sections were
-// stale relative to everything built this whole chain of sessions:
-//  - Combat tab's Enemy AI paragraph only listed the original archetypes (Chargers/Splitters/
-//    Summoners/Ambushers/Burrowers/Phasers/Turrets/Gas-cloud) -- none of the 7 added later
-//    (relentless/erratic/engulf/stalker/systematic/adaptive/menacing) were mentioned at all. Added
-//    a full paragraph covering all 7. Also added a paragraph on Throwing as a real combat style
-//    (it wasn't mentioned anywhere in Combat despite having its own technique/talent lines now).
-//  - Techniques tab named example schools but Throwing wasn't in the list despite existing.
-//  - Weather & World Events tab covered passive weather in full but never mentioned that the player
-//    can *cause* weather -- added a paragraph naming every weather-control spell/mutation/cyberware.
-//  - Eldritch tab named all 4 mutation categories but didn't mention their dedicated talent lines --
-//    added one sentence pointing at Talents.
-//  - Relationships tab covered the traveling-spouse mechanic but never mentioned Leadership (the
-//    talent line that makes them stronger) -- added one sentence.
-//  - Start tab covered archetype/custom creation in detail but never mentioned species selection at
-//    all, despite it being the actual first step of chargen (applySpeciesToPlayer runs before
-//    archetype/custom stat allocation) -- added a paragraph.
-//  - Talent/Spell/Technique/Cybernetic/Mutation full-list sections (generateTalentGuideHTML() etc.)
-//    were already fine without touching them -- they render live off the actual data arrays, so
-//    every addition this whole session chain was already showing up there automatically. Only the
-//    hand-written prose paragraphs around those generated lists had gone stale.
-// Checked achievements next: no achievement/meta-tracking system exists in the game at all (the
-// "trophy" system that exists is just loot drops from named legendary monsters, not a tracked
-// meta-progression layer). This is a real absence, not a broken/neglected existing system like
-// everything else on this list -- a legitimate scope decision rather than an oversight, and a
-// bigger lift than anything else here (a new game state, new UI screen, trigger tracking across
-// every existing system). Flagged rather than attempted, since it's a different category of work
-// from "wire up a system nothing currently reads" -- it would be building a new system, not fixing
-// a neglected one.
-//
-// NOT YET DONE: quest variety/depth remains unchecked. Achievements/meta-progression don't exist
-// and would be new scope, not a fix -- worth discussing with the player directly before attempting,
-// since it's the first candidate this whole audit has found that isn't "an existing system nothing
-// touches" but "a system that was never built at all."
-//
-// ---- ITEM SETS / BOSS UNIQUES GUIDE FIX (2026-08-15, v0.36.12) ----
-// Checked quest depth next: generateMainQuest and rollRadiantQuestOffer are both already rich
-// (main quest has a randomized trail of 3-5 mandatory dimensions each gated by a real Trail
-// Guardian fight, not just a footstep; side quests span 8 types -- bounty/boss_bounty/gather/
-// protect/delivery/explore/sabotage/caravan_guard -- weighted by the actual live political state
-// of neighboring kingdoms, so a sabotage quest only appears against a kingdom you're really at war
-// or tension with). No gap found here; this system is already solid.
-//  - Checked item sets/uniques next and found the exact same "system grew, docs didn't" pattern one
-//    more time, in the Sets & Uniques guide tab specifically: ITEM_SETS actually has 12 full 5-piece
-//    sets (a "second itemization pass" comment already in the code added 8 more after the original
-//    4), but the guide text only ever described those original 4 by name, verbatim. Same story for
-//    BOSS_UNIQUE_DROPS -- 14 unique weapons exist, the guide named exactly 6. Fixed both the way
-//    Sets & Uniques deserves to never break like this again: instead of hand-listing names, the
-//    guide now generates its list directly from Object.values(ITEM_SETS) and
-//    Object.entries(BOSS_UNIQUE_DROPS)/ITEM_BASES/MONSTER_BASES at render time. Whatever gets added
-//    to either table in the future shows up automatically -- this was the last hand-written,
-//    hardcoded list left in the Guide screens that wasn't already reading live off its own data.
-//
-// NOT YET DONE: quest system confirmed solid, no changes needed. Achievements/meta-progression
-// still don't exist and remain a "build new" decision rather than a "fix neglected" one -- flagging
-// again rather than attempting without the player's explicit go-ahead on that specific scope.
-//
-// ---- MAIN QUEST & SIDE QUEST OVERHAUL (2026-08-16, v0.37.0) ----
-// Player explicitly asked for a full overhaul of both the main quest and radiant/side quest
-// systems -- the note two entries up ("quest system confirmed solid, no changes needed") was
-// evaluating depth of the OLD linear/procedural structure, not whether the player wanted something
-// structurally different. Both were true at once: solid procedural depth, and still exactly the
-// "checklist with flavor text stapled on" shape the player described. Overhauled properly rather
-// than patched:
-//  - Main quest: generateMainQuest/advanceStory rewritten from a strictly linear 4-act stage array
-//    into a 6-act branching graph. Two hand-authored choice stages (lieutenant_choice,
-//    betrayal_choice) pause the story in a real decision modal (presentMainQuestChoice/
-//    resolveMainQuestChoice) and splice a different branch of stages into the story depending on
-//    the pick -- see grantStoryCompanion, empoweredBossIds, and the confrontation stage's dynamically
-//    mutated desc for how those choices keep mattering all the way to the ending.
-//  - World Phase system added (WORLD_PHASES/setWorldPhase/curWorldPhase): a permanent, one-way,
-//    milestone-triggered global shift (the "Terraria Hardmode" ask specifically) -- see
-//    maybeApplyInfernalEmpowerment in makeMonster, the Cinder Rift POI (phaseGate-filtered in
-//    placePOI), and worldPhaseReactionLine for how NPC dialogue reacts.
-//  - Side quest sourcing expanded beyond NPC dialogue: Guild Board (openGuildBoard, settlement-tier
-//    scaled, persistent postings rather than infinite reroll -- reuses the guildclerk/Guildhall
-//    infrastructure that already existed), injured dungeon captive -> recurring settlement NPC
-//    (makeInjuredCaptive/resolveDungeonRescue), caged dungeon prisoner as a genuine no-visible-tell
-//    gamble (makeCagedPrisoner/resolveCagedPrisoner), and lost keepsake return-to-owner
-//    (generateLostKeepsake, bound to a settlement the player has actually discovered).
-//  - Authored quest chains (QUEST_CHAINS registry): four so far -- refugee_bandits, empty_grave,
-//    paper_trail, fair_cut -- each with a real mid-quest twist (revealChainTwist) and two
-//    structurally different endings via resolveChainConfrontation, deliberately covering four
-//    different resolution mechanics (CHA persuasion / INT lore-argument / flat gold bribe / DEX
-//    stealth break-in) rather than four copies of the same check -- this was specifically requested
-//    ("combat, payment, persuasion/dialogue, stealth") and the first pass only had 2 of 4 covered.
-//  - Recurring quest-giver memory (giver.questHistory, wired in completeQuest) and a generic
-//    personal-quest unlock (offerPersonalQuest) after enough completed work for the same person.
-//  - Hand-authored unique named rewards (UNIQUE_REWARD_ITEMS) for meaningful quests, plus a small
-//    chance for them to drop from ordinary boss bounties too, so the pool isn't gated to exactly
-//    four fixed moments.
-//  - Fixed two genuine bugs found while auditing this work rather than just building on top of it:
-//    (1) the 'auto'-type stage's own desc (the inciting-hook narrative text specifically) was
-//    generated every game but never actually logged anywhere -- only its title was shown. Very
-//    likely the literal root cause of "you spawn in and a quest appears out of nowhere",
-//    independent of anything structural. Fixed in advanceStory's auto-stage branch. (2)
-//    antagonistAwareness was tracked (incremented every stage) but never read anywhere -- a
-//    half-built "world/antagonist reacts to you" feature that never paid off. Now mutates the
-//    confrontation stage's desc at 'the_reckoning' with an awareness-tiered line, the same pattern
-//    the betrayal choice already used to make its outcome remembered at the ending.
-//  - Synced GUIDE_SECTIONS' Quests/Ending tabs and added a new World Phase tab to match all of the
-//    above -- same "stale docs" pattern the two entries above this one already established a fix
-//    pattern for.
-//
-// NOT YET DONE (as of this entry -- see FACE-TO-FACE CHAIN ANTAGONISTS further down for the
-// resolution): 4 quest chains exist; QUEST_CHAINS is built to take more with no plumbing changes
-// needed. All four confrontations resolve through the giver (clerk/priest/official/merchant) rather
-// than a spawned antagonist NPC in person -- no persistent quest-specific NPC spawn system exists
-// yet to support a real face-to-face version. Caged-prisoner decoy odds (20%), chain reward numbers,
-// and the fair_cut stealth-fail flavor (currently a harmless non-event, unlike a failed persuade/
-// lore-argument which at least closes off retrying) are all untested against real play pacing.
-//
-// ---- QUEST OVERHAUL, FOLLOW-UP POLISH PASS (2026-08-16, v0.37.1) ----
-// Went back through the whole overhaul above looking specifically for claims that weren't actually
-// true yet, since "sounds done" and "is done" are different things:
-//  - source_choice added: a third main-quest choice stage (Act 3, "The Source's Ledger" -- hand
-//    recovered intelligence to the crown for reputation, or keep it privately for gold and a small
-//    later callback). Deliberately lower-stakes than the first two -- not every choice needs to be
-//    the biggest one the game has. Uses the exact same choice-stage/branch-splice/resolveMainQuestChoice
-//    pattern as the first two, so no new plumbing was needed, just a new case in the dispatcher.
-//  - World Phase 3 (the Unraveling) now has real exclusive content instead of just scaling Phase 2's
-//    numbers further: "Voidtouched" monsters (maybeApplyInfernalEmpowerment), a distinct, stronger,
-//    rarer tier above Infernal with a genuinely different mechanic (causesConfuse, not fire),
-//    dropping a new material (void_shard) from a new Rift Tear landmark (phaseGate:3 POI). Both
-//    infernal_ash and void_shard are now also valid 'gather' quest materials once the phase that
-//    produces them has actually happened -- fixing an item-base comment that overclaimed infernal_ash
-//    was "required" for quest-chain hooks when nothing ever actually consumed it.
-//  - Hall of Legends now records which betrayal_choice outcome a run had and what World Phase it
-//    ended in, and displays both in the listing -- closing the loop on choices mattering all the way
-//    to the permanent record, not just to the ending itself.
-//  - All of the above synced into GUIDE_SECTIONS (Quests tab now says "three" decisions, World Phase
-//    tab now describes Voidtouched/Rift Tear) and this changelog, rather than left to go stale again.
-//
-// ---- DESIGN CONFIRMATION + ONE MORE DECISION POINT (2026-08-16, v0.37.2) ----
-// Player clarified the intended shape explicitly: exactly one ending (the God/AI reveal), with
-// branching choices affecting the journey, world, and specific questlines along the way -- not
-// multiple main endings. Traced the full stage graph end to end to confirm this was already true:
-// all 9 MAIN_QUEST_PREMISES share identical stage structure and always converge on
-// targetBossId:'the_antagonist' then 'god'; all three choice stages (lieutenant/betrayal/source)
-// splice branches that reconverge into the same downstream stages, never a different final stage;
-// stage.done guards make every confrontation-desc mutation (betrayal outcome, kept ledger,
-// antagonistAwareness tier) fire exactly once. No changes needed there, but worth having actually
-// verified it instead of assuming.
-// Also extended real decision points beyond the 4 authored chains, since the original ask covered
-// quests broadly: 'sabotage' radiant quests (the most narratively loaded of the non-chain quest
-// types -- actively pushes a kingdom relation toward war) can now be called off at any time while
-// active, mending the relation instead of damaging it, for reduced-but-real rewards -- see
-// resolveSabotageReconsider. Deliberately bypasses completeQuest() rather than fighting its
-// sabotage-specific war-pushing logic, so normal sabotage completions are completely unaffected.
-//
-// ---- HAZARD LANDMARKS NOW ACTUALLY DO SOMETHING (2026-08-16, v0.37.3) ----
-// Cinder Rift and Rift Tear (the Phase 2/3 landmarks) were flagged in the last two entries as
-// "atmospheric/examinable only" -- true when written, worth actually fixing rather than leaving
-// noted. Discovered why they'd never had real effects: the existing on-step trap system
-// (triggerTrapAt) turned out to be hard-gated to curIsDungeon() && t.hiddenTrap at BOTH of its call
-// sites in movePlayer/enterTileAsEntity -- it will never fire for an overworld tile no matter what
-// t.trapType is set to, and these landmarks are overworld-only and deliberately not hidden. Rather
-// than touch that gating (explicitly commented elsewhere as battle-tested and kept isolated) or
-// route through the fire-spread/activeFxTiles system real fire traps use (wrong scope -- these are
-// meant to be a permanent, containable feature you can choose to avoid, not a wildfire that could
-// unpredictably burn the surrounding map), added one small, fully separate, additive check
-// (triggerWorldHazard, called from its own isolated `if` right next to but never overlapping the
-// existing trap block) keyed off a new t.hazardKind tag (set in placePOI). Cinder Rift now deals
-// real fire damage on step; Rift Tear has a real chance to inflict genuine statusConfuse (the same
-// player-facing status several bosses already use). quicksand_patch was deliberately left alone --
-// pre-existing, established behavior nobody asked to change, out of scope for this fix.
-//
-// ---- TWO MORE QUEST CHAINS (2026-08-16, v0.37.4) ----
-// Added QUEST_CHAINS.deserters ("The Deserters", STR-gated intimidation -- soldiers hunted for
-// desertion actually refused to burn a village) and QUEST_CHAINS.nothing_personal ("Nothing
-// Personal", WIL-gated resolve -- "extortionists" are actually providing real protection a rival
-// guild wants to muscle in on by using the player). Six chains now, seven distinct resolution
-// mechanics total between them (combat/CHA/INT/gold/DEX/STR/WIL) -- every remaining unused player
-// attribute now has a chain built around it.
-// Caught two real mistakes before they shipped, both worth noting since neither was caught by the
-// syntax checker: (1) wrote "Talk to ${q.sergeant}" in deserters' twist-reveal text -- q.sergeant is
-// pure flavor (never spawned as a real, findable NPC, same as every other chain's antagonist),
-// so that would have told the player to go talk to someone who doesn't exist. Fixed to point at
-// giverName, the actual reachable NPC, consistent with all five other chains. (2) drew
-// unique_plainspoken's bonus from wilBonus/chaBonus, then checked applyStatBonuses/
-// removeStatBonuses/EQUIP_FLAT_BONUS_KEYS directly and confirmed neither key is wired anywhere in
-// the game -- would have been a silently non-functional stat bonus on a brand new item, the exact
-// class of bug worth specifically checking for after nearly shipping something similar earlier in
-// this file's history. Switched to conBonus (confirmed wired) instead of extending the stat-bonus
-// engine for two fields nothing else uses -- smaller, safer fix for a single flavor item.
-//
-// ---- FACE-TO-FACE CHAIN ANTAGONISTS (2026-08-16, v0.37.5) ----
-// Closed the last explicitly-noted gap: all six chain confrontations previously resolved only
-// through the giver/intermediary (clerk, etc.), never the actual named antagonist, since none of
-// them were ever spawned as real NPCs. Built spawnChainAntagonist, called at the end of
-// revealChainTwist: the moment a twist is revealed, that chain's antagonist (noble/priest/
-// tollkeeper/merchant/captain/guildclerk, mapped per chain in CHAIN_ANTAGONIST_ROLE, named from the
-// same field already generated at quest start) becomes a real makeNPC()-built NPC, placed in the
-// nearest currently-loaded settlement (reusing findNearestLoadedSettlementChunk/findOpenSpotInChunk
-// from resolveDungeonRescue) -- findable through ordinary exploration, not fast-traveled to or
-// force-generated. If no settlement chunk happens to be loaded nearby, the confrontation just stays
-// intermediary-only for that quest instance -- a graceful fallback, not a failure state.
-// Talking to them (npc.isChainAntagonist + npc.chainQuestId, checked in openDialogue) offers the
-// exact same resolveChainConfrontation choice the giver route already offered, just reached by
-// finding the real person instead. Reused the giver route's altLabel wording for five of six chains
-// since a bribe/argument/stealth-plan/intimidation/refusal all read naturally face to face;
-// fair_cut's "stealth already done" would have made no sense as a pre-break-in dialogue option, so
-// that one got its own line (a credible in-person threat instead).
-// Also handled the case the giver-only design never had to consider: what if the antagonist dies?
-// Hooked onDeath (confirmed to be the single, universal death path every damage source in the game
-// already funnels through) to call resolveChainAntagonistDeath whenever an isChainAntagonist NPC's
-// hp hits 0, regardless of killer or cause -- force-resolves the linked quest under harsher terms
-// than either intended ending (no unique reward, real reputation cost, reduced gold) rather than
-// leaving it permanently unresolvable. Doubly guarded against re-firing (checks !q.done before
-// doing anything), so even a hypothetical duplicate onDeath call is a safe no-op.
-//
-// NOT YET DONE (current, as of v0.37.5): every specifically-noted gap from the quest overhaul has
-// now been addressed. What's left is genuinely new scope rather than unfinished work: more than 6
-// quest chains (trivial to add, registry supports it); hazard-tile damage now real for Cinder
-// Rift/Rift Tear specifically, but the broader hidden-trap system is still dungeon-only by design,
-// not a bug; achievements/meta-progression still don't exist (flagged repeatedly above, still a
-// "build new" decision, not a fix); face-to-face antagonists don't have unique combat dialogue or
-// death-line flavor beyond the generic NPC death log -- they're built on the same NPC framework as
-// everyone else on purpose, for consistency, not custom deeper characters. None of this was
-// untested-and-assumed-working -- every change in every entry above was validated with a full
-// script parse plus a duplicate-top-level-declaration check after every single edit, and cross-
-// referenced against the actual call sites of every function/field it touched or depended on,
-// specifically to avoid shipping something that merely "sounds done."
+// NOT YET DONE (as of v0.37.5): more quest chains (registry supports it trivially); hazard-tile damage
+// is dungeon-only outside Cinder Rift/Rift Tear by design; achievements/meta-progression don't exist yet;
+// chain antagonists use the standard NPC framework (no unique combat/death dialogue) by design.
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
 // external audio files. This keeps the game a single portable HTML file and
@@ -10058,27 +9699,16 @@ function advanceTimeToMorning() {
 }
 
 // ============================================================================
-// ============================================================================
 // ---- WEATHER, CLIMATE & WORLD EVENTS OVERHAUL ------------------------------
-// ============================================================================
-// A ground-up addition, not a reskin: weather is no longer cosmetic. It's driven by each
-// zone's climate (overworld biome temperature *and* each dimension's own thematic climate),
-// it changes over time with some narrative continuity (a thunderstorm winds down into rain,
-// not straight to clear skies), and it reaches into systems that already exist rather than
-// duplicating them -- fire/ice/gas ride the same tile-effect plumbing igniteTile/extinguishTile/
-// addGasCloud already provided (see BIOME ENVIRONMENTAL EFFECTS above), so "rain puts out fire"
-// and "a blizzard freezes the pond" cost almost nothing new to simulate correctly.
-//
-// Layered on top: an expanded Day/Night system (some dimensions get real solar cycles, some are
-// permanently fixed in a signature phase, some run on their own non-solar rhythm entirely -- see
-// ZONE_TIME_PROFILES), and a 100+ entry Random World Event registry (see WORLD_EVENTS below) with
-// a shared, extensible effect dispatcher so a new event is almost always just a new data entry,
-// not a new function.
-//
-// Deliberately zone-wide rather than per-tile: one weather state per dimension (plus one for the
-// overworld), the same granularity most roguelikes use for weather, rather than tracking it per
-// chunk. This keeps the simulation cheap and legible ("it's snowing in the Boneyard") instead of
-// a patchwork that's expensive to compute and hard for the player to read at a glance.
+// Weather is driven by each zone's climate (overworld biome temp + each dimension's thematic
+// climate), changes over time with narrative continuity (storm winds down into rain, not
+// straight to clear), and reuses existing tile-effect plumbing (igniteTile/extinguishTile/
+// addGasCloud) so "rain puts out fire" costs almost nothing extra to simulate.
+// Also: expanded Day/Night (ZONE_TIME_PROFILES -- solar cycles, fixed phases, or non-solar
+// rhythms per dimension) and a 100+ entry Random World Event registry (WORLD_EVENTS below)
+// with a shared effect dispatcher, so new events are just data entries.
+// Zone-wide granularity (one weather state per dimension/overworld, not per-chunk) keeps this
+// cheap and legible rather than an expensive-to-compute patchwork.
 // ============================================================================
 
 // ---------------------------------------------------------------- WEATHER CATALOG ----
@@ -13681,31 +13311,13 @@ function removeDeadEntity(def) {
 // See the in-game guide (? then Quests) for the player-facing explanation.
 // ============================================================================
 
-// ---- Main Quest: narrative premises. Procedurally chosen per seed; the
-// exact wording is a template, but which premise, which antagonist name, and
-// which bosses fill each beat varies every playthrough. ----
-// ============================================================================
-// ---- MAIN QUEST DEPTH PASS — PHASE 8 ---------------------------------------
-// Three upgrades to the Phase 1 story generator, now that there's real
-// content to draw on: (1) nine premises instead of four, so replays actually
-// feel different; (2) boss selection now strongly prefers the roster of
-// hand-scripted story bosses (10 of them as of Phase 6) over the old generic
-// stat-block bosses, so a playthrough is far more likely to be built out of
-// named characters with real dialogue rather than reskinned monsters; (3) the
-// "gather allies" and "betrayal" beats now reference a real, deterministic
-// rival kingdom pulled from the Phase 5 politics system instead of vague
-// hand-waving, and a new "the_rift" stage bridges Act 3 into Act 4 by
-// pointing the player at content that actually exists instead of the story
-// simply stopping cold at Act 4's locked gate.
-// ============================================================================
-// ---- MANDATORY DIMENSION TRAIL — later pass ---------------------------------
-// Originally "the_rift" only required discovering *any one* dimension. Per
-// explicit user feedback, Act 4 now generates a random trail of 3-5 dimensions
-// (out of however many exist) that the player must physically travel through,
-// in a fixed order rolled per seed, before "confrontation" unlocks -- not all
-// dimensions, and which ones (and in what order) varies every playthrough.
-// See generateMainQuest's mandatoryDimensions block and checkMainQuestDimensionVisit.
-// ============================================================================
+// ---- Main Quest: narrative premises, procedurally chosen per seed (premise, antagonist
+// name, and which bosses fill each beat all vary per playthrough). 9 premises; boss
+// selection prefers hand-scripted story bosses over generic stat blocks; "gather allies"/
+// "betrayal" beats reference a real rival kingdom from the politics system; "the_rift" stage
+// bridges Act 3 into Act 4. Act 4 requires physically visiting a random trail of 3-5
+// dimensions (fixed order per seed) before "confrontation" unlocks -- see generateMainQuest's
+// mandatoryDimensions block and checkMainQuestDimensionVisit. ----
 const MAIN_QUEST_PREMISES = [
   { id:'darkness', title:'The Long Dark',
     hook:(a,k1)=>`A darkness is bleeding into the world from somewhere beyond ${k1}. The elders speak of ${a}, a name older than any kingdom.` },
@@ -20670,114 +20282,47 @@ const DIMENSION_TRAIL_GUARDIANS = {
 };
 
 // ============================================================================================
-// HOW TO ADD A NEW DIMENSION -- a checklist, not just documentation. Every dimension in this file
-// (12 so far) was built by touching the same fixed set of tables/functions, listed below in the
-// order you'd actually do them. Nothing here is optional except where marked; skipping a step
-// means the new dimension is missing something every existing one has (a real dungeon pool, a
-// repeatable quest, a discovery POI, etc.), not just "less polished."
+// ============================================================================================
+// HOW TO ADD A NEW DIMENSION -- checklist. All 12 existing dimensions touch this same set of
+// tables/functions; skipping a step means the new one is missing something every other has.
 //
-// STEP 1 -- Biomes + classifier. Define a `<NAME>_BIOMES` object (copy the shape of GILDED_BIOMES
-//   or CLOCKWORK_BIOMES nearby) and a `classify<Name>Biome(elev, heat)` function that maps noise
-//   values to biome keys. At least one biome should be walkable:false (real impassable terrain --
-//   see ensureChunkConnectivity's comment for why this is safe rather than a trap) to give the
-//   dimension actual hazards, not just flavor-painted open ground.
-//
-// STEP 2 -- Register in DIMENSIONS (this const, right below this comment). Required fields: id,
-//   tint (hex, used for the arrival portal glyph), biomes, classify, noiseSalt (any unused
-//   integer), fillBiome (the "default/safe" biome key), arrival:{cx:0,cy:0,lx:12,ly:12} (every
-//   existing dimension uses this exact arrival point -- CH/2,CH/2 -- don't change it, see
-//   ensureChunkConnectivity's comment for why that specific coordinate matters), subDungeons: one
-//   entry with a fixed cx/cy/theme for the dimension's Trail Guardian dungeon (see Step 3),
-//   entryFlavor (one evocative sentence or two, shown once on arrival). outpost:{cx,cy,lx:12,ly:12}
-//   is OPTIONAL -- only add it if you're also doing Step 9.
-//
-// STEP 3 -- Trail Guardian (main quest integration). Add ONE entry to TRAIL_GUARDIANS (a boss-tier
-//   MONSTER_BASES-shaped object with engageLine/deathLine/lore and a dropItem -- follow the existing
-//   twelve for tone: the lore should never reference the antagonist by name, but the dropItem
-//   should read as one small fragment of an identity, so the whole set feels like one throughline
-//   assembled from different angles when read together). Add a matching DUNGEON_THEMES entry with
-//   tier:'dimension' (this is what makes it invisible to the *overworld's* own random dungeon
-//   roll -- never give a dimension-exclusive theme any other tier). Add one line to
-//   DIMENSION_TRAIL_GUARDIANS mapping the new dimId to {theme, monsterId}. Add the new monsterId to
-//   ALL_TRAIL_GUARDIAN_IDS (a 12-item array defined later in the file, right above
-//   checkGuardianCollection -- search `const ALL_TRAIL_GUARDIAN_IDS` to find it) so the
-//   collect-all-twelve capstone reward (grantAllGuardiansReward) correctly requires the new one too.
-//
-// STEP 4 -- The unique mechanic. THE ONE STEP THAT ISN'T A CONFIG TABLE. Every existing dimension's
-//   mechanic is mechanically distinct from every other one on purpose (terrain-unlock, movement+
-//   hazard, threat-escalation+release-valve, death-defiance, standing-dominance-from-strongholds,
-//   patience-resource+risky-unlock, passive-time-cycle, location-buff+risk, ambient-danger+purge,
-//   tactical-ally-conversion, interruptible-ritual, wealth-as-danger -- see the big banner comments
-//   above hookClockworkChunk, hookDriftChunk, checkChoirDiscord, onDeath's Recursion block,
-//   checkInfernalDominance, tickLucidity, tickTide, tickBloomSymbiosis, tickKernelCorruption,
-//   useHackChip, performLastRites, and tickWyrmreachGreed for the twelve reference
-//   implementations). A new dimension's mechanic should NOT reuse one of these twelve shapes --
-//   pick something the list doesn't already cover, driven by what the dimension is actually about.
-//   Mechanically this usually means: a per-turn tick function hooked into endTurn() (search for
-//   `tickChoirDiscord();` in endTurn to see exactly where the chain lives and add yours the same
-//   way), and/or a doAttack() hook for combat-facing payoffs (search `infernalDominanceBonus` for
-//   the pattern), and/or a new interactive tile feature (see Step 8).
-//
-// STEP 5 -- Scattered dungeons. Add 1-2 new DUNGEON_THEMES entries (tier:'dimension' again, with a
-//   genPool array set directly on the object -- see the big Object.assign block above this comment
-//   for the full set and reasoning) distinct from the Step 3 Trail Guardian theme. Add one entry to
-//   DIMENSION_DUNGEON_POOLS with a chance (0.05-0.16 in existing dimensions, tuned to how "densely
-//   structured" the place should feel -- see that const's own comment) and the new theme list.
-//   Without this, the dimension has exactly one dungeon in the whole place, forever, once the Trail
-//   Guardian's dungeon is cleared -- this was a real gap fixed retroactively across all 12, don't
-//   reintroduce it in a 13th.
-//
-// STEP 6 -- A guarded POI. Write a `hook<Name>Chunk(chunk, tiles, cx, cy, rng, dim)` function (copy
-//   hookAbyssalChunk or hookKernelChunk as a template) that rolls a chance to place a small guarded
-//   site (2-4 monsters from the dimension's own faction + a loot container) via a
-//   `place<SiteName>(chunk, tiles, cx, cy, rng)` helper, and register it in DIMENSION_CHUNK_HOOKS.
-//   This is the "there's a specific reason to walk over there" POI -- see the feedback this whole
-//   overhaul started from about there being no points of interest at all.
-//
-// STEP 7 -- A shrine (second, DIFFERENT POI type). Add one entry to DIMENSION_SHRINE_CONFIG: xp,
-//   optional materialId/materialAmount, and a lore line. This one is unguarded, no combat, pure
-//   discovery -- deliberately not another "guards + chest" site (see that const's own comment for
-//   why, and for how the lore lines all quietly point at the same antagonist throughline the Trail
-//   Guardians build toward). Placement is automatic once the config entry exists -- no new function
-//   needed, it's called generically from generateDimensionChunk.
-//
-// STEP 8 -- Interactive tiles (if Step 4's mechanic needs one). Pick a unique t.feature string,
-//   scatter it the same way placeWindingPostInChunk or placeRestlessGraveInChunk does, add a
-//   TILE_FEATURE_DESCRIPTIONS entry for its normal AND "spent"/used state, and wire it into
-//   useStairs()'s `if (curIsDimension())` dispatch chain (search for `t.feature === 'winding_post'`
-//   to find the exact chain to extend).
-//
-// STEP 9 -- An NPC (recommended) or a full outpost (optional, heavier). For a light NPC: write a
-//   `place<Name>(chunk, cx, cy, dim)` function using makeDimensionNPC (see placeFadingEcho for the
-//   minimal template), call it from generateDimensionChunk's arrival-chunk block (search
-//   `if (dimId === 'fourth_corridor') placeFadingEcho` for the exact list to extend), give the NPC
-//   object a unique `is<Name> = true` flag, add one line to openDialogue for that flag, and write a
-//   talk function with 3-5 rotating lines. Any dimensionNPC automatically gets a repeatable errand
-//   option for free IF you also add an entry to DIMENSION_ERRAND_CONFIG (Step 10) -- no extra
-//   wiring needed, that check is generic. For a full walled outpost instead: see buildOutpostShell
-//   and placeLastFireCamp/placeUndergridMarket for the lighter three-outpost template, or
-//   placeClockworkOutpost for the fullest one (barter shop + a personal questline NPC); register
-//   in DIMENSION_OUTPOST_BUILDERS and give the dimension an `outpost:{cx,cy,lx:12,ly:12}` field.
-//
-// STEP 10 -- Repeatable errands. Add one entry to DIMENSION_ERRAND_CONFIG: a monsterPool array from
-//   the dimension's own bestiary, and optionally rewardMaterialId/rewardMaterialMult if the
-//   dimension has its own signature material worth handing out as a bonus. This is what turns
-//   Step 9's NPC into an actual repeatable quest giver -- the dialogue option and completion logic
-//   are already generic, this is the only per-dimension piece required.
-//
-// STEP 11 -- Ordinary-kill material drops (optional). If the mechanic revolves around a farmable
-//   material (a key-item, a currency), add an entry to DIMENSION_LOOT_EXTRAS so regular monster
-//   kills in the dimension have a chance to drop it too, not just the guarded POI/errand rewards.
-//
-// Items: any new consumable/material the mechanic needs goes in ITEM_BASES same as any other item
-// -- no dimension-specific item registry, they're just normal items gated by where they're findable.
-//
-// That's the full list. A 13th dimension done properly touches: STEP 1 (2 new functions/consts),
-// STEP 2 (1 object), STEP 3 (3 edits), STEP 4 (real design work, not config), STEP 5 (1-2 theme
-// objects + 1 config line), STEP 6 (1-2 new functions + 1 config line), STEP 7 (1 config entry),
-// STEP 8 (only if needed), STEP 9 (1-2 new functions + 1 call site + 1 dialogue line), STEP 10 (1
-// config entry), STEP 11 (optional, 1 config entry). Every one of those tables is named
-// DIMENSION_<SOMETHING> and lives in this same region of the file for exactly this reason.
+// 1. Biomes: `<NAME>_BIOMES` object (copy GILDED_BIOMES/CLOCKWORK_BIOMES) + `classify<Name>Biome
+//    (elev, heat)`. At least one biome walkable:false for a real hazard.
+// 2. Register in DIMENSIONS: id, tint, biomes, classify, noiseSalt (unused int), fillBiome,
+//    arrival:{cx:0,cy:0,lx:12,ly:12} (fixed CH/2,CH/2 -- don't change), subDungeons (Trail
+//    Guardian dungeon, see step 3), entryFlavor. outpost:{...} optional (see step 9).
+// 3. Trail Guardian: one entry in TRAIL_GUARDIANS (boss-tier, engageLine/deathLine/lore/dropItem,
+//    lore never names the antagonist directly). Matching DUNGEON_THEMES entry, tier:'dimension'.
+//    One line in DIMENSION_TRAIL_GUARDIANS. Add monsterId to ALL_TRAIL_GUARDIAN_IDS (search for
+//    it, feeds grantAllGuardiansReward).
+// 4. The unique mechanic (the one real step, not config). Must be mechanically distinct from all
+//    12 existing ones (see banner comments above hookClockworkChunk, hookDriftChunk,
+//    checkChoirDiscord, onDeath's Recursion block, checkInfernalDominance, tickLucidity, tickTide,
+//    tickBloomSymbiosis, tickKernelCorruption, useHackChip, performLastRites, tickWyrmreachGreed).
+//    Usually: a per-turn tick hooked into endTurn() (search `tickChoirDiscord();`), and/or a
+//    doAttack() hook (search `infernalDominanceBonus`), and/or an interactive tile (step 8).
+// 5. Scattered dungeons: 1-2 DUNGEON_THEMES entries (tier:'dimension', own genPool) distinct from
+//    step 3's theme, + one DIMENSION_DUNGEON_POOLS entry (chance 0.05-0.16). Without this the
+//    dimension only ever has the one Trail Guardian dungeon.
+// 6. Guarded POI: `hook<Name>Chunk(chunk, tiles, cx, cy, rng, dim)` (copy hookAbyssalChunk), rolls
+//    a small guarded site via `place<SiteName>(...)`, register in DIMENSION_CHUNK_HOOKS.
+// 7. Shrine (different POI type): one DIMENSION_SHRINE_CONFIG entry (xp, optional
+//    materialId/materialAmount, lore line). Unguarded, no combat. Placement is automatic.
+// 8. Interactive tiles (only if step 4 needs one): unique t.feature string, scatter like
+//    placeWindingPostInChunk, add TILE_FEATURE_DESCRIPTIONS entry (normal + spent state), wire
+//    into useStairs()'s `if (curIsDimension())` chain (search `t.feature === 'winding_post'`).
+// 9. NPC (recommended) or outpost (optional): light NPC via `place<Name>(chunk, cx, cy, dim)`
+//    using makeDimensionNPC (template: placeFadingEcho), called from generateDimensionChunk's
+//    arrival block (search `placeFadingEcho`), unique `is<Name>` flag + openDialogue entry + 3-5
+//    line talk function. Full outpost instead: buildOutpostShell + placeLastFireCamp/
+//    placeUndergridMarket (light) or placeClockworkOutpost (full); register in
+//    DIMENSION_OUTPOST_BUILDERS + `outpost:{cx,cy,lx:12,ly:12}`.
+// 10. Repeatable errands: one DIMENSION_ERRAND_CONFIG entry (monsterPool, optional
+//     rewardMaterialId/rewardMaterialMult). Turns step 9's NPC into a real quest giver for free.
+// 11. Ordinary-kill drops (optional): DIMENSION_LOOT_EXTRAS entry if the mechanic has a farmable
+//     material.
+// Items: new consumables/materials just go in ITEM_BASES like any other item.
+// All tables above are named DIMENSION_<SOMETHING> and live in this region of the file.
 // ============================================================================================
 const DIMENSIONS = {
   abyssal_wastes: {
@@ -25475,44 +25020,19 @@ function maybeGrantCookingBonusEffect(it) {
 // ---- useItem v7: adds cyberware chips (learn cybernetic) and mutagen vials (grant mutation) ----
 // ============================================================================
 // ---- UNIVERSAL THROWING FRAMEWORK ------------------------------------------
-// Every item in the game is throwable now, not just the pre-flagged grenade/potion
-// consumables. What happens is *derived* from the item's own existing data (type, dmg,
-// str, armor, effect, value) instead of requiring a bespoke hand-written case for every
-// item that has ever existed or will ever be added -- drop a brand new weapon or potion
-// into ITEM_BASES with no extra work and it already throws sensibly. Items can still opt
-// into hand-tuned behavior (an explicit `range`/`radius`/`weight`/`thrown` field always
-// wins over the derived default), which is what keeps the existing grenade/potion arsenal
-// working exactly as before while everything else gets a good-faith generic behavior.
-//
-// The pieces:
-//   itemWeight(it)         -- how heavy something is, real field if set, else inferred
-//   throwRangeFor(it)      -- how far it can be thrown, real field if set, else weight-based
-//   canThrowItem(it)       -- gate for the inventory/equipment "Throw" option
-//   springHiddenTrapAt()   -- landing on an undiscovered trap tile sets it off, hurting
-//                             whatever's standing there (a bonus if you aimed a weapon at a
-//                             monster parked on a plate) even with nobody there at all
-//   resolveThrowAtTile()   -- top-level dispatcher: legacy grenade/potion effects first,
-//                             then falls through to the generic resolvers below for
-//                             everything that doesn't have one of those hand-authored effects
-//   resolveThrownWeapon        -- weapons: real to-hit/damage roll, purpose-built throwing
-//                                  weapons (daggers/javelins/axes/knives) fly true and rarely
-//                                  break; anything else is a clumsier improvised throw that's
-//                                  more likely to be damaged or destroyed on impact
-//   resolveThrownArmor         -- armor: a blunt, ungainly throw -- middling damage, decent
-//                                  chance to stagger (briefly slow) whatever it hits, and it's
-//                                  almost never worth recovering afterward
-//   resolveThrownPotionSplash  -- heal/poison/cure-type consumables: the effect lands on
-//                                  WHOEVER is standing on the tile, ally or enemy, not just
-//                                  you -- throw a healing potion at a foe and you've just
-//                                  healed your foe; throw a cure-poison flask to an ally
-//                                  stuck across the room and you've just saved them
-//   resolveThrownTeleportScroll -- a Scroll of Teleport thrown at a hostile banishes IT to a
-//                                  random spot instead of you -- a ranged "get this thing away
-//                                  from me" panic button that doesn't cost you the scroll's
-//                                  normal self-escape use
-//   resolveThrownImprovised    -- the catch-all: food, gems, gold, books, tomes, crafting
-//                                  materials, unrecognized future item types -- a small
-//                                  weight-scaled bump of damage, then the item is lost
+// Any item is throwable; behavior is derived from its own data (type/dmg/str/armor/effect/
+// value) unless it opts into an explicit range/radius/weight/thrown field.
+//   itemWeight(it) / throwRangeFor(it) -- weight/range, real field if set else inferred
+//   canThrowItem(it)            -- gate for the "Throw" option
+//   springHiddenTrapAt()        -- landing on an undiscovered trap sets it off
+//   resolveThrowAtTile()        -- dispatcher: legacy grenade/potion effects, else falls
+//                                   through to the generic resolvers below
+//   resolveThrownWeapon         -- real to-hit/damage; purpose-built throwables rarely break
+//   resolveThrownArmor          -- blunt throw, mid damage, chance to stagger
+//   resolveThrownPotionSplash   -- effect hits whoever's on the tile (ally or enemy)
+//   resolveThrownTeleportScroll -- banishes the target instead of the thrower
+//   resolveThrownImprovised     -- catch-all (food/gems/gold/books/materials): weight-scaled
+//                                   damage, item lost
 // ============================================================================
 
 // Purpose-built thrown weapons: designed to be chucked, so they fly true and survive the
