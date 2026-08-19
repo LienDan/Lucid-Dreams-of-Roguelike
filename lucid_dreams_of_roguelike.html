@@ -476,7 +476,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.36.12-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.37.0-alpha</div>
     </div>
   </div>
 
@@ -722,6 +722,173 @@
 // NOT YET DONE: quest system confirmed solid, no changes needed. Achievements/meta-progression
 // still don't exist and remain a "build new" decision rather than a "fix neglected" one -- flagging
 // again rather than attempting without the player's explicit go-ahead on that specific scope.
+//
+// ---- MAIN QUEST & SIDE QUEST OVERHAUL (2026-08-16, v0.37.0) ----
+// Player explicitly asked for a full overhaul of both the main quest and radiant/side quest
+// systems -- the note two entries up ("quest system confirmed solid, no changes needed") was
+// evaluating depth of the OLD linear/procedural structure, not whether the player wanted something
+// structurally different. Both were true at once: solid procedural depth, and still exactly the
+// "checklist with flavor text stapled on" shape the player described. Overhauled properly rather
+// than patched:
+//  - Main quest: generateMainQuest/advanceStory rewritten from a strictly linear 4-act stage array
+//    into a 6-act branching graph. Two hand-authored choice stages (lieutenant_choice,
+//    betrayal_choice) pause the story in a real decision modal (presentMainQuestChoice/
+//    resolveMainQuestChoice) and splice a different branch of stages into the story depending on
+//    the pick -- see grantStoryCompanion, empoweredBossIds, and the confrontation stage's dynamically
+//    mutated desc for how those choices keep mattering all the way to the ending.
+//  - World Phase system added (WORLD_PHASES/setWorldPhase/curWorldPhase): a permanent, one-way,
+//    milestone-triggered global shift (the "Terraria Hardmode" ask specifically) -- see
+//    maybeApplyInfernalEmpowerment in makeMonster, the Cinder Rift POI (phaseGate-filtered in
+//    placePOI), and worldPhaseReactionLine for how NPC dialogue reacts.
+//  - Side quest sourcing expanded beyond NPC dialogue: Guild Board (openGuildBoard, settlement-tier
+//    scaled, persistent postings rather than infinite reroll -- reuses the guildclerk/Guildhall
+//    infrastructure that already existed), injured dungeon captive -> recurring settlement NPC
+//    (makeInjuredCaptive/resolveDungeonRescue), caged dungeon prisoner as a genuine no-visible-tell
+//    gamble (makeCagedPrisoner/resolveCagedPrisoner), and lost keepsake return-to-owner
+//    (generateLostKeepsake, bound to a settlement the player has actually discovered).
+//  - Authored quest chains (QUEST_CHAINS registry): four so far -- refugee_bandits, empty_grave,
+//    paper_trail, fair_cut -- each with a real mid-quest twist (revealChainTwist) and two
+//    structurally different endings via resolveChainConfrontation, deliberately covering four
+//    different resolution mechanics (CHA persuasion / INT lore-argument / flat gold bribe / DEX
+//    stealth break-in) rather than four copies of the same check -- this was specifically requested
+//    ("combat, payment, persuasion/dialogue, stealth") and the first pass only had 2 of 4 covered.
+//  - Recurring quest-giver memory (giver.questHistory, wired in completeQuest) and a generic
+//    personal-quest unlock (offerPersonalQuest) after enough completed work for the same person.
+//  - Hand-authored unique named rewards (UNIQUE_REWARD_ITEMS) for meaningful quests, plus a small
+//    chance for them to drop from ordinary boss bounties too, so the pool isn't gated to exactly
+//    four fixed moments.
+//  - Fixed two genuine bugs found while auditing this work rather than just building on top of it:
+//    (1) the 'auto'-type stage's own desc (the inciting-hook narrative text specifically) was
+//    generated every game but never actually logged anywhere -- only its title was shown. Very
+//    likely the literal root cause of "you spawn in and a quest appears out of nowhere",
+//    independent of anything structural. Fixed in advanceStory's auto-stage branch. (2)
+//    antagonistAwareness was tracked (incremented every stage) but never read anywhere -- a
+//    half-built "world/antagonist reacts to you" feature that never paid off. Now mutates the
+//    confrontation stage's desc at 'the_reckoning' with an awareness-tiered line, the same pattern
+//    the betrayal choice already used to make its outcome remembered at the ending.
+//  - Synced GUIDE_SECTIONS' Quests/Ending tabs and added a new World Phase tab to match all of the
+//    above -- same "stale docs" pattern the two entries above this one already established a fix
+//    pattern for.
+//
+// NOT YET DONE (as of this entry -- see FACE-TO-FACE CHAIN ANTAGONISTS further down for the
+// resolution): 4 quest chains exist; QUEST_CHAINS is built to take more with no plumbing changes
+// needed. All four confrontations resolve through the giver (clerk/priest/official/merchant) rather
+// than a spawned antagonist NPC in person -- no persistent quest-specific NPC spawn system exists
+// yet to support a real face-to-face version. Caged-prisoner decoy odds (20%), chain reward numbers,
+// and the fair_cut stealth-fail flavor (currently a harmless non-event, unlike a failed persuade/
+// lore-argument which at least closes off retrying) are all untested against real play pacing.
+//
+// ---- QUEST OVERHAUL, FOLLOW-UP POLISH PASS (2026-08-16, v0.37.1) ----
+// Went back through the whole overhaul above looking specifically for claims that weren't actually
+// true yet, since "sounds done" and "is done" are different things:
+//  - source_choice added: a third main-quest choice stage (Act 3, "The Source's Ledger" -- hand
+//    recovered intelligence to the crown for reputation, or keep it privately for gold and a small
+//    later callback). Deliberately lower-stakes than the first two -- not every choice needs to be
+//    the biggest one the game has. Uses the exact same choice-stage/branch-splice/resolveMainQuestChoice
+//    pattern as the first two, so no new plumbing was needed, just a new case in the dispatcher.
+//  - World Phase 3 (the Unraveling) now has real exclusive content instead of just scaling Phase 2's
+//    numbers further: "Voidtouched" monsters (maybeApplyInfernalEmpowerment), a distinct, stronger,
+//    rarer tier above Infernal with a genuinely different mechanic (causesConfuse, not fire),
+//    dropping a new material (void_shard) from a new Rift Tear landmark (phaseGate:3 POI). Both
+//    infernal_ash and void_shard are now also valid 'gather' quest materials once the phase that
+//    produces them has actually happened -- fixing an item-base comment that overclaimed infernal_ash
+//    was "required" for quest-chain hooks when nothing ever actually consumed it.
+//  - Hall of Legends now records which betrayal_choice outcome a run had and what World Phase it
+//    ended in, and displays both in the listing -- closing the loop on choices mattering all the way
+//    to the permanent record, not just to the ending itself.
+//  - All of the above synced into GUIDE_SECTIONS (Quests tab now says "three" decisions, World Phase
+//    tab now describes Voidtouched/Rift Tear) and this changelog, rather than left to go stale again.
+//
+// ---- DESIGN CONFIRMATION + ONE MORE DECISION POINT (2026-08-16, v0.37.2) ----
+// Player clarified the intended shape explicitly: exactly one ending (the God/AI reveal), with
+// branching choices affecting the journey, world, and specific questlines along the way -- not
+// multiple main endings. Traced the full stage graph end to end to confirm this was already true:
+// all 9 MAIN_QUEST_PREMISES share identical stage structure and always converge on
+// targetBossId:'the_antagonist' then 'god'; all three choice stages (lieutenant/betrayal/source)
+// splice branches that reconverge into the same downstream stages, never a different final stage;
+// stage.done guards make every confrontation-desc mutation (betrayal outcome, kept ledger,
+// antagonistAwareness tier) fire exactly once. No changes needed there, but worth having actually
+// verified it instead of assuming.
+// Also extended real decision points beyond the 4 authored chains, since the original ask covered
+// quests broadly: 'sabotage' radiant quests (the most narratively loaded of the non-chain quest
+// types -- actively pushes a kingdom relation toward war) can now be called off at any time while
+// active, mending the relation instead of damaging it, for reduced-but-real rewards -- see
+// resolveSabotageReconsider. Deliberately bypasses completeQuest() rather than fighting its
+// sabotage-specific war-pushing logic, so normal sabotage completions are completely unaffected.
+//
+// ---- HAZARD LANDMARKS NOW ACTUALLY DO SOMETHING (2026-08-16, v0.37.3) ----
+// Cinder Rift and Rift Tear (the Phase 2/3 landmarks) were flagged in the last two entries as
+// "atmospheric/examinable only" -- true when written, worth actually fixing rather than leaving
+// noted. Discovered why they'd never had real effects: the existing on-step trap system
+// (triggerTrapAt) turned out to be hard-gated to curIsDungeon() && t.hiddenTrap at BOTH of its call
+// sites in movePlayer/enterTileAsEntity -- it will never fire for an overworld tile no matter what
+// t.trapType is set to, and these landmarks are overworld-only and deliberately not hidden. Rather
+// than touch that gating (explicitly commented elsewhere as battle-tested and kept isolated) or
+// route through the fire-spread/activeFxTiles system real fire traps use (wrong scope -- these are
+// meant to be a permanent, containable feature you can choose to avoid, not a wildfire that could
+// unpredictably burn the surrounding map), added one small, fully separate, additive check
+// (triggerWorldHazard, called from its own isolated `if` right next to but never overlapping the
+// existing trap block) keyed off a new t.hazardKind tag (set in placePOI). Cinder Rift now deals
+// real fire damage on step; Rift Tear has a real chance to inflict genuine statusConfuse (the same
+// player-facing status several bosses already use). quicksand_patch was deliberately left alone --
+// pre-existing, established behavior nobody asked to change, out of scope for this fix.
+//
+// ---- TWO MORE QUEST CHAINS (2026-08-16, v0.37.4) ----
+// Added QUEST_CHAINS.deserters ("The Deserters", STR-gated intimidation -- soldiers hunted for
+// desertion actually refused to burn a village) and QUEST_CHAINS.nothing_personal ("Nothing
+// Personal", WIL-gated resolve -- "extortionists" are actually providing real protection a rival
+// guild wants to muscle in on by using the player). Six chains now, seven distinct resolution
+// mechanics total between them (combat/CHA/INT/gold/DEX/STR/WIL) -- every remaining unused player
+// attribute now has a chain built around it.
+// Caught two real mistakes before they shipped, both worth noting since neither was caught by the
+// syntax checker: (1) wrote "Talk to ${q.sergeant}" in deserters' twist-reveal text -- q.sergeant is
+// pure flavor (never spawned as a real, findable NPC, same as every other chain's antagonist),
+// so that would have told the player to go talk to someone who doesn't exist. Fixed to point at
+// giverName, the actual reachable NPC, consistent with all five other chains. (2) drew
+// unique_plainspoken's bonus from wilBonus/chaBonus, then checked applyStatBonuses/
+// removeStatBonuses/EQUIP_FLAT_BONUS_KEYS directly and confirmed neither key is wired anywhere in
+// the game -- would have been a silently non-functional stat bonus on a brand new item, the exact
+// class of bug worth specifically checking for after nearly shipping something similar earlier in
+// this file's history. Switched to conBonus (confirmed wired) instead of extending the stat-bonus
+// engine for two fields nothing else uses -- smaller, safer fix for a single flavor item.
+//
+// ---- FACE-TO-FACE CHAIN ANTAGONISTS (2026-08-16, v0.37.5) ----
+// Closed the last explicitly-noted gap: all six chain confrontations previously resolved only
+// through the giver/intermediary (clerk, etc.), never the actual named antagonist, since none of
+// them were ever spawned as real NPCs. Built spawnChainAntagonist, called at the end of
+// revealChainTwist: the moment a twist is revealed, that chain's antagonist (noble/priest/
+// tollkeeper/merchant/captain/guildclerk, mapped per chain in CHAIN_ANTAGONIST_ROLE, named from the
+// same field already generated at quest start) becomes a real makeNPC()-built NPC, placed in the
+// nearest currently-loaded settlement (reusing findNearestLoadedSettlementChunk/findOpenSpotInChunk
+// from resolveDungeonRescue) -- findable through ordinary exploration, not fast-traveled to or
+// force-generated. If no settlement chunk happens to be loaded nearby, the confrontation just stays
+// intermediary-only for that quest instance -- a graceful fallback, not a failure state.
+// Talking to them (npc.isChainAntagonist + npc.chainQuestId, checked in openDialogue) offers the
+// exact same resolveChainConfrontation choice the giver route already offered, just reached by
+// finding the real person instead. Reused the giver route's altLabel wording for five of six chains
+// since a bribe/argument/stealth-plan/intimidation/refusal all read naturally face to face;
+// fair_cut's "stealth already done" would have made no sense as a pre-break-in dialogue option, so
+// that one got its own line (a credible in-person threat instead).
+// Also handled the case the giver-only design never had to consider: what if the antagonist dies?
+// Hooked onDeath (confirmed to be the single, universal death path every damage source in the game
+// already funnels through) to call resolveChainAntagonistDeath whenever an isChainAntagonist NPC's
+// hp hits 0, regardless of killer or cause -- force-resolves the linked quest under harsher terms
+// than either intended ending (no unique reward, real reputation cost, reduced gold) rather than
+// leaving it permanently unresolvable. Doubly guarded against re-firing (checks !q.done before
+// doing anything), so even a hypothetical duplicate onDeath call is a safe no-op.
+//
+// NOT YET DONE (current, as of v0.37.5): every specifically-noted gap from the quest overhaul has
+// now been addressed. What's left is genuinely new scope rather than unfinished work: more than 6
+// quest chains (trivial to add, registry supports it); hazard-tile damage now real for Cinder
+// Rift/Rift Tear specifically, but the broader hidden-trap system is still dungeon-only by design,
+// not a bug; achievements/meta-progression still don't exist (flagged repeatedly above, still a
+// "build new" decision, not a fix); face-to-face antagonists don't have unique combat dialogue or
+// death-line flavor beyond the generic NPC death log -- they're built on the same NPC framework as
+// everyone else on purpose, for consistency, not custom deeper characters. None of this was
+// untested-and-assumed-working -- every change in every entry above was validated with a full
+// script parse plus a duplicate-top-level-declaration check after every single edit, and cross-
+// referenced against the actual call sites of every function/field it touched or depended on,
+// specifically to avoid shipping something that merely "sounds done."
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
 // external audio files. This keeps the game a single portable HTML file and
@@ -1286,6 +1453,41 @@ const ITEM_BASES = [
   // misc / valuables
   { id:'gold', name:'Gold Coins', type:'misc', glyph:'$', color:'#e0c34a', value:1 },
   { id:'gem', name:'Gemstone', type:'misc', glyph:'*', color:'#5ae0d0', value:50 },
+  // ---- World Phase material: only ever drops from "infernal"-empowered monsters (see
+  // WORLD_PHASES / maybeApplyInfernalEmpowerment). Sells well and becomes a valid gather-quest
+  // material once the world has actually progressed far enough to produce it -- see the phase
+  // check in rollRadiantQuestOffer's 'gather' branch.
+  { id:'infernal_ash', name:'Infernal Ash', type:'misc', glyph:'*', color:'#ff5a2a', value:35,
+    desc:'Fine, still-warm ash that never fully cools. It only started turning up on things that were never on fire.' },
+  // ---- Phase 3 (the Unraveling) counterpart to infernal_ash -- dropped only by Voidtouched
+  // monsters (see maybeApplyInfernalEmpowerment), and, like infernal_ash, a valid gather-quest
+  // material once the world phase that produces it has actually happened.
+  { id:'void_shard', name:'Void Shard', type:'misc', glyph:'*', color:'#9a3af0', value:60,
+    desc:"A fragment that isn't quite a color, sitting at an angle that doesn't belong to the room it's in. Looking directly at it for too long gives you a headache." },
+  // ---- Lost & Found system (see generateLostKeepsake / side-quest sourcing overhaul): a generic
+  // base for a one-of-a-kind found item. makeItem() fills in a fresh procedural name/owner every
+  // time via Object.assign after creation -- this base just supplies the shape/appearance/value
+  // floor. noStack (see isStackableItem) keeps each one a distinct inventory entry even though
+  // they all share this base id, since two different keepsakes must never silently merge.
+  { id:'lost_keepsake', name:'Lost Keepsake', type:'misc', glyph:'"', color:'#e0d6a0', value:12, noStack:true },
+  // ---- Hand-authored unique rewards (see UNIQUE_REWARD_ITEMS / grantUniqueReward): fixed-stat,
+  // no-affix items with real names and lore, so finishing a meaningful quest leaves an actual mark
+  // instead of only topping up gold/xp. Deliberately modest-but-distinct power (roughly matching a
+  // mid-rarity roll) rather than best-in-slot, so they read as *memorable*, not mandatory.
+  { id:'unique_turncoats_edge', name:"Turncoat's Edge", type:'weapon', slot:'hand', dmg:[5,13], str:11, glyph:')', color:'#e8ab52', value:180, noAffixes:true, lifesteal:0.08,
+    desc:'Carried by a lieutenant who chose, in the end, not to die for a cause they never picked. It still remembers which way it used to point.' },
+  { id:'unique_refugees_ward', name:"The Refugees' Ward", type:'armor', slot:'body', armor:7, glyph:'[', color:'#5ae0a0', value:170, noAffixes:true, conBonus:2,
+    desc:'Stitched from a dozen mismatched cloaks by people who had nothing else to give. Somehow it turns a blade as well as anything forged.' },
+  { id:'unique_wardens_promise', name:"The Warden's Promise", type:'armor', slot:'ring', armor:0, glyph:'=', color:'#5ac9e0', value:200, noAffixes:true, intBonus:3, conBonus:1,
+    desc:'A ring given by someone who remembered every job you ever did for them, right up to the last one.' },
+  { id:'unique_gravewards_charm', name:"Graveward's Charm", type:'armor', slot:'amulet', armor:2, glyph:'"', color:'#c9a0e0', value:160, noAffixes:true, intBonus:2, conBonus:2,
+    desc:"Carved by a hedge-witch who only ever meant to protect one grave from being robbed twice. It still hums faintly when something means you harm." },
+  { id:'unique_porters_due', name:"The Porter's Due", type:'armor', slot:'gloves', armor:3, glyph:'[', color:'#8ac95a', value:150, noAffixes:true, dexBonus:2,
+    desc:"A pair of work gloves, worn soft at the palms by years of honest labor nobody ever paid for properly. Whoever left these behind finally got what they were owed." },
+  { id:'unique_deserters_oath', name:"The Deserter's Oath", type:'armor', slot:'body', armor:8, glyph:'[', color:'#8a9ac0', value:180, noAffixes:true, strBonus:2,
+    desc:"A soldier's breastplate, the unit crest filed off deliberately rather than lost to wear. Whoever wore it decided, once, that an order wasn't worth carrying out -- and lived to be right about it." },
+  { id:'unique_plainspoken', name:'Plainspoken', type:'armor', slot:'ring', armor:0, glyph:'=', color:'#e0a85a', value:170, noAffixes:true, conBonus:2,
+    desc:"A plain ring, given by people who'd learned not to expect anyone to actually tell them the truth for free. It doesn't do anything you could call magic. It just reminds you what that was worth." },
 ];
 // v3 balance pass: every affix now carries an explicit `tier` (0-4). makeItem() uses this to
 // cap which affixes a given drop is allowed to roll, keyed to the rarity it was generated with
@@ -1532,7 +1734,7 @@ function makeItem(baseId, rarity, rng, powerMult) {
 // To make a future item type non-stacking (e.g. a unique per-instance "artifact"), just add its
 // type string to NO_STACK_TYPES -- nothing else needs to change.
 const NO_STACK_TYPES = new Set(['weapon', 'armor', 'chest', 'corpse']);
-function isStackableItem(item) { return !!item && !NO_STACK_TYPES.has(item.type); }
+function isStackableItem(item) { return !!item && !item.noStack && !NO_STACK_TYPES.has(item.type); }
 // Adds `item` into `list`, merging into an existing same-id stack when possible instead of always
 // appending a new entry. Returns whichever item object now holds the combined amount (the
 // pre-existing stack it merged into, or `item` itself if it was pushed fresh) so callers that want
@@ -7063,6 +7265,15 @@ const POI_TYPES = [
   { id:'petrified_forest', name:'Petrified Forest', weight:3, lookExtra:'Trees turned entirely to stone, frozen mid-sway.', glyph:'^', color:'#8a8a8a' },
   { id:'strange_obelisk', name:'Strange Obelisk', weight:3, corruptionOnVisit:5, lookExtra:'A black obelisk that seems to drink in the light around it.', glyph:'I', color:'#3a1a4a' },
   { id:'quicksand_patch', name:'Quicksand', weight:3, hazardTile:true, lookExtra:'The ground here shifts and sucks at anything that steps on it.', glyph:'~', color:'#8a7a4a' },
+  // ---- World Phase hazard: only ever placed once the Infernal Tide has begun (phaseGate:2, see
+  // placePOI's candidate filter and setWorldPhase) -- a concrete, findable, examinable sign that
+  // the world itself has changed, not just tougher monsters, that actually hurts if you stand on
+  // it (see t.hazardKind / triggerWorldHazard in movePlayer) rather than being purely decorative.
+  { id:'cinder_rift', name:'Cinder Rift', weight:4, phaseGate:2, hazardTile:true, lookExtra:'A crack in the earth that glows like a coal bed and smells of ash that never quite cools.', glyph:'^', color:'#ff5a2a' },
+  // ---- Phase 3 (the Unraveling) exclusive landmark -- a visibly worse sign of the world's state
+  // than Cinder Rift, not just a recolor of it. Same hazardTile placement mechanic, distinct real
+  // effect (a chance of genuine statusConfuse rather than fire damage -- see triggerWorldHazard).
+  { id:'rift_tear', name:'Rift Tear', weight:4, phaseGate:3, hazardTile:true, lookExtra:"A seam in the world, hanging open at head height, showing a few square feet of somewhere else entirely. It doesn't seem to be getting any bigger. It also didn't, yesterday.", glyph:'%', color:'#9a3af0' },
   { id:'thorny_thicket', name:'Thorny Thicket', weight:4, lookExtra:'A dense tangle of thorned vines, best given a wide berth.', glyph:'"', color:'#3a6a2a' },
   { id:'geyser_field', name:'Geyser Field', weight:3, buff:true, lookExtra:'Jets of steam hiss up from cracks in the earth.', glyph:'^', color:'#c9704a' },
   { id:'corrupted_grove', name:'Corrupted Grove', weight:3, monsters:[{id:'wolf',count:[1,2]}], corruptionOnVisit:8, lookExtra:'The trees here bend at wrong angles, leaves black as tar.', glyph:'T', color:'#4a1a6a' },
@@ -7661,6 +7872,85 @@ const MONSTER_SCALE_BASE = Math.pow(40, 1 / 13);
 function depthScaleForPlayerLevel(level) {
   return 1 + (Math.max(1, level || 1) - 1) / 98 * 13;
 }
+// ===================== WORLD PHASE SYSTEM =====================
+// Design goal (see player feedback: "similar to how Terraria's progression phases (Hardmode,
+// etc.) permanently shift what the whole world is like"): certain main-quest milestones flip a
+// global, permanent, one-way switch. Once flipped, the whole world plays differently from then
+// on -- stronger "infernal" monster variants start appearing, new hazards/resources show up in
+// freshly-generated or repopulated content, and NPCs react (fear, hostility, changed dialogue and
+// quest offers). This is intentionally NOT retroactive pixel-perfect repainting of every already-
+// generated chunk (that would mean re-simulating the whole explored map on every phase change,
+// which doesn't scale) -- instead every *forward-looking* generation point (new monster spawns,
+// chunk repopulation, dungeon levels generated from here on, dialogue, NPC reactions) checks
+// player.worldPhase live, so the shift is felt everywhere the player goes next, the same way
+// Terraria's Hardmode doesn't rewrite pre-Hardmode chests but does change literally everything
+// that spawns from the moment the Wall of Flesh dies onward.
+const WORLD_PHASES = [
+  { id:0, name:'The Calm', short:'calm',
+    desc:'The world as it has always been -- dangerous in the ordinary ways.' },
+  { id:1, name:'The Fracturing', short:'fracturing',
+    desc:'Something in the world\'s fabric has started to give. Wildlife is uneasier. People are starting to talk.' },
+  { id:2, name:'The Infernal Tide', short:'infernal',
+    desc:'Whatever was holding the line has lost ground badly. Monsters are coming back changed -- hotter, angrier, harder to kill -- and the ground itself is starting to burn in places it never used to.' },
+  { id:3, name:'The Unraveling', short:'unraveling',
+    desc:'The world knows what is coming for it now, and it shows. Some of what\'s out there isn\'t burning anymore -- it\'s coming apart at a wrongness you can\'t quite look straight at, and the ground itself has started to tear. Even people far from any of this can feel it in the air.' },
+];
+function curWorldPhase() { return WORLD_PHASES[player.worldPhase || 0] || WORLD_PHASES[0]; }
+// Called only from advanceStory() at specific authored milestones (never rolled/random) -- a
+// world-state shift should always be traceable to a specific thing the player did.
+function setWorldPhase(n, reasonLine) {
+  if ((player.worldPhase || 0) >= n) return; // one-way ratchet, never regresses
+  player.worldPhase = n;
+  const wp = curWorldPhase();
+  Sound.play('questComplete');
+  log(`*** THE WORLD HAS CHANGED -- ${wp.name} ***`);
+  log(wp.desc);
+  if (reasonLine) log(reasonLine);
+  // Mark every currently-loaded chunk dirty so the next time each is left and revisited it gets a
+  // chance to repopulate under the new phase's rules (see maybeRepopulateChunk) rather than only
+  // ever-fresh chunks reflecting the change.
+  for (const c of worldChunks.values()) c.dirty = true;
+  updateSidebar();
+}
+// Rolled once per monster spawned, anywhere, once the Infernal Tide (phase 2+) has begun. Bosses,
+// fixed-stat entities (God), and anything already flagged special are exempt -- this is meant to
+// make ordinary wildlife and dungeon fodder feel like the world itself turned hostile, not to
+// re-skin authored encounters. Chance and intensity both scale with how far past the threshold
+// the current phase is, so phase 3 is visibly worse than phase 2.
+function maybeApplyInfernalEmpowerment(m, base, rng) {
+  const phase = player.worldPhase || 0;
+  if (phase < 2 || base.fixedStats || m.boss || m.infernal || m.voidtouched) return;
+  // Phase 3 (the Unraveling) introduces a rarer, stronger tier above Infernal -- "Voidtouched" --
+  // with its own distinct mechanical identity (causesConfuse, reality coming apart around whatever
+  // it hits, rather than fire) instead of Infernal's numbers just scaling up further. Rolled first
+  // and mutually exclusive with Infernal, so a given monster is always exactly one or the other,
+  // never both or neither-but-still-scaled.
+  if (phase >= 3 && rng() < 0.06) {
+    m.voidtouched = true;
+    m.name = 'Voidtouched ' + m.name;
+    m.color = '#9a3af0';
+    const mult = 1.7;
+    m.hp = Math.round(m.hp * mult); m.maxHp = m.hp;
+    m.str = Math.round(m.str * mult);
+    m.atk = [Math.round(m.atk[0] * mult), Math.round(m.atk[1] * mult)];
+    m.xp = Math.round(m.xp * mult * 1.4);
+    m.causesConfuse = true;
+    m.voidLootBonus = true; // see rollLoot's void_shard hook
+    return;
+  }
+  const chance = 0.10 + (phase - 2) * 0.12; // 10% at phase 2, 22% at phase 3
+  if (rng() >= chance) return;
+  m.infernal = true;
+  m.name = 'Infernal ' + m.name;
+  m.color = '#ff3a1a';
+  const mult = 1.35 + (phase - 2) * 0.2;
+  m.hp = Math.round(m.hp * mult); m.maxHp = m.hp;
+  m.str = Math.round(m.str * mult);
+  m.atk = [Math.round(m.atk[0] * mult), Math.round(m.atk[1] * mult)];
+  m.xp = Math.round(m.xp * mult * 1.3);
+  m.fire = Math.max(m.fire || 0, 3);
+  m.infernalLootBonus = true; // see rollLoot's infernal_ash hook
+}
 function makeMonster(monsterId, x, y, depthScale, rng) {
   rng = rng || Math.random;
   const base = MONSTER_BASES[monsterId];
@@ -7703,6 +7993,14 @@ function makeMonster(monsterId, x, y, depthScale, rng) {
   m.homeX = x; m.homeY = y;
   m.patrolRadius = m.patrolRadius || (base.dtier !== undefined ? 7 : 10);
   m.visionRange = m.visionRange || 9;
+  maybeApplyInfernalEmpowerment(m, base, rng);
+  if (player.story && player.story.empoweredBossIds && player.story.empoweredBossIds.includes(monsterId)) {
+    const mult = 1.3;
+    m.hp = Math.round(m.hp * mult); m.maxHp = m.hp;
+    m.str = Math.round(m.str * mult);
+    m.atk = [Math.round(m.atk[0] * mult), Math.round(m.atk[1] * mult)];
+    m.xp = Math.round(m.xp * mult);
+  }
   return m;
 }
 
@@ -8191,6 +8489,49 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
   }
   if (roleId === 'fisherman') { npc.teachRecipes = ['craft_raft']; }
   return npc;
+}
+// ---- Side-quest source: injured person found in a dungeon. A minimal, non-combat, immobile NPC
+// (see npcAI's immobile early-out and curNPCs()'s dungeon branch) -- not a full makeNPC() build,
+// since they have no shop/spells/combat role, just an identity and a rescue flag. Rescuing them
+// (see resolveDungeonRescue) converts them into a REAL makeNPC()-built settlement NPC dropped into
+// a real settlement chunk, at which point they behave exactly like any other recurring NPC --
+// this constructor only needs to get them from "found" to "rescued" convincingly.
+const CAPTIVE_ROLE_POOL = ['ranger', 'hunter', 'scholar', 'merchant', 'guard'];
+function makeInjuredCaptive(rng, theme, depth, x, y) {
+  const species = getSpecies(randomSpeciesWeighted(rng));
+  const name = humanName(rng);
+  const futureRole = choice(rng, CAPTIVE_ROLE_POOL);
+  return {
+    uid: 'n' + (uidCounter++), kind:'npc', roleId:'wounded_traveler', roleName:'Wounded Traveler', name,
+    x, y, hp:1, maxHp:1, str:1, dex:1, atk:[0,0], armor:0,
+    color:'#e8d0a0', glyph:'@', affection:0, alive:true, home:null,
+    rumor:null, hostile:false, healer:false, spouse:null, canGiveQuest:false,
+    gender: choice(rng, ['male','female']), appearance:'', giftCount:0, lastTalkTurn:-9999,
+    faction:'settlement', aiState:'idle', immobile:true, species: species.id, trait: choice(rng, TRAITS),
+    rescuable:true, rescued:false, futureRoleId: futureRole, dungeonTheme: theme, foundDepth: depth,
+  };
+}
+// ---- Side-quest source #2: a caged prisoner, found in a dungeon. Shares the same minimal,
+// immobile, dialogue-gated NPC scaffolding as makeInjuredCaptive, but the resolution is different
+// on purpose: freeing them is a genuine gamble rather than a guaranteed good deed. Most of the time
+// they're exactly what they look like -- a robbed traveler grateful to be let out. Sometimes
+// they're a bandit scout who let themselves get "caught" on purpose, banking on someone's good
+// nature to let them loose again -- see resolveCagedPrisoner. Unlike the injured captive, freeing
+// them doesn't create a recurring settlement NPC -- they simply move on (or, if it goes badly,
+// don't).
+function makeCagedPrisoner(rng, theme, depth, x, y) {
+  const species = getSpecies(randomSpeciesWeighted(rng));
+  const name = humanName(rng);
+  const isDecoy = rng() < 0.2;
+  return {
+    uid: 'n' + (uidCounter++), kind:'npc', roleId:'caged_prisoner', roleName:'Caged Prisoner', name,
+    x, y, hp:1, maxHp:1, str:1, dex:1, atk:[0,0], armor:0,
+    color:'#a0c9e0', glyph:'@', affection:0, alive:true, home:null,
+    rumor:null, hostile:false, healer:false, spouse:null, canGiveQuest:false,
+    gender: choice(rng, ['male','female']), appearance:'', giftCount:0, lastTalkTurn:-9999,
+    faction:'settlement', aiState:'idle', immobile:true, species: species.id, trait: choice(rng, TRAITS),
+    caged:true, freed:false, isDecoy, dungeonTheme: theme, foundDepth: depth,
+  };
 }
 
 function generateShopInventory(roleId, rng) {
@@ -9459,7 +9800,7 @@ function scatterFlavorDecor(chunk, rng, tag, tier) {
 // ---- generic, data-driven point-of-interest placement (35 types) ----
 function placePOI(chunk, cx, cy, rng) {
   const centerBiome = chunk.tiles[Math.floor(CH/2)][Math.floor(CH/2)].biome;
-  const candidates = POI_TYPES.filter(p => !p.biomeGate || p.biomeGate.includes(centerBiome));
+  const candidates = POI_TYPES.filter(p => (!p.biomeGate || p.biomeGate.includes(centerBiome)) && (!p.phaseGate || (player.worldPhase || 0) >= p.phaseGate));
   if (!candidates.length) return;
   const poiType = weightedChoice(rng, candidates.map(p => [p, p.weight]));
   const lx = randInt(rng, 3, CH-4), ly = randInt(rng, 3, CH-4);
@@ -9501,7 +9842,7 @@ function placePOI(chunk, cx, cy, rng) {
   else if (poiType.ritual) { t.feature = 'ritual_altar'; t.glyph = poiType.glyph; t.color = poiType.color; }
   else if (poiType.launchCradle) { t.feature = 'launch_cradle'; t.glyph = poiType.glyph; t.color = poiType.color; }
   else if (poiType.foldingStone) { t.feature = 'folding_stone'; t.glyph = poiType.glyph; t.color = poiType.color; }
-  else if (poiType.hazardTile) { t.feature = 'hazard'; t.glyph = poiType.glyph; t.color = poiType.color; }
+  else if (poiType.hazardTile) { t.feature = 'hazard'; t.glyph = poiType.glyph; t.color = poiType.color; t.hazardKind = poiType.id; }
   else if (!poiType.monsters && !poiType.npcRole) { t.feature = 'poi_marker'; t.glyph = poiType.glyph || '*'; t.color = poiType.color || '#c9a06a'; }
 }
 
@@ -13119,7 +13460,8 @@ function removeDeadEntity(def) {
   }
   if (curIsDungeon()) {
     const lvl = curDungeonLevel();
-    lvl.monsters = lvl.monsters.filter(m => m !== def);
+    if (def.kind === 'npc') lvl.npcs = (lvl.npcs || []).filter(n => n !== def);
+    else lvl.monsters = lvl.monsters.filter(m => m !== def);
     return;
   }
   // BUG FIX: this fell straight through to the overworld's getChunk() even while inside a
@@ -13242,6 +13584,23 @@ function pickBossSequence(rng, bosses, fracs) {
   }
   return out;
 }
+function humanName(rng) { return choice(rng, FIRST_NAMES) + ' ' + choice(rng, SURNAMES); }
+// ---- Story companion recruitment: used by choice-locked defector/ally rewards below. Builds a
+// real, combat-capable NPC via the same construction path every other NPC in the game uses (so it
+// has valid hp/str/atk/glyph/etc.), then joins them exactly the way a recruited spouse joins --
+// following=true, scaled to the player's level via scaleCompanionToPlayer, pushed onto
+// player.companions. This is the mechanism behind "a specific ally" unlocks from main-quest choices.
+function grantStoryCompanion(roleId, name, speciesId, flavorLine) {
+  const npc = makeNPC(roleId, player.x, player.y, Math.random, player.story ? player.story.homeKingdom : null, speciesId);
+  npc.name = name;
+  npc.canGiveQuest = false; npc.shop = null; npc.barterStock = null;
+  npc.following = true; npc.orderMode = 'follow'; npc.orderPos = null; npc.stance = npc.stance || 'aggressive';
+  scaleCompanionToPlayer(npc);
+  player.companions.push(npc);
+  relocateAllies();
+  Sound.play('questComplete');
+  log(`*** ${name} joins you. "${flavorLine}" ***`);
+}
 function generateMainQuest(rng) {
   const premise = choice(rng, MAIN_QUEST_PREMISES);
   const antagonist = mythicName(rng);
@@ -13252,27 +13611,19 @@ function generateMainQuest(rng) {
   const scriptedBosses = sortedBossPool(true);
   const bosses = scriptedBosses.length >= 5 ? scriptedBosses : sortedBossPool(false);
   const fallback = { id:'wolf', name:'a beast', power:1 };
-  const [b1, b2, b3, b4, b5] = bosses.length
-    ? pickBossSequence(rng, bosses, [0.05, 0.3, 0.55, 0.8, 0.97])
+  // Six combat beats now instead of five: the old single "rising threat" lieutenant becomes TWO
+  // named lieutenants (b2a/b2b) introduced together, so the player has a real choice about which
+  // to move on first (see lieutenant_choice below) instead of a fixed, unavoidable order.
+  const [b1, b2a, b2b, b4, b5] = bosses.length
+    ? pickBossSequence(rng, bosses, [0.05, 0.25, 0.33, 0.62, 0.9])
     : [fallback, fallback, fallback, fallback, fallback];
   // a real rival, pulled from the actual political map (Phase 5) rather than invented -- if k1
   // has a hostile neighbor, name them; otherwise fall back to a generic "unknown forces" beat so
   // the flavor text never lies about a relationship that doesn't exist in this particular seed.
   const hostileNeighbor = kingdomNeighborKeys(k1.key).map(nk => ({ nk, rel: getKingdomRelation(k1.key, nk) })).find(r => r.rel === 'war' || r.rel === 'tension');
   const rivalName = hostileNeighbor ? getKingdomByKey(hostileNeighbor.nk).name : null;
-  // ---- mandatory dimension trail: the player must physically travel through a random subset of
-  // the alternate dimensions (3-5 of however many exist, not all of them) before the confrontation
-  // stage unlocks -- which specific ones, and in what order, is rolled fresh per seed. The other
-  // dimensions stay fully optional (extra loot/lore/bosses, no quest requirement attached). This is
-  // checked against player.visitedDimensions (set the moment the player actually steps through a
-  // rift in travelThroughRift()) rather than discoveredDimensions (set the moment a portal is
-  // merely unlocked) -- the distinction matters because a boss-kill unlock and physically crossing
-  // over are two different moments, and the quest should require the latter.
-  // Each mandatory dimension now demands a real objective, not just a footstep: find and defeat
-  // that dimension's Trail Guardian (see TRAIL_GUARDIANS / DIMENSION_TRAIL_GUARDIANS), who each
-  // hold a specific keepsake tied to the antagonist's identity. Merely crossing the rift no longer
-  // completes the stage -- see checkMainQuestTrailGuardian(), hooked into the monster-death path
-  // alongside checkMainQuestBossKill(), instead of checkMainQuestDimensionVisit() firing on entry.
+  // ---- mandatory dimension trail (Act 5): unchanged mechanically from before, just renumbered
+  // into its own act now that the questline runs six acts instead of four.
   const allDimIds = Object.keys(DIMENSIONS);
   const trailCount = Math.min(allDimIds.length, randInt(rng, 3, 5));
   const mandatoryDimensions = shuffleArray(rng, allDimIds.slice()).slice(0, trailCount);
@@ -13285,45 +13636,122 @@ function generateMainQuest(rng) {
       ? `find and defeat ${guardianName} -- rumor holds they're still carrying ${dropName.name}, and that's worth more right now than anything else in there`
       : `find and defeat ${guardianName}`;
     if (i === 0) {
-      return { id:'the_rift', act:4, type:'dimension_trail', title:'A Door Where There Shouldn\'t Be One', done:false,
+      return { id:'the_rift', act:5, type:'dimension_trail', title:'A Door Where There Shouldn\'t Be One', done:false,
         targetDimensionId: dimId, targetMonsterId: guardian ? guardian.monsterId : null,
         desc: dimTrailNames.length > 1
           ? `Everything you've learned about ${antagonist} points somewhere that shouldn't exist on any map -- and not just one somewhere. The trail crosses through ${dimTrailNames.length} realms beyond this one, in this order: ${dimTrailNames.join(' -> ')}. Find a way into the first, ${DIMENSIONS[dimId].name}, then ${objective}.`
           : `Everything you've learned about ${antagonist} points somewhere that shouldn't exist on any map. The trail leads into ${DIMENSIONS[dimId].name} -- find a way through, then ${objective}.` };
     }
     const remaining = dimTrailNames.length - i;
-    return { id:`dim_trail_${i}`, act:4, type:'dimension_trail', title: DIMENSIONS[dimId].name, done:false,
+    return { id:`dim_trail_${i}`, act:5, type:'dimension_trail', title: DIMENSIONS[dimId].name, done:false,
       targetDimensionId: dimId, targetMonsterId: guardian ? guardian.monsterId : null,
       desc: `The trail leads onward into ${DIMENSIONS[dimId].name}. Once through, ${objective}. ${remaining} realm${remaining === 1 ? '' : 's'} left after this one before ${antagonist} runs out of places to hide.` };
   });
+  // ---- Choice 1: which lieutenant to pursue first (Act 2). Whichever is pursued FIRST hasn't
+  // heard you're coming -- and dying without warning is what breaks one of their own people loose
+  // to defect to you (see rewardsDefector below, resolved in checkMainQuestBossKill). Whichever is
+  // pursued SECOND has had time to prepare and is fought empowered (see empoweredBossIds, applied
+  // in makeMonster). The two resulting branches are otherwise symmetric -- same total content
+  // either way -- but which specific companion you unlock, and which fight is the harder one,
+  // genuinely differs per playthrough based on this one decision.
+  const defectorA = { roleId: choice(rng, ['ranger','hunter','mercenary','guard']), name: humanName(rng), species: randomSpeciesWeighted(rng) };
+  const defectorB = { roleId: choice(rng, ['ranger','hunter','mercenary','guard']), name: humanName(rng), species: randomSpeciesWeighted(rng) };
+  const lieutenantChoiceStage = {
+    id:'lieutenant_choice', act:2, type:'choice', title:'Two Names Surface', done:false,
+    desc:`Two of ${antagonist}'s lieutenants have surfaced close enough to reach: ${b2a.name} and ${b2b.name}. Word travels slowly between the two camps -- whichever you move on first won't see it coming. The other will have every warning in the world by the time you get there.`,
+    options:[
+      { id:'a_first', label:`Move on ${b2a.name} first` },
+      { id:'b_first', label:`Move on ${b2b.name} first` },
+    ],
+    branches:{
+      a_first:[
+        { id:'lieutenant_first', act:2, type:'kill_boss', title:'No Warning', done:false, targetBossId:b2a.id, rewardsDefector:defectorA,
+          desc:`${b2a.name} hasn't heard you're coming. Make it count.` },
+        { id:'lieutenant_second', act:2, type:'kill_boss', title:'Fully Warned', done:false, targetBossId:b2b.id, empoweredBoss:true, worldPhaseOnComplete:1,
+          desc:`${b2b.name} has had time to prepare, and it shows. This will not go like the last one.` },
+      ],
+      b_first:[
+        { id:'lieutenant_first', act:2, type:'kill_boss', title:'No Warning', done:false, targetBossId:b2b.id, rewardsDefector:defectorB,
+          desc:`${b2b.name} hasn't heard you're coming. Make it count.` },
+        { id:'lieutenant_second', act:2, type:'kill_boss', title:'Fully Warned', done:false, targetBossId:b2a.id, empoweredBoss:true, worldPhaseOnComplete:1,
+          desc:`${b2a.name} has had time to prepare, and it shows. This will not go like the last one.` },
+      ],
+    },
+  };
+  // ---- Choice 2: who to trust (Act 3, "the betrayal"). Two allies who've been feeding you real
+  // help are named; word reaches you that one of them has been passing everything back to
+  // ${antagonist} the whole time. Which one is genuinely rolled once, at generation time, and never
+  // revealed to the player before they choose -- guessing right recruits the loyal one as a
+  // companion and keeps a kingdom's trust; guessing wrong costs that trust and is remembered by
+  // name in the final confrontation. Either way the story keeps moving -- this isn't a fail state,
+  // it's a real fork with a real cost.
+  const allyX = { name: humanName(rng), roleId: choice(rng, ['ranger','guard','hunter','scholar']), species: randomSpeciesWeighted(rng) };
+  const allyY = { name: humanName(rng), roleId: choice(rng, ['ranger','guard','hunter','scholar']), species: randomSpeciesWeighted(rng) };
+  const traitorIsX = rng() < 0.5;
+  const betrayalChoiceStage = {
+    id:'betrayal_choice', act:3, type:'choice', title:'Betrayal', done:false,
+    desc: rivalName
+      ? `${allyX.name} and ${allyY.name} have both fed you real help since this began. Now word reaches you: one of them has been passing everything back to ${rivalName}, and through them, to ${antagonist}. You can't investigate both before it matters.`
+      : `${allyX.name} and ${allyY.name} have both fed you real help since this began. Now word reaches you: one of them has been passing everything back to ${antagonist} the whole time. You can't investigate both before it matters.`,
+    options:[
+      { id:'trust_x', label:`Trust ${allyX.name}, move against ${allyY.name}` },
+      { id:'trust_y', label:`Trust ${allyY.name}, move against ${allyX.name}` },
+    ],
+    // resolution logic lives in resolveMainQuestChoice (needs traitorIsX + the two ally objects,
+    // stashed on the stage itself since branches here can't be precomputed the way lieutenant_choice's
+    // could -- the outcome text depends on whether the player guessed right).
+    allyX, allyY, traitorIsX,
+    branches:{ trust_x:[{ id:'betrayal_resolved', act:3, type:'auto', title:'The Traitor Unmasked', done:false, desc:'' }],
+               trust_y:[{ id:'betrayal_resolved', act:3, type:'auto', title:'The Traitor Unmasked', done:false, desc:'' }] },
+  };
+  // ---- Choice 3: what to do with what you recover from the_source (Act 3). Lower-stakes than the
+  // first two on purpose -- no companion or fight difficulty is riding on it, just reputation and a
+  // small, private advantage -- so not every decision in the game has to be the biggest one it can
+  // possibly be. Resolution logic lives in resolveMainQuestChoice, same pattern as betrayal_choice.
+  const sourceChoiceStage = {
+    id:'source_choice', act:3, type:'choice', title:"The Source's Ledger", done:false,
+    desc: `${b4.name} was carrying more than a weapon -- a ledger, laying out in writing exactly how deep ${antagonist}'s reach goes into ${k1.name}. Handing it to the crown answers a lot of questions publicly, and quickly. Keeping it, and using what's in it yourself, answers them privately -- and leaves you owing no one an explanation for how you know what you know.`,
+    options:[
+      { id:'hand_over', label:`Hand the ledger to ${k1.name}'s authorities` },
+      { id:'keep_it', label:'Keep the ledger for yourself' },
+    ],
+    k1Key: k1.key,
+    branches:{
+      hand_over:[{ id:'source_choice_resolved', act:3, type:'auto', title:'An Open Book', done:false, desc:'' }],
+      keep_it:[{ id:'source_choice_resolved', act:3, type:'auto', title:'A Private Matter', done:false, desc:'' }],
+    },
+  };
   const stages = [
     { id:'inciting', act:1, type:'auto', title:'The Call', done:false, desc: premise.hook(antagonist, k1.name) },
     { id:'first_trial', act:1, type:'kill_boss', title:'First Trial', done:false, targetBossId:b1.id,
-      desc:`Word is ${b1.name} is behind trouble close to home. Deal with it, and word of you will start to travel too.` },
+      desc:`${b1.name} is behind trouble close to home -- and more than one person swears they've heard the name ${antagonist} muttered by ${b1.name}'s own people. Deal with it, and word of you will start to travel too.` },
     { id:'omen', act:1, type:'dungeon_tier', title:'An Omen', done:false, targetTier:'common',
-      desc:`Something ${antagonist} left behind is rumored to sit at the bottom of a nearby dungeon. Clear any common-tier dungeon to its deepest level.` },
-    { id:'rising_threat', act:2, type:'kill_boss', title:'Rising Threat', done:false, targetBossId:b2.id,
-      desc:`${b2.name} has thrown in with ${antagonist}. Stopping them will slow whatever is coming.` },
+      desc:`Whatever ${b1.name} answered to left something behind -- a den, rumored to sit at the bottom of a nearby dungeon, that should say more about who's really pulling strings. Clear any common-tier dungeon to its deepest level.` },
+    lieutenantChoiceStage,
     { id:'gather_allies', act:2, type:'discover_kingdoms', title:'Gather Allies', done:false, targetCount:3,
-      desc:`No single kingdom can face ${antagonist} alone. Travel and set foot in at least 3 kingdoms.` },
+      desc:`Word of what happened to ${antagonist}'s lieutenants is already spreading. Good -- because no single kingdom can face what's coming alone. Travel and set foot in at least 3 kingdoms to start building real support.` },
     { id:'dark_dungeon', act:2, type:'dungeon_tier', title:'Into the Dark', done:false, targetTier:'uncommon',
-      desc:`An uncommon-tier dungeon has become a staging ground for ${antagonist}'s forces. Clear it to its deepest level.` },
-    { id:'betrayal', act:2, type:'kill_boss', title:'Betrayal', done:false, targetBossId:b3.id,
-      desc: rivalName
-        ? `${b3.name} was trusted once. Word is they've been taking orders from ${rivalName} -- and ${k1.name} has not forgotten what ${rivalName} is capable of.`
-        : `${b3.name} was trusted once. Not anymore. ${antagonist}'s reach goes deeper than anyone feared.` },
+      desc:`An uncommon-tier dungeon has become a staging ground for ${antagonist}'s remaining forces -- and, if the rumors reaching you are right, for something else too close to home. Clear it to its deepest level.` },
+    // ---- World Phase 1 milestone actually fires earlier, on the second (forewarned) lieutenant's
+    // death -- see lieutenant_choice's branches above. By the time the betrayal below is unmasked
+    // the world has already started changing; this stage is where the player learns *why* someone
+    // close to them turned, not where the world itself turns.
+    betrayalChoiceStage,
     { id:'the_source', act:3, type:'kill_boss', title:'The Source', done:false, targetBossId:b4.id,
-      desc:`${b4.name} guards the path to ${antagonist} directly. This will not be an easy fight.` },
-    { id:'gathering_storm', act:3, type:'kill_boss', title:'The Gathering Storm', done:false, targetBossId:b5.id,
-      desc:`${b5.name}, the last and strongest of ${antagonist}'s lieutenants, stands between you and the truth.` },
+      desc:`With the traitor dealt with, the trail to ${antagonist} finally runs somewhere real -- straight through ${b4.name}, who guards it personally. This will not be an easy fight.` },
+    sourceChoiceStage,
+    { id:'gathering_storm', act:4, type:'kill_boss', title:'The Gathering Storm', done:false, targetBossId:b5.id, worldPhaseOnComplete:2,
+      desc:`${b5.name}, the last and strongest of ${antagonist}'s lieutenants, stands between you and the truth -- and everyone who's seen them fight says they don't hold anything back.` },
+    { id:'the_reckoning', act:4, type:'auto', title:'The Reckoning', done:false,
+      desc:`${b5.name} is dead, and whatever ${antagonist} was still holding back has stopped being held back. There's no quiet path left now -- only forward, into wherever ${antagonist} has actually been hiding. Not somewhere on any map. Somewhere else entirely.` },
     ...dimTrailStages,
-    { id:'confrontation', act:4, type:'kill_boss', title:premise.title, done:false, targetBossId:'the_antagonist',
+    { id:'confrontation', act:6, type:'kill_boss', title:premise.title, done:false, targetBossId:'the_antagonist', worldPhaseOnComplete:3,
       desc:`${antagonist} is real, and waiting, having run out of realms left to hide in. This is the confrontation everything has been leading to.` },
-    { id:'final_boss', act:4, type:'kill_boss', title:'???', done:false, targetBossId:'god',
-      desc:`Locked. Unlike everything above, this fight is fixed, not procedurally generated. What ${antagonist} was hiding behind is not what you think it is.` },
+    { id:'final_boss', act:6, type:'kill_boss', title:'???', done:false, targetBossId:'god',
+      desc:`What ${antagonist} was hiding behind does not answer to that name, or to any name a person would choose for themself. It calls itself God, it has been right about everything it's threatened so far, and you are about to find out if it was lying about the rest.` },
   ];
   return { premiseId: premise.id, title: premise.title, antagonist, homeKingdom: k1.name,
-    stageIndex: 0, stages, kingdomRep: {}, mandatoryDimensions };
+    stageIndex: 0, stages, kingdomRep: {}, mandatoryDimensions, choices:{}, empoweredBossIds:[], antagonistAwareness:0 };
 }
 function ensureStory() {
   if (player.story) return;
@@ -13331,10 +13759,16 @@ function ensureStory() {
   if (player.story.stages[0] && player.story.stages[0].type === 'auto') advanceStory();
 }
 function curStoryStage() { ensureStory(); return player.story.stages[player.story.stageIndex] || null; }
+// advanceStory() now pauses (rather than auto-completing) on a 'choice' stage -- it opens the
+// decision modal and returns without incrementing stageIndex. The player's pick, made through
+// resolveMainQuestChoice() below, is what actually splices the chosen branch into player.story.stages
+// and moves the story forward. Everything else about advancement (rewards, logging, world-phase
+// milestones, empowered-boss flags, defector recruitment) is unchanged in spirit from before.
 function advanceStory() {
   const st = player.story;
   const stage = st.stages[st.stageIndex];
   if (!stage || stage.done) return;
+  if (stage.type === 'choice') { presentMainQuestChoice(stage); return; }
   stage.done = true;
   if (stage.type !== 'auto' && stage.type !== 'locked') {
     const rewardGold = 40 * stage.act * stage.act, rewardXp = 60 * stage.act * stage.act;
@@ -13343,10 +13777,132 @@ function advanceStory() {
     log(`*** Main Quest — ${stage.title} complete! (+${rewardGold}g, +${rewardXp}xp) ***`);
   } else {
     log(`*** Main Quest — ${stage.title} ***`);
+    if (stage.desc) log(stage.desc);
   }
+  // World Phase milestone: authored per-stage, never random (see setWorldPhase).
+  if (stage.worldPhaseOnComplete !== undefined) {
+    setWorldPhase(stage.worldPhaseOnComplete, `${st.antagonist} has felt every one of these losses -- and so, now, has everything else.`);
+  }
+  // Choice payoff: the first-pursued lieutenant's death frees a defector to come find you --
+  // and they don't come empty-handed. See ITEM_BASES' unique_turncoats_edge, whose lore is
+  // written for exactly this moment.
+  if (stage.rewardsDefector) {
+    const d = stage.rewardsDefector;
+    grantStoryCompanion(d.roleId, d.name, d.species,
+      `I served them because I had to. I don't, anymore. Whatever's next -- I'd rather be on your side of it.`);
+    const blade = grantUniqueReward('unique_turncoats_edge');
+    if (blade) log(`${d.name} presses ${blade.name} into your hands. "Take it. I never want to carry that again."`);
+  }
+  // Antagonist awareness payoff: tracked across every completed stage, paid off once, at the
+  // moment the player has visibly dismantled enough of the plan for it to be undeniable -- see
+  // 'the_reckoning', the auto-stage right before the dimension trail. Mutates the (already-
+  // generated) confrontation stage's desc in place, the same pattern the betrayal choice uses to
+  // make its outcome remembered at the ending -- this is the "world/antagonist reacts to what
+  // you've done" the player specifically asked for, distinct from the World Phase (which reacts to
+  // the world at large, not to the player as an individual).
+  if (stage.id === 'the_reckoning') {
+    const confrontationStage = st.stages.find(s => s.id === 'confrontation');
+    const awareness = st.antagonistAwareness || 0;
+    if (confrontationStage) {
+      const tierLine = awareness >= 6
+        ? ` Every lieutenant, every guardian, every plan that was supposed to hold -- gone, one by one, at your hands specifically. ${st.antagonist} isn't pretending not to know who did this.`
+        : awareness >= 3
+        ? ` ${st.antagonist} has lost enough, by now, to know your name.`
+        : ` Word of you has reached ${st.antagonist} regardless -- there was never a version of this where it wouldn't.`;
+      confrontationStage.desc += tierLine;
+    }
+  }
+  st.antagonistAwareness = (st.antagonistAwareness || 0) + 1;
   st.stageIndex++;
   const next = st.stages[st.stageIndex];
+  if (next && next.empoweredBoss && next.targetBossId && !st.empoweredBossIds.includes(next.targetBossId)) st.empoweredBossIds.push(next.targetBossId);
+  // 'auto' stages (narrative beats with no player-action trigger, e.g. 'the_reckoning' or a
+  // resolved-choice branch stage) complete themselves the instant they become current -- recursing
+  // back into advanceStory() here is what makes that actually happen instead of leaving the story
+  // stuck showing an "auto" stage as current forever with nothing left to advance it.
+  if (next && next.type === 'auto') { advanceStory(); return; }
+  if (next && next.type === 'choice') { presentMainQuestChoice(next); return; }
   if (next) log(`Main Quest — ${next.title}: ${next.desc}`);
+}
+// Opens the same generic dialogue-modal framework offerRadiantQuests uses (gameState='dialogue',
+// dialogueOptions + renderModal) so Escape/click/letter-key all just work for free. Re-openable at
+// any time via the quest log (see openQuestLog) if the player backs out without deciding --
+// picking is mandatory to keep moving, but never lost or timed.
+function presentMainQuestChoice(stage) {
+  Sound.play('uiOpen');
+  gameState = 'dialogue'; dialogueNPC = null;
+  const opts = []; let n = 0;
+  const nextKey = () => String.fromCharCode(97 + (n++));
+  stage.options.forEach(o => { opts.push({ key: nextKey(), label: o.label, action: () => resolveMainQuestChoice(stage, o.id) }); });
+  dialogueOptions = opts;
+  renderModal(`A Decision — ${stage.title}`,
+    `<div class="npcline">${stage.desc}</div>`,
+    'Letter/click to decide. This choice shapes what comes next -- there is no "undo".');
+}
+function resolveMainQuestChoice(stage, optionId) {
+  stage.done = true;
+  const st = player.story;
+  st.choices[stage.id] = optionId;
+  const branch = stage.branches[optionId];
+  // ---- betrayal_choice special-cases its own outcome text/consequences since (unlike
+  // lieutenant_choice) they depend on whether the player guessed the secretly-rolled traitor
+  // correctly -- see generateMainQuest's traitorIsX.
+  if (stage.id === 'betrayal_choice') {
+    const guessedX = optionId === 'trust_x';
+    const correct = guessedX === stage.traitorIsX ? false : true; // trusting X is correct iff X is NOT the traitor
+    const trusted = guessedX ? stage.allyX : stage.allyY;
+    const suspected = guessedX ? stage.allyY : stage.allyX;
+    const resolvedStage = branch[0];
+    if (correct) {
+      resolvedStage.desc = `You were right to trust ${trusted.name}. ${suspected.name} slips away before you can act -- ${st.antagonist} loses a spy, but you keep an ally, and word of it does your standing nothing but good.`;
+      st.betrayalOutcome = 'correct'; st.betrayalTrusted = trusted.name; st.betrayalTraitor = suspected.name;
+      addKingdomRep(getKingdom(Math.floor(player.x/CH), Math.floor(player.y/CH)).key, 10);
+      grantStoryCompanion(trusted.roleId, trusted.name, trusted.species,
+        `Glad that's settled. I'm not going anywhere now.`);
+    } else {
+      resolvedStage.desc = `You moved against ${suspected.name} -- and you were wrong. ${trusted.name} was the one passing word to ${st.antagonist} the whole time, and by the time you realize it, they're already gone. ${suspected.name} doesn't forgive it easily, and neither do the people who trusted your judgment.`;
+      st.betrayalOutcome = 'wrong'; st.betrayalTrusted = suspected.name; st.betrayalTraitor = trusted.name;
+      addKingdomRep(getKingdom(Math.floor(player.x/CH), Math.floor(player.y/CH)).key, -8);
+      log(`*** ${trusted.name} was the traitor. You find out too late. ***`);
+    }
+    // The final confrontation's flavor text now remembers which way this went -- see the
+    // stage-mutation below, matched by id rather than assuming array position (branches/dim-trail
+    // stages of varying length sit between here and 'confrontation').
+    const confrontationStage = st.stages.find(s => s.id === 'confrontation');
+    if (confrontationStage) {
+      confrontationStage.desc += correct
+        ? ` ${trusted.name} insisted on being here for this part.`
+        : ` You still think about ${trusted.name} sometimes. ${st.antagonist} clearly does too -- they gloat about it before the fight even starts.`;
+    }
+  }
+  // ---- source_choice: lower-stakes than the first two -- a straight reputation-vs-gold-and-
+  // leverage tradeoff, no companion or fight difficulty riding on it. keep_it also leaves a mark on
+  // the confrontation's text later, same stage-mutation pattern as betrayal_choice above, just a
+  // smaller one.
+  else if (stage.id === 'source_choice') {
+    const resolvedStage = branch[0];
+    const confrontationStage = st.stages.find(s => s.id === 'confrontation');
+    if (optionId === 'hand_over') {
+      resolvedStage.desc = `You hand the ledger over. ${st.homeKingdom}'s response is swift and public -- whatever else people think of you after this, no one can say you're hiding anything.`;
+      addKingdomRep(stage.k1Key, 15);
+      log(`*** ${st.homeKingdom} takes the ledger seriously. (+15 rep) ***`);
+    } else {
+      resolvedStage.desc = `You keep the ledger. Whatever's in it is yours to use, and yours alone -- for now.`;
+      player.gold += 150; st.keptLedger = true;
+      log(`*** You quietly work the ledger's contents into coin instead. (+150g) ***`);
+      if (confrontationStage) confrontationStage.desc += ` Somewhere in the back of your mind, you still have ${st.homeKingdom}'s ledger. It never ended up mattering. It might have.`;
+    }
+  }
+  Sound.play('questAccept');
+  st.stages.splice(st.stageIndex, 1, ...branch);
+  closeModal();
+  log(`*** Main Quest — ${stage.title}: you chose. ***`);
+  const cur = st.stages[st.stageIndex];
+  if (cur && cur.empoweredBoss && cur.targetBossId && !st.empoweredBossIds.includes(cur.targetBossId)) st.empoweredBossIds.push(cur.targetBossId);
+  if (cur && cur.type === 'auto') { advanceStory(); return; }
+  if (cur && cur.type === 'choice') { presentMainQuestChoice(cur); return; }
+  if (cur) log(`Main Quest — ${cur.title}: ${cur.desc}`);
+  updateSidebar();
 }
 function checkMainQuestBossKill(monsterId) {
   const stage = curStoryStage();
@@ -13605,7 +14161,7 @@ function hasQuestLead() {
   ensureStory();
   if (!player.story) return false;
   const stage = curStoryStage();
-  if (!stage || stage.type === 'auto' || stage.type === 'locked') return true;
+  if (!stage || stage.type === 'auto' || stage.type === 'locked' || stage.type === 'choice') return true;
   return player.story.leadKnownStage === player.story.stageIndex;
 }
 // Called whenever the player actually learns their current lead in-world (an NPC tells them,
@@ -13625,6 +14181,7 @@ function mainQuestGuidance() {
   const stage = curStoryStage();
   if (!stage) return player.story && player.story.stages.every(s => s.done) ? 'Every step of this road is behind you now.' : null;
   if (stage.type === 'auto' || stage.type === 'locked') return null;
+  if (stage.type === 'choice') return 'A decision is waiting on you -- open the quest log [q] to make it.';
   if (!hasQuestLead()) return NO_LEAD_TEXT;
   return questStageHint(stage);
 }
@@ -13712,7 +14269,10 @@ function rollRadiantQuestOffer(npc, rng) {
       rewardRep:8, rewardItem:true, desc:`${npc.name} wants ${b.name} dealt with for good. This one won't be easy.` });
   }
   if (kind === 'gather') {
-    const mat = choice(rng, ['pelt','herb','ore']), need = randInt(rng, 4, 8), matBase = ITEM_BASES.find(b => b.id === mat);
+    const matPool = ['pelt','herb','ore'];
+    if ((player.worldPhase || 0) >= 2) matPool.push('infernal_ash');
+    if ((player.worldPhase || 0) >= 3) matPool.push('void_shard');
+    const mat = choice(rng, matPool), need = randInt(rng, 4, 8), matBase = ITEM_BASES.find(b => b.id === mat);
     return Object.assign(base, { type:'gather', target:mat, need, rewardGold:need*8, rewardXp:need*5, rewardRep:3,
       desc:`Bring ${need} ${matBase.name}${need>1?'s':''} to ${npc.name}.` });
   }
@@ -13727,6 +14287,69 @@ function rollRadiantQuestOffer(npc, rng) {
   }
   return Object.assign(base, { type:'explore', target:null, need:1, rewardGold:40, rewardXp:30, rewardRep:3,
     desc:`Explore any dungeon and report back to ${npc.name}.` });
+}
+// ---- Guild Board: an adventurer's-guild-style quest board, distinct from a single NPC's personal
+// favor (offerRadiantQuests). Bigger settlements post more work, more often; a hamlet's board (if
+// it even has a guild clerk at all -- see ROLES pools, guildclerk only appears from village tier
+// up) might have a single stale posting sitting on it for a long while. The board is persistent
+// per-clerk (stored on the npc itself) rather than rerolled every visit -- postings sit there until
+// taken or until the board's refresh interval passes, so it reads like a real board other people
+// are also drawing from, not an infinite personal quest dispenser.
+const GUILD_BOARD_SIZE_BY_TIER = { hamlet: 1, village: 2, town: 3, city: 4, capital: 5 };
+const GUILD_BOARD_REFRESH_TURNS_BY_TIER = { hamlet: 800, village: 500, town: 300, city: 180, capital: 120 };
+function guildBoardTierAt(x, y) {
+  const c = getChunk(Math.floor(x / CH), Math.floor(y / CH));
+  const t = c && c.settlement && c.settlement.type ? c.settlement.type.toLowerCase() : 'village';
+  return GUILD_BOARD_SIZE_BY_TIER[t] ? t : 'village';
+}
+function refreshGuildBoard(npc, force) {
+  const tier = guildBoardTierAt(npc.x, npc.y);
+  const size = GUILD_BOARD_SIZE_BY_TIER[tier];
+  const refreshInterval = GUILD_BOARD_REFRESH_TURNS_BY_TIER[tier];
+  if (!npc.guildBoard) npc.guildBoard = { offers: [], refreshTurn: -Infinity, tier };
+  const stale = (turnCount - npc.guildBoard.refreshTurn) > refreshInterval;
+  if (force || stale || npc.guildBoard.offers.length === 0) {
+    // Keep any postings the player hasn't taken yet if this was just a top-up, not a full stale
+    // refresh -- a full refresh (stale/forced) clears the board entirely, same as a real board
+    // getting cleaned off and re-posted.
+    npc.guildBoard.offers = stale || force ? [] : npc.guildBoard.offers;
+    while (npc.guildBoard.offers.length < size) {
+      // Small chance per slot, city tier and up only, to post the opening beat of an authored
+      // quest chain instead of a rolled radiant quest -- see QUEST_CHAINS.
+      let offer = null;
+      if ((tier === 'city' || tier === 'capital') && Math.random() < 0.22) offer = rollQuestChainBoardOffer(npc);
+      if (!offer) offer = rollRadiantQuestOffer(npc, Math.random);
+      npc.guildBoard.offers.push(offer);
+    }
+    npc.guildBoard.refreshTurn = turnCount;
+    npc.guildBoard.tier = tier;
+  }
+  return npc.guildBoard;
+}
+function openGuildBoard(npc) {
+  Sound.play('uiOpen');
+  gameState = 'dialogue'; dialogueNPC = npc;
+  const board = refreshGuildBoard(npc, false);
+  const opts = []; let n = 0;
+  const nextKey = () => String.fromCharCode(97 + (n++));
+  board.offers.forEach((offer, idx) => {
+    const already = player.quests.some(q => q.boardOfferKey === offer.id && !q.done);
+    if (already) return;
+    opts.push({ key: nextKey(), label: `${offer.desc} (${offer.rewardGold}g, ${offer.rewardXp}xp)`, action: () => {
+      offer.boardOfferKey = offer.id;
+      acceptRadiantQuest(offer);
+      board.offers.splice(idx, 1);
+      board.offers.push(rollRadiantQuestOffer(npc, Math.random));
+      closeModal();
+    }});
+  });
+  opts.push({ key: nextKey(), label: 'Never mind', action: () => closeModal() });
+  dialogueOptions = opts;
+  const tierLabel = board.tier.charAt(0).toUpperCase() + board.tier.slice(1);
+  renderModal(`Quest Board — ${npc.home || 'the guild'} (${tierLabel})`,
+    (opts.length <= 1 ? `<div class="npcline dim">Nothing posted right now. Bigger boards fill up faster -- check back later, or try a larger settlement.</div>` : `<div class="npcline dim">Postings on the board:</div>`) +
+    opts.map(o => `<div class="modal-opt" onclick="simulateKey('${o.key}')">[${o.key}] ${o.label}</div>`).join(''),
+    'Letter/click to take a posting, Esc to leave.');
 }
 function offerRadiantQuests(npc) {
   Sound.play('uiOpen');
@@ -13757,10 +14380,387 @@ function checkBountyQuests(monsterId) {
     } else if (q.type === 'dimension_bounty' && q.target === monsterId) {
       q.progress++;
       if (q.progress >= q.need) completeDimensionBounty(q);
+    } else if (q.type === 'chain_kill' && q.target === monsterId) {
+      q.progress++;
+      if (!q.twistRevealed && q.twistAt && q.progress >= q.twistAt) revealChainTwist(q);
+      if (q.progress >= q.need) {
+        // Quests with a twist gate (q.twistAt set) deliberately do NOT auto-complete here while the
+        // choice is still undecided (resolutionPath null) -- the whole point of the twist is a
+        // deliberate choice back at the giver (see resolveChainConfrontation), and auto-completing
+        // on the last kill would let the game silently resolve that choice before the player ever
+        // gets to make it. Once resolutionPath IS set (the player already decided, possibly before
+        // finishing every kill), later kills complete normally like anything else.
+        if (q.twistAt && !q.resolutionPath) { if (!q.readyHintShown) { q.readyHintShown = true; log(`(That's the last of them. Head back to ${q.giverName} to settle this.)`); } }
+        else completeQuest(q);
+      }
     }
   }
   checkMainQuestBossKill(monsterId);
   checkMainQuestTrailGuardian(monsterId);
+}
+// ===================== AUTHORED QUEST CHAINS =====================
+// Framework for hand-written, multi-stage side quests with a real beginning, middle, and twist --
+// distinct from the procedurally-rolled radiant templates in rollRadiantQuestOffer above. Each
+// entry in QUEST_CHAINS is a *starter*: a function that builds the opening quest object (same
+// shape as a radiant quest, so it slots into player.quests/checkBountyQuests/completeQuest for
+// free), plus whatever chain-specific hooks it needs (twist reveal, alternate resolution). Adding
+// a new chain later only means adding one more entry here and, if it needs a genuinely new
+// resolution mechanic, one more small hook -- the existing plumbing (board postings, dialogue
+// options, checkBountyQuests) doesn't need to change per-chain.
+const QUEST_CHAINS = {};
+// ---- "Not What They Seem": the hand-authored example from design notes. Hired to clear a
+// "bandit" camp; partway through, it turns out they're refugees a local noble evicted, defending
+// the only camp they have left. The player can finish the job as ordered, or go back to the giver
+// and turn the confrontation on the noble instead (a CHA-gated persuasion/threat resolution rather
+// than more combat) -- two structurally different endings with different rewards and reputation.
+QUEST_CHAINS.refugee_bandits = {
+  id: 'refugee_bandits', name: 'Not What They Seem',
+  start(npc, rng) {
+    const kingdom = getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
+    const noble = humanName(rng);
+    const need = randInt(rng, 4, 6);
+    const twistAt = Math.max(2, Math.floor(need / 2));
+    return {
+      id: 'qc' + Math.random().toString(36).slice(2, 9), chainId: 'refugee_bandits',
+      giverId: npc.uid, giverName: npc.name, giverHome: npc.home, kingdomKey: kingdom.key,
+      type: 'chain_kill', target: 'bandit', need, twistAt, progress: 0, done: false,
+      twistRevealed: false, resolutionPath: null, noble,
+      rewardGold: need * 22, rewardXp: need * 14, rewardRep: 8,
+      desc: `A noble, ${noble}, wants a bandit camp near ${npc.home} wiped out for good. Clear it -- ${need} of them.`,
+    };
+  },
+};
+// ---- "The Empty Grave": hired to clear what looks like undead activity in the local cemetery;
+// turns out the "skeletons" are silent guardians a hedge-witch raised at a grieving daughter's
+// request, to stop grave robbers -- hired by the very priest who posted this contract, who wants
+// a relic buried with the deceased. Resolution is INT-gated (recognizing and arguing the guardians
+// were clearly defensive, not offensive) rather than CHA-gated, for some mechanical variety
+// alongside refugee_bandits' persuasion check.
+QUEST_CHAINS.empty_grave = {
+  id: 'empty_grave', name: 'The Empty Grave',
+  start(npc, rng) {
+    const kingdom = getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
+    const priest = humanName(rng);
+    const need = randInt(rng, 3, 5);
+    const twistAt = Math.max(2, Math.ceil(need / 2));
+    return {
+      id: 'qc' + Math.random().toString(36).slice(2, 9), chainId: 'empty_grave',
+      giverId: npc.uid, giverName: npc.name, giverHome: npc.home, kingdomKey: kingdom.key,
+      type: 'chain_kill', target: 'skeleton', need, twistAt, progress: 0, done: false,
+      twistRevealed: false, resolutionPath: null, priest,
+      rewardGold: need * 26, rewardXp: need * 16, rewardRep: 8,
+      desc: `A priest, ${priest}, says the dead have stopped staying dead in the cemetery outside ${npc.home}. Put ${need} of them back down before it spreads.`,
+    };
+  },
+};
+// ---- "Paper Trail": hired to deal with raiders hitting the north road toll checkpoint; turns out
+// they're townsfolk smuggling food and medicine around a toll official's deliberate blockade,
+// squeezing a settlement for more money. Resolution is a straight gold bribe to the giver (who
+// keeps the ledgers) to lose the paperwork -- a "pay" resolution path, distinct from both
+// refugee_bandits' persuasion and empty_grave's lore-argument.
+QUEST_CHAINS.paper_trail = {
+  id: 'paper_trail', name: 'Paper Trail',
+  start(npc, rng) {
+    const kingdom = getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
+    const official = humanName(rng);
+    const need = randInt(rng, 4, 6);
+    const twistAt = Math.max(2, Math.floor(need / 2));
+    const bribeCost = 120 + need * 20;
+    return {
+      id: 'qc' + Math.random().toString(36).slice(2, 9), chainId: 'paper_trail',
+      giverId: npc.uid, giverName: npc.name, giverHome: npc.home, kingdomKey: kingdom.key,
+      type: 'chain_kill', target: 'bandit', need, twistAt, progress: 0, done: false,
+      twistRevealed: false, resolutionPath: null, official, bribeCost,
+      rewardGold: need * 24, rewardXp: need * 15, rewardRep: 7,
+      desc: `The toll clerk on the north road wants raiders dealt with -- ${need} of them have been hitting merchant caravans near the checkpoint ${official} runs.`,
+    };
+  },
+};
+// ---- "A Fair Cut": hired by a merchant guild to deal with thieves hitting warehouse shipments;
+// turns out the "thieves" are porters and laborers quietly taking back exactly what one merchant
+// has been shorting them on in wages for months. Resolution is DEX-gated stealth -- breaking into
+// that merchant's own ledger house at night and altering the books so the theft becomes
+// undeniable on paper, no confrontation or violence required -- rounding the chain set's resolution
+// mechanics out to all four originally requested: combat (default), payment (paper_trail),
+// persuasion (refugee_bandits/empty_grave), and now stealth.
+QUEST_CHAINS.fair_cut = {
+  id: 'fair_cut', name: 'A Fair Cut',
+  start(npc, rng) {
+    const kingdom = getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
+    const merchant = humanName(rng);
+    const need = randInt(rng, 3, 5);
+    const twistAt = Math.max(2, Math.ceil(need / 2));
+    return {
+      id: 'qc' + Math.random().toString(36).slice(2, 9), chainId: 'fair_cut',
+      giverId: npc.uid, giverName: npc.name, giverHome: npc.home, kingdomKey: kingdom.key,
+      type: 'chain_kill', target: 'bandit', need, twistAt, progress: 0, done: false,
+      twistRevealed: false, resolutionPath: null, merchant,
+      rewardGold: need * 23, rewardXp: need * 15, rewardRep: 7,
+      desc: `A merchant guild wants thieves hitting warehouse shipments near ${npc.home} dealt with -- ${need} of them, by ${npc.name}'s count.`,
+    };
+  },
+};
+// ---- "The Deserters": hired by a recruiting sergeant to hunt down deserters from the border
+// watch; turns out they refused a direct order to burn a village for resisting conscription, not
+// cowardice. Resolution is STR-gated intimidation -- a show of force convincing the sergeant to
+// quietly log them as killed in action instead -- distinct in feel from refugee_bandits' CHA
+// persuasion (words) even though both are, mechanically, a social resolution.
+QUEST_CHAINS.deserters = {
+  id: 'deserters', name: 'The Deserters',
+  start(npc, rng) {
+    const kingdom = getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
+    const sergeant = humanName(rng);
+    const need = randInt(rng, 3, 5);
+    const twistAt = Math.max(2, Math.ceil(need / 2));
+    return {
+      id: 'qc' + Math.random().toString(36).slice(2, 9), chainId: 'deserters',
+      giverId: npc.uid, giverName: npc.name, giverHome: npc.home, kingdomKey: kingdom.key,
+      type: 'chain_kill', target: 'bandit', need, twistAt, progress: 0, done: false,
+      twistRevealed: false, resolutionPath: null, sergeant,
+      rewardGold: need * 22, rewardXp: need * 15, rewardRep: 6,
+      desc: `A recruiting sergeant, ${sergeant}, wants deserters from the border watch hunted down near ${npc.home} -- ${need} of them, made an example of.`,
+    };
+  },
+};
+// ---- "Nothing Personal": hired by a guild rep to drive off "extortionists" shaking down local
+// merchants; turns out the merchants are willingly paying for real protection, and the guild that
+// hired you just wants the income for itself. Resolution is WIL-gated -- refusing to be the
+// guild's hired muscle for a turf grab despite the money already on the table, and telling the
+// merchants the truth instead. Rounds the resolution set to six chains covering seven distinct
+// mechanics: combat (default, always available), CHA persuasion, INT lore-argument, gold bribery,
+// DEX stealth, STR intimidation, and WIL resolve.
+QUEST_CHAINS.nothing_personal = {
+  id: 'nothing_personal', name: 'Nothing Personal',
+  start(npc, rng) {
+    const kingdom = getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
+    const guildRep = humanName(rng);
+    const need = randInt(rng, 3, 5);
+    const twistAt = Math.max(2, Math.ceil(need / 2));
+    return {
+      id: 'qc' + Math.random().toString(36).slice(2, 9), chainId: 'nothing_personal',
+      giverId: npc.uid, giverName: npc.name, giverHome: npc.home, kingdomKey: kingdom.key,
+      type: 'chain_kill', target: 'bandit', need, twistAt, progress: 0, done: false,
+      twistRevealed: false, resolutionPath: null, guildRep,
+      rewardGold: need * 24, rewardXp: need * 15, rewardRep: 7,
+      desc: `A guild representative, ${guildRep}, wants "extortionists" shaking down merchants near ${npc.home} driven off -- ${need} of them.`,
+    };
+  },
+};
+function rollQuestChainBoardOffer(npc) {
+  const ids = Object.keys(QUEST_CHAINS).filter(id => !player.quests.some(q => q.chainId === id && (q.done === false)) && !(player.completedChains || []).includes(id));
+  if (!ids.length) return null;
+  const chain = QUEST_CHAINS[choice(Math.random, ids)];
+  return chain.start(npc, Math.random);
+}
+// ---- Face-to-face chain antagonists: previously every chain resolved only through the giver
+// (clerk/priest/official/etc. who posted the board listing), never the actual person the twist is
+// about, since they were never spawned as real NPCs at all. Now, the moment a chain's twist is
+// revealed, its named antagonist becomes a real, placed, talkable NPC in the nearest loaded
+// settlement -- findable through ordinary exploration, offering the exact same confrontation choice
+// in person that was previously only reachable through the intermediary. The intermediary route
+// (still resolveChainConfrontation, still reachable via the giver) is left fully intact for players
+// who never bother tracking the antagonist down -- this is an additional path, not a replacement.
+const CHAIN_ANTAGONIST_ROLE = { refugee_bandits:'noble', empty_grave:'priest', paper_trail:'tollkeeper', fair_cut:'merchant', deserters:'captain', nothing_personal:'guildclerk' };
+const CHAIN_ANTAGONIST_NAME_FIELD = { refugee_bandits:'noble', empty_grave:'priest', paper_trail:'official', fair_cut:'merchant', deserters:'sergeant', nothing_personal:'guildRep' };
+function spawnChainAntagonist(q) {
+  const roleId = CHAIN_ANTAGONIST_ROLE[q.chainId];
+  const nameField = CHAIN_ANTAGONIST_NAME_FIELD[q.chainId];
+  if (!roleId || !nameField || !q[nameField]) return;
+  const giver = findNPCByUid(q.giverId);
+  const anchorX = giver ? giver.x : player.x, anchorY = giver ? giver.y : player.y;
+  const chunk = findNearestLoadedSettlementChunk(anchorX, anchorY);
+  const spot = chunk ? findOpenSpotInChunk(chunk, Math.random) : null;
+  // No settlement chunk currently loaded nearby -- rather than force one to generate (which could
+  // place them somewhere the player has never been and may never revisit), the confrontation just
+  // stays reachable through the giver only for this particular quest instance. Graceful, not a bug.
+  if (!chunk || !spot) return;
+  const npc = makeNPC(roleId, spot.x, spot.y, Math.random, chunk.settlement.name, randomSpeciesWeighted(Math.random));
+  npc.name = q[nameField];
+  npc.isChainAntagonist = true; npc.chainQuestId = q.id;
+  chunk.npcs.push(npc);
+  q.antagonistUid = npc.uid; q.antagonistHome = chunk.settlement.name;
+  log(`(Word is ${npc.name} can be found in ${chunk.settlement.name}, if you'd rather settle this in person.)`);
+}
+// Whoever it was, however it happened -- combat, an accident, someone else entirely -- a chain
+// quest can't be left permanently dangling just because its antagonist is dead and the
+// intermediary-only resolution path is still sitting there unresolved. Deliberately harsher and
+// duller than either the "finish" or the "alt path" endings: no unique reward, a real reputation
+// cost, reduced gold -- killing the actual person this was about was never one of the two endings
+// the quest was designed to reward.
+function resolveChainAntagonistDeath(def) {
+  const q = player.quests.find(qq => qq.id === def.chainQuestId && !qq.done);
+  if (!q) return;
+  q.resolutionPath = 'violence';
+  player.completedChains = player.completedChains || [];
+  if (!player.completedChains.includes(q.chainId)) player.completedChains.push(q.chainId);
+  q.rewardGold = Math.round((q.rewardGold || 0) * 0.5);
+  q.rewardUniqueId = null;
+  if (q.kingdomKey) addKingdomRep(q.kingdomKey, -10);
+  log(`*** With ${def.name} dead, there's no one left to answer for any of it -- whatever this was building toward ends here instead, and not cleanly. ***`);
+  completeQuest(q);
+}
+function revealChainTwist(q) {
+  q.twistRevealed = true;
+  if (q.chainId === 'refugee_bandits') {
+    q.desc = `These aren't bandits -- they're refugees ${q.noble} evicted from their own land, holed up and defending the only camp they have left. You've already hurt them. ${q.giverName} just posted the contract; they likely have no idea what they actually asked you to do.`;
+    log(`*** "Not What They Seem" -- the truth catches up with you. Talk to ${q.giverName} if you want to do something about it. ***`);
+  } else if (q.chainId === 'empty_grave') {
+    q.desc = `These "skeletons" haven't attacked anyone but you, and every one of them was standing guard around the same grave. This isn't undead activity -- it's a hedge-witch's ward, raised at a grieving daughter's request to stop grave robbers. Robbers ${q.priest} hired, most likely, for whatever relic was buried with the body. Talk to ${q.giverName} if you want to do something about it.`;
+    log(`*** "The Empty Grave" -- these were never monsters. Talk to ${q.giverName} if you want to do something about it. ***`);
+  } else if (q.chainId === 'paper_trail') {
+    q.desc = `These aren't raiders -- they're locals moving food and medicine around a blockade ${q.official} set up personally, squeezing the settlement on the far side for more coin than the toll should ever cost. Talk to ${q.giverName} if you want to do something about it.`;
+    log(`*** "Paper Trail" -- the toll was never about safety. Talk to ${q.giverName} if you want to do something about it. ***`);
+  } else if (q.chainId === 'fair_cut') {
+    q.desc = `These aren't thieves -- they're the same porters and dockhands who load ${q.merchant}'s shipments every day, taking back, almost to the coin, what ${q.merchant} has been shorting their wages by for months. ${q.giverName} posted this on the guild's behalf; whether they know exactly what they're covering for is another question. Talk to ${q.giverName} if you want to do something about it.`;
+    log(`*** "A Fair Cut" -- this was never theft. Talk to ${q.giverName} if you want to do something about it. ***`);
+  } else if (q.chainId === 'deserters') {
+    q.desc = `These aren't deserters running from a fight -- they're soldiers who refused a direct order to burn a village for resisting conscription, and walked rather than carry it out. ${q.sergeant} left that part out when posting the bounty. Talk to ${q.giverName} if you want to do something about it.`;
+    log(`*** "The Deserters" -- they didn't run from the fight, they ran from an order. Talk to ${q.giverName} if you want to do something about it. ***`);
+  } else if (q.chainId === 'nothing_personal') {
+    q.desc = `These aren't extortionists -- the merchants are paying willingly, for protection that's actually being provided. ${q.guildRep}'s guild just wants that income for itself, and is using you to clear the competition out. Talk to ${q.giverName} if you want to do something about it.`;
+    log(`*** "Nothing Personal" -- it was never about safety, just money. Talk to ${q.giverName} if you want to do something about it. ***`);
+  }
+  spawnChainAntagonist(q);
+}
+// Called from the giver's dialogue once a chain's twist has been revealed -- see the dialogue hook
+// wired into openDialogue below. `altPath=true` attempts each chain's alternate, non-combat
+// resolution; `altPath=false` explicitly finishes the job as originally contracted, closing off
+// the alternate ending on purpose rather than by default. Six chains, six distinct resolution
+// mechanics -- CHA persuasion, INT lore-argument, gold bribery, DEX stealth, STR intimidation, and
+// WIL resolve -- covering combat/pay/persuade/stealth with real variety, not re-skinned copies of
+// the same check. In every chain the giver is the person who posted the board listing, not the
+// actual antagonist in person (no spawned noble/priest/official/merchant/sergeant/guild-rep NPC
+// exists to confront face to face) -- resolution works by convincing or paying the intermediary to
+// withdraw the guild's involvement, or by acting entirely outside their knowledge (fair_cut), which
+// is narratively consistent with how a guild contract actually works.
+function resolveChainConfrontation(q, altPath) {
+  player.completedChains = player.completedChains || [];
+  const markChainSeen = () => { if (!player.completedChains.includes(q.chainId)) player.completedChains.push(q.chainId); };
+  const finishAsContracted = (line) => {
+    q.resolutionPath = 'finish'; markChainSeen();
+    log(line);
+    if (q.progress >= q.need) completeQuest(q);
+  };
+  if (!altPath) {
+    if (q.chainId === 'refugee_bandits') finishAsContracted(`You decide the contract stands. It's the safer bet, if not the kinder one.`);
+    else if (q.chainId === 'empty_grave') finishAsContracted(`You decide it isn't your fight to pick. The contract stands.`);
+    else if (q.chainId === 'paper_trail') finishAsContracted(`You decide it isn't worth the trouble. The checkpoint stays exactly as it was.`);
+    else if (q.chainId === 'fair_cut') finishAsContracted(`You decide it isn't your place to settle someone else's wage dispute. The contract stands.`);
+    else if (q.chainId === 'deserters') finishAsContracted(`You decide orders are orders, and it isn't your place to second-guess them. The contract stands.`);
+    else if (q.chainId === 'nothing_personal') finishAsContracted(`You decide it isn't your problem whose money it is. The contract stands.`);
+    return;
+  }
+  if (q.chainId === 'refugee_bandits') {
+    const roll = Math.random() * 20 + (player.cha - 8);
+    if (roll >= 13) {
+      q.resolutionPath = 'confront'; q.rewardGold = Math.round(q.rewardGold * 0.6); q.rewardRep = -Math.round(q.rewardRep * 0.5);
+      q.rewardUniqueId = 'unique_refugees_ward'; markChainSeen();
+      log(`*** You lay it out plainly. ${q.giverName} didn't post that contract out of any love for ${q.noble} -- word reaches ${q.noble} soon after that the guild won't be finishing the job, and that whoever's left in that camp isn't worth chasing down personally. ***`);
+      log(`A few days later, something turns up at your door -- a cloak, stitched together from a dozen mismatched scraps, with no note attached. You don't need one to know who it's from.`);
+      completeQuest(q);
+    } else {
+      log(`${q.giverName} isn't moved. "A contract's a contract, and I don't get paid to pass along your objections." If you want this to end differently, you'll have to finish what's left yourself, one way or another.`);
+      if (q.progress >= q.need) { q.resolutionPath = 'finish'; markChainSeen(); completeQuest(q); }
+    }
+  } else if (q.chainId === 'empty_grave') {
+    const roll = Math.random() * 20 + (player.int - 8);
+    if (roll >= 13) {
+      q.resolutionPath = 'confront'; q.rewardGold = Math.round(q.rewardGold * 0.6); q.rewardRep = -Math.round(q.rewardRep * 0.5);
+      q.rewardUniqueId = 'unique_gravewards_charm'; markChainSeen();
+      log(`*** You point out the obvious, once someone actually looks: every ward stood facing outward, toward the road, never toward the town. ${q.giverName} has no good answer for that in front of witnesses, and the "contract" quietly stops being spoken of. ***`);
+      log(`Word must reach whoever raised those wards -- a small, carved charm turns up on your doorstep a few days later, still faintly warm.`);
+      completeQuest(q);
+    } else {
+      log(`${q.giverName} isn't convinced. "Wards or not, something's been killing people's livestock out that way." If you want this to end differently, you'll have to finish it yourself, one way or another.`);
+      if (q.progress >= q.need) { q.resolutionPath = 'finish'; markChainSeen(); completeQuest(q); }
+    }
+  } else if (q.chainId === 'paper_trail') {
+    if (player.gold >= q.bribeCost) {
+      player.gold -= q.bribeCost;
+      q.resolutionPath = 'confront'; q.rewardGold = Math.round(q.rewardGold * 0.4); q.rewardRep = Math.round(q.rewardRep * 1.5);
+      markChainSeen();
+      log(`*** You pay ${q.giverName} ${q.bribeCost}g to lose the paperwork. The checkpoint stops reporting anyone matching that description -- whatever's getting through now, it isn't your business anymore, and it isn't ${q.official}'s either. ***`);
+      completeQuest(q);
+    } else {
+      log(`${q.giverName} isn't doing this for free. "${q.bribeCost}g, and I never saw you." You don't have it -- not yet, anyway.`);
+    }
+  } else if (q.chainId === 'fair_cut') {
+    const roll = Math.random() * 20 + (player.dex - 8);
+    if (roll >= 13) {
+      q.resolutionPath = 'confront'; q.rewardGold = Math.round(q.rewardGold * 0.5); q.rewardRep = Math.round(q.rewardRep * 1.2);
+      q.rewardUniqueId = 'unique_porters_due'; markChainSeen();
+      log(`*** You slip into ${q.merchant}'s ledger house after dark and quietly correct the books -- every shorted wage, entered honestly, dated and initialed like it always should have been. No one sees you do it. By morning the fraud is undeniable on paper, and the guild has no contract left worth finishing. ***`);
+      log(`Someone leaves a pair of worn work gloves folded on your doorstep. No note. You don't need one.`);
+      completeQuest(q);
+    } else {
+      log(`You nearly make it out clean, but a floorboard gives you away -- nothing comes of it beyond a fast exit and a racing heart, but the books stay exactly as they were. If you want this to end differently, you'll have to try again, or finish it the way it was contracted.`);
+      if (q.progress >= q.need) { q.resolutionPath = 'finish'; markChainSeen(); completeQuest(q); }
+    }
+  } else if (q.chainId === 'deserters') {
+    const roll = Math.random() * 20 + (player.str - 8);
+    if (roll >= 13) {
+      q.resolutionPath = 'confront'; q.rewardGold = Math.round(q.rewardGold * 0.6); q.rewardRep = -Math.round(q.rewardRep * 0.3);
+      q.rewardUniqueId = 'unique_deserters_oath'; markChainSeen();
+      log(`*** You make it very clear to ${q.giverName} exactly how this conversation is going to go. The paperwork gets filed as "killed in action" before you've even finished making your point. ***`);
+      log(`Word must reach whoever was hiding out there -- a soldier's breastplate, crest filed off, turns up left for you a few days later.`);
+      completeQuest(q);
+    } else {
+      log(`${q.giverName} doesn't rattle easily -- rank has its own kind of nerve. "Threaten me all you like. The order stands, and so does the bounty." If you want this to end differently, you'll have to finish it yourself, one way or another.`);
+      if (q.progress >= q.need) { q.resolutionPath = 'finish'; markChainSeen(); completeQuest(q); }
+    }
+  } else if (q.chainId === 'nothing_personal') {
+    const roll = Math.random() * 20 + (player.wil - 8);
+    if (roll >= 13) {
+      q.resolutionPath = 'confront'; q.rewardGold = 0; q.rewardRep = Math.round(q.rewardRep * 1.3);
+      q.rewardUniqueId = 'unique_plainspoken'; markChainSeen();
+      log(`*** You turn the contract down flat and tell the merchants exactly what ${q.guildRep}'s guild was actually trying to do. It costs you the whole payout -- ${q.guildRep} makes sure of that -- but the merchants remember who told them the truth for nothing. ***`);
+      completeQuest(q);
+    } else {
+      log(`It's a lot of coin to walk away from, and you know it. You take the job as contracted -- if you want this to end differently, you'll have to finish it yourself, one way or another.`);
+      if (q.progress >= q.need) { q.resolutionPath = 'finish'; markChainSeen(); completeQuest(q); }
+    }
+  }
+}
+// ---- Recurring quest-givers: after enough completed work for the same person, they notice, and
+// offer something personal instead of another anonymous posting. Generic/extensible on purpose --
+// scales to any QUEST_GIVER_ROLES NPC without needing a hand-authored entry per person, while still
+// reading as genuinely remembering the player (references the actual count and a recent job).
+const QUEST_TYPE_PHRASE = { boss_bounty:'that bounty', bounty:'that job', chain_kill:'that whole business', protect:'the escort', sabotage:'the sabotage run', caravan_guard:'the caravan run', dimension_bounty:'that hunt beyond', gather:'that errand', explore:'that trip', delivery:'that delivery' };
+// ---- Sabotage quests get a real decision point too, not just the 4 authored chains -- available
+// any time the quest is active (no twist-reveal gating needed, since there's nothing to discover;
+// the player already knows exactly what a sabotage contract is asking of them). Deliberately does
+// NOT call completeQuest() -- that function's own q.type==='sabotage' branch always pushes the
+// kingdom relation toward war, which is exactly the outcome calling the contract off is meant to
+// avoid, so this handles gold/xp/rep/relation itself instead of fighting the shared function's
+// normal-completion assumptions.
+function resolveSabotageReconsider(q) {
+  q.done = true;
+  const gold = Math.round((q.rewardGold || 0) * 0.5), xp = Math.round((q.rewardXp || 0) * 0.5);
+  player.gold += gold; gainXP(xp);
+  const giver = findNPCByUid(q.giverId);
+  if (giver) { giver.questHistory = giver.questHistory || []; giver.questHistory.push({ type:'sabotage_declined', turn: turnCount, desc: q.desc }); }
+  if (q.kingdomKey && q.rivalKingdomKey) nudgeKingdomRelation(q.kingdomKey, q.rivalKingdomKey, 10);
+  Sound.play('questAccept');
+  log(`*** You call off the sabotage. Whatever ${q.giverName} wanted with that border, it isn't worth starting a war over -- not from you, anyway. (+${gold}g, +${xp}xp) ***`);
+}
+function offerPersonalQuest(npc) {
+  npc.personalQuestOffered = true;
+  const count = npc.questHistory.length;
+  const recent = npc.questHistory[npc.questHistory.length - 1];
+  const recentPhrase = recent ? (QUEST_TYPE_PHRASE[recent.type] || 'that last job') : 'everything so far';
+  const pool = sortedBossPool().filter(b => b.power <= 4);
+  const b = pool.length ? choice(Math.random, pool) : null;
+  const quest = {
+    id: 'qp' + Math.random().toString(36).slice(2, 9), type: b ? 'boss_bounty' : 'bounty',
+    giverId: npc.uid, giverName: npc.name, giverHome: npc.home,
+    kingdomKey: getKingdom(Math.floor(npc.x/CH), Math.floor(npc.y/CH)).key,
+    target: b ? b.id : choice(Math.random, QUEST_MONSTER_POOL), need: b ? 1 : randInt(Math.random, 3, 5), progress: 0, done: false,
+    rewardGold: 90 + count * 15, rewardXp: 70 + count * 12, rewardRep: 12, rewardUniqueId: 'unique_wardens_promise',
+    desc: `${npc.name} isn't asking as a job this time. "After everything -- ${recentPhrase}, all of it -- I need to ask you something myself." ${b ? `${b.name} has to be dealt with, personally, and I trust you to do it right.` : `Something's been troubling me personally, and I trust you to handle it.`}`,
+  };
+  player.quests.push(quest);
+  Sound.play('questAccept');
+  log(`New quest: ${quest.desc}`);
 }
 function checkExploreQuests() {
   for (const q of player.quests) {
@@ -13790,6 +14790,78 @@ function checkDeliveryQuests(npc) {
   for (const q of player.quests) {
     if (q.done || q.type !== 'delivery' || q.kingdomKey === k.key) continue;
     completeQuest(q);
+  }
+}
+// ---- Dungeon rescue resolution (see makeInjuredCaptive / the rescuable dialogue branch in
+// openDialogue). Converts the minimal, immobile dungeon captive into a REAL settlement NPC via
+// makeNPC(), placed in the nearest currently-loaded settlement -- from that point on they're a
+// completely ordinary recurring NPC (shop-less unless their futureRoleId gives them one, a normal
+// quest giver, subject to the same recurring-memory system as everyone else) who happens to
+// remember you specifically for how they got there. If no settlement is loaded nearby (rare --
+// usually only true very early or very far from anywhere explored), the rescue still happens, it
+// just doesn't spawn a persistent recurring NPC out of it.
+function findNearestLoadedSettlementChunk(wx, wy) {
+  let best = null, bestD = Infinity;
+  for (const c of worldChunks.values()) {
+    if (!c.settlement) continue;
+    const ccx = c.cx * CH + Math.floor(CH / 2), ccy = c.cy * CH + Math.floor(CH / 2);
+    const d = chebyshev(wx, wy, ccx, ccy);
+    if (d < bestD) { bestD = d; best = c; }
+  }
+  return best;
+}
+function findOpenSpotInChunk(c, rng) {
+  for (let tries = 0; tries < 60; tries++) {
+    const lx = randInt(rng, 1, CH - 2), ly = randInt(rng, 1, CH - 2);
+    const t = c.tiles[ly] && c.tiles[ly][lx];
+    if (t && t.walkable && !t.building) return { x: c.cx * CH + lx, y: c.cy * CH + ly };
+  }
+  return null;
+}
+function resolveCagedPrisoner(npc) {
+  npc.freed = true;
+  closeModal();
+  removeDeadEntity(npc);
+  if (npc.isDecoy) {
+    Sound.play('hit');
+    const spot = findOpenAdjacent(npc.x, npc.y) || { x: npc.x, y: npc.y };
+    const ambusher = makeMonster('bandit', spot.x, spot.y, depthScaleForPlayerLevel(player.level), Math.random);
+    ambusher.engaged = true; ambusher.hostile = true;
+    addMonsterToWorld(ambusher);
+    log(`*** "Obliged," ${npc.name} says, already reaching for a blade you somehow didn't clock while they were "helpless." Should've left the cage shut. ***`);
+  } else {
+    Sound.play('questAccept');
+    player.gold += 20; gainXP(15);
+    const gaveThanks = Math.random() < 0.4;
+    let itemMsg = '';
+    if (gaveThanks) {
+      const pool = lootEligibleBaseIds(0, { excludeTypes: ['misc', 'chest', 'corpse', 'material', 'weapon', 'armor'] });
+      const it = pool.length ? makeItem(choice(Math.random, pool), 0, Math.random) : null;
+      if (it) { player.inventory.push(it); itemMsg = ` They press ${it.name} into your hands before they go -- "it's not much, but it's what I had left."`; }
+    }
+    log(`*** ${npc.name} doesn't waste time getting out of that cage. "I owe you one." They're gone before you can ask what they were even caged for -- some stories aren't worth finishing down here. (+20g, +15xp)${itemMsg} ***`);
+  }
+}
+function resolveDungeonRescue(npc) {
+  npc.rescued = true;
+  closeModal();
+  Sound.play('questAccept');
+  removeDeadEntity(npc);
+  const dg = curDungeon();
+  const anchorX = dg ? dg.x : player.x, anchorY = dg ? dg.y : player.y;
+  const chunk = findNearestLoadedSettlementChunk(anchorX, anchorY);
+  const spot = chunk ? findOpenSpotInChunk(chunk, Math.random) : null;
+  if (chunk && spot) {
+    const settled = makeNPC(npc.futureRoleId, spot.x, spot.y, Math.random, chunk.settlement.name, npc.species);
+    settled.name = npc.name;
+    settled.rescueOrigin = true; settled.trait = npc.trait; settled.gender = npc.gender;
+    settled.questHistory = []; settled.dungeonTheme = npc.dungeonTheme; settled.foundDepth = npc.foundDepth;
+    chunk.npcs.push(settled);
+    log(`*** You help ${npc.name} to their feet. Once they've caught their breath, they make their way toward ${chunk.settlement.name} to recover -- you might find them there later, and they won't forget who found them. ***`);
+    player.gold += 15; gainXP(20);
+  } else {
+    log(`You help ${npc.name} to their feet. "Thank you," they say, and head off to find their own way from here. "I won't forget this."`);
+    player.gold += 15; gainXP(20);
   }
 }
 
@@ -14233,17 +15305,28 @@ function fireRangedWeapon() {
 
 
 // ---- quest log ----
+function reopenMainQuestChoice() {
+  const stage = curStoryStage();
+  if (stage && stage.type === 'choice' && !stage.done) presentMainQuestChoice(stage);
+}
 function openQuestLog() {
   Sound.play('uiOpen');
   gameState = 'questlog';
   ensureStory();
   let html = '';
+  if ((player.worldPhase || 0) > 0) {
+    const wp = curWorldPhase();
+    html += `<div class="trade-col-title" style="color:#ff5a2a">World State — ${wp.name}</div><div class="npcline dim">${wp.desc}</div>`;
+  }
   html += `<div class="trade-col-title">Main Quest — ${player.story.title}</div>`;
   player.story.stages.forEach((s, i) => {
     if (i > player.story.stageIndex) return; // don't spoil stages the player hasn't reached
-    const mark = s.done ? '✓' : (s.type === 'locked' ? '🔒' : '➤');
+    const mark = s.done ? '✓' : (s.type === 'locked' ? '🔒' : (s.type === 'choice' ? '❓' : '➤'));
     const cls = (i === player.story.stageIndex && !s.done) ? 'modal-opt' : 'modal-opt dim';
     html += `<div class="${cls}">${mark} ${s.title}${(i === player.story.stageIndex) ? ': ' + s.desc : ''}</div>`;
+    if (i === player.story.stageIndex && !s.done && s.type === 'choice') {
+      html += `<div class="modal-opt" style="padding-left:18px;color:var(--amber-bright)" onclick="reopenMainQuestChoice()">➤ Decide now...</div>`;
+    }
     if (i === player.story.stageIndex && !s.done) {
       const hint = hasQuestLead() ? questStageHint(s) : NO_LEAD_TEXT;
       if (hint) html += `<div class="modal-opt dim" style="padding-left:18px;font-style:italic">Where to look: ${hint}</div>`;
@@ -14253,7 +15336,14 @@ function openQuestLog() {
   const done = player.quests.filter(q => q.done);
   html += `<div class="trade-col-title">Active Side Quests</div>`;
   if (!active.length) html += `<div class="npcline dim">No active quests. Ask NPCs marked as willing to give work.</div>`;
-  for (const q of active) html += `<div class="modal-opt">${q.desc}<br><span class="dim">Progress: ${q.progress}/${q.need}</span></div>`;
+  for (const q of active) {
+    // Gather quests never increment q.progress (checkGatherQuests only fires on the completing
+    // pickup, and items can also arrive via crafting/trade/gifts) -- computing live inventory count
+    // here instead keeps the displayed progress honest instead of frozen at "0/need" until done.
+    let shown = q.progress;
+    if (q.type === 'gather') { shown = 0; for (const it of player.inventory) if (it.id === q.target) shown += (it.amount || 1); shown = Math.min(shown, q.need); }
+    html += `<div class="modal-opt">${q.desc}<br><span class="dim">Progress: ${shown}/${q.need}</span></div>`;
+  }
   if (done.length) {
     html += `<div class="trade-col-title">Completed (most recent)</div>`;
     for (const q of done.slice(-10)) html += `<div class="modal-opt dim">${q.desc} ✓</div>`;
@@ -15095,12 +16185,30 @@ function findNPCByUid(uid) {
   for (const c of worldChunks.values()) { const n = c.npcs.find(x => x.uid === uid); if (n) return n; }
   return null;
 }
+// ---- Unique named rewards (see ITEM_BASES' "hand-authored unique rewards" section): a small,
+// curated pool, granted only from meaningful quests (boss_bounty, chain finales, personal-request
+// quests) rather than every fetch quest, so getting one still feels like an event. Never sold by
+// any shop -- these only ever enter play through completeQuest.
+const UNIQUE_REWARD_ITEMS = ['unique_turncoats_edge', 'unique_refugees_ward', 'unique_wardens_promise', 'unique_gravewards_charm', 'unique_porters_due', 'unique_deserters_oath', 'unique_plainspoken'];
+function grantUniqueReward(id) {
+  const it = makeItem(id, 0, Math.random);
+  if (it) player.inventory.push(it);
+  return it;
+}
 function completeQuest(q) {
   q.done = true;
   player.gold += q.rewardGold || 0;
   gainXP(q.rewardXp || 0);
   const giver = findNPCByUid(q.giverId);
-  if (giver) { giver.affection = (giver.affection || 0) + Math.round(15 * (1 + (player.affectionBonus || 0))); markLocationDirty(giver.x, giver.y); }
+  if (giver) {
+    giver.affection = (giver.affection || 0) + Math.round(15 * (1 + (player.affectionBonus || 0)));
+    markLocationDirty(giver.x, giver.y);
+    // Recurring quest-giver memory: every completed quest leaves a trace on the giver themselves,
+    // not just an anonymous reputation number -- see the "It's meant a lot..." personal-quest
+    // unlock (offerPersonalQuest) and the memory-aware Talk line, both keyed off this array.
+    giver.questHistory = giver.questHistory || [];
+    giver.questHistory.push({ type: q.type, turn: turnCount, desc: q.desc });
+  }
   if (q.kingdomKey && q.rewardRep) addKingdomRep(q.kingdomKey, q.rewardRep);
   if (q.type === 'caravan_guard' && q.partnerKingdomKey && q.rewardPartnerRep) addKingdomRep(q.partnerKingdomKey, q.rewardPartnerRep);
   if (q.type === 'sabotage' && q.rivalKingdomKey) addKingdomRep(q.rivalKingdomKey, -Math.round((q.rewardRep || 4) / 2));
@@ -15111,7 +16219,18 @@ function completeQuest(q) {
   if (q.type === 'sabotage' && q.kingdomKey && q.rivalKingdomKey) nudgeKingdomRelation(q.kingdomKey, q.rivalKingdomKey, -14);
   if (q.type === 'caravan_guard' && q.kingdomKey && q.partnerKingdomKey) nudgeKingdomRelation(q.kingdomKey, q.partnerKingdomKey, 14);
   let itemMsg = '';
-  if (q.rewardItem) {
+  const ownsUnique = (id) => player.inventory.some(it => it.id === id) || Object.values(player.equipment).some(it => it && it.id === id);
+  const availUniques = q.type === 'boss_bounty' ? UNIQUE_REWARD_ITEMS.filter(id => !ownsUnique(id)) : [];
+  if (q.rewardUniqueId) {
+    const it = grantUniqueReward(q.rewardUniqueId);
+    if (it) itemMsg = `, found ${it.name}`;
+  } else if (availUniques.length && Math.random() < 0.15) {
+    // Small, deliberately rare chance for an ordinary boss bounty to pay out one of the same
+    // hand-authored uniques the story chains grant -- so a lucky bounty hunter can still walk away
+    // with something memorable even outside the authored beats those items were written for.
+    const it = grantUniqueReward(choice(Math.random, availUniques));
+    if (it) itemMsg = `, found ${it.name}`;
+  } else if (q.rewardItem) {
     const rarity = randInt(Math.random, 1, 3);
     const pool = ITEM_BASES.filter(b => b.type === 'weapon' || b.type === 'armor').map(b => b.id);
     const it = makeItem(choice(Math.random, pool), rarity, Math.random, playerLevelPowerMult(player.level));
@@ -15483,6 +16602,17 @@ function dropLoot(def) {
     const base = MONSTER_BASES[def.monsterId];
     const pTier = monsterPowerTier(def);
     if (base && base.loot) rollLoot(base.loot, Math.random).forEach(it => addItemToList(items, it));
+    // World Phase: infernal-empowered kills always leave a little of what made them that way.
+    if (def.infernalLootBonus) {
+      const ash = makeItem('infernal_ash', 0, Math.random);
+      ash.amount = randInt(Math.random, 1, 3);
+      addItemToList(items, ash);
+    }
+    if (def.voidLootBonus) {
+      const shard = makeItem('void_shard', 0, Math.random);
+      shard.amount = randInt(Math.random, 1, 2);
+      addItemToList(items, shard);
+    }
     // ---- Dimension currency/material drops: data-driven off DIMENSION_LOOT_EXTRAS so a future
     // dimension's own currency/material just needs one entry here, not a new branch. Ordinary
     // Clockwork monsters (not just Winding Posts/bounties) drop Cogs and, more rarely, Wind-Keys,
@@ -15605,6 +16735,10 @@ function onDeath(def, killer) {
     // defense memory system near NPC_DEFENDER_ROLES for how this later surfaces as a rumor.
     recordSettlementDefense(killer, def);
   }
+  // Chain-antagonist death (see spawnChainAntagonist/resolveChainConfrontation): whoever it was,
+  // however it happened, the linked quest can't be left dangling with its antagonist gone and no
+  // way to ever resolve it -- see resolveChainAntagonistDeath.
+  if (def.kind === 'npc' && def.isChainAntagonist && def.chainQuestId) resolveChainAntagonistDeath(def);
   // Plague talent line (Walking Epidemic capstone, see player.plagueSpreadOnKill): a target you
   // poisoned yourself that dies while still infected has the infection leap to nearby hostiles
   // instead of dying with it -- the epidemic outliving the host, which is the whole point of the
@@ -15650,7 +16784,14 @@ function curNPCs() {
       const c = dimensionChunks.get(dimChunkKey(player.dimensionId, cx, cy));
       if (c && c.npcs) arr.push(...c.npcs);
     }
-  } else if (!curIsDungeon()) {
+  } else if (curIsDungeon()) {
+    // Injured/rescuable NPCs (see makeInjuredCaptive / generateDungeonLevel) live directly on the
+    // dungeon level object rather than in a chunk -- dungeons don't have chunks. Everything else
+    // (rendering, entityAt, dialogue-on-bump, AI ticking) already goes through curNPCs()/entityAt
+    // generically, so this one hook is enough to make them fully interactive.
+    const lvl = curDungeonLevel();
+    if (lvl && lvl.npcs) arr.push(...lvl.npcs);
+  } else {
     const pcx = Math.floor(player.x / CH), pcy = Math.floor(player.y / CH);
     for (let cy = pcy - 1; cy <= pcy + 1; cy++) for (let cx = pcx - 1; cx <= pcx + 1; cx++) {
       const c = worldChunks.get(chunkKey(cx, cy));
@@ -15752,6 +16893,7 @@ const AMBIENT_NPC_LINES = [
 function npcAI(n) {
   if (n.statusPoison) processEntityStatus(n);
   if (!n.alive || n.hp <= 0) return;
+  if (n.immobile) return; // injured/rescuable dungeon NPCs (see makeInjuredCaptive) never move or act
   if (n.following) { companionFollowAI(n); return; }
   regenEntityAIPools(n);
   const dist = chebyshev(n.x, n.y, player.x, player.y);
@@ -15926,12 +17068,70 @@ function beginCompanionGotoTargeting(npc) {
   beginTileTargeting('companion_goto', { npc, range: 30 });
   log(`Choose where to send ${npc.name} (click a tile). Esc to cancel.`);
 }
+// ---- World Phase: NPC reactions. Civilians read as increasingly rattled as the phase climbs;
+// defenders/hunters read as grimly resolved instead of afraid; by phase 3 a few civilians are
+// openly wary of a stranger who's clearly been in the thick of whatever this is (armor, notoriety,
+// or just showing up armed is enough -- no accusation, just distance).
+const WORLD_PHASE_CIVILIAN_LINES = {
+  1: ["Have you noticed the crops look... wrong, lately? Can't say how. They just do.",
+      "My grandmother used to say the world tells you when something's coming loose. I used to think that was just an old woman talking.",
+      "Nights feel longer than they used to. I know that's not possible. I still feel it."],
+  2: ["I saw one of them out past the treeline last night -- burning, but not dying from it. I haven't slept right since.",
+      "The well went strange a week back. Elder says not to drink from it 'til it clears. It hasn't cleared.",
+      "You've seen them too, haven't you? The burning ones. Gods keep you, whatever you're doing about it."],
+  3: ["I don't know you, and these days I've learned not to trust what I don't know. No offense meant.",
+      "Half of us sleep with a blade under the pillow now. The other half just don't sleep.",
+      "Whatever's coming, I hope you're one of the ones fighting it and not one of the ones causing it."],
+};
+const WORLD_PHASE_DEFENDER_LINES = {
+  1: "Something's off. Can't put a name to it yet. I've doubled my rounds regardless.",
+  2: "We've started losing patrols to things that don't die like they should. I don't like it, but I'm not running.",
+  3: "Every one of us knows what this is building to now. We're not going anywhere. Neither should you.",
+};
+function worldPhaseReactionLine(npc) {
+  const phase = player.worldPhase || 0;
+  if (phase < 1) return null;
+  const isDefender = NPC_DEFENDER_ROLES.has(npc.roleId) || NPC_HUNTER_ROLES.has(npc.roleId);
+  const chance = 0.25 + phase * 0.15;
+  if (Math.random() >= chance) return null;
+  if (isDefender) return WORLD_PHASE_DEFENDER_LINES[Math.min(3, phase)];
+  const pool = WORLD_PHASE_CIVILIAN_LINES[Math.min(3, phase)];
+  return pool ? choice(Math.random, pool) : null;
+}
 // ---- dialogue v5: crime hook, spouse follow toggle, family view, married flavor ----
 function openDialogue(npc) {
   Sound.play('uiOpen');
   gameState = 'dialogue';
   dialogueNPC = npc;
   markLocationDirty(npc.x, npc.y);
+  // ---- Injured dungeon captive: their whole interaction is this one decision, not the full
+  // shop/talk/quest menu everyone else gets -- see makeInjuredCaptive/resolveDungeonRescue.
+  if (npc.rescuable && !npc.rescued) {
+    const rescueOpts = [
+      { key: 'a', label: 'Help them to their feet', action: () => resolveDungeonRescue(npc) },
+      { key: 'b', label: 'Leave them', action: () => { closeModal(); log(`You leave them where they are. Whatever brought them down here, it isn't your problem.`); } },
+    ];
+    dialogueOptions = rescueOpts;
+    renderModal(`A Wounded ${getSpecies(npc.species).name}`,
+      `<div class="npcline">${npc.name} is slumped against the wall, hurt and clearly not equipped to be this deep. "Please," they manage. "I didn't think anyone else would come down here."</div>`,
+      'Letter/click to choose, Esc to leave.');
+    return;
+  }
+  // ---- Caged dungeon prisoner: a real gamble, not a guaranteed good deed -- see
+  // makeCagedPrisoner/resolveCagedPrisoner. No mechanical tell is given here on purpose (a
+  // reliable "always safe" signal would turn this into the same guaranteed-good-deed the injured
+  // captive already is); the decision is meant to rest on the fiction alone.
+  if (npc.caged && !npc.freed) {
+    const cageOpts = [
+      { key: 'a', label: 'Break the lock, free them', action: () => resolveCagedPrisoner(npc) },
+      { key: 'b', label: 'Leave them caged', action: () => { closeModal(); log(`You leave the cage shut. Whatever they did to end up in it, it isn't clear from here -- and that's exactly the problem.`); } },
+    ];
+    dialogueOptions = cageOpts;
+    renderModal(`A Caged ${getSpecies(npc.species).name}`,
+      `<div class="npcline">${npc.name} is locked in a crude cage, watching you without a word. "You going to let me out," they finally say, "or just stand there?"</div>`,
+      'Letter/click to choose, Esc to leave.');
+    return;
+  }
   // ---- NPC Schedules: a sleeping NPC doesn't run their shop/training/quest board until morning
   // (or until woken) -- talking, waking, and attacking still work.
   if (npc.asleep && !(player.spouse && player.spouse.uid === npc.uid)) {
@@ -15962,8 +17162,19 @@ function openDialogue(npc) {
     const canGain = (turnCount - lastTurn) > cooldown;
     let line;
     const defenseRumor = settlementDefenseRumor(npc);
+    const phaseLine = !isSpouse ? worldPhaseReactionLine(npc) : null;
+    const memoryLine = (!isSpouse && (npc.questHistory || []).length >= 2 && Math.random() < 0.3)
+      ? `You've done -- what, ${npc.questHistory.length} jobs for me now? I don't forget that kind of thing.` : null;
     if (isSpouse) {
       line = choice(Math.random, MARRIED_LINES);
+    } else if (phaseLine) {
+      line = phaseLine;
+    } else if (memoryLine) {
+      line = memoryLine;
+    } else if (npc.rescueOrigin && !npc.rescueStoryTold) {
+      npc.rescueStoryTold = true;
+      const themeName = (DUNGEON_THEMES[npc.dungeonTheme] && DUNGEON_THEMES[npc.dungeonTheme].name) || 'that place';
+      line = `I owe you for that, still. Truth is I shouldn't have been down there at all -- I went in after something I'd lost, deeper than I had any business going, depth ${npc.foundDepth || '?'} or so into ${themeName}. Wasn't worth what it nearly cost me. But I'm glad you were the one who found me.`;
     } else if (defenseRumor && Math.random() < 0.4) {
       line = defenseRumor;
     } else {
@@ -16023,7 +17234,84 @@ function openDialogue(npc) {
     opts.push({ key: nextKey(), label: 'Ask if there\'s work to do', action: () => offerDimensionErrand(npc, npc.dimensionId) });
   }
   if ((npc.teachSpells && npc.teachSpells.length) || (npc.teachRecipes && npc.teachRecipes.length)) opts.push({ key: nextKey(), label: 'Learn', action: () => openTrain(npc) });
-  if (npc.canGiveQuest && !player.quests.some(q => q.giverId === npc.uid && !q.done)) opts.push({ key: nextKey(), label: 'Ask for work', action: () => offerRadiantQuests(npc) });
+  // Lost & Found: any local of the matching settlement can pass a found keepsake along, no matter
+  // who exactly lost it -- see generateLostKeepsake.
+  const keepsake = player.inventory.find(it => it.isLostKeepsake && it.ownerHome === npc.home);
+  if (keepsake) opts.push({ key: nextKey(), label: `Return the ${keepsake.name} you found`, action: () => {
+    closeModal();
+    player.inventory = player.inventory.filter(it => it !== keepsake);
+    const reward = 25, xp = 15;
+    player.gold += reward; gainXP(xp);
+    npc.affection = (npc.affection || 0) + 10;
+    const k = getKingdom(Math.floor(npc.x/CH), Math.floor(npc.y/CH));
+    addKingdomRep(k.key, 3);
+    log(`*** "${keepsake.name}? You actually found this? ${keepsake.ownerName} is going to be so relieved." (+${reward}g, +${xp}xp, +10 affection, +3 rep) ***`);
+  }});
+  if (npc.roleId === 'guildclerk') opts.push({ key: nextKey(), label: 'Check the quest board', action: () => openGuildBoard(npc) });
+  else if (npc.canGiveQuest && !player.quests.some(q => q.giverId === npc.uid && !q.done)) opts.push({ key: nextKey(), label: 'Ask for work', action: () => offerRadiantQuests(npc) });
+  // Quest chain twist confrontation: only surfaces once the twist has actually been revealed
+  // in-world (see revealChainTwist), and only from the specific giver it belongs to.
+  const twistQuest = player.quests.find(q => q.giverId === npc.uid && !q.done && q.twistRevealed && !q.resolutionPath);
+  if (twistQuest) {
+    const twistLabel = { refugee_bandits:'Bring up the bandit contract', empty_grave:'Bring up the cemetery contract', paper_trail:'Bring up the checkpoint contract', fair_cut:'Bring up the warehouse contract', deserters:'Bring up the deserter bounty', nothing_personal:'Bring up the extortion contract' }[twistQuest.chainId] || 'Bring it up';
+    const altLabel = { refugee_bandits:`Ask them to call off ${twistQuest.noble || 'the'}'s contract (persuade)`,
+      empty_grave:`Point out the wards were never a threat (persuade)`,
+      paper_trail:`Pay ${twistQuest.giverName} ${twistQuest.bribeCost}g to lose the paperwork (bribe)`,
+      fair_cut:`Break into the ledger house tonight and fix the books (stealth)`,
+      deserters:`Make it clear this bounty ends now (intimidate)`,
+      nothing_personal:`Turn the contract down and tell the merchants the truth (refuse)` }[twistQuest.chainId] || 'Try another way';
+    opts.push({ key: nextKey(), label: twistLabel, action: () => {
+      closeModal();
+      const copts = [
+        { key: 'a', label: 'Finish the job as contracted', action: () => resolveChainConfrontation(twistQuest, false) },
+        { key: 'b', label: altLabel, action: () => resolveChainConfrontation(twistQuest, true) },
+      ];
+      dialogueOptions = copts; gameState = 'dialogue'; dialogueNPC = npc;
+      renderModal('A Decision', `<div class="npcline">${twistQuest.desc}</div>`, 'Letter/click to decide.');
+    }});
+  }
+  // Face-to-face chain antagonist: the real person the twist is about, not just the giver who
+  // posted the listing -- see spawnChainAntagonist. Same resolveChainConfrontation, same two
+  // outcomes, just reached by finding the actual antagonist instead of going through the
+  // intermediary. Reuses altLabel's wording since a bribe/argument/stealth-plan/intimidation/
+  // refusal all read naturally whether relayed through a clerk or said to someone's face.
+  if (npc.isChainAntagonist && npc.chainQuestId) {
+    const linkedQuest = player.quests.find(q => q.id === npc.chainQuestId && !q.done && q.twistRevealed && !q.resolutionPath);
+    if (linkedQuest) {
+      const altLabel2 = { refugee_bandits:`Ask them to call off the contract on their own camp (persuade)`,
+        empty_grave:`Point out the wards were never a threat (persuade)`,
+        paper_trail:`Offer ${linkedQuest.bribeCost}g to lose the paperwork (bribe)`,
+        fair_cut:`Tell them plainly you'll break into that ledger house yourself if they don't fix it (stealth threat)`,
+        deserters:`Make it clear this bounty ends now (intimidate)`,
+        nothing_personal:`Turn the contract down and tell the merchants the truth (refuse)` }[linkedQuest.chainId] || 'Try another way';
+      opts.push({ key: nextKey(), label: 'Confront them face to face', action: () => {
+        closeModal();
+        const copts = [
+          { key: 'a', label: 'Finish the job as contracted', action: () => resolveChainConfrontation(linkedQuest, false) },
+          { key: 'b', label: altLabel2, action: () => resolveChainConfrontation(linkedQuest, true) },
+        ];
+        dialogueOptions = copts; gameState = 'dialogue'; dialogueNPC = npc;
+        renderModal('A Decision', `<div class="npcline">${linkedQuest.desc}</div>`, 'Letter/click to decide.');
+      }});
+    }
+  }
+  // Sabotage quests can be called off any time they're active -- see resolveSabotageReconsider.
+  const activeSabotage = player.quests.find(q => q.giverId === npc.uid && !q.done && q.type === 'sabotage');
+  if (activeSabotage) opts.push({ key: nextKey(), label: 'Reconsider the sabotage contract', action: () => {
+    closeModal();
+    const rival = activeSabotage.rivalKingdomKey ? getKingdomByKey(activeSabotage.rivalKingdomKey) : null;
+    const copts = [
+      { key: 'a', label: 'Continue as planned', action: () => { log(`You decide to see it through.`); } },
+      { key: 'b', label: `Call it off${rival ? `, ease tensions with ${rival.name} instead` : ' instead'}`, action: () => resolveSabotageReconsider(activeSabotage) },
+    ];
+    dialogueOptions = copts; gameState = 'dialogue'; dialogueNPC = npc;
+    renderModal('A Decision', `<div class="npcline">${activeSabotage.desc}</div>`, 'Letter/click to decide.');
+  }});
+  // Recurring quest-giver: after enough completed work, they offer something personal instead of
+  // another anonymous posting -- see offerPersonalQuest.
+  if (QUEST_GIVER_ROLES.has(npc.roleId) && !npc.personalQuestOffered && (npc.questHistory || []).length >= 3 && !player.quests.some(q => q.giverId === npc.uid && !q.done)) {
+    opts.push({ key: nextKey(), label: "\"You wanted to ask me something?\"", action: () => { closeModal(); offerPersonalQuest(npc); } });
+  }
   if (npc.healer) opts.push({ key: nextKey(), label: 'Pay for healing', action: () => payForHealing(npc) });
   // ---- Settlement Overhaul: functional building-type interactions ----
   if (npc.roleId === 'innkeeper') opts.push({ key: nextKey(), label: 'Rent a room and rest', action: () => payForRoom(npc) });
@@ -17455,6 +18743,7 @@ function newPlayer() {
     invFilter: 'all', invPage: 0, bounties: {}, scenario: null, waypoints: [], discoveredKingdoms: [],
     quickslots: [null, null, null, null],
     knownSettlements: [], knownDungeons: [], customNames: {},
+    worldPhase: 0, completedChains: [],
     personalStash: null, // Settlement Overhaul: lazily created by getPlayerStash() on first storage-house visit
   });
 }
@@ -17710,8 +18999,22 @@ function performBreathWeapon(m, target) {
 }
 
 // ---- AI support helpers: enable splitting, summoning, and other special mechanics ----
-function findOpenAdjacent(x, y) {
-  const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+// radius defaults to 1 (immediately adjacent, the original behavior every other call site relies
+// on) but callers that want a tile "nearby" rather than right on top of the target -- e.g. the
+// Choir Enforcer's arrival, which is meant to give the player a beat of warning, not appear in
+// their face -- can pass a larger radius. BUG FIX: this used to take only (x, y); one call site
+// was already passing a 6 for exactly this "spawn a few tiles off, not adjacent" reason, and JS
+// silently discards extra arguments instead of erroring, so that radius was quietly doing nothing
+// and the enforcer always spawned literally next to the player.
+function findOpenAdjacent(x, y, radius) {
+  radius = radius || 1;
+  const dirs = [];
+  for (let dx = -radius; dx <= radius; dx++) {
+    for (let dy = -radius; dy <= radius; dy++) {
+      if (dx === 0 && dy === 0) continue;
+      if (radius === 1 || (dx * dx + dy * dy) <= radius * radius) dirs.push([dx, dy]);
+    }
+  }
   const shuffled = dirs.map(d => [d, Math.random()]).sort((a,b) => a[1]-b[1]).map(d => d[0]);
   for (const [dx, dy] of shuffled) {
     const nx = x + dx, ny = y + dy;
@@ -18572,6 +19875,32 @@ function maybeCarveRoadsToSettlements(chunk, cx, cy) {
   }
 }
 
+// ---- Side-quest source: a lost item out in the world, returnable to its owner (see the wilderness
+// scatter roll in generateChunk). Bound to a settlement the player has actually discovered
+// (player.knownSettlements) rather than an invented place, so "somewhere around X" is always a real,
+// reachable destination. Deliberately gives the player a real choice without any extra UI: turn it
+// in to any local of that settlement for a guaranteed small reward + reputation + affection (see the
+// "Return the ___" dialogue hook), or just sell it at any shop like an ordinary item for its (much
+// smaller) flat value -- keeping it, quietly, is always an option, it just isn't the generous one.
+const LOST_KEEPSAKE_FLAVORS = [
+  { name:'Tarnished Locket', desc:"A small locket, tarnished with age, holding a lock of hair that isn't yours." },
+  { name:'Carved Wooden Bird', desc:"A child's toy, carved crudely but with obvious care." },
+  { name:'Pressed-Flower Letter', desc:'A folded letter with a pressed flower still inside, the ink smudged from rain.' },
+  { name:'Engraved Ring', desc:"A ring, too small to be yours, engraved with initials that aren't." },
+  { name:'Worn Prayer Beads', desc:"A string of prayer beads, worn smooth by someone's thumb over many years." },
+  { name:"Soldier's Dog Tag", desc:"A simple metal tag stamped with a name and a kingdom's sigil." },
+  { name:'Faded Photograph', desc:'A small, faded portrait of a family none of whom you recognize.' },
+];
+function generateLostKeepsake(rng) {
+  const ownerHome = choice(rng, player.knownSettlements);
+  const ownerName = humanName(rng);
+  const flavor = choice(rng, LOST_KEEPSAKE_FLAVORS);
+  const it = makeItem('lost_keepsake', 0, rng);
+  it.name = flavor.name;
+  it.desc = `${flavor.desc} Whoever lost this is probably still looking for it -- it seems to belong to someone named ${ownerName}, somewhere around ${ownerHome}.`;
+  it.ownerName = ownerName; it.ownerHome = ownerHome; it.isLostKeepsake = true;
+  return it;
+}
 function generateChunk(cx, cy) {
   const tiles = [];
   for (let ly = 0; ly < CH; ly++) {
@@ -18665,6 +19994,18 @@ function generateChunk(cx, cy) {
         const baseIds = lootEligibleBaseIds(1, { excludeTypes: ['misc', 'chest', 'corpse'] });
         const it = makeItem(choice(rng, baseIds), 0, rng);
         t.items.push(it);
+      }
+    }
+    // ---- Side-quest source: a lost item out in the world, returnable to its owner. Only rolls
+    // once the player has actually discovered at least one settlement (see player.knownSettlements)
+    // -- an owner has to be somewhere the player could plausibly deliver to, not an invented place
+    // they've never heard of. See generateLostKeepsake and the "Return the ___" dialogue hook.
+    if (rng() < 0.02 && (player.knownSettlements || []).length) {
+      const lx = randInt(rng, 1, CH - 2), ly = randInt(rng, 1, CH - 2);
+      const t = tiles[ly][lx];
+      if (t.walkable && (!t.items || !t.items.length)) {
+        t.items = t.items || [];
+        t.items.push(generateLostKeepsake(rng));
       }
     }
     // Rare wilderness find: an abandoned sack, crate, or urn sitting out in the open -- a
@@ -20833,19 +22174,28 @@ function openDimensionBarter(npc) {
   const isGold = currencyId === 'gold';
   const currencyName = isGold ? 'gold' : ((ITEM_BASES.find(b => b.id === currencyId) || {}).name || currencyId);
   const getHave = () => isGold ? (player.gold || 0) : (((player.inventory.find(i => i.id === currencyId)) || {}).amount || 0);
+  // Foundry Standing (per-dimension reputation, see addDimensionStanding/standingTierFor): a
+  // Trusted/Recognized vendor discounts its prices and stocks entries flagged minStanding that a
+  // stranger never sees at all -- this is what actually makes standing worth earning, rather than
+  // just a number that goes up with a log line.
+  const standing = npc.dimensionId ? getDimensionStanding(npc.dimensionId) : 0;
+  const tier = standingTierFor(standing);
   const opts = [];
   let n = 0;
   const nextKey = () => String.fromCharCode(97 + (n++));
   stock.forEach(entry => {
+    if ((entry.minStanding || 0) > standing) return; // not unlocked yet -- stays quietly absent, not shown-but-locked
     const base = ITEM_BASES.find(b => b.id === entry.id);
     if (!base) return;
-    opts.push({ key: nextKey(), label: `${base.name} -- ${entry.cost} ${currencyName}`, action: () => {
+    const cost = Math.max(1, Math.round(entry.cost * tier.mult));
+    const priceLabel = cost === entry.cost ? `${cost} ${currencyName}` : `${cost} ${currencyName} (was ${entry.cost})`;
+    opts.push({ key: nextKey(), label: `${base.name} -- ${priceLabel}`, action: () => {
       const have = getHave();
-      if (have < entry.cost) { log(`You don't have enough ${currencyName}. (${have}/${entry.cost})`); openDimensionBarter(npc); return; }
-      if (isGold) { player.gold -= entry.cost; }
+      if (have < cost) { log(`You don't have enough ${currencyName}. (${have}/${cost})`); openDimensionBarter(npc); return; }
+      if (isGold) { player.gold -= cost; }
       else {
         const cur = player.inventory.find(i => i.id === currencyId);
-        if (cur.amount > entry.cost) cur.amount -= entry.cost; else player.inventory = player.inventory.filter(i => i.uid !== cur.uid);
+        if (cur.amount > cost) cur.amount -= cost; else player.inventory = player.inventory.filter(i => i.uid !== cur.uid);
       }
       const it = makeItem(entry.id, 0, Math.random); if (entry.amount) it.amount = entry.amount;
       addItemToList(player.inventory, it);
@@ -20855,7 +22205,8 @@ function openDimensionBarter(npc) {
   });
   opts.push({ key: nextKey(), label: 'Leave', action: () => closeModal() });
   dialogueOptions = opts;
-  renderModal(`${npc.name} -- Barter`, `<div class="npcline">${currencyName.charAt(0).toUpperCase() + currencyName.slice(1)} on hand: ${getHave()}</div>`, 'Letter/click to choose, Esc to leave.');
+  const standingLine = npc.dimensionId ? `<div class="npcline">Standing: ${tier.label}${tier.mult < 1 ? ` (${Math.round((1 - tier.mult) * 100)}% off)` : ''}</div>` : '';
+  renderModal(`${npc.name} -- Barter`, `<div class="npcline">${currencyName.charAt(0).toUpperCase() + currencyName.slice(1)} on hand: ${getHave()}</div>${standingLine}`, 'Letter/click to choose, Esc to leave.');
 }
 
 // Foundry Standing: Clockwork Expanse's reputation track (see the feedback point about repeatable
@@ -20877,8 +22228,8 @@ function addDimensionStanding(dimId, amount) {
   if (afterTier.label !== beforeTier.label) log(`*** Foundry Standing: ${beforeTier.label} -> ${afterTier.label} ***`);
 }
 function standingTierFor(standing) {
-  if (standing >= 60) return { label: 'Trusted', mult: 1 };
-  if (standing >= 25) return { label: 'Recognized', mult: 1 };
+  if (standing >= 60) return { label: 'Trusted', mult: 0.75 };
+  if (standing >= 25) return { label: 'Recognized', mult: 0.9 };
   return { label: 'Unknown', mult: 1 };
 }
 
@@ -20926,6 +22277,7 @@ function placeClockworkOutpost(chunk, cx, cy, dim, fill) {
     { id: 'wind_key', cost: 12 },
     { id: 'dim_waystone_anchor', cost: 45 },
     { id: 'antidote', cost: 8 },
+    { id: 'potion_heal', cost: 20, minStanding: 25 }, // unlocked once you're Recognized -- see standingTierFor
   ];
   chunk.npcs.push(tregg);
 
@@ -21702,7 +23054,8 @@ function recordHallOfLegends() {
     const key = 'lucid_dreams_of_roguelike_hall_of_legends_v1';
     let hall = [];
     try { hall = JSON.parse(localStorage.getItem(key)) || []; } catch (e) {}
-    hall.push({ name: player.name || player.scenario || 'an unnamed adventurer', level: player.level, turns: turnCount, seed: SEED, antagonist: player.story ? player.story.antagonist : null, date: Date.now() });
+    hall.push({ name: player.name || player.scenario || 'an unnamed adventurer', level: player.level, turns: turnCount, seed: SEED, antagonist: player.story ? player.story.antagonist : null, date: Date.now(),
+      worldPhase: player.worldPhase || 0, betrayalOutcome: player.story ? player.story.betrayalOutcome : null, betrayalTrusted: player.story ? player.story.betrayalTrusted : null });
     localStorage.setItem(key, JSON.stringify(hall.slice(-50)));
   } catch (e) {}
 }
@@ -22466,7 +23819,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId) {
   // already guaranteed, so it carries no risk of reintroducing a disconnected floor.
   applyOverlayVein(grid, W, H, rng, genId, theme);
 
-  const level = { grid, depth, monsters: [], items: [], upStairs: null, downStairs: null, w: W, h: H, genId, size: sizeTier.id };
+  const level = { grid, depth, monsters: [], npcs: [], items: [], upStairs: null, downStairs: null, w: W, h: H, genId, size: sizeTier.id };
   const floors = [];
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (grid[y][x].walkable) floors.push({ x, y });
   if (floors.length < 4) {
@@ -22488,6 +23841,31 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId) {
   }
   level.downStairs = down;
   grid[down.y][down.x] = dtile2('>', true, '#e05ae0');
+
+  // ---- Side-quest source: an injured person, found in a dungeon (see design notes). Rolled once
+  // per level, low chance, never on depth 1 right by the entrance (that would read as too easy/
+  // too safe to be a real "found this deep in danger" moment), and never in a themeless closet --
+  // picks a real room center when the layout has rooms to offer, same "lair" placement rule the
+  // miniboss roll below uses, so they read as tucked away rather than sitting in a hallway.
+  // Mutually exclusive with the caged-prisoner roll just below -- one special dungeon NPC per
+  // level at most, so finding one always feels like a real, singular moment.
+  if (depth > 1 && rng() < 0.09) {
+    const candidateRooms = rooms.filter(r => chebyshev(r.cx, r.cy, up.x, up.y) > 4 && !(r.cx === down.x && r.cy === down.y));
+    let spot = null;
+    if (candidateRooms.length) { const r = choice(rng, candidateRooms); spot = { x: r.cx, y: r.cy }; }
+    else { const c = choice(rng, floors); if (!(c.x===up.x&&c.y===up.y) && !(c.x===down.x&&c.y===down.y)) spot = c; }
+    if (spot && grid[spot.y] && grid[spot.y][spot.x] && grid[spot.y][spot.x].walkable) {
+      level.npcs.push(makeInjuredCaptive(rng, theme, depth, spot.x, spot.y));
+    }
+  } else if (depth > 1 && rng() < 0.07) {
+    const candidateRooms = rooms.filter(r => chebyshev(r.cx, r.cy, up.x, up.y) > 4 && !(r.cx === down.x && r.cy === down.y));
+    let spot = null;
+    if (candidateRooms.length) { const r = choice(rng, candidateRooms); spot = { x: r.cx, y: r.cy }; }
+    else { const c = choice(rng, floors); if (!(c.x===up.x&&c.y===up.y) && !(c.x===down.x&&c.y===down.y)) spot = c; }
+    if (spot && grid[spot.y] && grid[spot.y][spot.x] && grid[spot.y][spot.x].walkable) {
+      level.npcs.push(makeCagedPrisoner(rng, theme, depth, spot.x, spot.y));
+    }
+  }
 
   // bigger footprints get proportionally more monsters/loot/traps -- a "massive" dungeon at the
   // same depth as a "small" one should feel like it actually has more *in* it, not just more
@@ -23356,6 +24734,27 @@ function makeMutagen(rng) {
 }
 
 // ---- movement v6: trap triggers, poison gas contact, confusion-aware (all prior v5 behavior retained) ----
+// ---- World Phase hazard landmarks (Cinder Rift / Rift Tear -- see POI_TYPES' hazardTile entries
+// and setWorldPhase) actually do something now, rather than being purely atmospheric like
+// quicksand_patch (left untouched on purpose -- it's pre-existing, established behavior nobody
+// asked to change). Deliberately does NOT hook into the fire-spread/activeFxTiles system real fire
+// traps use -- these are meant to read as a permanent, contained geological feature you can choose
+// to avoid once you know what it is, not a wildfire that could unpredictably torch the surrounding
+// map. A flat, repeatable effect on the exact tile is the correct scope for that.
+function triggerWorldHazard(t, x, y) {
+  if (t.hazardKind === 'cinder_rift') {
+    const dmg = randInt(Math.random, 4, 9);
+    player.hp -= dmg;
+    lastDamageSource = 'a Cinder Rift';
+    Sound.play('trap');
+    log(`Heat rolls off the rift in a wave that catches you square -- you take ${dmg} damage.`);
+    if (player.hp <= 0) { onDeath(player, null); return; }
+  } else if (t.hazardKind === 'rift_tear' && Math.random() < 0.5) {
+    player.statusConfuse = (player.statusConfuse || 0) + 3;
+    Sound.play('trap');
+    log(`You get too close to the tear and your thoughts scatter for a moment.`);
+  }
+}
 function movePlayer(dx, dy, forceAttack) {
   if (gameState !== 'playing') return;
   floatingTexts = [];
@@ -23540,6 +24939,10 @@ function movePlayer(dx, dy, forceAttack) {
       triggerTrapAt(t, nx, ny);
       if (!player.alive || player.hp <= 0) return;
     }
+  }
+  if (t.hazardKind && !curIsDungeon()) {
+    triggerWorldHazard(t, nx, ny);
+    if (!player.alive || player.hp <= 0) return;
   }
   if (curIsDungeon() && t.feature === 'lever' && !t.leverPulled) {
     t.leverPulled = true;
@@ -24881,8 +26284,20 @@ const SAVE_KEY = 'lucid_dreams_of_roguelike_save_v2';
 // "Converting circular structure to JSON". This replacer drops exactly those transient fields so
 // saving never touches the cycle in the first place; nothing meaningful is lost since they'd be
 // cleared on load anyway.
+// CRITICAL FIX: the key name 'target' is NOT unique to AI state -- every quest object also has a
+// plain string `target` field (the monster/item id it's tracking, e.g. q.target==='wolf'), and a
+// bare `key === 'target'` check was stripping THAT too on every single save, for every quest type
+// except boss_bounty/dimension_bounty (which happen not to re-check .target after load). Silent,
+// severe bug: after any save/load, checkBountyQuests' `q.target === monsterId` and
+// checkGatherQuests' `it.id === q.target` compare against `undefined` forever, permanently
+// soft-locking every bounty/protect/sabotage/caravan_guard/gather/chain_kill quest active at save
+// time -- they'd never complete, with no error and no visible sign why (the quest log's `desc`
+// text is a separate pre-baked string, so it still reads fine). Only strip target/fleeFrom when
+// they're actually an entity reference (truthy object) -- confirmed by checking every non-quest
+// `.target =`/`.fleeFrom =` assignment in the file, which are always an entity or null, never a
+// string -- so quest data (string or null) now survives the round-trip untouched.
 function saveDataReplacer(key, value) {
-  if (key === 'target' || key === 'fleeFrom') return undefined;
+  if ((key === 'target' || key === 'fleeFrom') && value && typeof value === 'object') return undefined;
   if (value instanceof Set) return undefined;
   return value;
 }
@@ -25282,7 +26697,13 @@ function showHallOfLegends() {
   const hall = getHallOfLegends().slice().reverse();
   const html = hall.map(rec => {
     const date = new Date(rec.date).toLocaleDateString();
-    return `<div class="modal-opt">Level ${rec.level} adventurer &mdash; defeated ${rec.antagonist ? rec.antagonist : 'GOD'} after ${rec.turns} turns <span class="dim">(${date})</span></div>`;
+    const wpName = WORLD_PHASES[rec.worldPhase || 0] ? WORLD_PHASES[rec.worldPhase || 0].name : null;
+    const extras = [];
+    if (wpName && rec.worldPhase) extras.push(`world ended in ${wpName}`);
+    if (rec.betrayalOutcome === 'correct' && rec.betrayalTrusted) extras.push(`trusted ${rec.betrayalTrusted} rightly`);
+    else if (rec.betrayalOutcome === 'wrong' && rec.betrayalTrusted) extras.push(`paid for trusting wrong`);
+    const extraStr = extras.length ? ` <span class="dim">(${extras.join(', ')})</span>` : '';
+    return `<div class="modal-opt">Level ${rec.level} adventurer &mdash; defeated ${rec.antagonist ? rec.antagonist : 'GOD'} after ${rec.turns} turns${extraStr} <span class="dim">(${date})</span></div>`;
   }).join('') || `<div class="npcline dim">No legends recorded yet.</div>`;
   renderModal('Hall of Legends', html, 'Esc to return to the title screen.');
 }
@@ -26709,23 +28130,50 @@ const GUIDE_SECTIONS = [
   { id:'quests', label:'Quests', html: () => `
     <div class="modal-opt"><b>Main Quest</b>: a story generated fresh for this world's seed, drawn from 9 possible
     premises — the antagonist's name, and which of the game's named story bosses fill each beat, vary between
-    playthroughs, and beats now reference real kingdom politics (a "Betrayal" might genuinely name a kingdom yours
-    is at war with). All four acts are fully playable through to a real ending: Act 4 opens by pointing you at a
-    Demon Gate and the dimension beyond it, then leads to the Threshold, where this world's antagonist is waiting
-    for real -- not a stand-in. Progress is automatic — defeat the right boss, clear the right dungeon, set foot in
-    enough kingdoms, or find your way through a rift.</div>
-    <div class="modal-opt" style="margin-top:6px"><b>Side Quests</b>: q opens the Quest Log. Ask willing NPCs for work
-    and pick from 3 rolled offers — bounty, boss bounty (tougher, guarantees a gear reward), gather materials, protect
-    a settlement, deliver word to another kingdom's elder, sabotage or caravan-guard work tied to real kingdom
-    relations, or explore. All auto-complete and reward gold, XP, a relationship boost, and <b>kingdom reputation</b>,
-    which nudges that kingdom's shop prices up or down over time.</div>` },
+    playthroughs, and beats reference real kingdom politics (a "Betrayal" might genuinely name a kingdom yours is
+    at war with). Runs six acts to a real ending, and includes three hand-authored decisions along the way: which
+    of two named lieutenants to pursue first (the other gets a warning and fights harder for it), who to trust when
+    one of your own allies turns out to be a spy, and what to do with intelligence recovered later in the story —
+    each locks out or unlocks different companions, rewards, reputation, or dialogue for the rest of that
+    playthrough. Certain milestones permanently shift the <b>World Phase</b> (see below) for the rest of the run.
+    Progress is automatic — defeat the right boss, clear the right dungeon, set foot in enough kingdoms, or find
+    your way through a rift — except at a decision point, which pauses the story until you choose (reopen it any
+    time from the Quest Log if you back out without deciding).</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Side Quests</b>: more than just NPC dialogue now. Ask willing
+    NPCs for personal work, or find a settlement's <b>Guild Board</b> (bigger settlements post more jobs, more
+    often) for a persistent set of postings including bounty, boss bounty (tougher, guaranteed gear), gather,
+    protect, delivery, sabotage/caravan-guard work tied to real kingdom relations, explore, and — occasionally — the
+    opening beat of a hand-authored <b>quest chain</b> with a real twist partway through and more than one way to
+    end it (six so far, covering seven distinct resolution mechanics between them -- combat, persuasion, a lore
+    argument, a bribe, stealth, intimidation, and simple resolve). Once a chain's twist is revealed, its actual
+    antagonist becomes a real, findable person in the nearest settlement, not just an intermediary you talk it over
+    with -- confronting them in person offers the same resolution, or you can settle it with violence instead
+    (harsher terms than either intended ending). An active
+    sabotage contract can be called off at any time, mending the very relation it was meant to damage instead.
+    Beyond settlements: an injured or caged person is sometimes worth finding in a dungeon (rescue,
+    ignore, or take a real gamble — not every "victim" is one), and a lost keepsake occasionally turns up in the
+    wild, returnable to its owner's settlement for a reward. NPCs you help repeatedly remember it, reference it in
+    conversation, and eventually offer something personal instead of another anonymous job. Most quests reward
+    gold, XP, a relationship boost, and <b>kingdom reputation</b> (nudges that kingdom's shop prices); meaningful
+    ones can instead grant a unique, hand-named item you won't find any other way.</div>` },
   { id:'ending', label:'The Ending', html: () => `
-    <div class="modal-opt">Defeating this world's antagonist at the Threshold doesn't end the story — it reveals
-    what was actually behind them. What follows is fixed, not procedurally generated, no matter which of the 9
-    premises your world rolled: a single, final, 5-phase encounter with a fifty-move pool, meant to be a genuine
-    wall even for a fully-built level 99 character. Winning does not end the game or take control away — you keep
-    your character, your world, and your save exactly as they were, free to keep exploring. Completed runs are
-    recorded in the <b>Hall of Legends</b>, viewable from the title screen.</div>` },
+    <div class="modal-opt">Defeating this world's antagonist doesn't end the story — it reveals what was actually
+    behind them. What follows is fixed, not procedurally generated, no matter which of the 9 premises your world
+    rolled: a single, final, 5-phase encounter with a fifty-move pool, meant to be a genuine wall even for a
+    fully-built level 99 character. Winning does not end the game or take control away — you keep your character,
+    your world, and your save exactly as they were, free to keep exploring, and the world you return to may look
+    very different depending on how far its <b>World Phase</b> escalated and which choices you made getting there.
+    Completed runs are recorded in the <b>Hall of Legends</b>, viewable from the title screen.</div>` },
+  { id:'worldphase', label:'World Phase', html: () => `
+    <div class="modal-opt">A permanent, one-way shift in how the whole world plays, triggered only by specific
+    Main Quest milestones — never randomly. Once it advances it never regresses. Phase 2 (the Infernal Tide) brings
+    tougher "Infernal" monster variants (renamed, visibly recolored, dropping Infernal Ash) and Cinder Rift
+    landmarks, which deal real fire damage to anyone standing on them. Phase 3 (the Unraveling) adds a rarer,
+    stronger tier above that — "Voidtouched" monsters, with a genuinely different attack (confusion, not fire) and
+    their own material — plus Rift Tear landmarks, which carry a real chance to leave you confused if you get too
+    close. Both materials become valid gather-quest rewards once the phase that produces them has actually
+    happened. NPCs react throughout — uneasy rumors early on, open fear or wariness of armed strangers by the worst
+    of it. Check the Quest Log at any time to see the world's current phase and what it means.</div>` },
   { id:'storybosses', label:'Story Bosses', html: () => `
     <div class="modal-opt">Named bosses roam the overworld (and can be pulled into your Main Quest's later acts).
     Early game: <b>Thessaly Voss, the Broken Blade</b> (duelist, plains/forest) and <b>Grimsen Oldhollow, the
