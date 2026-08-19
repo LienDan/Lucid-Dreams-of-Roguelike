@@ -122,12 +122,21 @@
   }
   .gamearea{
     display:flex; flex-direction:column; align-items:center; justify-content:flex-start;
-    padding:12px; flex:1; min-width:0; overflow:auto;
+    padding:12px; flex:1; min-width:0; overflow:hidden;
   }
-  .canvas-wrap{ position:relative; display:inline-block; }
+  /* Holds the canvas + loc-row and absorbs all the vertical give/take -- min-height:0 is required
+     so a flex column child can actually shrink below its content size instead of forcing the
+     parent to overflow. This is what lets the log keep an exact user-set height without pushing
+     itself (or the outer gamearea) into a scrollbar: the view pane shrinks/grows instead. */
+  .game-view-pane{
+    display:flex; flex-direction:column; align-items:center; width:100%;
+    flex:1 1 auto; min-height:0; overflow:hidden;
+  }
+  .canvas-wrap{ position:relative; display:inline-block; max-width:100%; max-height:100%; }
   #canvas{
     background:#000; border:1px solid var(--line); image-rendering:pixelated;
     box-shadow: 0 0 0 1px #000, 0 4px 24px rgba(0,0,0,0.6);
+    max-width:100%; max-height:100%; display:block;
   }
   /* Screen shake for big explosions (tactical nuke, etc). Respects the reduceMotion setting --
      see triggerScreenShake(), which skips applying this class entirely when that's on. */
@@ -145,18 +154,43 @@
   }
   #explosion-flash.flash-active{ opacity:1; transition:opacity 0.08s ease-in; }
   .loc-row{
-    display:flex; justify-content:space-between; width:100%; max-width:816px;
-    font-size:1.2rem; color:var(--amber); padding:6px 2px; letter-spacing:0.5px;
+    display:flex; justify-content:space-between; width:100%; max-width:var(--game-w, 816px);
+    font-size:1.2rem; color:var(--amber); padding:6px 2px; letter-spacing:0.5px; flex-shrink:0;
+  }
+  /* Drag handle between the game view and the log (see initLogSplitter) -- lets the ratio between
+     them be adjusted directly, the same Premiere-style idea as #split-handle but on the other axis. */
+  .vsplit-handle{
+    width:100%; max-width:var(--game-w, 816px); height:6px; flex-shrink:0; cursor:row-resize;
+    background:var(--line); position:relative; margin-top:6px; transition:background 0.15s;
+  }
+  .vsplit-handle:hover, .vsplit-handle.dragging{ background:var(--amber-dim); }
+  .vsplit-handle::after{
+    content:''; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:36px; height:2px; background:rgba(0,0,0,0.35); border-radius:2px;
   }
   .log{
-    width:100%; max-width:816px; height:118px; overflow-y:auto; margin-top:8px;
+    width:100%; max-width:var(--game-w, 816px); height:118px; flex-shrink:0; overflow-y:auto;
     background:rgba(var(--panel-rgb),var(--panel-alpha)); border:1px solid var(--line); padding:6px 10px;
     font-size:1.25rem; line-height:1.5; color:var(--text-dim);
   }
   .log div:last-child{ color:var(--text); }
 
+  /* Drag handle between the game column and the sidebar (see initPanelSplitter) -- docked-mode
+     equivalent of Premiere's panel splitters. Hidden in "unlocked HUD" floating mode since the
+     sidebar has its own native resize handle there instead (see applyHudLayout). */
+  .split-handle{
+    width:6px; flex-shrink:0; cursor:col-resize; background:var(--line); position:relative;
+    transition:background 0.15s;
+  }
+  .split-handle:hover, .split-handle.dragging{ background:var(--amber-dim); }
+  .split-handle::after{
+    content:''; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:2px; height:36px; background:rgba(0,0,0,0.35); border-radius:2px;
+  }
+  body.hud-unlocked .split-handle{ display:none; }
+
   .sidebar{
-    width:270px; flex-shrink:0; background:rgba(var(--panel-rgb),var(--panel-alpha)); border-left:1px solid var(--line);
+    width:var(--sidebar-w, 270px); flex-shrink:0; background:rgba(var(--panel-rgb),var(--panel-alpha)); border-left:1px solid var(--line);
     padding:14px; overflow-y:auto; font-size:1.25rem;
   }
   .sidebar h2{
@@ -374,16 +408,21 @@
 
   <div class="layout">
     <div class="gamearea">
-      <div class="canvas-wrap">
-        <canvas id="canvas"></canvas>
-        <div id="explosion-flash"></div>
+      <div class="game-view-pane">
+        <div class="canvas-wrap">
+          <canvas id="canvas"></canvas>
+          <div id="explosion-flash"></div>
+        </div>
+        <div class="loc-row">
+          <span id="loc-text">-</span>
+          <span id="pos-text">-</span>
+        </div>
       </div>
-      <div class="loc-row">
-        <span id="loc-text">-</span>
-        <span id="pos-text">-</span>
-      </div>
+      <div class="vsplit-handle" id="vsplit-handle" title="Drag to resize"></div>
       <div class="log" id="log"></div>
     </div>
+
+    <div class="split-handle" id="split-handle" title="Drag to resize"></div>
 
     <div class="sidebar">
       <h2>Vitals</h2>
@@ -476,7 +515,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.37.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.38.0-alpha</div>
     </div>
   </div>
 
@@ -13178,6 +13217,7 @@ const DEFAULT_SETTINGS = {
   autosaveEnabled: true,
   autosaveInterval: 50,
   layout: {},
+  sidebarWidth: 270, // docked-mode sidebar width in px, set by dragging #split-handle -- see initPanelSplitter
   // Off by default, per design: the quest tracker/journal/NPC rumors always give general,
   // in-world guidance (direction + rough distance, or narrative leads), but never a pinpoint
   // location unless the player opts in here. Turning this on adds exact tile distances to the
@@ -13269,6 +13309,7 @@ function applySettings() {
     if (sfxSlider) sfxSlider.value = Math.round(settings.sfxVolume * 100);
   }
   applyHudLayout();
+  if (typeof recalcGameViewport === 'function') recalcGameViewport(); // e.g. the Message Log Height slider changes how much vertical room the canvas has left
 }
 
 // ---- floating HUD panels (movable + resizable) ----
@@ -13353,6 +13394,146 @@ function initHudDragging() {
     if (sb) ro.observe(sb);
     if (lg) ro.observe(lg);
   }
+}
+
+// ---- game viewport + panel splitters (docked-layout resizing, Premiere-style) ----
+// Keeps the canvas/loc-row/log filling the actual available box of the game column -- both width
+// AND height, since the log's height is user-adjustable (see initLogSplitter) and needs to be
+// respected without the canvas overflowing into a scrollbar or pushing the log off-screen.
+// Recomputed on load, on window resize, and live while dragging #split-handle or #vsplit-handle.
+function recalcGameViewport() {
+  const area = document.querySelector('.gamearea');
+  const pane = document.querySelector('.game-view-pane');
+  const loc = document.querySelector('.loc-row');
+  if (!area || !pane || !loc) return;
+  // Re-clamp the sidebar against the current window size too -- a wide-screen sidebar preference
+  // (persisted in settings.sidebarWidth) shouldn't awkwardly squeeze the game to nothing if the
+  // window's since gotten a lot smaller.
+  const windowCapW = Math.max(200, Math.floor(window.innerWidth * 0.5 - 40));
+  const sidebarNow = Math.max(200, Math.min(560, windowCapW, settings.sidebarWidth || 270));
+  document.documentElement.style.setProperty('--sidebar-w', sidebarNow + 'px');
+  const cs = getComputedStyle(area);
+  const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+  const availW = Math.floor(area.clientWidth - padX);
+  // pane.clientHeight already reflects however much vertical room flexbox has actually given the
+  // view pane (area's height minus the log's set height minus the split handles minus padding --
+  // see .game-view-pane{flex:1 1 auto;min-height:0} in CSS), so read it directly rather than
+  // re-deriving that budget by hand; that stays correct no matter what else changes around it.
+  const locH = loc.getBoundingClientRect().height;
+  const availH = Math.floor(pane.clientHeight - locH);
+  if (!(availW > 0) || !(availH > 0)) return; // not laid out yet (e.g. display:none ancestor) -- try again later
+  dynamicAvailW = availW;
+  dynamicAvailH = availH;
+  // Read back the actual fitted width curView() lands on (see its own comment for why: ts is
+  // height-driven and any leftover width becomes extra columns, not bigger tiles) so --game-w --
+  // which the loc-row/log/vsplit-handle all size themselves against -- matches the real canvas
+  // width exactly rather than the raw, unrounded available width.
+  const v = curView();
+  document.documentElement.style.setProperty('--game-w', v.canvasW + 'px');
+  if (typeof ctx !== 'undefined' && ctx && gameState) render();
+}
+let gameViewportResizeTimer = null;
+function scheduleRecalcGameViewport() {
+  clearTimeout(gameViewportResizeTimer);
+  gameViewportResizeTimer = setTimeout(recalcGameViewport, 80);
+}
+let panelSplitDrag = null;
+function initPanelSplitter() {
+  const handle = document.getElementById('split-handle');
+  if (!handle) return;
+  const applySidebarWidth = (w) => {
+    const windowCap = Math.max(200, Math.floor(window.innerWidth * 0.5 - 40));
+    const clamped = Math.max(200, Math.min(560, windowCap, Math.round(w)));
+    document.documentElement.style.setProperty('--sidebar-w', clamped + 'px');
+    return clamped;
+  };
+  applySidebarWidth(settings.sidebarWidth || 270);
+  const moveTo = (clientX) => {
+    // Sidebar spans from just right of the handle to the window's right edge.
+    const w = window.innerWidth - clientX - 3;
+    settings.sidebarWidth = applySidebarWidth(w);
+    recalcGameViewport();
+  };
+  const start = (e, x) => {
+    panelSplitDrag = true;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  };
+  const stop = () => {
+    if (!panelSplitDrag) return;
+    panelSplitDrag = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    saveSettingsToStorage();
+  };
+  handle.addEventListener('mousedown', (e) => start(e, e.clientX));
+  window.addEventListener('mousemove', (e) => { if (panelSplitDrag) moveTo(e.clientX); });
+  window.addEventListener('mouseup', stop);
+  handle.addEventListener('touchstart', (e) => start(e, e.touches[0].clientX), { passive: false });
+  window.addEventListener('touchmove', (e) => { if (panelSplitDrag && e.touches[0]) moveTo(e.touches[0].clientX); }, { passive: true });
+  window.addEventListener('touchend', stop);
+  window.addEventListener('resize', scheduleRecalcGameViewport);
+}
+// Vertical counterpart to initPanelSplitter -- adjusts the ratio between the game view and the
+// log by dragging #vsplit-handle, sharing the same underlying settings.logLines value as the
+// existing "Message Log Height" slider (see renderSettingsTab) so both controls always agree.
+let logSplitDrag = null;
+function initLogSplitter() {
+  const handle = document.getElementById('vsplit-handle');
+  const logEl = document.getElementById('log');
+  if (!handle || !logEl) return;
+  const applyLogHeight = (px) => {
+    // Match the same 4-20 line range as the "Message Log Height" slider so the two controls
+    // always agree on what's a valid value, however the height was actually set.
+    const clamped = Math.max(4 * 19.5, Math.min(20 * 19.5, Math.round(px)));
+    logEl.style.height = clamped + 'px';
+    settings.logLines = Math.round((clamped / 19.5) * 10) / 10;
+    return clamped;
+  };
+  const moveTo = (clientY) => {
+    const rect = logEl.getBoundingClientRect();
+    const newHeight = rect.bottom - clientY; // handle sits just above the log; log's bottom edge stays put
+    applyLogHeight(newHeight);
+    recalcGameViewport();
+  };
+  const start = (e) => {
+    logSplitDrag = true;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  };
+  const stop = () => {
+    if (!logSplitDrag) return;
+    logSplitDrag = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    saveSettingsToStorage();
+    if (gameState === 'settings') renderSettingsTab(settingsTab); // keep the Message Log Height slider in sync if it's open
+  };
+  handle.addEventListener('mousedown', start);
+  window.addEventListener('mousemove', (e) => { if (logSplitDrag) moveTo(e.clientY); });
+  window.addEventListener('mouseup', stop);
+  handle.addEventListener('touchstart', (e) => { start(e); }, { passive: false });
+  window.addEventListener('touchmove', (e) => { if (logSplitDrag && e.touches[0]) moveTo(e.touches[0].clientY); }, { passive: true });
+  window.addEventListener('touchend', stop);
+}
+// "Reset to Default Ratio" -- puts both the sidebar/game split and the game/log split back to
+// their DEFAULT_SETTINGS values. Distinct from resetHudLayout(), which resets the *floating*
+// (hudUnlocked) panel positions -- this one is for the normal docked layout.
+function resetPanelRatios() {
+  settings.sidebarWidth = DEFAULT_SETTINGS.sidebarWidth;
+  settings.logLines = DEFAULT_SETTINGS.logLines;
+  saveSettingsToStorage();
+  document.documentElement.style.setProperty('--sidebar-w', settings.sidebarWidth + 'px');
+  const logEl = document.getElementById('log');
+  if (logEl && !settings.hudUnlocked) logEl.style.height = Math.max(4, settings.logLines) * 19.5 + 'px';
+  recalcGameViewport();
+  if (gameState === 'settings') renderSettingsTab(settingsTab);
 }
 
 // ---- floating combat text ----
@@ -16014,11 +16195,29 @@ const ZOOM_LEVELS = [
   { w:51, h:31 }, { w:65, h:39 }, { w:81, h:49 }, { w:95, h:57 },
 ];
 let zoomIndex = 5;
+// The canvas used to be pinned to a fixed 816x496 design resolution no matter how big the game
+// view actually was, leaving a dead gap between the game column and the sidebar on a wide screen.
+// dynamicAvailW/H track the actual available box (measured by recalcGameViewport() -- on load, on
+// window resize, and live while dragging #split-handle or #vsplit-handle) that the game view has
+// to work with. curView() derives everything else from those two numbers fresh on every call, so
+// it's always correct for whatever the current zoom level is, even if zoom changes without a new
+// measurement. 816x496 remain the fallback for the very first layout pass before
+// recalcGameViewport has run once.
+//
+// Tile size (ts) is deliberately driven by HEIGHT alone: it's whatever makes the zoom level's
+// fixed row count (lv.h) exactly fill the available height, so vertical extent never overflows
+// and the log never gets pushed off-screen. Any leftover horizontal space is then filled by
+// showing MORE COLUMNS of the map (w grows past lv.w) rather than by enlarging the tiles -- that's
+// what actually uses the width instead of just leaving a gap next to the sidebar, and it does so
+// without the tiles (and therefore the whole view) scaling up out of proportion to the height fit.
+let dynamicAvailW = 816, dynamicAvailH = 496;
 function curView() {
   const lv = ZOOM_LEVELS[zoomIndex];
-  const canvasW = 51 * 16, canvasH = 31 * 16;
-  const ts = Math.max(6, Math.floor(canvasW / lv.w));
-  return { w: lv.w, h: lv.h, ts, halfW: Math.floor(lv.w/2), halfH: Math.floor(lv.h/2), canvasW, canvasH };
+  const availW = dynamicAvailW || 816, availH = dynamicAvailH || 496;
+  const ts = Math.max(6, Math.floor(availH / lv.h));
+  const w = Math.max(lv.w, Math.floor(availW / ts)); // never fewer columns than the zoom level's own baseline
+  const canvasW = ts * w, canvasH = ts * lv.h;
+  return { w, h: lv.h, ts, halfW: Math.floor(w/2), halfH: Math.floor(lv.h/2), canvasW, canvasH };
 }
 function setZoom(delta) {
   zoomIndex = Math.max(0, Math.min(ZOOM_LEVELS.length-1, zoomIndex+delta));
@@ -27312,6 +27511,7 @@ function renderSettingsTab(tabId) {
     body += row('Combat Text Size', `Size of floating damage/miss numbers (${s.combatTextScale}%).`, sliderHtml('combatTextScale', s.combatTextScale, 60, 180, 10));
     body += row('Unlock HUD Panels', 'Drag panels by their top strip and resize from the bottom-right corner.', toggleHtml('hudUnlocked', s.hudUnlocked));
     body += `<div class="settings-row"><div class="settings-label"><b>Reset HUD Layout</b><span>Puts panels back in their default docked position.</span></div><div class="settings-control"><span class="settings-btn" onclick="resetHudLayout()">Reset</span></div></div>`;
+    body += `<div class="settings-row"><div class="settings-label"><b>Reset Panel Ratios</b><span>Puts the sidebar width and the game/log split back to their defaults.</span></div><div class="settings-control"><span class="settings-btn" onclick="resetPanelRatios()">Reset</span></div></div>`;
   } else if (tabId === 'gameplay') {
     const zoomLabels = ['Max Zoom In','Very Close','Close','Small','Medium','Large','X-Large','Wide','Max Zoom Out'];
     body += row('Default Zoom Level', `Zoom used when starting/loading a game (${zoomLabels[s.defaultZoom]}).`, sliderHtml('defaultZoom', s.defaultZoom, 0, 8, 1));
@@ -27668,6 +27868,9 @@ function gameOverChoice(letter) {
 function initGame() {
   loadSettings();
   canvas = document.getElementById('canvas');
+  initPanelSplitter();
+  initLogSplitter();
+  recalcGameViewport();
   const v = curView();
   canvas.width = v.canvasW; canvas.height = v.canvasH;
   ctx = canvas.getContext('2d');
