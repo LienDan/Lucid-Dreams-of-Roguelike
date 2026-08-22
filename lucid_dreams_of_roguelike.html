@@ -515,7 +515,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.38.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.39.0-alpha</div>
     </div>
   </div>
 
@@ -566,9 +566,45 @@
 //     giver route. onDeath hook -> resolveChainAntagonistDeath force-resolves the quest on harsher terms
 //     if the antagonist dies before confrontation (guarded by !q.done, safe against duplicate calls).
 //
-// NOT YET DONE (as of v0.37.5): more quest chains (registry supports it trivially); hazard-tile damage
+// v0.39.0 Major Emergence update: deep cross-system simulation pass -- environment, AI, crafting,
+// body/health, gathering, and world-reactivity all made to interact with each other by design.
+//   - Environmental physics: oil/grease tiles (oilTile/detonateOil) that detonate as a connected
+//     fuse (oilFuseChain); entity-level Wet/Oiled/Burning/Frozen Solid status (applyGroundHazardsOnEnter,
+//     igniteEntity, freezeEntitySolid/shatterFrozenEntity) layered on top of ordinary HP; wind
+//     (ensureWind/tickWind) biasing fire spread and gas drift; water-conduction chain lightning
+//     (chainLightningFrom extended range through water); toxic gas explosions (detonateGas/gasFuseChain).
+//   - AI/ecology: monsters won't path onto burning tiles (isPassableFor); a burning, non-fireproof
+//     creature panics and flees to the nearest water (findNearestWaterTile) instead of fighting on.
+//   - Crafting: quality tiers (craftQualityRoll, driven by per-discipline practice + governing stat,
+//     not a flat roll) affecting rarity/power/durability/value; material properties (MATERIAL_PROPERTIES:
+//     Starmetal Ore/Ironwood, ~4% rare gather find) as a second, independent axis stacking with quality.
+//   - Body & Health: locational wounds (rollHitLocation/woundBodyPart: Bruised->Wounded->Maimed, rare
+//     permanent Ruined), bleeding (applyBleed, distinct DoT from poison), procedural disease
+//     (triggerDisease: randomized symptoms+cure per instance, rare chronic variant), armor coverage
+//     per body part (getPartArmorValue), inferred weapon damage types (weaponDamageType), Called Shot
+//     (beginCalledShot/openCalledShotMenu), Greater Restoration for permanent afflictions
+//     (payForGreaterRestoration, priest service + rare shrine boon).
+//   - Gathering/Farming/Fishing: DESTRUCTIBLE_FEATURES now yield real materials on top of clearing the
+//     tile (grantGatherYield, tool-type + crafted-quality scaling via toolGatherMultiplier); farming
+//     (tillSoil/plantCrop/harvestCrop, weather-driven growth speed, frost can kill an immature crop);
+//     fishing (beginFishing, rod quality, weather affects catch rate, rare aquatic ambush).
+//   - World Memory: burning actual settlement property is a real crime (commitCrime hooked into
+//     applyTerrainInteraction/resolveThrowAtTile's aoefire case); positive reputation (addGoodwill --
+//     defending a settlement from an active war party, quest completion, trade) folded into every price
+//     in the game via reputationPriceMult inside npcTierPriceMult; Bounty Hunters actually hunt a
+//     high-bounty player (maybeSpawnBountyHunter, explicitly level-scaled on top of makeNPC's tier
+//     roll); direct pay-off-bounty dialogue option (payOffBounty) alongside the existing slow decay.
+//   - Bug fixes found and closed along the way: fish_raw was referenced by 6 recipes with no way to
+//     ever obtain it; ev_oil_slick was a flat "you're slowed" debuff instead of a real hazard; player
+//     frost spells weren't actually chilling their target (only the tile-freeze half worked, monster
+//     frost attacks were unaffected); gathering tools took zero durability wear from use; Bounty
+//     Hunters could roll a random NPC tier completely unrelated to player level.
+//
+// NOT YET DONE (as of v0.39.0): more quest chains (registry supports it trivially); hazard-tile damage
 // is dungeon-only outside Cinder Rift/Rift Tear by design; achievements/meta-progression don't exist yet;
-// chain antagonists use the standard NPC framework (no unique combat/death dialogue) by design.
+// chain antagonists use the standard NPC framework (no unique combat/death dialogue) by design; hunger/
+// thirst deliberately not implemented (declined by design); body/health locational model is player-only,
+// not extended to monsters (deliberate scope decision, see the framework note near ensureBodyParts).
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
 // external audio files. This keeps the game a single portable HTML file and
@@ -580,7 +616,6 @@ const Sound = (function () {
   let muted = false;
   let sfxVol = 0.7;
   let lastFootstepAt = 0;
-  let unlocked = false;
 
   function ensureCtx() {
     if (actx) return true;
@@ -595,7 +630,6 @@ const Sound = (function () {
   function unlock() {
     if (!ensureCtx()) return;
     if (actx.state === 'suspended') actx.resume();
-    unlocked = true;
   }
 
   function now() { return actx.currentTime; }
@@ -1096,6 +1130,9 @@ const ITEM_BASES = [
   { id:'axe', name:'Hand Axe', type:'weapon', slot:'hand', dmg:[3,8], str:10, glyph:')', color:'#c9a06a', value:25 },
   { id:'waraxe', name:'War Axe', type:'weapon', slot:'hand', dmg:[4,11], str:13, glyph:')', color:'#c9a06a', value:45 },
   { id:'mace', name:'Mace', type:'weapon', slot:'hand', dmg:[3,7], str:11, glyph:')', color:'#9a9a9a', value:20 },
+  { id:'pickaxe', name:'Pickaxe', type:'weapon', slot:'hand', dmg:[3,7], str:9, glyph:')', color:'#8a8a9a', value:22, desc:'A miner\'s tool, weighty enough to fight with in a pinch -- and the right tool for breaking into an ore vein cleanly instead of just smashing it apart.' },
+  { id:'hoe', name:'Hoe', type:'weapon', slot:'hand', dmg:[1,4], str:4, glyph:')', color:'#8a6a3d', value:10, desc:'A farming tool. Awkward in a real fight, but it\'s what turns open ground into a tilled plot ready for planting.' },
+  { id:'fishing_rod', name:'Fishing Rod', type:'weapon', slot:'hand', dmg:[1,3], str:3, glyph:')', color:'#c9a06a', value:14, desc:'A simple rod and line. Stand at the water\'s edge and cast a line -- a better rod means a better catch.' },
   { id:'warhammer', name:'Warhammer', type:'weapon', slot:'hand', dmg:[5,12], str:15, glyph:')', color:'#8f8f8f', value:55 },
   { id:'spear', name:'Spear', type:'weapon', slot:'hand', dmg:[2,7], str:8, glyph:'/', color:'#b98d54', value:18 },
   { id:'staff', name:'Wooden Staff', type:'weapon', slot:'hand', dmg:[1,5], str:5, glyph:'/', color:'#8a6a3d', value:16, intBonus:1 },
@@ -1664,6 +1701,8 @@ ITEM_BASES.push(
   { id:'herb', name:'Wild Herb', type:'material', glyph:'"', color:'#5ac95a', value:3 },
   { id:'ore', name:'Raw Ore', type:'material', glyph:'*', color:'#9a8a7a', value:5 },
   { id:'wood', name:'Wood', type:'material', glyph:'"', color:'#8a6a3d', value:1 },
+  { id:'starmetal_ore', name:'Starmetal Ore', type:'material', glyph:'*', color:'#8ad0e0', value:35, desc:'A rare ore vein with a faint, cold sheen, like it fell from somewhere far above. Said to hold its edge better than any earthly metal.' },
+  { id:'ironwood', name:'Ironwood', type:'material', glyph:'"', color:'#5a4a2a', value:28, desc:'Timber grown dense and slow, its grain as tough as forged iron. Rare -- most trees never live long enough to become this.' },
   { id:'cloth', name:'Cloth', type:'material', glyph:'"', color:'#dcd6c8', value:2 },
   { id:'leather_scrap', name:'Leather Scrap', type:'material', glyph:'"', color:'#a9834a', value:3 },
   { id:'iron_ingot', name:'Iron Ingot', type:'material', glyph:'*', color:'#b6bcc4', value:9 },
@@ -2349,7 +2388,7 @@ MONSTER_BASES.stoneguardian = { name:'Stone Guardian', glyph:'&', color:'#8a8a8a
 MONSTER_BASES.claygolem = { name:'Clay Golem', glyph:'G', color:'#9c7a4a', hp:40, str:12, dex:3, atk:[3,7], armor:4, xp:0, behavior:'aggressive', dtier:2 };
 MONSTER_BASES.stonegolem = { name:'Stone Golem', glyph:'G', color:'#8a8a8a', hp:70, str:18, dex:2, atk:[5,12], armor:7, xp:0, behavior:'aggressive', dtier:3 };
 MONSTER_BASES.animatedarmor = { name:'Animated Armor', glyph:']', color:'#c0c0d0', hp:26, str:10, dex:6, atk:[2,6], armor:6, xp:0, behavior:'aggressive', dtier:2 };
-MONSTER_BASES.fireelemental = { name:'Fire Elemental', glyph:'e', color:'#e0783a', hp:20, str:10, dex:8, atk:[3,7], armor:1, xp:0, behavior:'aggressive', dtier:2, fire:3 };
+MONSTER_BASES.fireelemental = { name:'Fire Elemental', glyph:'e', color:'#e0783a', hp:20, str:10, dex:8, atk:[3,7], armor:1, xp:0, behavior:'aggressive', dtier:2, fire:3, fireImmune:true };
 MONSTER_BASES.spirit = { name:'Spirit', glyph:'s', color:'#c0e0e0', hp:10, str:5, dex:14, atk:[1,4], armor:0, xp:0, behavior:'aggressive', dtier:1 };
 
 const TALENTS_V2 = [
@@ -3609,6 +3648,14 @@ RECIPES.push(
   { id:'craft_firebomb', name:'Assemble Firebomb', category:'crafting', inputs:[{id:'sulfur',qty:2},{id:'salamander_blood',qty:1}], output:{id:'firebomb',qty:1} },
   { id:'craft_greater_firebomb', name:'Assemble Greater Firebomb', category:'crafting', inputs:[{id:'sulfur',qty:3},{id:'salamander_blood',qty:2},{id:'saltpeter',qty:1}], output:{id:'greater_firebomb',qty:1} },
   { id:'craft_frostbomb', name:'Assemble Frostbomb', category:'crafting', inputs:[{id:'frost_lotus',qty:2},{id:'saltpeter',qty:1}], output:{id:'frostbomb',qty:1} },
+  { id:'craft_oil_flask', name:'Assemble Oil Flask', category:'crafting', inputs:[{id:'sulfur',qty:2}], output:{id:'oil_flask',qty:1} },
+  // ---- MATERIAL PROPERTIES: dedicated recipes for the rare gathered materials (see
+  // MATERIAL_PROPERTIES near craftQualityRoll) -- without at least these, Starmetal Ore/Ironwood
+  // would be a genuine dead end: found while gathering, with nothing to actually spend them on.
+  { id:'craft_starmetal_blade', name:'Forge Starmetal Longsword', category:'crafting', inputs:[{id:'starmetal_ore',qty:2},{id:'wood',qty:1}], output:{id:'longsword',qty:1} },
+  { id:'craft_starmetal_warhammer', name:'Forge Starmetal Warhammer', category:'crafting', inputs:[{id:'starmetal_ore',qty:3},{id:'wood',qty:1}], output:{id:'warhammer',qty:1} },
+  { id:'craft_ironwood_bow', name:'Craft Ironwood Longbow', category:'crafting', inputs:[{id:'ironwood',qty:2},{id:'cloth',qty:1}], output:{id:'longbow',qty:1} },
+  { id:'craft_ironwood_staff', name:'Craft Ironwood Staff', category:'crafting', inputs:[{id:'ironwood',qty:2}], output:{id:'staff',qty:1} },
   { id:'craft_poison_grenade', name:'Assemble Poison Gas Grenade', category:'crafting', inputs:[{id:'nightshade',qty:2},{id:'spider_venom',qty:1}], output:{id:'poison_grenade',qty:1} },
   { id:'craft_gas_grenade', name:'Assemble Gas Grenade', category:'crafting', inputs:[{id:'sulfur',qty:1},{id:'nightshade',qty:1}], output:{id:'gas_grenade',qty:1} },
   { id:'craft_greater_gas_grenade', name:'Assemble Greater Gas Grenade', category:'crafting', inputs:[{id:'sulfur',qty:2},{id:'nightshade',qty:2},{id:'spider_venom',qty:1}], output:{id:'greater_gas_grenade',qty:1} },
@@ -3629,6 +3676,9 @@ RECIPES.push(
   { id:'craft_medkit', name:'Assemble Medkit', category:'crafting', inputs:[{id:'cloth',qty:2},{id:'herb',qty:1}], output:{id:'medkit',qty:1} },
   { id:'craft_nanoweave_stim', name:'Synthesize Nanoweave Stim', category:'crafting', inputs:[{id:'nanite_cluster',qty:1},{id:'circuit_board',qty:1}], output:{id:'nanoweave_stim',qty:1} },
   { id:'craft_bandage', name:'Roll Bandages', category:'crafting', inputs:[{id:'cloth',qty:1}], output:{id:'bandage',qty:3} },
+  { id:'craft_splint', name:'Assemble Splint', category:'crafting', inputs:[{id:'wood',qty:2},{id:'cloth',qty:1}], output:{id:'splint',qty:1} },
+  { id:'craft_hoe', name:'Assemble Hoe', category:'crafting', inputs:[{id:'wood',qty:2},{id:'ore',qty:1}], output:{id:'hoe',qty:1} },
+  { id:'craft_fishing_rod', name:'Assemble Fishing Rod', category:'crafting', inputs:[{id:'wood',qty:2},{id:'cloth',qty:1}], output:{id:'fishing_rod',qty:1} },
   { id:'craft_charge_cell', name:'Assemble Charge Cell', category:'crafting', inputs:[{id:'circuit_board',qty:1},{id:'nanite_cluster',qty:1}], output:{id:'charge_cell',qty:1} },
   { id:'craft_greater_charge_cell', name:'Assemble Greater Charge Cell', category:'crafting', inputs:[{id:'circuit_board',qty:2},{id:'nanite_cluster',qty:2}], output:{id:'greater_charge_cell',qty:1} },
   { id:'craft_silver_shot', name:'Cast Silver Shot', category:'crafting', inputs:[{id:'silver_ore',qty:1}], output:{id:'silver_shot',qty:3} },
@@ -3748,7 +3798,8 @@ ITEM_BASES.push(
   { id:'holy_grenade', name:'Holy Water Flask', type:'consumable', effect:'throwaoe', power:[6,14], radius:2, dtype:'holy', range:5, glyph:'*', color:'#e0e0a0', value:32 },
   { id:'shrapnel_bomb', name:'Shrapnel Bomb', type:'consumable', effect:'throwaoe', power:[7,14], radius:2, dtype:'physical', range:5, glyph:'*', color:'#909090', value:34 },
   // ---- bandages/medkits/utility ----
-  { id:'bandage', name:'Bandage', type:'consumable', effect:'heal', power:8, glyph:'!', color:'#e0d0c0', value:6 },
+  { id:'bandage', name:'Bandage', type:'consumable', effect:'bandage', power:8, glyph:'!', color:'#e0d0c0', value:6, desc:'Clean cloth wrapping. Stanches active bleeding and closes a modest amount of the wound itself.' },
+  { id:'splint', name:'Splint', type:'consumable', effect:'splint', glyph:'!', color:'#c9a56a', value:20, desc:"A rigid brace and wrapping for a broken limb. Won't undo the damage, but stabilizes a maimed limb enough to use again and let it resume healing naturally." },
   { id:'medkit', name:'Medkit', type:'consumable', effect:'heal', power:45, glyph:'!', color:'#e05a5a', value:50 },
   { id:'nanoweave_stim', name:'Nanoweave Stim', type:'consumable', effect:'heal', power:30, glyph:'!', color:'#4ae0d0', value:40 },
   { id:'ration_pack', name:'Trail Rations', type:'consumable', effect:'food', power:2, glyph:'%', color:'#c9a06a', value:8 },
@@ -4023,6 +4074,11 @@ ITEM_BASES.push(
   { id:'firebomb', name:'Firebomb', type:'consumable', effect:'aoefire', power:[6,14], radius:3, glyph:'*', color:'#e0451a', value:30 },
   { id:'greater_firebomb', name:'Greater Firebomb', type:'consumable', effect:'aoefire', power:[12,24], radius:4, glyph:'*', color:'#ff2a2a', value:65 },
   { id:'frostbomb', name:'Frost Grenade', type:'consumable', effect:'aoefrost', power:[5,12], radius:3, glyph:'*', color:'#8ad0e0', value:28 },
+  // Not a damage grenade -- an area-denial/setup tool. Coats the ground in oil (slick, and
+  // explosively flammable -- see isOiledTile/detonateOil near igniteTile) rather than dealing
+  // damage on its own. Thrown onto an enemy directly, it also coats THEM (see resolveThrowAtTile's
+  // 'oilsplash' case), setting up a guaranteed ignite from any follow-up fire attack.
+  { id:'oil_flask', name:'Oil Flask', type:'consumable', effect:'oilsplash', radius:2, oilTurns:60, glyph:'!', color:'#8a6a2a', value:16, desc:'A corked flask of thick, dark oil. Shatters into a slick, volatile puddle -- coat the ground as a trap, or douse a foe directly and follow up with fire.' },
   { id:'gas_grenade', name:'Gas Grenade', type:'consumable', effect:'aoepoison', power:6, radius:3, glyph:'*', color:'#5ac93a', value:26 },
   { id:'greater_gas_grenade', name:'Greater Gas Grenade', type:'consumable', effect:'aoepoison', power:12, radius:4, glyph:'*', color:'#3a9a1a', value:55 },
   { id:'flashbang', name:'Flashbang', type:'consumable', effect:'aoeconfuse', power:4, radius:4, glyph:'*', color:'#e0e0a0', value:24 },
@@ -7121,7 +7177,6 @@ function scatterBiomeStructures(chunk, cx, cy, rng) {
       }
     }
     if (structure.npcRole) {
-      const localKingdom = getKingdom(cx * CH, cy * CH);
       const npc = makeNPC(structure.npcRole, cx * CH + spot.lx, cy * CH + spot.ly, rng, 'the Wilds', 'human');
       npc.wanderCenter = { x: npc.x, y: npc.y };
       chunk.npcs.push(npc);
@@ -7378,6 +7433,21 @@ function settlementDefenseRumor(npc) {
   const ev = settlementDefenseMemory.get(npc.home);
   if (!ev || turnCount - ev.turn > 250) return null;
   return `Did you hear? ${ev.text}`;
+}
+// ---- WORLD MEMORY: the negative mirror of settlementDefenseMemory above -- NPCs of a settlement
+// the player set fire to gossip about it too, same "still fresh" window, same rumor-rotation slot
+// in dialogue. See the commitCrime hooks in applyTerrainInteraction/resolveThrowAtTile's aoefire
+// case for where this gets written.
+const settlementCrimeMemory = new Map(); // settlement name -> { turn, text }
+function recordSettlementCrime(settlement, text) {
+  if (!settlement) return;
+  settlementCrimeMemory.set(settlement, { turn: typeof turnCount !== 'undefined' ? turnCount : 0, text });
+}
+function settlementCrimeRumor(npc) {
+  if (!npc.home) return null;
+  const ev = settlementCrimeMemory.get(npc.home);
+  if (!ev || turnCount - ev.turn > 250) return null;
+  return ev.text;
 }
 
 // ---- 2) ABILITIES: a monster-side spell/eldritch/cyber/thrown library. Shares the same
@@ -7832,7 +7902,6 @@ function computeBoundaryMask(shape, margin, rng, gateSide) {
     // to work with than a square village even before this buffer, so over-eroding here was a real
     // regression (fewer houses than before the boundary-shape work), not just a minor visual nit.
     const steps = Math.max(180, Math.round(baseR * 12));
-    const blockedDist = []; // per-row array of blocked-x Sets would be slower to query; use a flat grid instead
     const clearGrid = new Array(CH); for (let y = 0; y < CH; y++) clearGrid[y] = new Array(CH).fill(true);
     for (let i = 0; i < steps; i++) {
       const theta = (i / steps) * Math.PI * 2;
@@ -7965,7 +8034,6 @@ function drawOpenSidedBoundary(chunk, shape, openSide, gateSide, margin, rng, ma
 // road already exists -- closer buildings connect first, so later ones naturally branch off the
 // growing network rather than every single building tracing its own line back to the gate.
 function growRoadNetwork(chunk, doorList, rootX, rootY) {
-  const isRoadTile = (t) => t.feature === 'road' || t.feature === 'gate';
   const markRoad = (x, y) => {
     const t = chunk.tiles[y][x];
     if (t.walkable && t.building === null && t.feature !== 'door' && t.feature !== 'gate') { t.feature = 'road'; t.glyph = ':'; t.color = '#b09a6a'; }
@@ -8030,22 +8098,6 @@ function bfsToExistingRoad(chunk, sx, sy) {
 }
 function isRoadOrGate(chunk, x, y) { const t = chunk.tiles[y][x]; return t.feature === 'road' || t.feature === 'gate'; }
 
-function paintRoad(chunk, gx, gy) {
-  const t = chunk.tiles;
-  const dirs = [[0,1],[0,-1],[1,0],[-1,0]];
-  for (const [dx,dy] of dirs) {
-    let x = gx, y = gy;
-    for (let i = 0; i < 6; i++) {
-      x += dx; y += dy;
-      if (x < 0 || y < 0 || x >= CH || y >= CH) break;
-      const tile = t[y][x];
-      if (tile.building !== null || tile.feature === 'wall') break;
-      if (tile.walkable) { tile.glyph = ':'; tile.color = '#b09a6a'; tile.feature = 'road'; }
-    }
-  }
-}
-
-
 const ROLE_POOLS = {
   hamlet: ['farmer','farmer','farmer','elder','child','shepherd'],
   village: ['merchant','blacksmith','innkeeper','farmer','guard','elder','child','trainer','tavernkeeper','cobbler','weaver','potter'],
@@ -8099,7 +8151,7 @@ const NPC_TIERS = [
 ];
 function pickNPCTier(rng) { return weightedChoice(rng, NPC_TIERS.map(t => [t.id, t.weight])); }
 function npcTierInfo(npc) { return NPC_TIERS.find(t => t.id === npc.tier) || NPC_TIERS[1]; }
-function npcTierPriceMult(npc) { return npcTierInfo(npc).priceMult; }
+function npcTierPriceMult(npc) { return npcTierInfo(npc).priceMult * reputationPriceMult(npc); }
 
 function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
   const role = ROLES.find(r => r.id === roleId) || ROLES[0];
@@ -8159,7 +8211,7 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
   if (roleId === 'chef' || roleId === 'blacksmith' || roleId === 'alchemist' || roleId === 'tailor') {
     npc.teachRecipes = RECIPES.filter(r => {
       if (roleId === 'chef') return r.category === 'cooking';
-      if (roleId === 'blacksmith') return r.id === 'smelt_iron' || r.id === 'craft_leather';
+      if (roleId === 'blacksmith') return r.id === 'smelt_iron' || r.id === 'craft_leather' || r.id === 'craft_starmetal_blade' || r.id === 'craft_starmetal_warhammer' || r.id === 'craft_ironwood_bow' || r.id === 'craft_ironwood_staff';
       if (roleId === 'alchemist') return r.id === 'antidote';
       if (roleId === 'tailor') return r.id === 'craft_gloves' || r.id === 'craft_boneamulet';
       return false;
@@ -8224,7 +8276,7 @@ function generateShopInventory(roleId, rng) {
   else if (roleId === 'silversmith') pool = ITEM_BASES.filter(b => b.type === 'armor' && ['ring','amulet','circlet'].includes(b.id));
   else if (roleId === 'armorer') pool = ITEM_BASES.filter(b => b.type === 'armor' && !['ring','amulet','circlet'].includes(b.id) && !b.setId && !b.isUnique && !b.craftOnly);
   else if (roleId === 'fletcher') pool = ITEM_BASES.filter(b => b.type === 'weapon' && b.ranged && !b.setId && !b.isUnique && !b.craftOnly);
-  else if (roleId === 'fisherman' || roleId === 'fishmonger') pool = ITEM_BASES.filter(b => ['meat_cooked','stew','holy_water','cooked_fish','honeyed_salmon'].includes(b.id));
+  else if (roleId === 'fisherman' || roleId === 'fishmonger') pool = ITEM_BASES.filter(b => ['meat_cooked','stew','holy_water','cooked_fish','honeyed_salmon','fishing_rod'].includes(b.id));
   else if (roleId === 'guildclerk' || roleId === 'fence' || roleId === 'quartermaster') pool = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor' || b.type === 'consumable') && !b.setId && !b.isUnique && !b.craftOnly);
   else pool = ITEM_BASES.filter(b => b.type !== 'misc' && b.type !== 'material' && b.type !== 'chest' && b.type !== 'corpse' && !b.setId && !b.isUnique && !b.craftOnly);
   const n = randInt(rng, 5, 9);
@@ -8857,12 +8909,20 @@ SHOP_ROLES.add('cybersmith');
 // anything destructible in their radius outright, exactly as before -- see destroyDestructibleAt.
 // To make some other overworld feature breakable later (a fence, a totem, a barricade...), add
 // one entry here; nothing in movement, melee, or fire-spread code needs to know it exists.
+// ---- GATHERING & TOOLS: felling a tree or breaking an ore vein used to just turn it into a
+// stump/rubble tile and give NOTHING -- a real dead end for a mechanic whose own flavor text
+// (see 'orepile' below) explicitly promised a payoff. `gatherType` + `yield` below are what
+// finally connects chopping/mining to the material economy raw material items already feed
+// (wood/ore/mushroom/gem, used throughout RECIPES) -- and doing it here, in this one shared
+// framework, means every destructible feature (including any added later) gets real loot for
+// free just by declaring what it drops, not by hand-wiring a payout at each call site.
 const DESTRUCTIBLE_FEATURES = {
   tree: {
     hpRange: [16, 30], chopVerb: 'chop into', fallVerb: 'The tree splinters and crashes down!',
     flammable: true, fireDmgRange: [2, 5], fireCatchChance: 0.16,
     fireResult:  { feature: 'scorched', glyph: ',', color: '#4a3a2a' },
-    meleeResult: { feature: 'stump',    glyph: '\u2229', color: '#5a4028' }
+    meleeResult: { feature: 'stump',    glyph: '\u2229', color: '#5a4028' },
+    gatherType: 'wood', yield: [{ id: 'wood', min: 2, max: 4 }, { id: 'ironwood', min: 1, max: 1, chance: 0.04 }]
   },
   cactus: {
     hpRange: [10, 18], chopVerb: 'hack at', fallVerb: 'The cactus topples in a shower of spines!',
@@ -8877,13 +8937,15 @@ const DESTRUCTIBLE_FEATURES = {
     hpRange: [12, 20], chopVerb: 'hack into', fallVerb: 'The giant mushroom bursts in a cloud of spores!',
     flammable: true, fireDmgRange: [1, 3], fireCatchChance: 0.1,
     fireResult:  { feature: 'scorched', glyph: ',', color: '#4a3a2a' },
-    meleeResult: { feature: 'stump', glyph: '\u2229', color: '#7a4a6a' }
+    meleeResult: { feature: 'stump', glyph: '\u2229', color: '#7a4a6a' },
+    gatherType: 'organic', yield: [{ id: 'mushroom', min: 1, max: 3 }]
   },
   crystal_spire: {
     hpRange: [20, 32], chopVerb: 'strike at', fallVerb: 'The crystal spire shatters into glittering fragments!',
     flammable: false,
     fireResult:  { feature: 'rubble', glyph: ',', color: '#5a6a7a' },
-    meleeResult: { feature: 'rubble', glyph: ',', color: '#5a6a7a' }
+    meleeResult: { feature: 'rubble', glyph: ',', color: '#5a6a7a' },
+    gatherType: 'ore', yield: [{ id: 'gem', min: 1, max: 2, chance: 0.6 }]
   },
   toxic_barrel: {
     hpRange: [6, 12], chopVerb: 'strike at', fallVerb: 'The barrel splits open, spilling caustic waste!',
@@ -8895,15 +8957,167 @@ const DESTRUCTIBLE_FEATURES = {
     hpRange: [18, 28], chopVerb: 'batter at', fallVerb: 'The crumbling wall finally gives way!',
     flammable: false,
     fireResult:  { feature: 'rubble', glyph: ',', color: '#5a5a5a' },
-    meleeResult: { feature: 'rubble', glyph: ',', color: '#5a5a5a' }
+    meleeResult: { feature: 'rubble', glyph: ',', color: '#5a5a5a' },
+    gatherType: 'ore', yield: [{ id: 'ore', min: 1, max: 2, chance: 0.5 }]
   },
   scrap_pile: {
     hpRange: [8, 14], chopVerb: 'dig through', fallVerb: 'The scrap pile collapses in a clatter of metal!',
     flammable: false,
     fireResult:  { feature: 'rubble', glyph: ',', color: '#5a6a7a' },
-    meleeResult: { feature: 'rubble', glyph: ',', color: '#5a6a7a' }
+    meleeResult: { feature: 'rubble', glyph: ',', color: '#5a6a7a' },
+    gatherType: 'ore', yield: [{ id: 'ore', min: 1, max: 3 }, { id: 'iron_ingot', min: 1, max: 1, chance: 0.2 }]
+  },
+  // Previously pure decoration -- walkable, inert, and yet its own tooltip ("ready for a pickaxe
+  // or a forge") promised exactly this. Now a real, non-walkable vein you have to actually mine
+  // through (see scatterOrePiles), same as any other destructible feature.
+  orepile: {
+    hpRange: [10, 16], chopVerb: 'swing at', fallVerb: 'The ore vein breaks apart!',
+    flammable: false,
+    fireResult:  { feature: 'rubble', glyph: ',', color: '#5a5a5a' },
+    meleeResult: { feature: 'rubble', glyph: ',', color: '#5a5a5a' },
+    gatherType: 'ore', yield: [{ id: 'ore', min: 2, max: 4 }, { id: 'gem', min: 1, max: 1, chance: 0.15 }, { id: 'starmetal_ore', min: 1, max: 1, chance: 0.04 }]
   }
 };
+// Which weapon (by name pattern, same "infer from name, explicit field always wins" approach as
+// weaponDamageType near getPartArmorValue) counts as the right tool for a given gather type --
+// and how much of a difference having it makes. Bare hands or the wrong tool still work (nothing
+// in this game gets hard-gated behind owning a specific item), just roughly, at a third the yield
+// instead of getting nothing.
+const GATHER_TOOL_PATTERNS = { wood: /axe|hatchet|saw/i, ore: /pickaxe|warhammer|hammer|maul/i, organic: /sickle|knife|dagger|scythe|machete/i };
+const CRAFT_QUALITY_GATHER_MULT = { Shoddy: 0.8, Fine: 1.15, Superior: 1.3, Masterwork: 1.5 };
+function toolGatherMultiplier(weapon, gatherType) {
+  if (!gatherType) return 1;
+  const pattern = GATHER_TOOL_PATTERNS[gatherType];
+  const hasTool = pattern && weapon && pattern.test(weapon.id || weapon.name || '');
+  let mult = hasTool ? 2.2 : 0.35;
+  if (weapon && weapon.craftedQuality && CRAFT_QUALITY_GATHER_MULT[weapon.craftedQuality]) mult *= CRAFT_QUALITY_GATHER_MULT[weapon.craftedQuality];
+  return mult;
+}
+// Rolls and grants a destructible feature's declared yield to the player, called only when the
+// PLAYER felled it by hand (method==='melee' in attackDestructibleFeature) -- burning a tree down
+// with a fire spell destroys the wood along with it, same as it would in reality, so scorchArea/
+// the fire-catch path deliberately never calls this.
+function grantGatherYield(cfg) {
+  if (!cfg.yield) return;
+  const weapon = player.equipment.hand;
+  const mult = toolGatherMultiplier(weapon, cfg.gatherType);
+  const got = [];
+  for (const y of cfg.yield) {
+    if (Math.random() > (y.chance ?? 1)) continue;
+    const qty = Math.max(0, Math.round(randInt(Math.random, y.min, y.max) * mult));
+    if (qty <= 0) continue;
+    for (let i = 0; i < qty; i++) addItemToList(player.inventory, makeItem(y.id, 0, Math.random));
+    const base = ITEM_BASES.find(b => b.id === y.id);
+    if (base) got.push(`${qty}x ${base.name}`);
+  }
+  if (got.length) log(`You gather ${got.join(', ')}.`);
+}
+// ============================================================================
+// ---- FARMING: a tilled plot is just another tracked tile effect, exactly like a burning or
+// oiled one (see trackFxTile/processTerrainEffects) -- growth ticks once per turn there, biased
+// by real current weather (rain speeds it up, drought/heatwave slow it, a hard freeze can kill an
+// immature crop outright) rather than a flat countdown, so the weather system built earlier this
+// session actually matters to a system that has nothing to do with combat. Sustainable by design:
+// harvesting has a real chance to return a seed alongside the crop, so a plot can be replanted
+// indefinitely without buying more stock every time, same as a real garden.
+const CROPS = {
+  potato: { name: 'Potato', stageTurns: 40, yieldMin: 2, yieldMax: 4 },
+  onion:  { name: 'Onion',  stageTurns: 34, yieldMin: 2, yieldMax: 4 },
+  garlic: { name: 'Garlic', stageTurns: 30, yieldMin: 2, yieldMax: 3 },
+  berries:{ name: 'Wild Berries', stageTurns: 46, yieldMin: 3, yieldMax: 5 },
+};
+// Land you can till: open, walkable, unclaimed ground outdoors -- deliberately not restricted to
+// a specific biome allowlist (plains-only would be an arbitrary hardcoded edge case), just "is
+// this plain, empty, standable ground". Water, dungeons, settlements/buildings, and anything
+// already a feature (including another farmplot) are naturally excluded by the checks themselves.
+function isTillableGround(t) {
+  return !!(t && t.walkable && !t.feature && !t.building && !curIsDungeon());
+}
+function tillSoil(x, y) {
+  const t = curTileAt(x, y);
+  if (!isTillableGround(t)) return false;
+  t.feature = 'farmplot'; t.cropId = null; t.growStage = 0; t.growTimer = 0;
+  t.glyph = ':'; t.color = '#5a4028';
+  return true;
+}
+function plantCrop(t, x, y, cropId) {
+  if (!CROPS[cropId] || t.feature !== 'farmplot' || t.cropId) return false;
+  t.cropId = cropId; t.growStage = 0; t.growTimer = CROPS[cropId].stageTurns;
+  t.glyph = '.'; t.color = '#4a6a2a';
+  trackFxTile(t, x, y);
+  return true;
+}
+function harvestCrop(t, x, y) {
+  if (t.feature !== 'farmplot' || !t.cropId || t.growStage < 2) return false;
+  const crop = CROPS[t.cropId];
+  const qty = randInt(Math.random, crop.yieldMin, crop.yieldMax);
+  for (let i = 0; i < qty; i++) addItemToList(player.inventory, makeItem(t.cropId, 0, Math.random));
+  const gotSeed = Math.random() < 0.6;
+  if (gotSeed) addItemToList(player.inventory, makeItem(t.cropId, 0, Math.random));
+  log(`You harvest ${qty}x ${crop.name}${gotSeed ? ' (and save a seed for next time)' : ''}.`);
+  t.cropId = null; t.growStage = 0; t.growTimer = 0;
+  t.glyph = ':'; t.color = '#5a4028';
+  return true;
+}
+// ============================================================================
+// ---- FISHING: a real catch table instead of `fish_raw` being an item two existing cooking
+// recipes (Cook Fish, Waterlung Soup) reference but that had NO way to actually obtain -- see
+// the "Fish here" option this wires into pickUp()'s interact-here menu (same menu that already
+// handles containers, corpses, and salvaging a wreck) whenever the player is adjacent to open
+// water. A held Fishing Rod isn't required to try, just to be any good at it -- consistent with
+// every other tool in this game (see toolGatherMultiplier/weaponDamageType): nothing is ever
+// hard-gated behind owning a specific item, it's just much better with the right one.
+const FISH_CATCH_TABLE = ['fish_raw','fish_raw','fish_raw','fish_raw','gem'];
+// ---- Uses the same async setInterval pattern as doRest (not a synchronous loop) deliberately:
+// endTurn() can trigger game-ending or state-changing effects (death, an ambush, a random event),
+// and a tight synchronous loop calling it repeatedly wouldn't re-check gameState/nearby threats
+// between calls the way every other multi-turn player action in this game already does.
+function beginFishing(x, y) {
+  if (gameState !== 'playing') return;
+  const nearbyThreat = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 8 && hasLOS(player.x,player.y,m.x,m.y));
+  if (nearbyThreat) { log("You can't fish with danger nearby!"); return; }
+  const rod = player.equipment.hand;
+  const hasRod = !!(rod && /rod|fishing/i.test(rod.id || rod.name || ''));
+  let quality = hasRod ? 1.6 : 0.5;
+  if (rod && rod.craftedQuality && CRAFT_QUALITY_GATHER_MULT[rod.craftedQuality]) quality *= CRAFT_QUALITY_GATHER_MULT[rod.craftedQuality];
+  log(`You cast your line out into the water${hasRod ? '' : ' (bare-handed, without a rod -- worth a shot, but a Rod would help)'}...`);
+  autoRunActive = true;
+  let ticks = 0;
+  const maxTicks = randInt(Math.random, 3, 6);
+  const interval = setInterval(() => {
+    if (gameState !== 'playing' || !autoRunActive || !player.alive) { autoRunActive = false; clearInterval(interval); render(); return; }
+    const threat = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 6 && hasLOS(player.x,player.y,m.x,m.y));
+    if (threat) { log('Something disturbs the water -- you reel in your line!'); autoRunActive = false; clearInterval(interval); render(); return; }
+    const weatherPenalty = curIsDungeon() ? 0 : -(currentWeatherDef().staminaDrain || 0) * 0.08; // rough seas from a storm make for a worse catch
+    const chance = Math.max(0.05, Math.min(0.85, 0.22 * quality + weatherPenalty));
+    if (Math.random() < chance) {
+      if (Math.random() < 0.03 && !entityAt(x, y)) {
+        // A rare bite back -- something in the water was hungrier than you were patient. Spawned
+        // right on the water tile you're fishing from, same placement pattern spawnEventMonsters
+        // uses elsewhere, just anchored to a specific tile instead of scattered near the player.
+        const pool = ['giant_eel','crocodile','giant_catfish'].filter(id => MONSTER_BASES[id]);
+        if (pool.length) {
+          log('Something yanks the line hard and lunges out of the water!');
+          const m = makeMonster(choice(Math.random, pool), x, y, depthScaleForPlayerLevel(player.level), Math.random);
+          addMonsterToWorld(m);
+          autoRunActive = false; clearInterval(interval); endTurn(); return;
+        }
+      }
+      const catchId = choice(Math.random, FISH_CATCH_TABLE);
+      addItemToList(player.inventory, makeItem(catchId, 0, Math.random));
+      const base = ITEM_BASES.find(b => b.id === catchId);
+      log(`You reel in a catch: ${base ? base.name : catchId}!`);
+      // One wear tick per completed cast (not per tick of the interval) -- landing a fight with
+      // a real catch is the strain that matters, same "meaningful use, not busywork" spirit as
+      // the crit-only wear rule combat weapons already follow.
+      if (rod) wearItem(rod, 1);
+      autoRunActive = false; clearInterval(interval); endTurn(); return;
+    }
+    ticks++;
+    if (ticks >= maxTicks) { log('Nothing bites. You reel your line back in.'); autoRunActive = false; clearInterval(interval); endTurn(); return; }
+    endTurn();
+  }, 20);
+}
 // Called once, wherever a destructible feature tile is first placed (world gen), so it starts
 // with an HP pool matching its type instead of every call site having to remember to set one.
 function initDestructibleFeature(t) {
@@ -8951,8 +9165,12 @@ function attackDestructibleFeature(t, x, y) {
   Sound.play('hit');
   if (settings.showDamageNumbers) spawnFloatingText(x, y, String(dmg), '#ffffff');
   const destroyed = damageDestructibleFeature(t, x, y, dmg, 'melee');
-  if (destroyed) log(`You ${cfg.chopVerb} the ${featureWas} for ${dmg}. ${cfg.fallVerb}`);
+  if (destroyed) { log(`You ${cfg.chopVerb} the ${featureWas} for ${dmg}. ${cfg.fallVerb}`); grantGatherYield(cfg); }
   else log(`You ${cfg.chopVerb} the ${featureWas} for ${dmg}. (${t.hp}/${t.maxHp})`);
+  // Gathering wears the tool down exactly like combat use does (see wearItem) -- chopping,
+  // mining, and hacking are real strain on an edge/head, not a freebie just because the target
+  // wasn't a monster. Bare fists obviously take no wear.
+  if (weapon) wearItem(weapon, 1);
 }
 // ---- environment destruction (trees/cacti can be burned away) ----
 function scorchArea(cx, cy, radius) {
@@ -9141,7 +9359,7 @@ function grandSlotForCell(footprint, ox, oy) {
 // multi-chunk system without duplicating this whole pipeline (roles, houses, decorations,
 // containers, NPC schedules, guards) a second time.
 function buildSettlementCore(chunk, cx, cy, p) {
-  const { tier, flavorId, flavor, kingdom, name, rng, margin, wallSides, gateSide, targetCount, houseCountRatio, guardCount, grand, settlement } = p;
+  const { tier, flavorId, flavor, kingdom, rng, margin, wallSides, gateSide, targetCount, houseCountRatio, guardCount, grand, settlement } = p;
   chunk.settlement = settlement;
   const centerBiome = p.centerBiome;
   // ---- Settlement Boundary Overhaul: p.boundaryShape is only set by the single-chunk
@@ -9431,7 +9649,9 @@ function scatterOrePiles(chunk, rng) {
   for (let tries = 0; tries < 15 && placed < 3; tries++) {
     const lx = randInt(rng, 2, CH-3), ly = randInt(rng, 2, CH-3);
     const t = chunk.tiles[ly][lx];
-    if (t.walkable && t.building === null && !t.feature) { t.feature = 'orepile'; t.glyph = '*'; t.color = '#9a8a7a'; placed++; }
+    // Now a real vein you mine through (see DESTRUCTIBLE_FEATURES.orepile), not decoration --
+    // walkable:false is what routes bumping into it through attackDestructibleFeature at all.
+    if (t.walkable && t.building === null && !t.feature) { t.feature = 'orepile'; t.glyph = '*'; t.color = '#9a8a7a'; t.walkable = false; initDestructibleFeature(t); placed++; }
   }
 }
 
@@ -9883,6 +10103,53 @@ function ensureWeather(zk) {
   if (!weatherState[zk]) weatherState[zk] = { id:'clear', turnsRemaining: randInt(Math.random, 60, 140) };
   return weatherState[zk];
 }
+// ---------------------------------------------------------------- WIND ----
+// A genuinely persistent, drifting wind, separate from (but driven by) the current weather --
+// not just a flat "windy weather = -accuracy" flag. Direction is one of the 8 compass tiles and
+// wanders slowly rather than snapping around every tick (real wind doesn't reverse instantly);
+// strength eases toward whatever the current weather implies (see WEATHER_WIND_STRENGTH) instead
+// of jumping straight to it, so a gale visibly *builds* rather than turning on like a switch.
+// Consumers: fire spread bias and gas cloud drift (see processTerrainEffects), both of which
+// just call currentWindVector() and don't need to know anything about weather at all -- that's
+// the whole point of factoring wind out from weather as its own system.
+const WEATHER_WIND_STRENGTH = {
+  windy:2, gale:3, thunderstorm:2, hailstorm:1, sandstorm:3, duststorm:2, blizzard:2, whiteout:2,
+  static_storm:1, gear_squall:2, drizzle:1, rain:1, snow:1, ashfall:1, pressure_swell:2,
+};
+const WIND_DIRS8 = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+let windState = {}; // zoneKey -> { dx, dy, strength }
+function ensureWind(zk) {
+  if (!windState[zk]) { const [dx,dy] = choice(Math.random, WIND_DIRS8); windState[zk] = { dx, dy, strength: 0 }; }
+  return windState[zk];
+}
+function tickWind(zk) {
+  if (curIsDungeon()) return; // still air underground -- no wind system indoors
+  const w = ensureWind(zk);
+  // direction wanders: a small chance each tick to rotate to an adjacent compass direction
+  if (Math.random() < 0.05) {
+    const idx = WIND_DIRS8.findIndex(([dx,dy]) => dx === w.dx && dy === w.dy);
+    const step = Math.random() < 0.5 ? 1 : -1;
+    const [ndx, ndy] = WIND_DIRS8[(idx + step + WIND_DIRS8.length) % WIND_DIRS8.length];
+    w.dx = ndx; w.dy = ndy;
+  }
+  const target = WEATHER_WIND_STRENGTH[currentWeatherId(zk)] || 0;
+  if (w.strength < target) w.strength = Math.min(target, w.strength + 1);
+  else if (w.strength > target) w.strength = Math.max(target, w.strength - 1);
+}
+// Returns {dx, dy, strength}. strength 0 means "no meaningful wind" -- callers should treat dx/dy
+// as meaningless in that case (and every consumer in this file already gates on strength > 0).
+function currentWindVector() {
+  if (curIsDungeon()) return { dx: 0, dy: 0, strength: 0 };
+  const w = ensureWind(zoneKey());
+  return { dx: w.dx, dy: w.dy, strength: w.strength };
+}
+function windCompassLabel() {
+  const w = currentWindVector();
+  if (w.strength <= 0) return null;
+  const names = { '1,0':'east', '-1,0':'west', '0,1':'south', '0,-1':'north', '1,1':'southeast', '1,-1':'northeast', '-1,1':'southwest', '-1,-1':'northwest' };
+  const strengthLabel = w.strength >= 3 ? 'Strong wind' : w.strength >= 2 ? 'Wind' : 'Light breeze';
+  return `${strengthLabel} blowing toward the ${names[w.dx + ',' + w.dy] || 'east'}`;
+}
 function currentWeatherId(zk) { zk = zk || zoneKey(); if (curIsDungeon()) return 'clear'; return ensureWeather(zk).id; }
 function currentWeatherDef(zk) { return WEATHER_TYPES[currentWeatherId(zk)] || WEATHER_TYPES.clear; }
 
@@ -9955,15 +10222,27 @@ function temperatureLabel(temp) {
 // the current weather's multiplier for that element. Called from applyEffectToTarget (player
 // spells), monsterCastAt (monster bolts/AOE cast at the player), and chainLightningFrom (so a
 // storm empowering Chain Lightning actually empowers every jump, not just the first hit).
-function weatherElementMultiplier(spellLike) {
-  if (curIsDungeon() || !spellLike) return 1;
-  const em = currentWeatherDef().elementMods;
-  if (!em) return 1;
+// `target` is optional and additive to the weather math above it -- callers that don't have (or
+// don't care about) a specific entity can omit it and get the old weather-only behavior exactly.
+// Where it IS passed (applyEffectToTarget, chainLightningFrom, monsterCastAt), a soaked target
+// conducts a shock hit far harder (genuinely dangerous to fight in water during a storm, or to
+// stand in a puddle near a Chain Lightning caster) and shrugs off fire for the same physical
+// reason igniteTile itself refuses to light a wet tile/entity.
+function weatherElementMultiplier(spellLike, target) {
   let mult = 1;
-  if (spellLike.frost || spellLike.element === 'frost') mult *= (em.frost || 1);
-  if (spellLike.igniteGround || spellLike.element === 'fire') mult *= (em.fire || 1);
-  if (spellLike.chainLightning || spellLike.element === 'shock') mult *= (em.shock || 1);
-  if (spellLike.poison || spellLike.gasCloud || spellLike.element === 'poison') mult *= (em.poison || 1);
+  if (!curIsDungeon() && spellLike) {
+    const em = currentWeatherDef().elementMods;
+    if (em) {
+      if (spellLike.frost || spellLike.element === 'frost') mult *= (em.frost || 1);
+      if (spellLike.igniteGround || spellLike.element === 'fire') mult *= (em.fire || 1);
+      if (spellLike.chainLightning || spellLike.element === 'shock') mult *= (em.shock || 1);
+      if (spellLike.poison || spellLike.gasCloud || spellLike.element === 'poison') mult *= (em.poison || 1);
+    }
+  }
+  if (spellLike && target && entityIsWet(target)) {
+    if (spellLike.chainLightning || spellLike.element === 'shock') mult *= 1.6;
+    if (spellLike.igniteGround || spellLike.element === 'fire') mult *= 0.5;
+  }
   return mult;
 }
 function weatherVisRadiusDelta() { if (curIsDungeon()) return 0; return currentWeatherDef().visMod || 0; }
@@ -10173,6 +10452,7 @@ function tickWeather() {
     st.id = nextId;
     st.turnsRemaining = weatherDuration(nextId);
   }
+  tickWind(zk);
   const def = currentWeatherDef(zk);
   if (def.extinguishChance) {
     for (const entry of activeFxTiles) {
@@ -10463,6 +10743,17 @@ const WORLD_EVENT_HANDLERS = {
   grantXp(def) { log(def.msg); gainXP(randInt(Math.random, def.xp[0], def.xp[1])); },
   buffPlayer(def) { applyBuffQuiet(def.stat, def.power, def.turns); log(def.msg); },
   debuffStatus(def) { player[def.status] = Math.max(player[def.status] || 0, def.power); log(def.msg); },
+  // A real machine-oil spill instead of a flat "you're slowed" debuff: coats the ground under
+  // and around the player (see oilTile/oilArea near igniteTile) AND the player themselves, so
+  // it's slick to walk through going forward, and genuinely flammable -- a spark, a fire spell,
+  // or a Static Storm's lightning turns the whole patch (and possibly the player) into a real
+  // hazard, exactly the kind of "the environment has teeth" the flat version never delivered.
+  oilSlick(def) {
+    if (curIsDungeon()) return;
+    oilArea(player.x, player.y, def.radius || 2, def.oilTurns || 80);
+    player.oiledTurns = Math.max(player.oiledTurns || 0, 40);
+    log(def.msg);
+  },
   igniteAround(def) {
     if (!curIsDungeon()) igniteArea(player.x + randInt(Math.random, -3, 3), player.y + randInt(Math.random, -3, 3), def.radius || 3);
     log(def.msg);
@@ -10717,7 +11008,7 @@ const WORLD_EVENTS = [
   { id:'ev_bioluminescence', name:'Bioluminescent Flicker', rarity:'common', scope:['the_undertow'], type:'flavor', msg:'Something small and glowing drifts past in the current, gone before you can get a good look.' },
   { id:'ev_pressure_pop', name:'Pressure Pop', rarity:'common', scope:['the_undertow'], type:'flavor', msg:'Your ears pop hard as the pressure shifts, and then, just as suddenly, settles.' },
   { id:'ev_gear_chime', name:'Gear Chime', rarity:'common', scope:['clockwork_expanse'], type:'flavor', msg:'Somewhere close, a hundred small gears all click into place at once, a sound like distant applause.' },
-  { id:'ev_oil_slick', name:'Oil Slick', rarity:'common', scope:['clockwork_expanse'], type:'debuffStatus', status:'statusSlow', power:1, msg:'You step in a patch of leaked machine oil and nearly go down.' },
+  { id:'ev_oil_slick', name:'Oil Slick', rarity:'common', scope:['clockwork_expanse'], type:'oilSlick', radius:2, oilTurns:80, msg:'You step in a spreading patch of leaked machine oil -- the ground underfoot, and your boots, are slick with it now.' },
   { id:'ev_spore_puff', name:'Spore Puff', rarity:'common', scope:['the_bloom'], type:'flavor', msg:'A nearby growth releases a small, harmless puff of spores as you pass.' },
   { id:'ev_root_shift', name:'Roots Shift', rarity:'common', scope:['the_bloom'], type:'flavor', msg:'The ground itself seems to flex slightly, like something enormous just adjusted underneath it.' },
   { id:'ev_process_hiccup', name:'Process Hiccup', rarity:'common', scope:['corrupted_kernel'], type:'flavor', msg:'The world stutters for a single visible frame, then resumes as if nothing happened.' },
@@ -10931,6 +11222,20 @@ function curTileAt(x, y) {
   return getTile(x, y);
 }
 function curWalkable(x, y) { const t = curTileAt(x, y); return t ? t.walkable : false; }
+// A small bounded search (not a full BFS -- this is a "does the entity notice water nearby",
+// not a "find the true shortest path", so plain Chebyshev-radius scanning is both cheap enough
+// to call every turn for every burning monster and plenty accurate for a panic response) for the
+// nearest water tile within radius. Used by monsterAI's fire-panic behavior above.
+function findNearestWaterTile(x, y, radius) {
+  let best = null, bestD = Infinity;
+  for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) {
+    const d = Math.max(Math.abs(dx), Math.abs(dy));
+    if (d === 0 || d >= bestD) continue;
+    const t = curTileAt(x + dx, y + dy);
+    if (t && isWaterTile(t)) { best = { x: x + dx, y: y + dy }; bestD = d; }
+  }
+  return best;
+}
 function revealArea(radius) {
   let count = 0;
   for (let dy = -radius; dy <= radius; dy++) {
@@ -11043,18 +11348,6 @@ function containersAt(x, y) {
   }
   const t = curTileAt(x, y);
   return (t && t.containers) ? t.containers : [];
-}
-function placeContainerAt(x, y, container) {
-  if (curIsDungeon()) {
-    const lvl = curDungeonLevel();
-    if (!lvl.containers) lvl.containers = [];
-    lvl.containers.push({ x, y, container });
-  } else {
-    const t = curTileAt(x, y);
-    if (!t) return;
-    if (!t.containers) t.containers = [];
-    t.containers.push(container);
-  }
 }
 // Sorts a container's (or, via the same helper, could sort anything shaped like item[]) contents
 // into a stable, sensible order: gear before consumables before materials before misc/books, then
@@ -11236,10 +11529,396 @@ function isFlammableTile(t) {
          t.feature === 'door' || t.feature === 'tentwall' || t.feature === 'grass' || t.feature === 'woodbridge';
 }
 function trackFxTile(t, x, y) { if (!t._fxTracked) { t._fxTracked = true; activeFxTiles.push({ t, x, y }); } }
+// ============================================================================
+// ---- OIL / GREASE: a genuine liquid hazard, not a flat "you're slowed" debuff. Oil coats
+// the ground (see oilTile/oilArea), is slick underfoot (applyGroundHazardsOnEnter below makes
+// entities skid), soaks into whoever walks through it (entity.oiledTurns -- see
+// applyGroundHazardsOnEnter and igniteEntity), and is explosively, contagiously flammable: one
+// spark anywhere in a connected puddle of it detonates the whole puddle at once (see
+// igniteTile's oil branch and oilFuseChain below), which is what makes trailing a line of oil
+// flasks as a fuse, or oiling a chokepoint before an enemy walks through it, actually work as a
+// deliberate tactic instead of flavor text. Rain washes it away over time (see
+// processTerrainEffects); fire, obviously, does not. ----
+function isOiledTile(t) { return !!(t && t.oilTurns > 0); }
+function oilTile(x, y, turns) {
+  const t = curTileAt(x, y);
+  if (!t || !t.walkable || isWaterTile(t)) return false;
+  t.oilTurns = Math.max(t.oilTurns || 0, turns);
+  trackFxTile(t, x, y);
+  return true;
+}
+function oilArea(cx, cy, radius, turns) {
+  let count = 0;
+  for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) {
+    if (dx*dx + dy*dy > radius*radius) continue;
+    if (oilTile(cx + dx, cy + dy, turns)) count++;
+  }
+  return count;
+}
+// A struck oil puddle doesn't burn like grass -- it goes up all at once, and drags every other
+// oiled tile physically connected to it (4-directionally, through other oil, not just adjacent
+// to the spark) up with it in the same instant, exactly like a real fuse/powder trail would.
+// Capped at a generous but finite flood size so a genuinely enormous spill can't hang the game.
+function oilFuseChain(x0, y0) {
+  const seen = new Set(); const queue = [[x0,y0]]; const tiles = [];
+  const key = (x,y) => x + ',' + y;
+  seen.add(key(x0,y0));
+  while (queue.length && tiles.length < 400) {
+    const [x,y] = queue.shift();
+    const t = curTileAt(x, y);
+    if (!t || !isOiledTile(t)) continue;
+    tiles.push({ t, x, y });
+    for (const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx = x+dx, ny = y+dy, k = key(nx,ny);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const nt = curTileAt(nx, ny);
+      if (nt && isOiledTile(nt)) queue.push([nx, ny]);
+    }
+  }
+  return tiles;
+}
+function detonateOil(x, y) {
+  const chain = oilFuseChain(x, y);
+  if (!chain.length) return false;
+  for (const { t, x: tx, y: ty } of chain) {
+    t.oilTurns = 0;
+    igniteTile(tx, ty, 6 + randInt(Math.random, 0, 4), true);
+    const occ = entityAt(tx, ty);
+    if (occ && occ.alive !== false) {
+      const dmg = randInt(Math.random, 4, 9);
+      occ.hp -= dmg;
+      log(`${occ === player ? 'You are' : occ.name + ' is'} caught in the burst of igniting oil (${dmg}).`);
+      igniteEntity(occ);
+      if (occ.hp <= 0) onDeath(occ, null);
+    }
+  }
+  if (chain.length > 1 && posVisibleToPlayer(x, y)) log(`The oil catches all at once, fire racing along the slick in a heartbeat!`);
+  return true;
+}
+// ---- toxic gas explosion: same connected-flood-fill fuse logic as oilFuseChain/detonateOil,
+// applied to a poison gas cloud instead of a puddle. Everyone caught in the cloud when it goes
+// up takes a real fire-damage burst on top of whatever poison they'd already taken from
+// breathing it, and the whole cloud converts to a burst of fire tiles rather than lingering as
+// gas -- so "ignite the toxic cloud the necromancer/plague-caster just dropped on you" is a real,
+// high-payoff counterplay rather than just having to walk out of it. ----
+function gasFuseChain(x0, y0) {
+  const seen = new Set(); const queue = [[x0,y0]]; const tiles = [];
+  const key = (x,y) => x + ',' + y;
+  seen.add(key(x0,y0));
+  while (queue.length && tiles.length < 300) {
+    const [x,y] = queue.shift();
+    const t = curTileAt(x, y);
+    if (!t || !(t.gasTurns > 0 && t.gasKind === 'poison')) continue;
+    tiles.push({ t, x, y });
+    for (const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx = x+dx, ny = y+dy, k = key(nx,ny);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const nt = curTileAt(nx, ny);
+      if (nt && nt.gasTurns > 0 && nt.gasKind === 'poison') queue.push([nx, ny]);
+    }
+  }
+  return tiles;
+}
+function detonateGas(x, y) {
+  const chain = gasFuseChain(x, y);
+  if (!chain.length) return false;
+  for (const { t, x: tx, y: ty } of chain) {
+    t.gasTurns = 0;
+    igniteTile(tx, ty, 5 + randInt(Math.random, 0, 3), true);
+    const occ = entityAt(tx, ty);
+    if (occ && occ.alive !== false) {
+      const dmg = randInt(Math.random, 5, 11);
+      occ.hp -= dmg;
+      log(`${occ === player ? 'You are' : occ.name + ' is'} caught in the fireball as the toxic fumes ignite (${dmg}).`);
+      if (occ.hp <= 0) onDeath(occ, null);
+    }
+  }
+  if (posVisibleToPlayer(x, y)) log(`The toxic cloud erupts into a rolling fireball!`);
+  return true;
+}
+// ---- entity-level fire: an oiled or sufficiently doused-in-fuel creature keeps burning even
+// after it steps off whatever tile ignited it, distinct from (and layered on top of) the
+// existing tile-fire-burns-whoever's-standing-on-it damage. This is what makes an oil-flask ->
+// firebolt combo, or a torch touched to an oiled enemy, genuinely devastating rather than just
+// "fire damage twice". Wet entities can't be lit this way (see applyGroundHazardsOnEnter/
+// entityIsWet) -- the oil is simply washed off them instead. ----
+function entityIsWet(e) { return !!(e && e.wetTurns > 0); }
+function entityIsOiled(e) { return !!(e && e.oiledTurns > 0); }
+function igniteEntity(e, turns) {
+  if (!e || e.hp === undefined || e.hp <= 0) return false;
+  if (entityIsWet(e)) return false; // soaked -- nothing to catch
+  e.burningTurns = Math.max(e.burningTurns || 0, turns || 5);
+  e.oiledTurns = 0; // the coating that was fuel is now consumed
+  return true;
+}
+function extinguishEntity(e) {
+  if (!e) return false;
+  const did = (e.burningTurns || 0) > 0;
+  e.burningTurns = 0;
+  return did;
+}
+// ---- freeze/shatter: the third leg of the elemental triangle alongside oil+fire (detonateOil)
+// and water+shock (the wet bonus in weatherElementMultiplier). Frost hitting an already-wet
+// target doesn't just chill them -- it freezes them solid: they can't act at all (see the
+// frozenSolidTurns gates in movePlayer/castSpell and the AI turn-skip in npcAI/monsterAI) until
+// it thaws on its own, OR until anything hits them again, which shatters the ice for a burst of
+// bonus damage and ends the freeze early. That tradeoff (reliable long lockdown vs. rushing in
+// for a shatter-damage burst) is the actual tactical decision this is meant to create. ----
+function isEntityFrozenSolid(e) { return !!(e && e.frozenSolidTurns > 0); }
+function freezeEntitySolid(e, turns) {
+  if (!e || e.hp === undefined || e.hp <= 0) return false;
+  e.frozenSolidTurns = Math.max(e.frozenSolidTurns || 0, turns || 3);
+  e.wetTurns = 0; // the water that made this possible is now the ice itself, not liquid anymore
+  extinguishEntity(e); // can't be on fire and frozen solid at once
+  return true;
+}
+// Called from doAttack/applyEffectToTarget whenever damage lands on a frozen target -- breaks
+// the freeze and returns the bonus shatter damage to add on top of the attack's own damage (0 if
+// the target wasn't frozen, so callers can unconditionally add the result).
+function shatterFrozenEntity(e) {
+  if (!isEntityFrozenSolid(e)) return 0;
+  const bonus = randInt(Math.random, 4, 10);
+  e.frozenSolidTurns = 0;
+  if (posVisibleToPlayer(e.x, e.y)) log(`The ice around ${e === player ? 'you' : e.name} shatters violently! (+${bonus} damage)`);
+  return bonus;
+}
+// ============================================================================
+// ---- BODY & HEALTH OVERHAUL: locational damage, bleeding, and procedural disease. Layered on
+// TOP of ordinary HP (still the real life/death number) rather than replacing it -- a body part's
+// wound level is a second axis tracking WHERE you're hurt and what that costs you mechanically,
+// the same way the elemental status effects above (wet/oiled/burning/frozen) layer onto combat
+// without touching the core HP loop. Framework, not special cases: any entity can call
+// ensureBodyParts/woundBodyPart/applyBleed/triggerDisease -- currently only the player's own
+// wounds are rolled in doAttack (monsters dying in a few hits get little value from tracking
+// six body parts each), but nothing below is player-only by construction. ----
+const BODY_PARTS = ['head', 'torso', 'leftArm', 'rightArm', 'leftLeg', 'rightLeg'];
+const WOUND_LEVEL_NAMES = ['', 'Bruised', 'Wounded', 'Maimed', 'Ruined'];
+function ensureBodyParts(e) {
+  if (!e.bodyParts) { e.bodyParts = {}; for (const p of BODY_PARTS) e.bodyParts[p] = { level: 0, healTimer: 0 }; }
+  return e.bodyParts;
+}
+// Weighted hit-location roll: torso is the biggest target and eats most hits; each limb a solid
+// chunk; the head is rare in the open but a real risk on a critical (a called shot connecting).
+function rollHitLocation(critical) {
+  const r = Math.random();
+  if (critical && r < 0.22) return 'head';
+  if (r < 0.08) return 'head';
+  if (r < 0.50) return 'torso';
+  if (r < 0.65) return 'leftArm';
+  if (r < 0.80) return 'rightArm';
+  if (r < 0.90) return 'leftLeg';
+  return 'rightLeg';
+}
+// Escalates a part's wound level (0 Healthy -> 1 Bruised -> 2 Wounded -> 3 Maimed) with odds tied
+// to how big a bite this single hit took out of the target's own max HP -- a graze from something
+// that could barely scratch you won't break anything, a hit for a third of your health might.
+// Returns the level AFTER the roll so callers only react (log a message, force a bleed) when it
+// actually changed. Maimed (3) is a hard floor for NATURAL healing (see tickBodyParts) -- see the
+// 'splint' item, which is the normal, always-available fix. Ruined (4) is a deliberately rare,
+// permanent-until-treated outcome, reachable only by taking ANOTHER serious hit to an already-
+// Maimed part (a low, flat chance per such hit, not per-turn) -- i.e. it's earned by fighting on
+// with an obviously broken limb rather than retreating or splinting, not something that can just
+// happen to you out of nowhere. Only a priest's Greater Restoration (see payForHealing) or a rare
+// shrine blessing can undo it -- see the shrine-boon block near curTileAt's poi handling.
+function woundBodyPart(e, part, dmgFraction) {
+  const parts = ensureBodyParts(e);
+  const w = parts[part];
+  if (w.level === 3) {
+    if (dmgFraction > 0.1 && Math.random() < 0.05) { w.level = 4; w.healTimer = Infinity; w.permanent = true; }
+    return w.level;
+  }
+  if (w.level >= 4) return w.level;
+  const chance = Math.min(0.85, dmgFraction * 2.2);
+  if (Math.random() >= chance) return w.level;
+  w.level = Math.min(3, w.level + 1);
+  w.healTimer = [0, 50, 130, Infinity][w.level];
+  return w.level;
+}
+// ---- WEAPON DAMAGE TYPES: inferred from the weapon's own base id/name against a pattern table
+// rather than requiring every one of this game's weapon entries to be hand-tagged -- a new
+// weapon added later (by name alone) is classified correctly automatically, which is the whole
+// point of a framework over a lookup table. An explicit `dmgType` on an item always wins over
+// the inference, for the rare case a name would guess wrong (a "Rending Claw" glaive, say).
+// Fists (weapon-less) are blunt -- you bruise a target barehanded, you don't open a wound.
+const WEAPON_DAMAGE_TYPE_PATTERNS = [
+  { type: 'blunt', re: /mace|hammer|club|staff|flail|maul|cudgel|gauntlet|knuckle|quarterstaff/i },
+  { type: 'piercing', re: /dagger|spear|rapier|pike|stiletto|needle|lance|dirk|trident|bayonet/i },
+  { type: 'slashing', re: /sword|axe|blade|saber|scimitar|cleaver|katana|falchion|halberd|scythe|knife|glaive|cutlass/i },
+];
+function weaponDamageType(weapon) {
+  if (!weapon) return 'blunt';
+  if (weapon.dmgType) return weapon.dmgType;
+  const hay = weapon.id || weapon.name || '';
+  for (const p of WEAPON_DAMAGE_TYPE_PATTERNS) if (p.re.test(hay)) return p.type;
+  return 'slashing';
+}
+// ---- ARMOR & LOCATIONAL PROTECTION: which equipped slot(s) actually cover a given body part,
+// and how much. Deliberately separate from getArmorOf's flat damage-reduction total (that still
+// governs how much raw damage a hit does, same as always) -- this is armor's OTHER real job:
+// stopping a blow that gets through from doing lasting harm to what's underneath. A plate helm
+// doesn't reduce a punch to the arm, but it makes a hit that lands on your actual head far less
+// likely to cave it in. Body armor gives a partial assist to the limbs and torso alike (a
+// breastplate covers real shoulder/hip area), which is why it isn't 1.0 everywhere.
+function getPartArmorValue(e, part) {
+  if (e !== player) return 0;
+  const eq = player.equipment;
+  const pieceVal = (slot) => { const it = eq[slot]; if (!it) return 0; return it.broken ? Math.round((it.armor || 0) * 0.25) : (it.armor || 0); };
+  switch (part) {
+    case 'head': return pieceVal('head');
+    case 'torso': return pieceVal('body') + pieceVal('cloak') * 0.4;
+    case 'leftArm': case 'rightArm': return pieceVal('gloves') + pieceVal('body') * 0.3;
+    case 'leftLeg': case 'rightLeg': return pieceVal('feet') + pieceVal('body') * 0.25;
+    default: return 0;
+  }
+}
+// Recomputes the mechanical penalties an entity's current wounds impose -- called any time a
+// wound level changes (see the hook in doAttack) so every consumer (movePlayer's stumble check,
+// doAttack's outgoing-damage penalty, dodge, etc) just reads a plain number instead of walking
+// bodyParts itself. Deliberately keyed off the WORSE of a paired limb (leftLeg/rightLeg,
+// leftArm/rightArm) -- a hobbled left leg is exactly as much of a problem for walking as a
+// hobbled right one, so there's no reason to track them as separate penalty sources.
+function recalcBodyPenalties(e) {
+  const parts = ensureBodyParts(e);
+  const legLvl = Math.max(parts.leftLeg.level, parts.rightLeg.level);
+  const armLvl = Math.max(parts.leftArm.level, parts.rightArm.level);
+  const headLvl = parts.head.level;
+  e.legInjuryPenalty = [0, 0.12, 0.3, 0.55, 0.75][legLvl];
+  e.armInjuryPenalty = [0, 0.08, 0.22, 0.4, 0.6][armLvl];
+  e.headInjuryPenalty = [0, 0.08, 0.2, 0.35, 0.5][headLvl];
+}
+// Natural healing tick for wound levels 1-2 (Bruised/Wounded); Maimed and Ruined (healTimer===
+// Infinity) never count down here -- see the 'splint' item (fixes Maimed) and Greater Restoration
+// (fixes Ruined, the one level a splint can't touch).
+function tickBodyParts(e) {
+  if (!e.bodyParts) return;
+  let changed = false;
+  for (const p of BODY_PARTS) {
+    const w = e.bodyParts[p];
+    if (w.level > 0 && w.level < 3 && w.healTimer !== Infinity) {
+      w.healTimer--;
+      if (w.healTimer <= 0) {
+        w.level--;
+        w.healTimer = w.level > 0 ? [0, 50, 130][w.level] : 0;
+        changed = true;
+        if (e === player && w.level === 0) log(`Your ${p.replace(/([A-Z])/g, ' $1').toLowerCase()} finally feels sound again.`);
+      }
+    }
+  }
+  if (changed) recalcBodyPenalties(e);
+}
+// ---- bleeding: a real DoT distinct from (and stacking with) poison, triggered by crits and by
+// torso/limb wounds (see the doAttack hook), stopped by a Bandage rather than fading on its own
+// in any reasonable time -- the entire point is that an untreated wound is genuinely dangerous,
+// not a background ticker that resolves itself if you just wait a few turns. ----
+function applyBleed(e, stacks) {
+  if (!e || e.hp === undefined) return;
+  e.bleedStacks = Math.min(6, (e.bleedStacks || 0) + stacks);
+  e.bleedTurns = Math.max(e.bleedTurns || 0, 10 + stacks * 5);
+}
+function stanchBleed(e) { if (!e) return false; const did = (e.bleedTurns || 0) > 0; e.bleedStacks = 0; e.bleedTurns = 0; return did; }
+// ============================================================================
+// ---- PROCEDURAL DISEASE: every infection is assembled at the moment it's caught, not picked
+// from a fixed list of five hand-authored illnesses -- 1-2 symptoms drawn from SYMPTOM_POOL, one
+// cure drawn from CURE_POOL, both randomly paired, so "what did I catch and how do I fix it" is
+// different nearly every time. True to the brief either way: every disease ALSO has a natural
+// duration and will burn itself out eventually even completely ignored (see tickDiseases) -- the
+// assigned cure only exists to resolve it faster, never to gate progress on a specific item drop.
+// ----------------------------------------------------------------------------
+const DISEASE_SYMPTOM_POOL = [
+  { id: 'fever', label: 'Fever', apply: (e) => { if (Math.random() < 0.5) { e.hp -= 1; if (e === player) lastDamageSource = 'fever'; } } },
+  { id: 'weakness', label: 'Weakness', statPenalty: { str: -2 } },
+  { id: 'shakes', label: 'The Shakes', statPenalty: { dex: -2 } },
+  { id: 'brainfog', label: 'Brain Fog', statPenalty: { int: -2 } },
+  { id: 'nausea', label: 'Nausea', apply: (e) => { if (e === player) player.stamina = Math.max(0, player.stamina - 2); } },
+  { id: 'coughing', label: 'Coughing Fits', apply: (e) => { if (Math.random() < 0.15 && curIsDungeon()) { soundLevelAlarm(e.x, e.y, { immediateRadius: 5, silent: true }); if (e === player) log('A coughing fit wracks you -- that probably carried.'); } } },
+];
+const DISEASE_CURE_POOL = [
+  { id: 'remedyItem', hint: (d) => `An antidote or a strong healing draught might fight this off.` },
+  { id: 'restCure', hint: () => `A full night's proper rest, safe and undisturbed, might shake this loose.` },
+  { id: 'fireCure', hint: () => `Staying warm by a fire for a good while might sweat it out.` },
+];
+const DISEASE_NAME_POOL = ['Camp Fever', 'The Wasting Chill', 'Bog Rot', 'Creeping Malaise', 'Swamp Ague', 'The Shivers', 'Grey Sickness'];
+const CHRONIC_NAME_POOL = ['a Wasting Curse', 'the Grey Rot', 'a Lingering Blight', 'Marrow Fever'];
+function triggerDisease(e, sourceTag) {
+  if (e !== player) return; // framework supports any entity; only the player's illnesses are tracked/shown for now
+  player.diseases = player.diseases || [];
+  if (player.diseases.length >= 3) return; // a body can only be fighting off so much at once
+  if (player.diseaseImmune) return;
+  const symptoms = [];
+  const n = 1 + (Math.random() < 0.4 ? 1 : 0);
+  const pool = DISEASE_SYMPTOM_POOL.slice();
+  for (let i = 0; i < n && pool.length; i++) symptoms.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  // Rare, deliberately avoidable exception: a small chance any infection "sets in" chronically --
+  // no natural duration, no ordinary cure, just the single symptom above until treated by a
+  // priest's Greater Restoration or a rare shrine blessing (see payForHealing / the shrine boon
+  // block). This is what makes the "some illnesses are permanent" allowance real without making
+  // every cough a life sentence -- it's a ~4% tail on an already-optional trigger, not a
+  // guaranteed outcome of playing normally.
+  if (Math.random() < 0.04) {
+    const name = choice(Math.random, CHRONIC_NAME_POOL);
+    const dis = { name, source: sourceTag, symptoms: symptoms.slice(0, 1), cureId: 'greaterRestoration', cureProgress: 0, naturalDuration: Infinity, turnsElapsed: 0, permanent: true };
+    player.diseases.push(dis);
+    log(`*** Something about this infection doesn't feel like it'll pass on its own -- ${name} has taken root. It'll need real treatment: a priest's Greater Restoration, or a rare shrine's blessing. ***`);
+    return;
+  }
+  const cure = choice(Math.random, DISEASE_CURE_POOL);
+  const name = choice(Math.random, DISEASE_NAME_POOL);
+  const dis = { name, source: sourceTag, symptoms, cureId: cure.id, cureProgress: 0, naturalDuration: randInt(Math.random, 60, 140), turnsElapsed: 0 };
+  player.diseases.push(dis);
+  log(`You feel unwell -- ${name} has taken hold. (${symptoms.map(s => s.label).join(', ')}). ${cure.hint(dis)}`);
+}
+function tickDiseases(e) {
+  if (e !== player || !player.diseases || !player.diseases.length) return;
+  const stillSick = [];
+  for (const d of player.diseases) {
+    d.turnsElapsed++;
+    for (const s of d.symptoms) {
+      if (s.apply) s.apply(player);
+      if (s.statPenalty) { /* applied continuously via getDiseaseStatPenalty() at stat-read time, not here */ }
+    }
+    const resolved = d.turnsElapsed >= d.naturalDuration || d.cureProgress >= 3;
+    if (resolved) log(`${d.name} finally runs its course -- you're rid of it.`);
+    else stillSick.push(d);
+  }
+  player.diseases = stillSick;
+}
+// Live stat penalty reader -- called from wherever the game already computes effective STR/DEX/
+// INT (effStr etc), so a disease's Weakness/Shakes/Brain Fog symptom actually lowers what matters
+// (damage, dodge, spell success) instead of just existing as flavor text in the status list.
+function getDiseaseStatPenalty(stat) {
+  if (!player.diseases || !player.diseases.length) return 0;
+  let total = 0;
+  for (const d of player.diseases) for (const s of d.symptoms) if (s.statPenalty && s.statPenalty[stat]) total += s.statPenalty[stat];
+  return total;
+}
+// Advances cure progress on every currently-active disease that was randomly assigned the given
+// cure type (see DISEASE_CURE_POOL/triggerDisease) -- an antidote or strong potion (remedyItem),
+// a completed proper rest (restCure -- see doRest), or time spent by a fire (fireCure -- see the
+// tick in processEntityStatus). A disease resolves in tickDiseases once cureProgress reaches 3.
+function grantDiseaseCureProgress(cureId, amount) {
+  if (!player.diseases || !player.diseases.length) return;
+  let any = false;
+  for (const d of player.diseases) if (d.cureId === cureId) { d.cureProgress = (d.cureProgress || 0) + amount; any = true; }
+  if (any) log(`You feel a little steadier -- whatever's ailing you is loosening its grip.`);
+}
 function igniteTile(x, y, turns, force) {
   const t = curTileAt(x, y);
   if (!t || !t.walkable) return false;
   if (isWaterTile(t)) { steamBurst(x, y); return false; } // fire meets water -> scalding steam, no burning
+  // Oil ignites on contact, unconditionally (it's not damp grass -- see weatherIgniteChanceMult
+  // below, which this deliberately bypasses) and detonates the whole connected puddle at once.
+  if (isOiledTile(t)) { detonateOil(x, y); return true; }
+  // Toxic fumes are volatile too, not just poisonous -- a spark dropped into a poison gas cloud
+  // touches off a genuine explosion through the whole connected cloud (see detonateGas), same
+  // fuse-chain logic as oil. Confuse-gas (spores/pollen) is inert to fire and just burns off
+  // harmlessly wherever the fire itself already reaches, rather than chain-detonating.
+  if (t.gasTurns > 0 && t.gasKind === 'poison') { detonateGas(x, y); return true; }
+  // A wet occupant (see entityIsWet) shrugs off an ignite attempt aimed at their own square --
+  // it fizzles into a hiss of steam around them instead of catching the ground beneath them.
+  const occupant = entityAt(x, y);
+  if (!force && entityIsWet(occupant)) { t.smokeTurns = Math.max(t.smokeTurns || 0, 1); trackFxTile(t, x, y); return false; }
   // Weather/Climate overhaul: rain/snow/blizzard make things much harder (or, at the extreme,
   // outright impossible) to set alight; drought/heatwave make it easier. `force` (a direct
   // lightning strike) bypasses the wetness gate but still respects an outright downpour, since
@@ -11252,6 +11931,7 @@ function igniteTile(x, y, turns, force) {
   }
   t.fireTurns = Math.max(t.fireTurns || 0, turns);
   trackFxTile(t, x, y);
+  if (occupant && entityIsOiled(occupant)) igniteEntity(occupant, 5);
   return true;
 }
 // Fire meeting water doesn't just fizzle -- it flashes into a burst of scalding steam that
@@ -11328,6 +12008,15 @@ function affectEntityWithGas(e, kind, power) {
   if (!resisted) {
     const amt = Math.max(1, Math.round(power/2) * (e.poisonDmgReduction ? (1 - e.poisonDmgReduction) : 1));
     e.statusPoison = (e.statusPoison||0) + Math.max(0, Math.round(amt));
+    // Airborne/breathed-in poison (plague breath, spore clouds, toxic gas grenades) is
+    // contagious -- see the spread tick in processEntityStatus -- where a blade coated in venom
+    // is not: you don't catch a disease from someone else's poisoned dagger wound, but you can
+    // absolutely catch it standing next to someone still coughing from the cloud that got them.
+    e.poisonContagious = true;
+    // A strong enough lungful of toxic fumes carries a small, separate risk of a real secondary
+    // infection setting in on top of the poison itself -- see the BODY & HEALTH OVERHAUL block
+    // near igniteTile (triggerDisease et al).
+    if (power >= 5 && Math.random() < 0.05) triggerDisease(e, 'toxic fumes');
   }
   return resisted ? null : `${e===player?'You breathe':e.name+' breathes'} in the toxic fumes.`;
 }
@@ -11508,14 +12197,23 @@ function processTerrainEffects() {
       if (nextToWater && Math.random() < 0.25) {
         t.fireTurns = 0;
       } else {
+        // ---- wind: fire spreads faster, further, and preferentially downwind (see
+        // currentWindVector near the weather system) -- a burning field in a gale is a genuinely
+        // different, more dangerous hazard than the same fire on a still day, and standing
+        // upwind of one is measurably safer than standing downwind of it. ----
         if (Math.random() < 0.5) {
+          const wind = currentWindVector();
           const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
           for (let i = dirs.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [dirs[i], dirs[j]] = [dirs[j], dirs[i]]; }
+          const maxSpread = 1 + (wind.strength >= 2 ? 1 : 0);
           let spread = 0;
           for (const [dx,dy] of dirs) {
-            if (spread >= 1) break;
+            if (spread >= maxSpread) break;
             const nt = curTileAt(x+dx, y+dy);
-            if (nt && isFlammableTile(nt) && !nt.fireTurns && Math.random() < 0.22) { igniteTile(x+dx, y+dy, 3 + randInt(Math.random,0,3)); spread++; }
+            if (!nt || !isFlammableTile(nt) || nt.fireTurns) continue;
+            const aligned = wind.strength > 0 && dx === wind.dx && dy === wind.dy;
+            const chance = 0.22 + (aligned ? wind.strength * 0.13 : 0);
+            if (Math.random() < chance) { igniteTile(x+dx, y+dy, 3 + randInt(Math.random,0,3) + (aligned ? wind.strength : 0)); spread++; }
           }
         }
         t.fireTurns--;
@@ -11560,11 +12258,19 @@ function processTerrainEffects() {
       // A gas cloud billows outward while it's fresh (high remaining turns/power), then, as it
       // thins out, stops spreading and just lingers before dispersing entirely -- so poison gas
       // genuinely fills a room over a few turns instead of sitting frozen in its blast radius.
+      // Outdoors, it also drifts with the wind (see currentWindVector) rather than spreading
+      // evenly in all directions -- a gas grenade thrown upwind of a camp is a real tactic, and
+      // being caught downwind of one is a real reason to reposition.
       if (t.gasTurns > 1 && Math.random() < 0.3) {
+        const wind = currentWindVector();
         const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
         for (const [dx,dy] of dirs) {
           const nt = curTileAt(x+dx, y+dy);
-          if (nt && nt.walkable && !isWaterTile(nt) && !(nt.gasTurns > 0) && Math.random() < 0.35) {
+          if (!nt || !nt.walkable || isWaterTile(nt) || nt.gasTurns > 0) continue;
+          const aligned = wind.strength > 0 && dx === wind.dx && dy === wind.dy;
+          const against = wind.strength > 0 && dx === -wind.dx && dy === -wind.dy;
+          const chance = 0.35 + (aligned ? wind.strength * 0.15 : 0) - (against ? wind.strength * 0.12 : 0);
+          if (Math.random() < chance) {
             pendingSpreads.push([x+dx, y+dy, t.gasTurns - 1, Math.max(1, Math.round((t.gasPower||3) * 0.8)), t.gasKind]);
           }
         }
@@ -11590,6 +12296,42 @@ function processTerrainEffects() {
         t.wasChasm = false;
         log('The ice thaws away.');
       } else keep = true;
+    }
+    // ---- oil: a long-lived puddle that just sits there, slick and volatile, until something
+    // ignites it (see igniteTile/detonateOil) or rain/downpour weather thins it out and finally
+    // washes it away -- reuses the exact same extinguishChance field rain already rolls against
+    // burning tiles, since "how hard is it currently raining" is exactly the right knob for both.
+    if (t.oilTurns > 0) {
+      t.oilTurns--;
+      if (!curIsDungeon() && Math.random() < ((currentWeatherDef().extinguishChance || 0) * 0.5)) t.oilTurns = Math.max(0, t.oilTurns - 8);
+      if (t.oilTurns > 0) keep = true;
+    }
+    // ---- farming: real current weather governs growth speed, not a flat countdown -- rain
+    // speeds a crop along, drought/heatwave slow it, and a hard freeze has a real (small) chance
+    // to kill an immature crop outright, the same "weather with teeth" spirit as everything else
+    // this tick loop already does. See tillSoil/plantCrop/harvestCrop and the CROPS registry.
+    if (t.feature === 'farmplot' && t.cropId && t.growStage < 2) {
+      let rate = 1, killed = false;
+      if (!curIsDungeon()) {
+        const wid = currentWeatherId();
+        if (wid === 'rain' || wid === 'drizzle' || wid === 'thunderstorm') rate = 1.8;
+        else if (wid === 'drought' || wid === 'heatwave') rate = 0.5;
+        else if (wid === 'blizzard' || wid === 'frost' || wid === 'snow' || wid === 'hailstorm') {
+          rate = 0.4;
+          if (Math.random() < 0.04) killed = true;
+        }
+      }
+      if (killed) {
+        if (posVisibleToPlayer(x, y)) log(`The frost kills the ${CROPS[t.cropId].name.toLowerCase()} in your farm plot!`);
+        t.cropId = null; t.growStage = 0; t.growTimer = 0; t.glyph = ':'; t.color = '#5a4028';
+      } else {
+        t.growTimer -= rate;
+        if (t.growTimer <= 0) {
+          t.growStage++;
+          if (t.growStage < 2) { t.growTimer = CROPS[t.cropId].stageTurns; keep = true; t.glyph = ';'; t.color = '#6a8a3a'; }
+          else { t.glyph = '\u2663'; t.color = '#8ac93a'; if (posVisibleToPlayer(x, y)) log(`Your ${CROPS[t.cropId].name.toLowerCase()} crop is ready to harvest.`); }
+        } else keep = true;
+      }
     }
     if (keep) stillActive.push(entry); else t._fxTracked = false;
   }
@@ -11783,6 +12525,23 @@ function getActiveStatusEffects(e) {
   if (e.statusSlow > 0) out.push({ label: 'Slowed', turns: e.statusSlow, kind: 'debuff' });
   if (e === player && e.statusChill > 0) out.push({ label: e.statusChill >= 14 ? 'Freezing' : 'Chilled', turns: e.statusChill, kind: 'debuff' });
   if (e === player && e.statusHeat > 0) out.push({ label: e.statusHeat >= 14 ? 'Overheating' : 'Sweltering', turns: e.statusHeat, kind: 'debuff' });
+  // Environmental physics status (see applyGroundHazardsOnEnter/igniteEntity near igniteTile) --
+  // shown for any entity, not just the player, so a wet/oiled/burning monster telegraphs its
+  // vulnerability the same way a poisoned one does.
+  if (e.burningTurns > 0) out.push({ label: 'On Fire', turns: e.burningTurns, kind: 'debuff' });
+  if (e.oiledTurns > 0) out.push({ label: 'Oil-Slicked', turns: e.oiledTurns, kind: 'debuff' });
+  if (e.wetTurns > 0) out.push({ label: 'Soaked', turns: e.wetTurns, kind: 'neutral' });
+  if (e.frozenSolidTurns > 0) out.push({ label: 'Frozen Solid', turns: e.frozenSolidTurns, kind: 'debuff' });
+  // ---- BODY & HEALTH OVERHAUL: wounds, bleeding, and active illness, all shown the same way
+  // every other status is -- see the framework block near igniteTile. ----
+  if (e.bleedTurns > 0) out.push({ label: 'Bleeding', turns: e.bleedTurns, kind: 'debuff' });
+  if (e.bodyParts) {
+    for (const p of BODY_PARTS) {
+      const lvl = e.bodyParts[p].level;
+      if (lvl > 0) out.push({ label: `${WOUND_LEVEL_NAMES[lvl]} ${p.replace(/([A-Z])/g, ' $1')}`, turns: e.bodyParts[p].healTimer === Infinity ? null : e.bodyParts[p].healTimer, kind: 'debuff' });
+    }
+  }
+  if (e === player && player.diseases) for (const d of player.diseases) out.push({ label: d.name, turns: Math.max(0, d.naturalDuration - d.turnsElapsed), kind: 'debuff' });
   if (e.berserked) out.push({ label: 'Berserk (empowered)', turns: null, kind: 'buff' });
   if (e.burrowed) out.push({ label: 'Burrowed underground', turns: e.burrowTimer || null, kind: 'buff' });
   return out;
@@ -11814,10 +12573,10 @@ function charismaAllyMult() {
 function willpowerResistChance() {
   return Math.max(0, Math.min(0.5, (player.wil - 8) * 0.03));
 }
-function effStr(e) { return e === player ? player.str + getBuff('str') : e.str; }
+function effStr(e) { return e === player ? player.str + getBuff('str') + getDiseaseStatPenalty('str') : e.str; }
 function effDex(e) {
   if (e !== player) return e.dex;
-  let d = player.dex + getBuff('dex');
+  let d = player.dex + getBuff('dex') + getDiseaseStatPenalty('dex');
   if (player.waterDexBonus && isPlayerInWater()) d += player.waterDexBonus;
   // A steadier platform to fight from: a rowboat or ship under you is a lot less precarious than
   // treading open water, so the best vessel you're carrying (see VESSELS) adds its own DEX bonus
@@ -11876,7 +12635,7 @@ function repairItem(it, amount) {
 }
 
 // ---------------- combat ----------------
-function rollHit(att, def, ranged) {
+function rollHit(att, def, ranged, calledShotPenalty) {
   let chance = 0.6 + (effDex(att) - effDex(def)) * 0.025;
   if (att === player) chance -= weaponStrDeficit() * 0.02;
   if (def === player) chance += armorStrDeficit() * 0.015; // over-encumbered defenders are easier to hit
@@ -11884,6 +12643,9 @@ function rollHit(att, def, ranged) {
   // less reliable (a thrown weapon or arrow drifts, a sandstorm blots out the target) -- melee is
   // unaffected since it doesn't rely on a flight path.
   if (ranged) chance += weatherRangedAccuracyMod() * (att === player ? (1 - (player.weatherAccResist || 0)) : 1);
+  // Called Shot: deliberately aiming for a specific point costs real accuracy -- see
+  // beginCalledShot/doAttack's payoff block for what a landed one actually does.
+  if (calledShotPenalty) chance -= calledShotPenalty;
   chance = Math.max(0.1, Math.min(0.95, chance));
   return Math.random() < chance;
 }
@@ -11956,6 +12718,13 @@ function isPassableFor(e, x, y) {
   const t = curTileAt(x, y);
   if (!t) return false;
   if (isAquaticOnly(e)) return isWaterTile(t) && canSwim(e);
+  // Living-World AI: no creature (except something that's actually fireproof, like a fire
+  // elemental) will voluntarily path or step onto a tile that's actively on fire -- this is
+  // what stops monsters walking straight through a burning field to reach the player, and is
+  // also what makes fire genuinely useful as area denial/a chokepoint block rather than just
+  // damage. The player is unaffected (movePlayer already asks for explicit confirmation via its
+  // own bump-attack/walk-into-danger flow) -- this only governs AI-driven movement.
+  if (e !== player && t.fireTurns > 0 && !e.fireImmune) return false;
   if (t.walkable) return true;
   if (isWaterTile(t)) return canSwim(e);
   if (isChasmFeatureTile(t)) return canFly(e);
@@ -11966,9 +12735,42 @@ function isPassableFor(e, x, y) {
 // separate from movePlayer's much richer version (locked doors, raft/stamina prompts, chasm-jump
 // modal, etc. don't apply to NPCs/monsters) so that already-battle-tested player path is untouched.
 // Only ever called for e !== player -- the player's own trap check lives in movePlayer itself.
+// ---- shared ground-contact hazards: the ONE place any entity (player, monster, NPC, ally)
+// reacts to stepping onto water or oil, so every mover in the game gets the same physical
+// behavior instead of the player having bespoke swim code and monsters silently ignoring
+// puddles. Extend THIS, not the individual movement functions, for any future "the ground
+// itself does something when you step on it" mechanic (mud, ash, deep snow, etc). ----
+function applyGroundHazardsOnEnter(e, t, x, y, moveDx, moveDy, fromSlip) {
+  if (!t || !e || e.hp === undefined || e.hp <= 0) return;
+  if (isWaterTile(t)) {
+    e.wetTurns = Math.max(e.wetTurns || 0, 12);
+    if (extinguishEntity(e) && posVisibleToPlayer(x, y)) log(`${e === player ? 'You' : e.name} plunge${e === player ? '' : 's'} into the water, hissing out the flames!`);
+    if (e.oiledTurns) { e.oiledTurns = 0; if (e === player) log('The water rinses the oil from you.'); }
+  }
+  if (isOiledTile(t)) {
+    const wasOiled = e.oiledTurns > 0;
+    e.oiledTurns = Math.max(e.oiledTurns || 0, 8);
+    if (!wasOiled && e === player) log('Oil slicks the ground beneath you.');
+    // Momentum carries a moving entity an extra tile on a fresh slick -- purely physical, not a
+    // flat debuff: it only happens while actually moving, only once per step (fromSlip guards
+    // the recursive re-entry below), and can chain into a SECOND hazard if the skid lands
+    // somewhere interesting (another puddle, a ledge, an enemy).
+    if (!fromSlip && (moveDx || moveDy) && Math.random() < 0.4) {
+      const sx = x + moveDx, sy = y + moveDy;
+      if (curWalkable(sx, sy) && !entityAt(sx, sy)) {
+        if (e === player) log('You skid across the oil, unable to stop!');
+        else if (posVisibleToPlayer(x, y)) log(`${e.name} slips on the oil and skids sideways!`);
+        e.x = sx; e.y = sy;
+        applyGroundHazardsOnEnter(e, curTileAt(sx, sy), sx, sy, moveDx, moveDy, true);
+      }
+    }
+  }
+}
 function enterTileAsEntity(e, nx, ny) {
   const t = curTileAt(nx, ny);
+  const _hazDx = Math.sign(nx - e.x), _hazDy = Math.sign(ny - e.y);
   e.x = nx; e.y = ny;
+  applyGroundHazardsOnEnter(e, t, nx, ny, _hazDx, _hazDy);
   if (curIsDungeon() && t && t.hiddenTrap && !t.trapTriggered) {
     t.trapTriggered = true; t.glyph = '^'; t.color = '#c93a3a';
     if (e.trapImmune || Math.random() < (e.trapAvoidBonus || 0)) {
@@ -12529,6 +13331,10 @@ function tradeTransact(letter) {
     player.inventory = player.inventory.filter(i => i.uid !== it.uid);
     Sound.play('tradeSell');
     log(`You sell ${it.name} for ${price}g.`);
+    // ---- WORLD MEMORY, part 3: a small, ongoing trickle of standing just for doing business
+    // there -- capped low per sale so it can never substitute for real work (a quest) or real
+    // risk (defending the settlement), see addGoodwill near commitCrime.
+    if (!curIsDungeon() && !curIsDimension()) addGoodwill(getRegionKey(npc.x, npc.y), 1);
   }
   updateSidebar();
   renderTrade();
@@ -12712,7 +13518,7 @@ function renderCharacterSheet() {
   const effects = getActiveStatusEffects();
   if (!effects.length) html += `<div class="modal-opt dim">(none active)</div>`;
   effects.forEach(e => {
-    html += `<div class="modal-opt" style="${e.kind==='debuff'?'color:#e05a5a':'color:#5ae0d0'}">${e.label} <span class="dim">(${e.turns} turn${e.turns===1?'':'s'} left)</span></div>`;
+    html += `<div class="modal-opt" style="${e.kind==='debuff'?'color:#e05a5a':'color:#5ae0d0'}">${e.label} <span class="dim">(${e.turns == null ? 'needs treatment' : e.turns + ' turn' + (e.turns===1?'':'s') + ' left'})</span></div>`;
   });
   renderModal('Character Sheet', html, player.statPoints>0 ? 'Press 1-6 to spend a stat point. Esc to close.' : 'Esc to close.');
 }
@@ -12777,7 +13583,6 @@ function currentVisRadius() {
   return Math.max(3, radius);
 }
 function markSeen() {
-  const inDungeon = curIsDungeon();
   let radius = currentVisRadius();
   for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) {
     if (dx*dx + dy*dy > radius*radius) continue;
@@ -13230,6 +14035,7 @@ function allyAI(a) {
   if (a.duration > 0) { a.duration--; if (a.duration <= 0) { a.alive = false; log(`${a.name} crumbles to dust.`); return; } }
   processEntityStatus(a);
   if (!a.alive) return;
+  if (a.frozenSolidTurns > 0) return; // frozen solid -- can't act at all this turn (see freezeEntitySolid)
   // faction-aware target pick (see the Living World AI framework near monsterAI) -- an ally now
   // fights any hostile monster OR hostile NPC, not just whichever monster happens to be closest.
   const target = pickHostileTarget(a, 8);
@@ -14736,9 +15542,7 @@ function ascend() {
 }
 
 // ---- chasm diving: an alternate way down a dungeon, riskier than the stairs but faster ----
-let pendingChasmJump = null;
 function promptChasmJump(cx, cy) {
-  pendingChasmJump = { x: cx, y: cy };
   gameState = 'confirmchasm';
   const html = `<div class="npcline">A dark chasm splits the floor here. You could jump down to the level below, but the fall will hurt.</div>
     <div class="modal-opt" onclick="simulateKey('y')">[y] Jump down</div>
@@ -14746,7 +15550,6 @@ function promptChasmJump(cx, cy) {
   renderModal('Jump Into the Chasm?', html, 'y to jump, n or Esc to cancel.');
 }
 function confirmChasmJumpChoice(key) {
-  pendingChasmJump = null;
   const jump = key === 'y';
   closeModal();
   if (jump) chasmFall();
@@ -14825,6 +15628,76 @@ function consumeMaterial(id, qty) {
   });
 }
 function hasIngredients(recipe) { return recipe.inputs.every(inp => countMaterial(inp.id) >= inp.qty); }
+// ============================================================================
+// ---- CRAFTING QUALITY: before this, craftRecipe() always called makeItem(id, 0, rng) -- every
+// crafted weapon/armor, from your very first at level 1 to your ten-thousandth at endgame, was
+// bit-for-bit the same base item with zero affixes and baseline durability. Looted gear scales
+// with monster power (itemPowerMult) and rarity (affixPoolForRarity); crafted gear had no
+// equivalent axis at all, which made crafting a worse Rare/Cheap sidegrade for its entire
+// existence instead of ever paying off. This reconnects crafting to the SAME rarity/powerMult
+// machinery makeItem already exposes for loot, driven by two real, legible inputs instead of a
+// flat roll: raw practice (player.craftSkill, keyed by discipline, incremented by every craft --
+// literally "you get better at a kind of craft by doing it") and the discipline's governing stat.
+// Deliberately generic: craftingCategoryFor() buckets ANY recipe by its OUTPUT's own type, so a
+// brand new recipe added later slots into the right discipline automatically with no per-recipe
+// tagging required -- exactly the "don't hardcode edge cases" a real extensible framework needs.
+// ----------------------------------------------------------------------------
+const CRAFT_QUALITY_TIERS = [
+  { max: 0.15, name: 'Shoddy',     rarity: 0, powerMult: 0.85, durMult: 0.65, valueMult: 0.7,  color:'#c9915a' },
+  { max: 0.90, name: null,         rarity: 0, powerMult: 1.00, durMult: 1.00, valueMult: 1.0,  color:null },      // Standard -- no name prefix, no log fanfare
+  { max: 1.60, name: 'Fine',       rarity: 1, powerMult: 1.08, durMult: 1.30, valueMult: 1.35, color:'#8ac93a' },
+  { max: 2.40, name: 'Superior',   rarity: 2, powerMult: 1.16, durMult: 1.65, valueMult: 1.9,  color:'#4ad0e0' },
+  { max: Infinity, name: 'Masterwork', rarity: 2, powerMult: 1.28, durMult: 2.20, valueMult: 2.7, color:'#e0c34a' },
+];
+function craftingCategoryFor(recipe) {
+  if (recipe.category === 'cooking') return { key: 'cooking', stat: 'con' };
+  const base = ITEM_BASES.find(b => b.id === recipe.output.id);
+  if (!base) return { key: 'tinkering', stat: 'dex' };
+  if (base.type === 'consumable' || base.type === 'scroll') return { key: 'alchemy', stat: 'int' };
+  if (base.type === 'armor') return { key: 'armorsmith', stat: 'dex' };
+  if (base.type === 'weapon') return { key: 'weaponsmith', stat: 'str' };
+  return { key: 'tinkering', stat: 'dex' };
+}
+// Returns null for anything crafting quality doesn't meaningfully apply to (only weapons/armor
+// have the dmg/armor/durability/value axes for a quality roll to actually move) -- callers treat
+// null as "craft it plain, no quality system involved" rather than special-casing item types.
+function craftQualityRoll(recipe) {
+  const base = ITEM_BASES.find(b => b.id === recipe.output.id);
+  if (!base || (base.type !== 'weapon' && base.type !== 'armor')) return null;
+  const { key, stat } = craftingCategoryFor(recipe);
+  player.craftSkill = player.craftSkill || {};
+  const practice = player.craftSkill[key] || 0;
+  const statVal = player[stat] || 10;
+  // Practice matters most, with real but diminishing returns (log-shaped -- your 5th craft in a
+  // discipline helps a lot more than your 500th); the governing stat nudges it further. Real
+  // randomness on top keeps every craft a genuine roll rather than a lookup table.
+  const score = Math.log2(practice + 1) * 0.35 + Math.max(0, statVal - 10) * 0.03;
+  const roll = Math.max(0, score + (Math.random() - 0.4) * 0.6);
+  return CRAFT_QUALITY_TIERS.find(t => roll < t.max);
+}
+// ============================================================================
+// ---- MATERIAL PROPERTIES: a second, independent axis from crafting quality above -- quality is
+// about the SMITH (how well-made it is, driven by practice/stat/luck), this is about the
+// MATERIAL (what it's actually made of). A Shoddy Starmetal Warhammer and a Masterwork Raw Ore
+// Warhammer are both real, coherent outcomes: bad workmanship on rare metal, or a master smith
+// stuck with common stock. Deliberately a registry keyed by raw material id, checked generically
+// against WHATEVER a recipe's inputs happen to list -- adding a new rare material later, or a
+// new recipe that happens to consume Starmetal Ore/Ironwood for something other than a weapon,
+// automatically gets this for free, no per-recipe wiring required. Starmetal/Ironwood themselves
+// are rare (~4%) bonus rolls on ordinary gathering (see DESTRUCTIBLE_FEATURES.orepile/tree near
+// grantGatherYield) -- found, not bought, which is the point: this is what turns "I found
+// something interesting while chopping wood" into a real mechanical payoff later at the forge.
+const MATERIAL_PROPERTIES = {
+  starmetal_ore: { label: 'Starmetal', powerMult: 1.18, durMult: 1.4, valueMult: 1.6, color: '#8ad0e0' },
+  ironwood:      { label: 'Ironwood',  powerMult: 1.12, durMult: 1.6, valueMult: 1.4, color: '#5a4a2a' },
+};
+// Returns the property entry for the first input on `recipe` that has one, or null. First-match
+// (not "richest match") is intentional: a recipe listing a special material at all means the
+// player deliberately chose to spend it, and that's the material the output is made of.
+function materialPropertyFor(recipe) {
+  for (const inp of recipe.inputs) if (MATERIAL_PROPERTIES[inp.id]) return MATERIAL_PROPERTIES[inp.id];
+  return null;
+}
 function craftRecipe(recipeId) {
   const r = RECIPES.find(x => x.id === recipeId);
   if (!r || !player.knownRecipes.includes(recipeId)) return;
@@ -14834,11 +15707,39 @@ function craftRecipe(recipeId) {
     if ((player.craftYieldChance || 0) > 0 && Math.random() < player.craftYieldChance) { saved++; continue; }
     consumeMaterial(inp.id, inp.qty);
   }
+  const quality = craftQualityRoll(r);
+  const material = materialPropertyFor(r);
   const qty = (r.output.qty || 1) + (r.category === 'cooking' ? (player.cookingYieldBonus || 0) : 0);
   let out = null;
-  for (let i = 0; i < qty; i++) { out = makeItem(r.output.id, 0, Math.random); out = addItemToList(player.inventory, out); }
+  for (let i = 0; i < qty; i++) {
+    const combinedPowerMult = (quality ? quality.powerMult : 1) * (material ? material.powerMult : 1);
+    const combinedRarity = Math.max(quality ? quality.rarity : 0, material ? 1 : 0);
+    out = makeItem(r.output.id, combinedRarity, Math.random, (quality || material) ? combinedPowerMult : undefined);
+    // Material name prefix goes BEFORE quality's (e.g. "Fine Starmetal Warhammer") -- reads as
+    // "a fine [example of a] starmetal warhammer", material first, workmanship second, matching
+    // how the same phrase would actually be said aloud.
+    if (material) out.name = material.label + ' ' + out.name;
+    if (quality && quality.name) out.name = quality.name + ' ' + out.name;
+    if (quality || material) {
+      if (out.maxDurability !== undefined && out.maxDurability !== Infinity) {
+        const durMult = (quality ? quality.durMult : 1) * (material ? material.durMult : 1);
+        out.maxDurability = Math.max(1, Math.round(out.maxDurability * durMult));
+        out.durability = out.maxDurability;
+      }
+      const valueMult = (quality ? quality.valueMult : 1) * (material ? material.valueMult : 1);
+      out.value = Math.max(1, Math.round(out.value * valueMult));
+      if (quality) out.craftedQuality = quality.name || 'Standard';
+      if (material) out.craftedMaterial = material.label;
+    }
+    out = addItemToList(player.inventory, out);
+  }
+  const catInfo = craftingCategoryFor(r);
+  player.craftSkill = player.craftSkill || {};
+  player.craftSkill[catInfo.key] = (player.craftSkill[catInfo.key] || 0) + 1;
   Sound.play('craftSuccess');
-  log(qty > 1 ? `You craft ${qty}x ${out.name}.` : `You craft ${out.name}.`);
+  if (material) log(`<span style="color:${material.color}">The ${material.label.toLowerCase()} makes all the difference</span> -- you craft a ${out.name}!`);
+  else if (quality && quality.name) log(`<span style="color:${quality.color}">Your ${catInfo.key.replace(/([A-Z])/g,' $1')} skill shows</span> -- you craft a ${quality.name} ${out.name.replace(quality.name + ' ', '')}!`);
+  else log(qty > 1 ? `You craft ${qty}x ${out.name}.` : `You craft ${out.name}.`);
   if (saved > 0) log('Your skill meant some ingredients were not consumed.');
   updateSidebar();
 }
@@ -14947,7 +15848,7 @@ function useQuickslot(slot) {
 }
 // Legacy set kept only for describeItem()'s flavor-text lookup below; the actual "can this be
 // thrown" gate is canThrowItem() now, which covers every item type, not just this whitelist.
-const THROWABLE_EFFECTS = new Set(['aoefire','aoefrost','aoepoison','aoeconfuse','throwdmg','scrollfire','throwaoe','nukeblast','throwgas','throwemp','throwslow','throwsnare']);
+const THROWABLE_EFFECTS = new Set(['aoefire','aoefrost','aoepoison','aoeconfuse','throwdmg','scrollfire','throwaoe','nukeblast','throwgas','throwemp','throwslow','throwsnare','oilsplash']);
 function openItemAction(it, slot) {
   gameState = 'itemaction'; invSelected = it; invSelectedSlot = slot || null;
   let opts = [];
@@ -15061,6 +15962,44 @@ function pickUp() {
       log(`You salvage the ${structName}. You now carry a ${vesselDef.name}.`);
       updateSidebar(); endTurn();
     } });
+  }
+  // ---- FARMING: till/plant/harvest, all from the same interact-here menu everything else in
+  // this function already uses -- see the FARMING framework block near grantGatherYield.
+  if (isTillableGround(hereTile)) {
+    options.push({ label: 'Till the soil (requires a Hoe)', action: () => {
+      const hand = player.equipment.hand;
+      if (!hand || !/hoe/i.test(hand.id || hand.name || '')) { log("You need a Hoe equipped to till soil."); return; }
+      tillSoil(player.x, player.y);
+      log('You till the soil, turning it ready for planting.');
+      wearItem(hand, 1);
+      updateSidebar(); endTurn();
+    } });
+  } else if (hereTile && hereTile.feature === 'farmplot') {
+    if (!hereTile.cropId) {
+      const seeds = ['potato','onion','garlic','berries'].filter(id => player.inventory.some(i => i.id === id));
+      for (const id of seeds) {
+        options.push({ label: `Plant ${CROPS[id].name}`, action: () => {
+          consumeMaterial(id, 1);
+          plantCrop(hereTile, player.x, player.y, id);
+          log(`You plant ${CROPS[id].name} in the tilled soil.`);
+          updateSidebar(); endTurn();
+        } });
+      }
+      if (!seeds.length) options.push({ label: 'Plant something (you have no seeds -- Potato/Onion/Garlic/Berries)', action: () => log("You'll need one of those in your inventory first.") });
+    } else if (hereTile.growStage >= 2) {
+      options.push({ label: `Harvest ${CROPS[hereTile.cropId].name}`, action: () => { harvestCrop(hereTile, player.x, player.y); updateSidebar(); endTurn(); } });
+    } else {
+      options.push({ label: `${CROPS[hereTile.cropId].name} is still growing (${hereTile.growStage === 0 ? 'planted' : 'sprouting'})`, action: () => log('Give it more time.') });
+    }
+  }
+  // ---- FISHING: only offered when adjacent (not standing on top of, which would mean you're
+  // swimming) to open water -- see beginFishing near CROPS for the full mechanic.
+  if (!curIsDungeon()) {
+    let waterAdj = false;
+    for (const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) if (isWaterTile(curTileAt(player.x+dx, player.y+dy))) { waterAdj = true; break; }
+    if (waterAdj && !isWaterTile(hereTile)) {
+      options.push({ label: 'Fish here', action: () => { closeModal(); beginFishing(player.x, player.y); } });
+    }
   }
   if (!options.length) {
     log(hasCorpse ? 'There is a corpse here. (Some spells can make use of it.)' : 'There is nothing here to pick up.');
@@ -15376,6 +16315,51 @@ function payForHealing(npc) {
   if (player.gold < cost) { log(`${npc.name} says: "That'll cost ${cost} gold, dear. Come back when you can pay."`); return; }
   player.gold -= cost; player.hp = player.maxHp; player.mp = player.maxMp;
   log(`${npc.name} heals your wounds for ${cost} gold.`);
+  updateSidebar();
+  closeModal();
+}
+// ---- BODY & HEALTH OVERHAUL: the one reliable (if expensive) cure for anything a splint or an
+// ordinary remedy can't touch -- a permanently Ruined (level 4) limb, or a chronic disease that
+// was rolled with cureId:'greaterRestoration' (see woundBodyPart/triggerDisease). Steep, scales
+// with settlement tier same as ordinary healing, and requires actually finding a priest -- which
+// is what keeps a permanent affliction meaningful without being a run-ending trap: it costs real
+// time and gold to fix, but it is always fixable.
+function hasCurableAffliction() {
+  const parts = player.bodyParts;
+  if (parts && BODY_PARTS.some(p => parts[p].level >= 4)) return true;
+  if (player.diseases && player.diseases.some(d => d.cureId === 'greaterRestoration')) return true;
+  return false;
+}
+function payForGreaterRestoration(npc) {
+  if (!hasCurableAffliction()) { log("You have nothing that needs Greater Restoration right now."); return; }
+  const cost = Math.round(180 * npcTierPriceMult(npc));
+  if (player.gold < cost) { log(`${npc.name} says: "Greater Restoration is sacred work -- ${cost} gold, and not a copper less."`); return; }
+  player.gold -= cost;
+  let fixed = [];
+  if (player.bodyParts) for (const p of BODY_PARTS) {
+    if (player.bodyParts[p].level >= 4) { player.bodyParts[p].level = 2; player.bodyParts[p].healTimer = 130; fixed.push(p.replace(/([A-Z])/g, ' $1').toLowerCase()); }
+  }
+  if (fixed.length) recalcBodyPenalties(player);
+  if (player.diseases) {
+    const before = player.diseases.length;
+    player.diseases = player.diseases.filter(d => d.cureId !== 'greaterRestoration');
+    if (player.diseases.length < before) fixed.push('your chronic illness');
+  }
+  log(`${npc.name} lays on hands, and a slow warmth spreads through you -- ${fixed.join(', ')} mended. (-${cost}g)`);
+  updateSidebar();
+  closeModal();
+}
+// ---- WORLD MEMORY: direct redemption -- see the dialogue hook near hasCurableAffliction. A
+// real premium over the bounty's own gold value (3x) since this is buying your way out of it
+// outright and instantly, rather than the slow free option (decayBounties) or the risky one
+// (fighting off a Bounty Hunter, which gives partial relief for free). All three paths stay
+// viable; this one just costs money instead of time or a fight.
+function payOffBounty(npc, region, bounty) {
+  const cost = bounty * 3;
+  if (player.gold < cost) { log(`${npc.name} says: "You owe ${cost} gold to clear that. Come back when you have it."`); return; }
+  player.gold -= cost;
+  player.bounties[region] = 0;
+  log(`${npc.name} takes your payment and marks the ledger clear. "Word will get around that you made it right."`);
   updateSidebar();
   closeModal();
 }
@@ -16019,6 +17003,10 @@ function completeQuest(q) {
     // unlock (offerPersonalQuest) and the memory-aware Talk line, both keyed off this array.
     giver.questHistory = giver.questHistory || [];
     giver.questHistory.push({ type: q.type, turn: turnCount, desc: q.desc });
+    // ---- WORLD MEMORY, part 3: real work for a settlement's own quest-giver builds real
+    // standing there, not just personal affection with the giver -- see addGoodwill/
+    // reputationPriceMult near commitCrime.
+    if (!curIsDungeon() && !curIsDimension()) addGoodwill(getRegionKey(giver.x, giver.y), 8);
   }
   if (q.kingdomKey && q.rewardRep) addKingdomRep(q.kingdomKey, q.rewardRep);
   if (q.type === 'caravan_guard' && q.partnerKingdomKey && q.rewardPartnerRep) addKingdomRep(q.partnerKingdomKey, q.rewardPartnerRep);
@@ -16068,6 +17056,28 @@ function giveGift(npc, item) {
 
 
 // ---- rest v2: restores second wind charges ----
+const CALLED_SHOT_LABELS = { head: 'the head', legs: 'the legs', arms: 'the weapon arm' };
+// ---- CALLED SHOT: sets up exactly the player's next attack (see doAttack's consumption at the
+// top, and its two payoff blocks) to deliberately target a chosen point instead of the normal
+// random hit-location roll, at a real accuracy cost (see rollHit). Expires unused if you do
+// anything else that isn't an attack (see its clear in movePlayer/castSpell's action gates would
+// be the natural place to also clear it, but leaving it live through non-attack actions like
+// examining or opening inventory is harmless -- it only ever gets read/consumed inside doAttack).
+function beginCalledShot(target) {
+  if (gameState !== 'playing') return;
+  if (player.frozenSolidTurns > 0) { log("You're frozen solid and can't take aim!"); return; }
+  if (!CALLED_SHOT_LABELS[target]) return;
+  player.calledShotTarget = target;
+  log(`You steady yourself, aiming for ${CALLED_SHOT_LABELS[target]} on your next strike -- it'll cost you some accuracy.`);
+}
+function openCalledShotMenu() {
+  if (gameState !== 'playing') return;
+  presentChoice('Take Aim -- your next attack only, at reduced accuracy:', [
+    { label: 'The head (bypass armor)', action: () => beginCalledShot('head') },
+    { label: 'The legs (cripple movement)', action: () => beginCalledShot('legs') },
+    { label: 'The weapon arm (stagger)', action: () => beginCalledShot('arms') },
+  ]);
+}
 function doRest() {
   if (gameState !== 'playing') return;
   if (player.hp >= player.maxHp && player.mp >= player.maxMp) { log('You are already at full strength.'); return; }
@@ -16078,7 +17088,7 @@ function doRest() {
   const interval = setInterval(() => {
     const full = player.hp >= player.maxHp && player.mp >= player.maxMp;
     if (gameState !== 'playing' || full || ticks >= 80 || !autoRunActive) {
-      if (full) { player.secondWindCharges = player.secondWindMax || 0; Sound.play('restComplete'); }
+      if (full) { player.secondWindCharges = player.secondWindMax || 0; Sound.play('restComplete'); grantDiseaseCureProgress('restCure', 3); }
       autoRunActive = false; clearInterval(interval); render(); return;
     }
     const threat = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 6 && hasLOS(player.x,player.y,m.x,m.y));
@@ -16291,6 +17301,24 @@ function render() {
 
 // ---- reputation / bounty system (regional, not global) ----
 function getRegionKey(x, y) { return Math.floor(x / CH) + ',' + Math.floor(y / CH); }
+// ---- WORLD MEMORY: does this overworld tile belong to a settlement? Reuses the exact lookup
+// describeTile already does for "you're standing in the blacksmith's building" flavor text --
+// now also used to decide whether burning/blasting a tile is a crime (see the commitCrime hooks
+// in applyTerrainInteraction and resolveThrowAtTile's aoefire case) instead of nothing at all.
+function settlementAt(x, y) {
+  if (curIsDungeon() || curIsDimension()) return null;
+  const c = getChunk(Math.floor(x / CH), Math.floor(y / CH));
+  return (c && c.settlement) || null;
+}
+// True for a tile whose destruction is unambiguously "you damaged someone's property" -- an
+// actual building -- as opposed to open commons ground that happens to fall inside a
+// settlement's loose bounds (which deliberately includes farm plots, even ones inside town
+// limits: with no ownership tracking on a plot, blaming the player for burning what might be
+// their OWN crop would be a real false-positive, so property damage stays scoped to buildings,
+// the one thing in this game unambiguously owned by the settlement itself).
+function isSettlementProperty(t) {
+  return !!(t && t.building !== null && t.building !== undefined);
+}
 function alertGuards(regionKey) {
   const [rcx, rcy] = regionKey.split(',').map(Number);
   const c = worldChunks.get(chunkKey(rcx, rcy));
@@ -16308,6 +17336,50 @@ function currentRegionBounty() {
   if (curIsDungeon()) return 0;
   player.bounties = player.bounties || {};
   return player.bounties[getRegionKey(player.x, player.y)] || 0;
+}
+// ============================================================================
+// ---- WORLD MEMORY, part 3: the positive mirror of commitCrime/bounties. Real good deeds --
+// helping a settlement fend off a rival war party (see the onDeath hook near isInActiveWar),
+// completing work for one of its quest-givers (see completeQuest), and, in a small ongoing way,
+// just trading there (see tradeTransact) -- build standing the exact same region-keyed way a
+// crime builds a bounty, and that standing is genuinely worth something: real prices, not just a
+// number going up (see reputationPriceMult, folded straight into npcTierPriceMult so every price
+// in the game already accounts for it automatically). Deliberately does NOT decay the way a
+// bounty does -- a bounty represents a manhunt going cold; goodwill represents people remembering
+// you helped, which isn't the kind of thing that should evaporate just because time passed. ----
+function addGoodwill(regionKey, amount, why) {
+  if (!regionKey || amount <= 0) return;
+  player.goodwill = player.goodwill || {};
+  player.goodwill[regionKey] = (player.goodwill[regionKey] || 0) + amount;
+  if (why) log(`${why} (+${amount} standing)`);
+}
+function currentRegionGoodwill() {
+  if (curIsDungeon()) return 0;
+  player.goodwill = player.goodwill || {};
+  return player.goodwill[getRegionKey(player.x, player.y)] || 0;
+}
+// Folds both bounty (markup, capped at +50%) and goodwill (discount, capped at -20%) into a
+// single multiplier -- called from npcTierPriceMult, which every buy/sell/service price already
+// runs through, so this needed exactly one integration point instead of touching every price
+// calculation in the game individually.
+function reputationPriceMult(npc) {
+  if (!npc || curIsDungeon() || curIsDimension()) return 1;
+  const region = getRegionKey(npc.x, npc.y);
+  const bounty = (player.bounties || {})[region] || 0;
+  const goodwill = (player.goodwill || {})[region] || 0;
+  let mult = 1;
+  if (bounty >= 15) mult *= 1 + Math.min(0.5, bounty * 0.01);
+  if (goodwill >= 10) mult *= Math.max(0.8, 1 - Math.min(0.2, goodwill * 0.004));
+  return mult;
+}
+// Player-credited counterpart to recordSettlementDefense (see near DEFENSE_FLAVOR) -- writes into
+// the exact same settlementDefenseMemory map and surfaces through the exact same
+// settlementDefenseRumor dialogue hook, just with text that credits the traveler who actually did
+// it instead of the town's own guard.
+function recordPlayerDefense(settlement, slainNpc) {
+  if (!settlement) return;
+  const text = `A traveler passing through helped drive off ${slainNpc.warKingdom ? 'a ' + slainNpc.warKingdom + ' raiding party' : 'an attack'} -- ${player.name || 'they'} didn't even ask for a reward.`;
+  settlementDefenseMemory.set(settlement, { turn: typeof turnCount !== 'undefined' ? turnCount : 0, text });
 }
 
 // ---- ally/monster AI v4: invisibility actually matters; guards go hostile on sight if bounty is high ----
@@ -16540,7 +17612,28 @@ function onDeath(def, killer) {
   if (isPlayerOwnedKiller(killer) || def.harmedByPlayer) {
     gainXP(def.xp || 1);
     if (def.kind === 'monster') { player.killCounts[def.monsterId] = (player.killCounts[def.monsterId] || 0) + 1; checkBountyQuests(def.monsterId); checkChoirDiscord(def); checkInfernalDominance(def); checkWyrmreachHunter(def); checkGuardianCollection(def); }
-    if (def.kind === 'npc' && !curIsDungeon() && !isInActiveWar(def)) { commitCrime(getRegionKey(def.x, def.y), bountyValueFor(def)); }
+    // ---- WORLD MEMORY: killing the Bounty Hunter your own bounty summoned (see
+    // maybeSpawnBountyHunter near decayBounties) is self-defense against a pursuer, not a fresh
+    // crime -- committing another one here would perversely double-punish the player for the
+    // exact payoff loop the mechanic is supposed to offer. Real relief on the bounty instead.
+    else if (def.kind === 'npc' && def.huntingPlayer) {
+      const region = getRegionKey(def.x, def.y);
+      player.bounties = player.bounties || {};
+      const before = player.bounties[region] || 0;
+      player.bounties[region] = Math.max(0, before - 25);
+      log('One less person hunting you. Word of this will get around too, in its own way.');
+    }
+    else if (def.kind === 'npc' && !curIsDungeon() && !isInActiveWar(def)) { commitCrime(getRegionKey(def.x, def.y), bountyValueFor(def)); }
+    // ---- WORLD MEMORY, part 3: the positive counterpart to the crime branch right above --
+    // killing an NPC who IS in an active war (a rival kingdom's raiders attacking a settlement,
+    // see spawnWarParty/isInActiveWar) is defending the town, not assaulting an innocent, and is
+    // worth real standing there -- both the price discount (reputationPriceMult) and a rumor
+    // (recordPlayerDefense) crediting the player specifically, same surfacing NPC defenders
+    // already get for the same act.
+    else if (def.kind === 'npc' && !curIsDungeon() && isInActiveWar(def)) {
+      const settlement = settlementAt(def.x, def.y);
+      if (settlement) { addGoodwill(getRegionKey(def.x, def.y), 15, `${settlement.name} won't forget this.`); recordPlayerDefense(settlement.name, def); }
+    }
   } else if (killer && killer.kind === 'npc' && def.kind === 'monster' && (NPC_DEFENDER_ROLES.has(killer.roleId) || NPC_HUNTER_ROLES.has(killer.roleId))) {
     // the town defended itself while you weren't the one swinging the sword -- see the settlement
     // defense memory system near NPC_DEFENDER_ROLES for how this later surfaces as a rumor.
@@ -16702,8 +17795,9 @@ const AMBIENT_NPC_LINES = [
   '{a} laughs at something {b} said.',
 ];
 function npcAI(n) {
-  if (n.statusPoison) processEntityStatus(n);
+  if (n.statusPoison || n.wetTurns || n.oiledTurns || n.burningTurns || n.frozenSolidTurns || n.bleedTurns) processEntityStatus(n);
   if (!n.alive || n.hp <= 0) return;
+  if (n.frozenSolidTurns > 0) return; // frozen solid -- can't act at all this turn (see freezeEntitySolid)
   if (n.immobile) return; // injured/rescuable dungeon NPCs (see makeInjuredCaptive) never move or act
   if (n.following) { companionFollowAI(n); return; }
   regenEntityAIPools(n);
@@ -16973,6 +18067,7 @@ function openDialogue(npc) {
     const canGain = (turnCount - lastTurn) > cooldown;
     let line;
     const defenseRumor = settlementDefenseRumor(npc);
+    const crimeRumor = settlementCrimeRumor(npc);
     const phaseLine = !isSpouse ? worldPhaseReactionLine(npc) : null;
     const memoryLine = (!isSpouse && (npc.questHistory || []).length >= 2 && Math.random() < 0.3)
       ? `You've done -- what, ${npc.questHistory.length} jobs for me now? I don't forget that kind of thing.` : null;
@@ -16988,6 +18083,8 @@ function openDialogue(npc) {
       line = `I owe you for that, still. Truth is I shouldn't have been down there at all -- I went in after something I'd lost, deeper than I had any business going, depth ${npc.foundDepth || '?'} or so into ${themeName}. Wasn't worth what it nearly cost me. But I'm glad you were the one who found me.`;
     } else if (defenseRumor && Math.random() < 0.4) {
       line = defenseRumor;
+    } else if (crimeRumor && Math.random() < 0.5) {
+      line = crimeRumor;
     } else {
       // First time talking to this NPC (or haven't talked in a long while): proactively share
       // a quest hint in NPC voice if their role supports it. After that, fall back to the normal
@@ -17124,6 +18221,18 @@ function openDialogue(npc) {
     opts.push({ key: nextKey(), label: "\"You wanted to ask me something?\"", action: () => { closeModal(); offerPersonalQuest(npc); } });
   }
   if (npc.healer) opts.push({ key: nextKey(), label: 'Pay for healing', action: () => payForHealing(npc) });
+  if (npc.healer && hasCurableAffliction()) opts.push({ key: nextKey(), label: 'Pay for Greater Restoration (permanent afflictions)', action: () => payForGreaterRestoration(npc) });
+  // ---- WORLD MEMORY: the direct redemption path for a bounty, not just waiting it out (see
+  // decayBounties) or having to fight off a Bounty Hunter (see maybeSpawnBountyHunter). Only ever
+  // offered by a non-hostile defender -- once a bounty's high enough that guards attack on sight
+  // (see the hostility check near NPC_DEFENDER_ROLES), you no longer get the option to talk your
+  // way out of it, which is the intended stakes: pay it down early, or eventually answer for it
+  // the hard way.
+  if (NPC_DEFENDER_ROLES.has(npc.roleId) && !npc.hostile) {
+    const region = getRegionKey(npc.x, npc.y);
+    const bounty = (player.bounties || {})[region] || 0;
+    if (bounty > 0) opts.push({ key: nextKey(), label: `Pay off your bounty here (${bounty * 3}g)`, action: () => payOffBounty(npc, region, bounty) });
+  }
   // ---- Settlement Overhaul: functional building-type interactions ----
   if (npc.roleId === 'innkeeper') opts.push({ key: nextKey(), label: 'Rent a room and rest', action: () => payForRoom(npc) });
   if (npc.roleId === 'companion') opts.push({ key: nextKey(), label: 'Pay for a quiet evening', action: () => payForCompanionship(npc) });
@@ -17393,6 +18502,54 @@ function autoTravelHome() {
 function decayBounties() {
   if (!player.bounties) return;
   for (const k in player.bounties) player.bounties[k] = Math.max(0, player.bounties[k] - 10);
+}
+// ---- WORLD MEMORY, part 2: a high enough bounty doesn't just make local guards recognize you --
+// it eventually puts a real Bounty Hunter on your trail. `bountyhunter` was already a full NPC
+// role (see ROLES) with its own combat stats and dialogue lines about "bringing 'em back" -- it
+// just never actually acted on that job outside idle settlement flavor. This is the other half:
+// spawned hostile, right on top of the player, independent of any settlement (home: null, so it
+// won't show up in a town's own NPC roster or get caught by anything that assumes settlement
+// membership), with its own opening line so it reads as a deliberate pursuit, not a random mugging.
+// Defeating one gives real relief on the bounty that summoned it -- the intended payoff loop:
+// commit a crime, get away with it in the short term, eventually have to actually answer for it.
+function maybeSpawnBountyHunter() {
+  if (curIsDungeon() || curIsDimension() || !player.bounties) return;
+  const region = getRegionKey(player.x, player.y);
+  const bounty = player.bounties[region] || 0;
+  if (bounty < 40) return;
+  if (player.lastBountyHunterTurn && turnCount - player.lastBountyHunterTurn < 400) return; // real cooldown, never a swarm
+  if (Math.random() > 0.12) return;
+  // Same bounded-tries placement pattern spawnEventMonsters already uses -- close enough to feel
+  // like they tracked you down, far enough not to spawn literally on top of you.
+  let spot = null;
+  for (let tries = 0; tries < 8; tries++) {
+    const dx = randInt(Math.random, -8, 8), dy = randInt(Math.random, -8, 8);
+    if (Math.abs(dx) < 3 && Math.abs(dy) < 3) continue;
+    const x = player.x + dx, y = player.y + dy;
+    if (!curWalkable(x, y) || entityAt(x, y)) continue;
+    spot = { x, y }; break;
+  }
+  if (!spot) return;
+  const hunter = makeNPC('bountyhunter', spot.x, spot.y, Math.random, null, randomSpeciesWeighted(Math.random));
+  // ---- BALANCE FIX: makeNPC's tier (novice/journeyman/master) is a random weighted roll,
+  // completely independent of player level -- fine for an ordinary settlement NPC, but it means
+  // an unlucky "novice" roll here would send a trivial pushover after a high-level player, making
+  // a total non-event out of what's supposed to read as a real threat ("I mean to collect it").
+  // Scaled explicitly on top of whatever tier it rolled, same spirit as depthScaleForPlayerLevel
+  // already does for the fishing "bite back" monster spawn just above.
+  const levelScale = 1 + Math.max(0, player.level - 1) * 0.09;
+  hunter.maxHp = Math.max(hunter.maxHp, Math.round(hunter.maxHp * levelScale)); hunter.hp = hunter.maxHp;
+  hunter.str = Math.round(hunter.str * levelScale);
+  hunter.dex = Math.round(hunter.dex * levelScale);
+  hunter.armor = Math.round(hunter.armor * levelScale);
+  hunter.atk = [Math.max(1, Math.round(hunter.atk[0] * levelScale)), Math.max(1, Math.round(hunter.atk[1] * levelScale))];
+  hunter.hostile = true; hunter.huntingPlayer = true; hunter.engaged = true; hunter.target = player;
+  hunter.homeX = player.x; hunter.homeY = player.y; hunter.wanderCenter = { x: player.x, y: player.y };
+  hunter.name = `${hunter.name}, Bounty Hunter`;
+  const c = getChunk(Math.floor(spot.x / CH), Math.floor(spot.y / CH));
+  if (c) c.npcs.push(hunter);
+  player.lastBountyHunterTurn = turnCount;
+  log(`*** "${hunter.name.split(',')[0]}, is it? There's coin on your head, and I mean to collect it." A bounty hunter has found your trail! ***`);
 }
 
 // ---- turn processing v4: bounty decay ----
@@ -18064,7 +19221,7 @@ function applyEffectToTarget(spell, t) {
   // lookup rather than as hardcoded per-category branches, so a future category (Plague, Void/
   // Cosmic, ...) just needs an entry here plus a talent that sets the field -- no formula changes.
   const catBonusField = (abilityPoolOf(spell.id) === 'mutation' && spell.category) ? MUTATION_CATEGORY_DMG_FIELD[spell.category] : null;
-  const dmgMult = (1 + (player.spellDmgBonus || 0) + (abilityPoolOf(spell.id) === 'technique' ? (player.techniqueDmgBonus || 0) : 0) + (abilityPoolOf(spell.id) === 'mutation' ? (player.mutationDmgBonus ? player.mutationDmgBonus/20 : 0) + (player.eldritchDmgBonus || 0) + (catBonusField ? (player[catBonusField] || 0) : 0) : 0)) * abilityPenaltyFactor(abilityRequirementDeficit(spell)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell);
+  const dmgMult = (1 + (player.spellDmgBonus || 0) + (abilityPoolOf(spell.id) === 'technique' ? (player.techniqueDmgBonus || 0) : 0) + (abilityPoolOf(spell.id) === 'mutation' ? (player.mutationDmgBonus ? player.mutationDmgBonus/20 : 0) + (player.eldritchDmgBonus || 0) + (catBonusField ? (player[catBonusField] || 0) : 0) : 0)) * abilityPenaltyFactor(abilityRequirementDeficit(spell)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell, t);
   // martial techniques push the wielded weapon far past normal use -- unlike plain attacks,
   // these do chip away at durability (see doAttack() for the equivalent crit-only weapon wear).
   if (abilityPoolOf(spell.id) === 'technique' && ['damage','execute','smite','drain'].includes(spell.type) && player.equipment.hand) {
@@ -18108,7 +19265,8 @@ function applyEffectToTarget(spell, t) {
     return;
   }
   if (spell.type === 'damage' || spell.type === 'drain') {
-    const dmg = Math.round(randInt(Math.random, spell.power[0], spell.power[1]) * dmgMult);
+    let dmg = Math.round(randInt(Math.random, spell.power[0], spell.power[1]) * dmgMult);
+    dmg += shatterFrozenEntity(t); // breaking a frozen target open with any hit, spell or melee, is a bonus-damage payoff (see doAttack)
     t.hp -= dmg;
     log(`Your ${spell.name} strikes ${t.name} for ${dmg}.`);
     if (spell.type === 'drain') { player.hp = Math.min(player.maxHp, player.hp + Math.floor(dmg * 0.5)); log('You feel invigorated.'); }
@@ -18116,13 +19274,23 @@ function applyEffectToTarget(spell, t) {
     if (spell.stagger && t.hp > 0) { t.statusSlow = Math.max(t.statusSlow || 0, 2); log(`${t.name} is staggered!`); }
     if (t.hp <= 0) onDeath(t, player);
     if (spell.destructive) { const d = scorchArea(t.x, t.y, 2); if (d>0) log(`The blast scorches the land, destroying ${d} trees!`); }
-    if (spell.igniteGround) { igniteTile(t.x, t.y, 4); }
+    if (spell.igniteGround) {
+      igniteTile(t.x, t.y, 4);
+      // Same oiled-target-catches-fire synergy as a monster's fire-flagged melee (see doAttack) --
+      // an oil flask thrown on an enemy, followed up with any fire spell, guarantees a lasting burn.
+      if (t.hp > 0 && entityIsOiled(t) && igniteEntity(t, 6)) log(`The oil on ${t.name} catches -- it's ablaze!`);
+    }
     // ---- BUG FIX: frost-flagged damage (frostbolt, glacialform, frostbite_mut) previously only
     // interacted with terrain (freezing water/snuffing fire) via applyTerrainInteraction() -- the
     // target it actually hit was never chilled, despite several of these abilities explicitly
     // promising that in their own description text. Mirrors the same statusSlow chill monsters
     // already apply with their own frost attacks (see doAttack()). ----
-    if (spell.frost && t.hp > 0) { t.statusSlow = Math.max(t.statusSlow || 0, 2); log(`${t.name} is chilled and slowed!`); }
+    if (spell.frost && t.hp > 0) {
+      // Wet + Frost = frozen solid, not just chilled -- the other half of the elemental triangle
+      // alongside oil+fire (detonateOil) and water+shock (weatherElementMultiplier's wet bonus).
+      if (entityIsWet(t) && freezeEntitySolid(t, 3)) log(`The frost seizes the water on ${t.name} -- it freezes solid!`);
+      else { t.statusSlow = Math.max(t.statusSlow || 0, 2); log(`${t.name} is chilled and slowed!`); }
+    }
     return;
   }
   if (spell.type === 'debuff') {
@@ -18142,6 +19310,7 @@ function applyEffectToTarget(spell, t) {
 function castSpell(spellId) {
   const spell = findAbilityById(spellId);
   if (!spell || !isAbilityKnown(spellId)) { log("You don't know that ability."); return; }
+  if (player.frozenSolidTurns > 0) { log("You're frozen solid and can't cast anything!"); endTurn(); return; }
   // ---- v3: soft stat requirement check (spells need INT, weapon-school techniques need STR/DEX) ----
   const deficit = abilityRequirementDeficit(spell);
   if (deficit > 0) {
@@ -18365,7 +19534,17 @@ function applyTerrainInteraction(spell, x, y) {
   if (!t) return;
   if (spell.igniteGround) {
     if (isWaterTile(t)) steamBurst(x, y);
-    else igniteTile(x, y, 4 + randInt(Math.random, 0, 3));
+    else {
+      const wasProperty = isSettlementProperty(t);
+      igniteTile(x, y, 4 + randInt(Math.random, 0, 3));
+      // ---- WORLD MEMORY: setting fire to an actual building, not just open ground, is a real
+      // crime -- reuses the exact same bounty/guard-hostility machinery a direct assault on an
+      // NPC already triggers (see commitCrime near getRegionKey), rather than a separate
+      // parallel reputation system. This function is only ever reached from the player's own
+      // resolveSpellAtTile (monster AOE spells resolve through monsterCastAt instead), so there's
+      // no risk of blaming the player for a monster's own fire spell.
+      if (wasProperty && settlementAt(x, y)) { log('Flames catch on the building -- someone\'s bound to notice!'); commitCrime(getRegionKey(x, y), 12); recordSettlementCrime(settlementAt(x, y).name, 'Someone set fire to a building here -- burned it right in front of everyone.'); }
+    }
   }
   if (spell.destructive && DESTRUCTIBLE_FEATURES[t.feature]) {
     destroyDestructibleAt(t, 'fire');
@@ -18378,6 +19557,10 @@ function applyTerrainInteraction(spell, x, y) {
       t.glyph = '='; t.color = '#bfe8f5'; t.bg = '#0d1c22'; t.frozenTurns = 7;
       trackFxTile(t, x, y);
       log(wasChasm ? 'A sheet of ice bridges the chasm — but not for long.' : 'The water freezes solid underfoot.');
+      // Anyone (wet or not, since they're standing directly IN the water as it freezes around
+      // them) caught on a tile that freezes over gets frozen solid themselves, not just chilled.
+      const occ = entityAt(x, y);
+      if (occ && occ.hp > 0 && freezeEntitySolid(occ, 3)) log(`${occ === player ? 'You are' : occ.name + ' is'} frozen in the ice!`);
     }
     if (t.fireTurns > 0) { t.fireTurns = 0; log('The flames are snuffed out by sudden cold.'); }
     if (t.gasTurns > 0) { t.gasTurns = 0; log('The gas cloud freezes solid and falls as harmless frost.'); }
@@ -18397,19 +19580,28 @@ function applyTerrainInteraction(spell, x, y) {
 }
 // ---- chain lightning: arcs entity-to-entity by proximity, not tile-radius -- can round
 // corners an AOE never would, at falling damage per jump. ----
+// ---- water conduction: lightning arcing through/near a connected body of water reaches much
+// further than through open air (8 tiles instead of 3), and a target standing in water takes
+// the same wet-shock bonus a direct hit would (see weatherElementMultiplier) on every jump, not
+// just the first -- so fighting a Chain Lightning caster while you (or your allies) are wading
+// in a pond or flooded room is now a genuinely different, riskier fight than fighting the same
+// caster on dry land, exactly the kind of terrain-aware tactics real conduction implies. ----
 function chainLightningFrom(spell, x, y, hitSet, hopsLeft, dmgMult) {
   if (hopsLeft <= 0) return;
+  const sourceConducting = isWaterTile(curTileAt(x, y));
+  const range = sourceConducting ? 8 : 3;
   let best = null, bestD = Infinity;
   for (const m of curMonsters()) {
     if (!m.alive || hitSet.has(m)) continue;
     const d = chebyshev(m.x, m.y, x, y);
-    if (d <= 3 && d < bestD) { best = m; bestD = d; }
+    if (d <= range && d < bestD) { best = m; bestD = d; }
   }
   if (!best) return;
   hitSet.add(best);
-  const dmg = Math.max(1, Math.round(randInt(Math.random, spell.power[0], spell.power[1]) * dmgMult));
+  const wetBonus = entityIsWet(best) ? 1.6 : 1;
+  const dmg = Math.max(1, Math.round(randInt(Math.random, spell.power[0], spell.power[1]) * dmgMult * wetBonus));
   best.hp -= dmg;
-  log(`The lightning arcs to ${best.name} for ${dmg} damage!`);
+  log(sourceConducting && bestD > 3 ? `The lightning races through the water to ${best.name} for ${dmg} damage!` : `The lightning arcs to ${best.name} for ${dmg} damage!`);
   if (best.hp <= 0) onDeath(best, player);
   else chainLightningFrom(spell, best.x, best.y, hitSet, hopsLeft - 1, dmgMult * 0.65);
 }
@@ -18455,7 +19647,7 @@ function resolveSpellAtTile(spell, wx, wy) {
     log(hitCount ? `${spell.name} erupts, catching ${hitCount} in the blast!` : `${spell.name} erupts against empty ground.`);
     if (spell.knockback) hitEntities.forEach(e => knockbackEntity(e, wx, wy, spell.knockback));
     if (spell.gravityPull) hitEntities.forEach(e => gravityPullEntity(e, wx, wy, spell.gravityPull));
-    if (spell.chainLightning && hitEntities.length) chainLightningFrom(spell, hitEntities[0].x, hitEntities[0].y, new Set(hitEntities), 3, (1 + (player.spellDmgBonus||0)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell) * 0.65);
+    if (spell.chainLightning && hitEntities.length) chainLightningFrom(spell, hitEntities[0].x, hitEntities[0].y, new Set(hitEntities), 3, (1 + (player.spellDmgBonus||0)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell, hitEntities[0]) * 0.65);
     return;
   }
   if (spell.pierceLine) {
@@ -18477,7 +19669,7 @@ function resolveSpellAtTile(spell, wx, wy) {
     if (e.alive !== false && e.hp > 0) {
       if (spell.knockback) knockbackEntity(e, player.x, player.y, spell.knockback);
       if (spell.gravityPull) gravityPullEntity(e, player.x, player.y, spell.gravityPull);
-      if (spell.chainLightning) chainLightningFrom(spell, e.x, e.y, new Set([e]), 3, (1 + (player.spellDmgBonus||0)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell) * 0.65);
+      if (spell.chainLightning) chainLightningFrom(spell, e.x, e.y, new Set([e]), 3, (1 + (player.spellDmgBonus||0)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell, e) * 0.65);
     }
   }
   else log(`${spell.name} strikes empty ground.`);
@@ -18551,7 +19743,7 @@ function newPlayer() {
     story: null, kingdomEventLog: [],
     dimensionId: null, dimensionReturn: null, discoveredDimensions: [], visitedDimensions: [],
     gameCompleted: false, completionTurn: null,
-    invFilter: 'all', invPage: 0, bounties: {}, scenario: null, waypoints: [], discoveredKingdoms: [],
+    invFilter: 'all', invPage: 0, bounties: {}, goodwill: {}, scenario: null, waypoints: [], discoveredKingdoms: [],
     quickslots: [null, null, null, null],
     knownSettlements: [], knownDungeons: [], customNames: {},
     worldPhase: 0, completedChains: [],
@@ -18585,6 +19777,12 @@ function getArmorOf(e) {
 }
 function doAttack(att, def) {
   const isPlayer = att === player;
+  // ---- CALLED SHOT: consumed exactly once per attack attempt, win or lose (dodge/miss/hit all
+  // burn it), captured into a local const right up front so nothing later in this function can
+  // read a stale or double-applied aim. See beginCalledShot for how it's set, and the payoff
+  // block right after a successful hit below for what it actually does.
+  const calledShot = isPlayer ? player.calledShotTarget : null;
+  if (isPlayer) player.calledShotTarget = null;
   // Message Log Overhaul: the player is always a participant in their own fights (isPlayer or
   // def===player short-circuits true below), so this only actually filters monster-vs-NPC or
   // monster-vs-monster combat happening somewhere the player can't see or hear it -- previously
@@ -18599,11 +19797,11 @@ function doAttack(att, def) {
   const defName = def === player ? 'you' : def.name;
   // racial dodge (e.g. Thalassi Water's Grace) now applies to whoever's actually defending, not
   // just the player -- plus the player's own buff/encumbrance modifiers layered on top when it's them.
-  const dodgeChance = (def.dodgeChance || 0) + (def === player ? getBuff('evasion') - armorStrDeficit() * 0.01 : 0);
+  const dodgeChance = (def.dodgeChance || 0) + (def === player ? getBuff('evasion') - armorStrDeficit() * 0.01 - (player.legInjuryPenalty || 0) * 0.5 : 0);
   if (dodgeChance > 0 && Math.random() < dodgeChance) { log(`${defName === 'you' ? 'You' : def.name} nimbly dodge${defName === 'you' ? '' : 's'} ${attName === 'You' ? 'the' : att.name + "'s"} attack!`); return; }
-  if (!rollHit(att, def, !!(weapon && weapon.ranged))) {
+  if (!rollHit(att, def, !!(weapon && weapon.ranged), calledShot ? 0.22 : 0)) {
     Sound.play(isPlayer ? 'miss' : 'enemyMiss');
-    log(`${attName} miss${isPlayer ? '' : 'es'} ${defName}.`);
+    log(calledShot ? `You aim for ${CALLED_SHOT_LABELS[calledShot]} and miss entirely!` : `${attName} miss${isPlayer ? '' : 'es'} ${defName}.`);
     if (settings.showDamageNumbers) spawnFloatingText(def.x, def.y, 'Miss', '#8a7f6a');
     return;
   }
@@ -18617,6 +19815,9 @@ function doAttack(att, def) {
   if (!isPlayer && att.packTactics && countNearbyAllies(att, 2) > 0) dmg = Math.round(dmg * 1.25);
   if (isPlayer) dmg += Math.floor(player.level / 5);
   if (isPlayer && weapon) dmg = Math.round(dmg * abilityPenaltyFactor(weaponStrDeficit()));
+  // A wounded/maimed arm makes every swing weaker, on top of (not instead of) the existing
+  // under-strength penalty above -- see recalcBodyPenalties near igniteTile.
+  if (isPlayer && player.armInjuryPenalty) dmg = Math.round(dmg * (1 - player.armInjuryPenalty));
   if (isPlayer && weapon && weapon.broken) dmg = Math.round(dmg * 0.35);
   if (isPlayer) {
     dmg += (player.cyberDmgBonus || 0);
@@ -18656,6 +19857,10 @@ function doAttack(att, def) {
   }
   let defArmor = getArmorOf(def);
   if (weapon && weapon.armorPierce) defArmor = Math.max(0, defArmor - weapon.armorPierce);
+  // ---- CALLED SHOT payoff, damage/armor half: a landed shot at the head punches through armor
+  // that would normally have stopped it (a visor gap, an unguarded temple); a landed shot at the
+  // legs/arms doesn't get the armor-pierce, it gets its payoff below instead, after damage lands.
+  if (calledShot === 'head') defArmor = Math.round(defArmor * 0.4);
   dmg -= defArmor;
   // incoming-damage half of Infernal Dominance: the same growing edge also softens what demonic
   // things in the Wastes can land on you, not just what you land on them.
@@ -18679,12 +19884,73 @@ function doAttack(att, def) {
   const critChance = 0.08 + (att.critBonus || 0) + (isPlayer ? getBuff('crit') : 0);
   if (Math.random() < critChance) { dmg *= (2 + (isPlayer ? (player.critDmgBonus || 0) : 0)); crit = true; }
   dmg = Math.max(1, Math.round(dmg));
+  // Shatter: any hit landing on a frozen-solid target (see freezeEntitySolid) breaks the ice
+  // early for a burst of bonus damage -- the payoff for rushing a frozen target down instead of
+  // just leaving it locked out of acting for the rest of the freeze's duration.
+  dmg += shatterFrozenEntity(def);
   // One-Hit Kill (debug): only ever amplifies the PLAYER's outgoing damage against something
   // other than the player themselves -- never touches incoming damage, so it can't be (ab)used
   // to also make monster attacks lethal in one hit.
   if (isPlayer && DEBUG.oneHitKill && def !== player) dmg = Math.max(dmg, (def.maxHp || def.hp || 0) + 9999);
   def.hp -= dmg;
   if (isPlayer) def.harmedByPlayer = true;
+  // ---- CALLED SHOT payoff, status half: a landed shot at the legs cripples movement (statusSlow
+  // -- same field a frost hit or a leg wound already use, so it stacks sensibly with both), and
+  // one at the weapon arm rattles a foe's grip enough to fluster their next few actions
+  // (statusConfuse). The head's payoff was already spent above as armor-pierce. Deliberately
+  // works on ANY defender, not just ones with a full body-part model (see the framework note near
+  // ensureBodyParts) -- a called shot doesn't need six tracked limbs to make narrative and
+  // mechanical sense against a monster, just a place to land the existing status fields.
+  if (calledShot && def.hp > 0) {
+    const defCap = def === player ? 'You are' : `${def.name} is`;
+    if (calledShot === 'legs') { def.statusSlow = (def.statusSlow || 0) + 4; log(`${defCap} crippled -- the leg gives out!`); }
+    else if (calledShot === 'arms') { def.statusConfuse = (def.statusConfuse || 0) + 2; log(`${defCap} staggered -- the strike numbs the arm!`); }
+    else if (calledShot === 'head') { log(`The called shot finds its mark -- straight past the guard!`); }
+  }
+  // ---- BODY & HEALTH OVERHAUL: locational wounds + bleeding, rolled only for the player as
+  // defender (see the framework comment near ensureBodyParts near igniteTile for why) -- any hit
+  // that actually lands has a chance to bleed, scaling with how hard it hit, and a chance to
+  // wound whatever it happened to land on, which is where crit's rarer headshot chance actually
+  // matters mechanically instead of just being a bigger number.
+  if (def === player && def.hp > 0 && dmg > 0) {
+    // Player attacks always know their exact weapon; monster/NPC attacks don't carry an item, so
+    // weaponDamageType falls through to its generic slashing-attack guess for anything that
+    // isn't explicitly tagged (see the pattern table near getPartArmorValue) -- claws and fangs
+    // read close enough to "bladed" for this purpose without needing every monster base tagged.
+    const dmgType = weaponDamageType(isPlayer ? weapon : att);
+    const dmgFraction = dmg / (player.maxHp || 30);
+    if (dmgFraction > 0.06) applyBleed(player, (crit ? 2 : 1) + (dmgType !== 'blunt' ? 1 : 0));
+    const part = rollHitLocation(crit);
+    // Locational armor (see getPartArmorValue near recalcBodyPenalties) softens THIS specific
+    // roll -- a well-armored head can shrug off a hit that would otherwise concuss it, even
+    // though the raw damage already got through and came off HP the normal way. Blunt weapons
+    // (maces, hammers, fists) are worse for breaking bone than they are for opening a wound --
+    // the extra bleed stack above skips them, but they escalate the wound level itself faster.
+    const partArmor = getPartArmorValue(player, part);
+    const bluntMult = dmgType === 'blunt' ? 1.3 : 1;
+    const woundFraction = dmgFraction * Math.max(0.3, 1 - partArmor * 0.05) * bluntMult;
+    const levelBefore = ensureBodyParts(player)[part].level;
+    const levelAfter = woundBodyPart(player, part, woundFraction);
+    if (levelAfter > levelBefore) {
+      recalcBodyPenalties(player);
+      const partLabel = part.replace(/([A-Z])/g, ' $1').toLowerCase();
+      log(`Your ${partLabel} is ${WOUND_LEVEL_NAMES[levelAfter].toLowerCase()}!`);
+      if (levelAfter === 3) log(`Your ${partLabel} won't heal on its own like this -- it needs a splint.`);
+      if (levelAfter === 4) log(`*** Your ${partLabel} is permanently ruined -- no splint will fix this. You'll need a priest's Greater Restoration, or the rare blessing of a shrine. ***`);
+      if (part === 'torso') applyBleed(player, 1);
+      // Any wound left at Maimed for a long stretch risks going septic -- see the infection check
+      // in processEntityStatus's body-part tick, which is what actually punishes ignoring it
+      // rather than this moment of impact.
+    }
+  } else if (crit && def.hp > 0 && dmg > 0 && weaponDamageType(isPlayer ? weapon : att) !== 'blunt' && Math.random() < 0.4) {
+    // Symmetric on the way out, minus the full locational model (see the framework note near
+    // ensureBodyParts on why monsters don't track six body parts each) -- a crit against
+    // something else still opens a real bleeding wound, which is what makes Bloodfrenzy and
+    // Hemorrhage's own flavor text ("wounds bleed worse...") true instead of aspirational. Gated
+    // off blunt weapons the same way the player's own wound hook above is -- a warhammer crit
+    // should crush, not lacerate.
+    applyBleed(def, 1);
+  }
   // ---- v3 durability wear: only on crits (weapon under exceptional strain) and heavy hits
   // taken (armor absorbing serious punishment), plus corrosive attackers -- never on routine hits.
   if (isPlayer && crit && weapon) wearItem(weapon, 1);
@@ -18714,7 +19980,14 @@ function doAttack(att, def) {
   // resistance, Dwarf/Skarath/Construct poison resistance, etc), not just the player's.
   const defIsPlayer = def === player, defYouIs = defIsPlayer ? 'you' : def.name, defYouAre = defIsPlayer ? 'You are' : def.name + ' is';
   if (!isPlayer && att.fire && Math.random() < 0.25) { igniteTile(def.x, def.y, 3); log(`${att.name}'s attack leaves the ground burning beneath ${defYouIs}!`); }
-  if (!isPlayer && att.frost && Math.random() < 0.25) { def.statusSlow = (def.statusSlow||0) + 2; log(`The frost of ${att.name}'s attack chills ${defIsPlayer ? 'you' : def.name} to the bone.`); }
+  // An oiled defender catches personally whenever a fire-flagged attack lands, reliably (not
+  // gated behind the 25% ground-scorch roll above) -- the whole point of oiling a target down
+  // first is that the next fire hit is a guaranteed, lasting ignition, not another coin flip.
+  if (!isPlayer && att.fire && entityIsOiled(def) && igniteEntity(def, 6)) log(`The oil on ${defIsPlayer ? 'you' : def.name} catches -- ${defIsPlayer ? 'you are' : def.name + ' is'} ablaze!`);
+  if (!isPlayer && att.frost && Math.random() < 0.25) {
+    if (entityIsWet(def) && freezeEntitySolid(def, 3)) log(`The frost of ${att.name}'s attack seizes the water on ${defIsPlayer ? 'you' : def.name} -- frozen solid!`);
+    else { def.statusSlow = (def.statusSlow||0) + 2; log(`The frost of ${att.name}'s attack chills ${defIsPlayer ? 'you' : def.name} to the bone.`); }
+  }
   if (!isPlayer && att.poison && (!defIsPlayer || getBuff('resistpoison') <= 0) && (def.poisonDmgReduction || 0) < 1 && Math.random() < 0.4) { def.statusPoison = (def.statusPoison || 0) + (def.poisonDmgReduction ? Math.round(att.poison * (1-def.poisonDmgReduction)) : att.poison); log(`${defYouAre} poisoned!`); }
   if (!isPlayer && att.causesFear && Math.random() < 0.35 * (1 - (def.fearResistBonus || 0))) { def.statusFear = (def.statusFear || 0) + 3; log(defIsPlayer ? 'Terror grips you!' : `Terror grips ${def.name}!`); }
   if (!isPlayer && att.causesConfuse && Math.random() < 0.35) { def.statusConfuse = (def.statusConfuse || 0) + 3; log(defIsPlayer ? 'Your mind reels in confusion!' : `${def.name}'s mind reels in confusion!`); }
@@ -18744,8 +20017,25 @@ function processEntityStatus(e) {
       if (e === player && e.statusPoison > 0 && Math.random() < willpowerResistChance()) e.statusPoison--;
       if (e === player) { log(`Poison courses through you (${d} damage).`); lastDamageSource = 'poison'; }
       if (e.hp <= 0) onDeath(e, null);
+      // ---- contagion: a still-symptomatic, airborne-poisoned entity (see the poisonContagious
+      // flag set in affectEntityWithGas) has a small chance each turn to pass it on to anyone
+      // standing right next to them -- a sick creature in a crowd genuinely becomes a spreading
+      // outbreak, not a dead end for the effect. Doesn't stack indefinitely: an already-poisoned
+      // neighbor doesn't get re-infected, and immune/resistant creatures never catch it at all. ----
+      if (e.poisonContagious && Math.random() < 0.12) {
+        for (const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]) {
+          const nb = entityAt(e.x + dx, e.y + dy);
+          if (!nb || nb === e || nb.hp <= 0 || (nb.statusPoison || 0) > 0) continue;
+          const nbImmune = (nb === player && (player.poisonImmune || getBuff('resistpoison') > 0)) || (nb.poisonDmgReduction || 0) >= 1;
+          if (nbImmune) continue;
+          nb.statusPoison = 2; nb.poisonContagious = true;
+          if (posVisibleToPlayer(nb.x, nb.y)) log(`The sickness spreads to ${nb === player ? 'you' : nb.name}!`);
+          break; // one new infection per tick per carrier -- a slow-building outbreak, not an instant wipe
+        }
+      }
     }
   }
+  if (e.statusPoison <= 0) e.poisonContagious = false;
   if (e.statusSlow > 0) {
     e.statusSlow--;
     if (e === player && e.statusSlow > 0 && Math.random() < willpowerResistChance()) e.statusSlow--;
@@ -18761,12 +20051,65 @@ function processEntityStatus(e) {
     if (e === player) { log(`Radiation sickness wracks your body (${d} damage).`); lastDamageSource = 'radiation'; }
     if (e.hp <= 0) onDeath(e, null);
   }
+  // ---- environmental physics status: wetness/oil/personal-fire, all set by
+  // applyGroundHazardsOnEnter / igniteEntity / extinguishEntity. Deliberately independent of
+  // (and stacked on top of) tile-based fire/gas damage above -- see the OIL/GREASE block near
+  // igniteTile for the full design rationale. ----
+  if (e.wetTurns > 0) e.wetTurns--;
+  if (e.oiledTurns > 0) e.oiledTurns--;
+  if (e.frozenSolidTurns > 0) {
+    e.frozenSolidTurns--;
+    if (e.frozenSolidTurns <= 0 && posVisibleToPlayer(e.x, e.y)) log(`${e === player ? 'You thaw' : e.name + ' thaws'} out.`);
+  }
+  if (e.burningTurns > 0) {
+    const dmg = Math.max(1, e.fireDmgReduction ? Math.round(3 * (1 - e.fireDmgReduction)) : 3);
+    e.hp -= dmg;
+    e.burningTurns--;
+    if (e === player) { log(`You're still on fire! (${dmg} damage)`); lastDamageSource = 'fire'; }
+    else if (posVisibleToPlayer(e.x, e.y)) log(`${e.name} burns for ${dmg} damage.`);
+    if (e.hp <= 0) onDeath(e, null);
+  }
   if (e.regen) e.hp = Math.min(e.maxHp, e.hp + e.regen);
   if (e === player && player.mutationRegen) player.hp = Math.min(player.maxHp, player.hp + player.mutationRegen);
   // Eye of the Storm capstone: thrives specifically in weather severe enough to matter (proxied by
   // a strong visMod -- the same field driving the vision/accuracy penalties everyone else suffers).
   if (e === player && player.stormRegenBonus && !curIsDungeon() && Math.abs(currentWeatherDef().visMod || 0) >= 2 && player.hp < player.maxHp && Math.random() < 0.3) {
     player.hp = Math.min(player.maxHp, player.hp + 1);
+  }
+  // ---- BODY & HEALTH OVERHAUL: bleeding, wound healing, and infection risk for a neglected
+  // Maimed limb. See the framework block near igniteTile (ensureBodyParts et al) for the design
+  // rationale -- this is just the per-turn tick side of it, mirroring every other DoT/decay
+  // pattern already established above (poison, burning, frozen). ----
+  if (e.bleedTurns > 0) {
+    const d = Math.max(1, Math.round((e.bleedStacks || 1) * 0.8));
+    e.hp -= d;
+    e.bleedTurns--;
+    if (e.bleedTurns <= 0) e.bleedStacks = 0;
+    if (e === player) { log(`You're bleeding! (${d} damage)`); lastDamageSource = 'bleeding'; }
+    else if (posVisibleToPlayer(e.x, e.y)) log(`${e.name} bleeds for ${d}.`);
+    if (e.hp <= 0) onDeath(e, null);
+  }
+  if (e.bodyParts) {
+    tickBodyParts(e);
+    // A Maimed limb left untreated is an open wound, not a healed-over scar -- every so often it
+    // risks turning into a real infection (a procedurally-generated disease, same as any other
+    // trigger) rather than just sitting there as a flat stat penalty forever.
+    if (e === player) {
+      for (const p of BODY_PARTS) {
+        if (player.bodyParts[p].level >= 3 && Math.random() < 0.006) { triggerDisease(player, 'infected wound'); break; }
+      }
+    }
+  }
+  if (e === player && player.diseases && player.diseases.length) {
+    // fireCure progress: standing near an active fire (a lit tile, or your own campfire feature)
+    // slowly earns cure progress toward anything assigned that cure type.
+    let nearFire = false;
+    for (let dy = -2; dy <= 2 && !nearFire; dy++) for (let dx = -2; dx <= 2 && !nearFire; dx++) {
+      const t = curTileAt(player.x + dx, player.y + dy);
+      if (t && (t.fireTurns > 0 || t.feature === 'campfire')) nearFire = true;
+    }
+    if (nearFire) for (const d of player.diseases) if (d.cureId === 'fireCure' && Math.random() < 0.08) d.cureProgress = (d.cureProgress || 0) + 1;
+    tickDiseases(player);
   }
 }
 
@@ -19030,7 +20373,7 @@ function monsterCastAt(caster, ab, target) {
     case 'bolt': case 'drain': {
       let dmg = randInt(Math.random, ab.power[0], ab.power[1]);
       dmg = Math.round(dmg * (0.4 + 0.6 * (caster.powerScale || 1))); // gentler than raw powerScale so casters don't dwarf melee at high depth
-      dmg = Math.round(dmg * weatherElementMultiplier(ab)); // Weather/Climate overhaul: monster bolts respect the same elemental weather swings player spells do
+      dmg = Math.round(dmg * weatherElementMultiplier(ab, target)); // Weather/Climate overhaul: monster bolts respect the same elemental weather swings player spells do, plus a wet target's conduction bonus
       dmg = Math.max(1, dmg - Math.floor(getArmorOf(target) / 2));
       if (target === player) {
         if (ab.element === 'fire' && player.fireDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - player.fireDmgReduction)));
@@ -19524,12 +20867,22 @@ function runCombatState(m, vision) {
 function monsterAI(m) {
   // Message Log Overhaul: see runCombatState's comment -- monster-only function, gate on m's position.
   const log = posVisibleToPlayer(m.x, m.y) ? realLog : () => {};
-  if (m.statusPoison || m.regen || m.statusSlow) processEntityStatus(m);
+  if (m.statusPoison || m.regen || m.statusSlow || m.wetTurns || m.oiledTurns || m.burningTurns || m.frozenSolidTurns || m.bleedTurns) processEntityStatus(m);
   if (!m.alive || m.hp <= 0) return;
+  if (m.frozenSolidTurns > 0) return; // frozen solid -- can't act at all this turn (see freezeEntitySolid)
   regenEntityAIPools(m);
   if (m.statusSlow > 0 && Math.random() < 0.5) return;
   if (m.statusConfuse > 0) { m.statusConfuse--; wander(m); return; }
   if (m.statusFear > 0) { m.statusFear--; const away = (m.target && m.target.alive) ? m.target : player; stepAway(m, away.x, away.y); return; }
+  // Panic response to being on fire: a burning, non-fireproof creature's survival instinct
+  // overrides whatever else it was doing and it makes a beeline for the nearest visible water to
+  // douse itself (see findNearestWaterTile / applyGroundHazardsOnEnter's extinguish-on-entry).
+  // This is what makes fire a genuine area-denial/crowd-control tool rather than just a damage
+  // source -- a burning enemy breaks off its attack to save itself, buying real breathing room.
+  if (m.burningTurns > 0 && !m.fireImmune) {
+    const water = findNearestWaterTile(m.x, m.y, 8);
+    if (water) { log(`${m.name}, ablaze, bolts for the water!`); stepToward(m, water.x, water.y); return; }
+  }
 
   const vision = m.visionRange || 9;
 
@@ -21978,7 +23331,6 @@ function standingTierFor(standing) {
 }
 
 function placeClockworkOutpost(chunk, cx, cy, dim, fill) {
-  const rng = mulberry32((cx * 40961 + cy * 61111 + SEED + 55221) | 0);
   const centerLX = Math.floor(CH / 2), centerLY = Math.floor(CH / 2);
   const tiles = chunk.tiles;
   const R = 6; // half-width of the enclave
@@ -24502,6 +25854,14 @@ function triggerWorldHazard(t, x, y) {
 function movePlayer(dx, dy, forceAttack) {
   if (gameState !== 'playing') return;
   floatingTexts = [];
+  // Frozen solid (see freezeEntitySolid near igniteTile's wet/frost combo) locks out movement
+  // and attacks entirely -- the point of freezing something is that it genuinely can't act, not
+  // just "50% chance to fumble" like Slow. It still burns a turn so time (and every other status'
+  // countdown, including the freeze's own) keeps moving.
+  if (player.frozenSolidTurns > 0) {
+    log("You're frozen solid and can't move!");
+    endTurn(); return;
+  }
   const intendedTarget = entityAt(player.x + dx, player.y + dy);
   const intendedTile = curTileAt(player.x + dx, player.y + dy);
   const isAttackAttempt = (intendedTarget && intendedTarget !== player && (intendedTarget.kind === 'monster' || (intendedTarget.kind === 'npc' && intendedTarget.hostile)))
@@ -24509,6 +25869,19 @@ function movePlayer(dx, dy, forceAttack) {
   if (player.statusSlow > 0 && !isAttackAttempt && Math.random() < 0.5) {
     log("You're too sluggish to move!");
     endTurn(); return;
+  }
+  // ---- BODY & HEALTH OVERHAUL: a wounded leg has a real chance to buckle underfoot when you try
+  // to move on it (never when attacking in place -- see isAttackAttempt), and walking around at
+  // all on a bleeding wound reopens it a little, same "moving on it makes it worse" logic a real
+  // injury would have. Neither check fires for a Maimed leg's WORST case here -- that's already
+  // covered by the flat leg penalty stacking with statusSlow's own roll above.
+  if (player.legInjuryPenalty && !isAttackAttempt && Math.random() < player.legInjuryPenalty) {
+    log("Your bad leg buckles under you!");
+    endTurn(); return;
+  }
+  if (player.bleedTurns > 0 && !isAttackAttempt && Math.random() < 0.15) {
+    player.bleedTurns += 2;
+    log('Moving reopens your wound a little.');
   }
   if (player.statusConfuse > 0 && Math.random() < 0.5) {
     const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
@@ -24634,12 +26007,14 @@ function movePlayer(dx, dy, forceAttack) {
       const flying = canFly(player);
       if (canSwim(player)) {
         player.x = nx; player.y = ny;
+        applyGroundHazardsOnEnter(player, t, nx, ny, dx, dy);
         Sound.play('splash');
         log(vessel ? vessel.crossMsg : flying ? 'You soar over the water.' : 'You swim easily across.');
         endTurn(); return;
       }
       if ((player.stamina || 0) > 0) {
         player.x = nx; player.y = ny;
+        applyGroundHazardsOnEnter(player, t, nx, ny, dx, dy);
         const swimCost = Math.round(8 * (1 - (player.staminaDrainReduction || 0)) * (1 + (player.waterStaminaPenalty || 0)));
         player.stamina = Math.max(0, player.stamina - swimCost);
         Sound.play('splash');
@@ -24653,6 +26028,7 @@ function movePlayer(dx, dy, forceAttack) {
         endTurn(); return;
       }
       player.x = nx; player.y = ny;
+      applyGroundHazardsOnEnter(player, t, nx, ny, dx, dy);
       Sound.play('splash');
       log("You're too exhausted to swim properly! You flounder and take damage.");
       player.hp -= 3;
@@ -24665,6 +26041,7 @@ function movePlayer(dx, dy, forceAttack) {
     return;
   }
   player.x = nx; player.y = ny;
+  applyGroundHazardsOnEnter(player, t, nx, ny, dx, dy);
   Sound.footstep(t, curIsDungeon());
   if (settings.autoPickupGold) {
     const goldHere = itemsAt(nx, ny).find(i => i.id === 'gold');
@@ -24719,6 +26096,16 @@ function movePlayer(dx, dy, forceAttack) {
       () => { player.dex += 1; return '+1 DEX'; },
       () => { player.int += 1; return '+1 INT'; },
     ];
+    // A rare free path to the same Greater Restoration a priest charges 180g for -- only ever
+    // enters the pool when it would actually do something, and even then it's one option among
+    // six, not a guaranteed cure. See payForGreaterRestoration for the paid, reliable version.
+    if (hasCurableAffliction()) boons.push(() => {
+      let fixed = [];
+      if (player.bodyParts) for (const p of BODY_PARTS) if (player.bodyParts[p].level >= 4) { player.bodyParts[p].level = 2; player.bodyParts[p].healTimer = 130; fixed.push(p.replace(/([A-Z])/g,' $1').toLowerCase()); }
+      if (fixed.length) recalcBodyPenalties(player);
+      if (player.diseases) { const before = player.diseases.length; player.diseases = player.diseases.filter(d => d.cureId !== 'greaterRestoration'); if (player.diseases.length < before) fixed.push('your chronic illness'); }
+      return `a permanent affliction mended (${fixed.join(', ')})`;
+    });
     const result = choice(Math.random, boons)();
     Sound.play('shrine');
     log(`*** An ancient shrine blesses you: ${result}! ***`);
@@ -24889,6 +26276,7 @@ function endTurn() {
     if (worst) repairItem(worst, player.autoRepairRate);
   }
   if (turnCount % 300 === 0) decayBounties();
+  maybeSpawnBountyHunter();
   if (settings.autosaveEnabled && turnCount % settings.autosaveInterval === 0) saveGame(true);
   checkKingdomDiscovery();
   checkFastTravelDiscovery();
@@ -25059,7 +26447,7 @@ const THROW_CONSUMED_EFFECTS = new Set([
   // grenades / aimed magical effects -- these are already fully resolved in the legacy switch
   // inside resolveThrowAtTile before resolveGenericThrow is ever reached; listed here too so
   // isThrowConsumed() (used by describeItem() etc.) agrees with what actually happens.
-  'aoefire', 'aoefrost', 'aoepoison', 'aoeconfuse', 'throwdmg', 'scrollfire', 'throwaoe', 'nukeblast', 'throwgas', 'throwemp', 'throwslow', 'throwsnare',
+  'aoefire', 'aoefrost', 'aoepoison', 'aoeconfuse', 'throwdmg', 'scrollfire', 'throwaoe', 'nukeblast', 'throwgas', 'throwemp', 'throwslow', 'throwsnare', 'oilsplash',
   // splash potions: consumed the instant they hit (see resolveThrownPotionSplash)
   'heal', 'poison', 'cureposion', 'cureconfuse', 'curefear', 'cureall',
   // every other bottled/vial liquid -- no bespoke thrown effect written for these yet, but a
@@ -25167,9 +26555,14 @@ function resolveThrowAtTile(it, wx, wy, fromSlot) {
         // firebomb/reactor-charge line above instead of silently reusing their flavor text.
         log(`${it.name} collapses in on itself, briefly tearing a hole in reality!`);
       } else {
+        const wasProperty = isSettlementProperty(curTileAt(wx, wy));
         const d = scorchArea(wx, wy, radius+1); if (d>0) log(`The flames spread, destroying ${d} trees!`);
         igniteArea(wx, wy, radius);
         log(`${it.name} bursts into flame where it lands.`);
+        // ---- WORLD MEMORY: same crime hook as a fire spell (see applyTerrainInteraction) --
+        // throwing a firebomb at/near an actual building is exactly as much arson as casting one
+        // at it, so it uses the same commitCrime call rather than a separate check.
+        if (wasProperty && settlementAt(wx, wy)) { log('Flames catch on the building -- someone\'s bound to notice!'); commitCrime(getRegionKey(wx, wy), 12); recordSettlementCrime(settlementAt(wx, wy).name, 'Someone threw a firebomb right at a building here -- burned it in front of everyone.'); }
       }
       break;
     }
@@ -25178,6 +26571,21 @@ function resolveThrowAtTile(it, wx, wy, fromSlot) {
       hit.forEach(t => { const dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult); t.hp -= dmg; log(`Freezing shrapnel tears into ${t.name} for ${dmg} frost damage.`); if (t.hp<=0) onDeath(t, player); });
       const doused = extinguishArea(wx, wy, radius);
       if (doused > 0) log('The freezing blast douses the flames nearby.');
+      break;
+    }
+    // Deliberately not a damage grenade -- see the oil_flask item comment. Landing directly on
+    // an entity coats THEM (entityIsOiled, ready to catch on the very next fire hit -- see
+    // doAttack/applyEffectToTarget); landing on open ground coats the AREA instead, for a trap
+    // or a fuse laid ahead of time.
+    case 'oilsplash': {
+      const direct = entityAt(wx, wy);
+      if (direct && direct.alive !== false) {
+        direct.oiledTurns = Math.max(direct.oiledTurns || 0, it.oilTurns || 50);
+        log(`The oil flask shatters across ${direct.name}, soaking them in slick, volatile oil!`);
+      } else {
+        const n = oilArea(wx, wy, radius, it.oilTurns || 50);
+        log(n > 0 ? `The oil flask shatters, spreading a slick, volatile puddle across the ground!` : `The oil flask shatters uselessly.`);
+      }
       break;
     }
     case 'aoepoison': {
@@ -25612,6 +27020,36 @@ function useItem(it) {
   let consumed = true;
   switch (it.effect) {
     case 'heal': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult * healMult()); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You consume ${it.name} and recover ${amt} HP.`); break; }
+    // ---- BODY & HEALTH OVERHAUL: bandage is its own effect now, not a reskinned 'heal' potion --
+    // stanching active bleeding is the actual point, the modest HP recovery on top represents
+    // properly cleaning and closing the wound rather than nothing at all.
+    case 'bandage': {
+      const wasBleeding = stanchBleed(player);
+      const amt = Math.round(it.power * (1 + (player.alchemyPotencyBonus || 0)) * healMult());
+      player.hp = Math.min(player.maxHp, player.hp + amt);
+      log(wasBleeding ? `You bind the wound tight, stopping the bleeding and recovering ${amt} HP.` : `You dress your wounds and recover ${amt} HP.`);
+      break;
+    }
+    case 'splint': {
+      const parts = ensureBodyParts(player);
+      // Prefer an actually-splintable Maimed (3) part; a permanently Ruined (4) part is beyond
+      // what a splint can do (see woundBodyPart/payForHealing's Greater Restoration) and is
+      // deliberately never "fixed" by this, even if it's the worse of the two.
+      let target = null;
+      for (const p of BODY_PARTS) if (parts[p].level === 3) { target = p; break; }
+      if (target) {
+        parts[target].level = 2; parts[target].healTimer = 130;
+        recalcBodyPenalties(player);
+        log(`You splint your ${target.replace(/([A-Z])/g,' $1').toLowerCase()} -- it's usable again, and will keep mending from here.`);
+      } else if (BODY_PARTS.some(p => parts[p].level === 4)) {
+        log(`A splint can't help a permanently ruined limb -- you'll need real restoration.`);
+        consumed = false;
+      } else if (BODY_PARTS.some(p => parts[p].level > 0)) {
+        log(`Nothing's broken badly enough to need a splint right now -- save it.`);
+        consumed = false;
+      } else { log("You're not injured enough to need a splint."); consumed = false; }
+      break;
+    }
     case 'mana': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult); player.mp = Math.min(player.maxMp, player.mp + amt); log(`You consume ${it.name} and recover ${amt} MP.`); break; }
     case 'buffstr': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('str', it.power, Math.round((it.dur||40)*durMult)); break; }
     case 'buffdex': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('dex', it.power, Math.round((it.dur||40)*durMult)); break; }
@@ -25621,14 +27059,14 @@ function useItem(it) {
     case 'buffregen': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('regen', it.power, Math.round((it.dur||10)*durMult)); break; }
     case 'curefear': { player.statusFear = 0; log('Your courage steadies.'); break; }
     case 'cureconfuse': { player.statusConfuse = 0; log('Your mind clears.'); break; }
-    case 'cureall': { player.statusPoison = 0; player.statusFear = 0; player.statusConfuse = 0; log('A wave of clarity washes over you — all afflictions cleansed.'); break; }
+    case 'cureall': { player.statusPoison = 0; player.statusFear = 0; player.statusConfuse = 0; grantDiseaseCureProgress('remedyItem', 3); log('A wave of clarity washes over you — all afflictions cleansed.'); break; }
     case 'stamina': { player.stamina = Math.min(player.maxStamina, player.stamina + it.power); log(`You recover ${it.power} Stamina.`); break; }
     case 'charge': { player.charge = Math.min(player.maxCharge, (player.charge||0) + it.power); log(`Your systems recharge ${it.power} Charge.`); break; }
-    case 'aoefire': case 'aoefrost': case 'aoepoison': case 'aoeconfuse': case 'throwdmg': case 'scrollfire':
+    case 'aoefire': case 'aoefrost': case 'aoepoison': case 'aoeconfuse': case 'throwdmg': case 'scrollfire': case 'oilsplash':
       // unreachable: THROWABLE_EFFECTS redirects these to beginThrowTargeting() before the
       // switch is ever entered. Cases kept only so this isn't mistaken for a missing effect.
       break;
-    case 'cureposion': { player.statusPoison = 0; log('The poison is cleansed from your body.'); break; }
+    case 'cureposion': { player.statusPoison = 0; grantDiseaseCureProgress('remedyItem', 2); log('The poison is cleansed from your body.'); break; }
     case 'poison': { player.statusPoison = (player.statusPoison||0) + it.power; log('That was a terrible idea.'); break; }
     case 'food': { const amt = Math.round((it.power || 2) * (1 + (player.cookingHealBonus || 0)) * healMult()); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You eat ${it.name} and recover ${amt} HP.`); maybeGrantCookingBonusEffect(it); break; }
     case 'identify': {
@@ -25823,10 +27261,14 @@ function describeItem(it) {
     if (it.lifesteal) lines.push(`Drains ${Math.round(it.lifesteal*100)}% of damage dealt as HP`);
     if (it.armorPierce) lines.push(`Pierces ${it.armorPierce} armor`);
     if (it.str) lines.push(`Requires ${it.str} STR to wield effectively${effStr(player) < it.str ? ' (you fall short — expect reduced accuracy & damage)' : ''}`);
+    if (it.craftedQuality) lines.push(`Hand-crafted quality: ${it.craftedQuality}`);
+    if (it.craftedMaterial) lines.push(`Worked from: ${it.craftedMaterial}`);
     if (it.maxDurability !== undefined) lines.push(it.maxDurability === Infinity ? 'Indestructible.' : `Durability: ${it.durability}/${it.maxDurability}${it.broken ? ' — BROKEN, repair to restore full performance' : ''}`);
   } else if (it.type === 'armor') {
     lines.push(`Armor (${it.slot}) — Defense +${it.armor}`);
     if (it.str) lines.push(`Requires ${it.str} STR to wear comfortably${effStr(player) < it.str ? ' (you fall short — expect worse dodge & stamina recovery)' : ''}`);
+    if (it.craftedQuality) lines.push(`Hand-crafted quality: ${it.craftedQuality}`);
+    if (it.craftedMaterial) lines.push(`Worked from: ${it.craftedMaterial}`);
     if (it.maxDurability !== undefined) lines.push(it.maxDurability === Infinity ? 'Indestructible.' : `Durability: ${it.durability}/${it.maxDurability}${it.broken ? ' — BROKEN, repair to restore full protection' : ''}`);
   } else if (it.type === 'consumable' || it.type === 'scroll') {
     const eff = { heal:'Restores HP', mana:'Restores MP', buffstr:'Temporarily boosts Strength', poison:'Poisons you (bad idea to drink!)',
@@ -25907,7 +27349,7 @@ function updateSidebar() {
   const effects = getActiveStatusEffects();
   if (effects.length) {
     document.getElementById('status-list').innerHTML = effects.map(e =>
-      `<span style="color:${e.kind==='debuff'?'#e05a5a':'#5ae0d0'}">${e.label}</span> <span class="dim">(${e.turns} turn${e.turns===1?'':'s'})</span>`
+      `<span style="color:${e.kind==='debuff'?'#e05a5a':'#5ae0d0'}">${e.label}</span> <span class="dim">(${e.turns == null ? 'needs treatment' : e.turns + ' turn' + (e.turns===1?'':'s')})</span>`
     ).join('<br>');
     statusRow.classList.remove('hidden');
   } else statusRow.classList.add('hidden');
@@ -25925,6 +27367,8 @@ function updateSidebar() {
       const temp = currentTemperature();
       const activeEventNames = activeWorldEvents.map(ev => ev.def.name);
       let txt = `<span style="color:${wdef.color}">${wdef.name}</span> · ${temperatureLabel(temp)}`;
+      const windLabel = windCompassLabel();
+      if (windLabel && currentWindVector().strength >= 2) txt += ` · <span style="color:#8fd0e0">${windLabel}</span>`;
       if (player.interstice) txt += ` · <span style="color:#c060ff">Tear closing in ${player.interstice.turnsLeft}</span>`;
       else if (activeEventNames.length) txt += ` · <span style="color:#e0a020">${activeEventNames.join(', ')}</span>`;
       // Fairness/QA pass: a persistent, hard-to-miss reminder that something telegraphed is
@@ -26314,10 +27758,11 @@ const ARCHETYPES = [
     apply: () => { player.dex+=3; player.int+=2; player.con+=1; player.gold+=70;
       player.equipment.hand=makeItem('wrench',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
       addItemToList(player.inventory, makeItem('firebomb',0,Math.random)); addItemToList(player.inventory, makeItem('frostbomb',0,Math.random));
+      addItemToList(player.inventory, makeItem('oil_flask',0,Math.random)); addItemToList(player.inventory, makeItem('oil_flask',0,Math.random));
       addItemToList(player.inventory, makeItem('sulfur',0,Math.random)); addItemToList(player.inventory, makeItem('sulfur',0,Math.random));
       addItemToList(player.inventory, makeItem('saltpeter',0,Math.random)); addItemToList(player.inventory, makeItem('saltpeter',0,Math.random));
       addItemToList(player.inventory, makeItem('iron_ingot',0,Math.random));
-      player.knownRecipes.push('craft_landmine','craft_firebomb','craft_frostbomb');
+      player.knownRecipes.push('craft_landmine','craft_firebomb','craft_frostbomb','craft_oil_flask');
       player.knownTechniques.push('wrenchbash','quickrig'); } },
   { id:'herbalist', name:'Herbalist', desc:'A field botanist who brews toxins and tonics on the fly, poisoning foes as readily as mending wounds.',
     apply: () => { player.wil+=3; player.int+=2; player.con+=1; player.gold+=65;
@@ -27510,6 +28955,7 @@ const GUIDE_SECTIONS = [
     ${guideKeyTable('Actions', [
       ['g','Pick up an item, or open a chest/barrel/sack/bookshelf/etc. underfoot — containers stay in the world exactly as you leave them.'],
       ['f','Fire your equipped ranged weapon at the nearest target in range.'],
+      ['a','Take Aim — line up a Called Shot (head/legs/weapon arm) for your next attack only, at reduced accuracy in exchange for a guaranteed extra effect. See the Status Effects tab, "Body &amp; Health".'],
       ['t','Talk to an adjacent friendly NPC — including an "Ask about your journey" option for a lead on your current main quest.'],
       ['x','Look/examine mode — inspect any visible tile, item, or creature.'],
       ['&gt; / &lt;','Descend / ascend stairs.'],
@@ -27612,6 +29058,49 @@ const GUIDE_SECTIONS = [
     equipped weapon (or bare fists) just like attacking a monster; a few hits will fell it and permanently clear
     your path. Some powerful abilities (dragon breath, certain fire spells/cybernetics/mutations) instead scorch
     every tree and cactus in the blast outright, no matter its remaining health.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Gathering &amp; tools:</b> felling a tree, ore vein, giant
+    mushroom, crystal spire, or scrap pile by hand now actually yields real crafting material (Wood, Ore, Mushroom,
+    Gemstone) instead of just clearing the tile. Bare hands or the wrong tool still work, just roughly — the right
+    tool (an Axe for wood, a Pickaxe or Warhammer for ore/stone, a bladed weapon for organic growth) more than doubles
+    the yield, and a higher-quality hand-crafted tool (see Crafting) does even better on top of that. Burning something
+    down with fire instead of chopping it destroys the material along with it — no yield that way.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Farming:</b> stand on open, empty outdoor ground with a
+    <b>Hoe</b> equipped and use the interact-here menu (<b>g</b>) to till it into a farm plot, then plant a Potato,
+    Onion, Garlic, or Wild Berries from your inventory into it. Growth speed follows the real current weather — rain
+    speeds it along, drought or a heatwave slow it down, and a hard freeze has a small chance to kill an immature crop
+    outright — so keep an eye on the sky as much as the calendar. Harvesting a ready plot has a good chance to return
+    a seed alongside the crop, so one plot can keep feeding itself indefinitely.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Fishing:</b> stand next to (not in) open water and use the
+    interact-here menu (<b>g</b>) for "Fish here". Works bare-handed, but a <b>Fishing Rod</b> — better yet, a
+    hand-crafted high-quality one (see Crafting) — makes for a far better catch rate, and rough weather makes the
+    water harder to fish. Very rarely, something bites back and an aquatic predator lunges out of the water at you.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>World Memory:</b> the world notices real property damage, not
+    just violence. Setting an actual building on fire — with a spell or a thrown firebomb — inside a settlement is a
+    real crime: it raises a bounty on you in that region exactly like assaulting an innocent NPC does, local guards
+    go on alert, and it becomes a rumor other townsfolk there will bring up in conversation for a while afterward.
+    Open ground, trees, and your own farm plots are unaffected — this is about burning down someone's house, not
+    scorching the grass.</div>
+    <div class="modal-opt" style="margin-top:6px">Let a region's bounty run high enough (40+) and stay unpaid long
+    enough, and it stops being background flavor — a real <b>Bounty Hunter</b> eventually tracks you down and shows
+    up hostile, wherever you happen to be in that region, not just waiting in some settlement. Win, and it's real
+    relief on that bounty (defeating your own pursuer is self-defense, not a fresh crime); ignore your bounty long
+    enough without paying it down and expect another one eventually. All three paths to a clean slate stay open: wait
+    it out (slow, free), fight off a hunter if one comes (partial relief, risky), or find a Guard/Watchman/Captain
+    who isn't already hostile and pay your bounty off directly (fast, costs 3x its gold value) — the last option
+    disappears once a bounty gets high enough that guards attack you on sight instead of talking.</div>
+    <div class="modal-opt" style="margin-top:6px">Crime has a mirror: real good deeds build real <b>standing</b> with a
+    region too, on the exact same scale bounty runs on. Defending a settlement from an actual rival war party,
+    finishing work for one of its quest-givers, and — in a small, ongoing way — just doing business there all add
+    up. High enough standing gets you real discounted prices there (and a high bounty gets you real markups) —
+    everything you buy or pay for already accounts for it automatically. Unlike a bounty, standing doesn't decay —
+    people remembering you helped isn't the kind of thing that should evaporate just because time passed.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Material properties:</b> a second axis from crafting quality,
+    independent of it — quality is about how well the smith worked it, this is about what it's actually made of.
+    Very rarely (~4%) while gathering wood or ore, you'll turn up <b>Ironwood</b> or <b>Starmetal Ore</b> instead of
+    the ordinary stuff — found, not bought. Bring it to a blacksmith to learn the recipes, or craft it yourself if
+    you already know them: the result carries both its own name prefix and real bonus stats on top of (not instead
+    of) whatever quality tier the crafting roll landed on — a Fine Starmetal Warhammer and a Masterwork Raw Ore
+    Warhammer are both genuinely different, valid outcomes.</div>
     <div class="modal-opt" style="margin-top:6px"><b>Enemy AI:</b> not every monster fights the same way. Chargers (dragons,
     giants, hellhounds) close 2-3 tiles a turn and can breathe fire/frost/poison on approach. Splitters (oozes) divide into
     weaker copies when killed. Summoners (Goblin King, liches, Rogue AI Core) call reinforcements. Ambushers (assassins,
@@ -27710,7 +29199,43 @@ const GUIDE_SECTIONS = [
     <div class="modal-opt" style="margin-top:6px"><b>Curing status effects:</b> Tonic/Clarity Tonic (or the
     'cureconfuse' effect) clears Confused; a fear-cure item clears Afraid; a general cure-all item or the Cure spell
     school clears Poison, Afraid, and Confused together. Resistance potions (Fire/Frost/Poison) reduce or block their
-    matching damage type but don't cure a status already applied.</div>` },
+    matching damage type but don't cure a status already applied.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Wet</b> (swimming, wading, heavy rain) — extinguishes any fire
+    burning on you outright, washes off Oiled, and blocks new ignition attempts entirely — but a wet target takes 60%
+    <i>more</i> shock damage (a Chain Lightning hit, or standing in water near one) and, if a Frost attack lands while
+    you're wet, freezes you <b>Frozen Solid</b> instead of just chilling you.</div>
+    <div class="modal-opt"><b>Oiled</b> (an Oil Flask, an oil slick event, some hazard terrain) — slick underfoot
+    (a real chance to skid an extra tile while moving through it) and highly combustible: any fire-flagged hit against
+    an oiled target guarantees they catch fire personally (see Burning below), and a connected puddle of oiled ground
+    detonates all at once if any part of it ignites — lay it as a fuse, or oil a chokepoint before something walks
+    through it.</div>
+    <div class="modal-opt"><b>Burning</b> (personal fire, distinct from standing on a burning tile) — ticks fire
+    damage every turn until it burns out or you get wet. A burning monster that isn't fireproof breaks off whatever
+    it's doing and bolts for the nearest water to douse itself.</div>
+    <div class="modal-opt"><b>Frozen Solid</b> (Frost hitting a Wet target, or being caught on a tile as it freezes
+    over) — locks out movement, attacks, and spellcasting entirely until it thaws. Any hit landing on a frozen target
+    shatters the ice early for real bonus damage (4-10) — a genuine choice between leaving something frozen to buy
+    time, or rushing it down for the shatter.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Bleeding</b> — a separate DoT from Poison, triggered by any
+    critical hit (yours or theirs) or a torso wound (see Body &amp; Health below). Doesn't taper off on its own in any
+    reasonable time, and moving around while bleeding reopens it further — a Bandage is the real fix.</div>
+    <div class="modal-opt" style="margin-top:10px;border:1px solid var(--amber-dim);padding:6px"><b>Body &amp; Health:</b>
+    every hit that lands on you rolls a body part (torso is the biggest target, head is rare unless it's a critical)
+    and has a chance to wound it: Bruised &rarr; Wounded &rarr; Maimed, worse the bigger the hit was relative to your
+    max HP, softened by whatever armor actually covers that spot. A wounded leg can buckle mid-move and hurts your
+    dodge; a wounded arm weakens every swing you make; Maimed won't heal on its own — a <b>Splint</b> brings it back
+    down to Wounded so natural healing can resume. Very rarely (only by taking another serious hit to an
+    <i>already-Maimed</i> part), a limb can be permanently <b>Ruined</b> — beyond what a Splint can fix, needing a
+    priest's paid Greater Restoration, or the rare luck of a shrine blessing.
+    <br><br><b>Disease</b> is procedurally assembled at the moment you catch it (from an infected Maimed wound left
+    untreated, or a strong lungful of toxic gas): 1-2 symptoms drawn at random (fever damage, a stat penalty, stamina
+    drain, coughing fits that can give away your position), paired with one randomly-assigned cure — an antidote/potion,
+    a full proper rest, or time spent by a fire. Every disease also has a natural duration and <i>will</i> pass on its
+    own even fully ignored — except the very rare chronic case (~4% of infections) that needs the same Greater
+    Restoration a Ruined limb does.
+    <br><br><b>Called Shot</b> (key <b>a</b>) lines up your <i>next</i> attack only to deliberately target the head
+    (punches through most of the target's armor), the legs (cripples movement, a real Slow), or the weapon arm
+    (staggers them into Confusion) — at a real accuracy penalty in exchange.</div>` },
   { id:'equipment', label:'Equipment', html: () => `
     <div class="modal-opt">Slots: Hand, Offhand, Body, Head, Feet, Ring, Amulet, Gloves, Cloak.</div>
     <div class="modal-opt">i — Inventory. Equipped items lettered A-I (select → Unequip). Backpack items lettered a-t per
@@ -28367,6 +29892,7 @@ function handleKey(e) {
     if (key === '<') { useStairsUp(); return; }
     if (key === '?') { openHelp(); return; }
     if (key === 'r') { doRest(); return; }
+    if (key === 'a') { openCalledShotMenu(); return; }
     return;
   }
 
