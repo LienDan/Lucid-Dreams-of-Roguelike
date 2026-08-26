@@ -515,7 +515,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.40.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.40.1-alpha</div>
     </div>
   </div>
 
@@ -2429,7 +2429,7 @@ const TALENTS_V2 = [
   { id:'mighty', name:'Mighty', desc:'+3 STR', tier:1, requires:null, apply:()=>{ player.str+=3; } },
   { id:'scholar', name:'Scholar', desc:'+3 INT', tier:1, requires:null, apply:()=>{ player.int+=3; } },
   { id:'scavenger', name:'Scavenger', desc:'+20% gold from all loot', tier:1, requires:null, apply:()=>{ player.goldBonus=0.2; } },
-  { id:'vitality', name:'Vitality', desc:'HP/MP regeneration ticks twice as often', tier:1, requires:null, apply:()=>{ player.regenBonus=true; } },
+  { id:'vitality', name:'Vitality', desc:'HP/MP regeneration ticks noticeably faster (stacks with other regen-speed sources)', tier:1, requires:null, apply:()=>{ player.regenBonusStacks=(player.regenBonusStacks||0)+1; } },
   { id:'ironstomach', name:'Iron Stomach', desc:'+40 Max Stamina', tier:1, requires:null, apply:()=>{ player.maxStamina=(player.maxStamina||100)+40; player.stamina=(player.stamina||100)+40; } },
   // tier 2 — requires level 5
   { id:'necrobond', name:"Necromancer's Bond", desc:'Summoned/raised/conjured allies gain +30% HP', tier:2, requires:{level:5}, apply:()=>{ player.allyHpBonus=(player.allyHpBonus||0)+0.3; } },
@@ -2689,7 +2689,7 @@ const SPECIES = [
     statMods:{ str:0, dex:2, int:2, con:-2, wil:1, cha:0 },
     traits:[
       { name:'Keen Sight', desc:'See noticeably further across the overworld.', apply:(p)=>{ p.visionBonus=(p.visionBonus||0)+2; } },
-      { name:'Old Magic', desc:'HP and MP trickle back faster between fights.', apply:(p)=>{ p.regenBonus=true; } },
+      { name:'Old Magic', desc:'HP and MP trickle back faster between fights (stacks with other regen-speed sources).', apply:(p)=>{ p.regenBonusStacks=(p.regenBonusStacks||0)+1; } },
     ],
     heritageBoost:(p)=>{ p.visionBonus=(p.visionBonus||0)+2; p.mutationRegen=(p.mutationRegen||0)+1; },
     kingdomTraitWeights:{ scholarly:6, isolationist:4, pious:2, militaristic:-2, lawless:-3 },
@@ -3605,10 +3605,13 @@ TALENTS_V2.push(
   { id:'elderone9', name:'The Elder One Ascendant', category:'eldritch', desc:'+50 Max HP; active mutations cost another 20% less HP; +3 all attributes', tier:9, requires:{level:90, talent:'elderone8'}, apply:()=>{ player.maxHp+=50; player.hp+=50; player.mutationHpCostReduction=(player.mutationHpCostReduction||0)+0.2; player.str+=3; player.dex+=3; player.int+=3; player.con+=3; player.wil+=3; player.cha+=3; } },
 
   // -- Storm Ward (weather/temperature: already full immunity by tier 5, so growth pivots into
-  // the same "the environment doesn't touch me" theme via CON/HP and the general regen-tick talent
-  // (see 'vitality') rather than restacking an already-maxed boolean flag) --
+  // the same "the environment doesn't touch me" theme via CON/HP and the general regen-speed
+  // stat (see 'vitality') rather than a flat flag -- REGEN STACKING FIX below means this tier-7
+  // node is now a real, additive reward even for a character who already has Vitality and/or the
+  // Elf "Old Magic" trait, instead of silently doing nothing for anyone who'd already picked
+  // either of those up. See player.regenBonusStacks in the main turn loop's regen block.) --
   { id:'stormward6', name:'Hardened by the Storm', category:'survival', desc:'+3 CON; +15 Max HP', tier:6, requires:{level:30, talent:'stormward_capstone'}, apply:()=>{ player.con+=3; player.maxHp+=15; player.hp+=15; } },
-  { id:'stormward7', name:'One With the Weather', category:'survival', desc:'HP/MP regeneration ticks twice as often', tier:7, requires:{level:50, talent:'stormward6'}, apply:()=>{ player.regenBonus=true; } },
+  { id:'stormward7', name:'One With the Weather', category:'survival', desc:'HP/MP regeneration ticks noticeably faster (stacks with other regen-speed sources)', tier:7, requires:{level:50, talent:'stormward6'}, apply:()=>{ player.regenBonusStacks=(player.regenBonusStacks||0)+1; } },
   { id:'stormward8', name:'Eye of Every Storm', category:'survival', desc:'+4 CON; +20 Max HP', tier:8, requires:{level:70, talent:'stormward7'}, apply:()=>{ player.con+=4; player.maxHp+=20; player.hp+=20; } },
   { id:'stormward9', name:'Avatar of the Elements', category:'survival', desc:'+6 CON; +30 Max HP', tier:9, requires:{level:90, talent:'stormward8'}, apply:()=>{ player.con+=6; player.maxHp+=30; player.hp+=30; } },
 
@@ -7903,6 +7906,25 @@ function overworldDangerScale(cx, cy) {
 }
 // MONSTER_SCALE_BASE^13 = 40 -- see REBALANCE PASS 1 comment in makeMonster below.
 const MONSTER_SCALE_BASE = Math.pow(40, 1 / 13);
+// ---- REGEN SCALING FIX (shared constant): several independent regen sources across the game --
+// player.mutationRegen (mutations/cybernetics/eldritch talents), player.stormRegenBonus (Storm
+// Ward capstone), and monster base.regen (troll, treant, war priest) -- were all flat per-turn HP
+// amounts authored once and never revisited, exactly like the passive-regen-tick bug fixed near
+// the main turn loop's regenInterval block. A flat amount is fine against a ~28 HP level-1 pool
+// and functionally meaningless against a ~5,000 HP level-99 pool. REGEN_PCT_PER_LEGACY_POINT
+// converts "1 legacy flat point" into a percentage of the relevant maxHp pool, calibrated so a
+// level-1 character (starting maxHp 28, see newPlayer) experiences EXACTLY the old flat-1-per-
+// point behavior -- nothing about early game changes, only how it's expressed. See the three
+// call sites (makeMonster's regen field, mutationRegen/stormRegenBonus in processEntityStatus)
+// for how each applies it, and REGEN_STACK_CAP_PCT for why heavily-stacked player builds don't
+// snowball into trivializing combat at high level.
+const REGEN_PCT_PER_LEGACY_POINT = 1 / 28;
+const REGEN_STACK_CAP_PCT = 0.08; // no single per-turn player regen source stacks past 8% of the relevant pool per turn, regardless of how many talents/mutations feed it
+function scaledRegenFromLegacyPoints(points, maxPool) {
+  if (!points) return 0;
+  const pct = Math.min(REGEN_STACK_CAP_PCT, points * REGEN_PCT_PER_LEGACY_POINT);
+  return Math.max(1, Math.round(maxPool * pct));
+}
 // Player level (1-99) -> the same ~1-14 depthScale range the monster power curve is calibrated
 // for (see MONSTER_SCALE_BASE/makeMonster: depthScale=14 is "the deepest realistic dungeon boss
 // spawn", reaching the same ~40x ceiling player HP growth reaches by level 99). Anything that
@@ -8011,7 +8033,16 @@ function makeMonster(monsterId, x, y, depthScale, rng) {
     atk: base.fixedStats ? base.atk.slice() : [Math.round(base.atk[0]*scale), Math.round(base.atk[1]*scale)],
     armor: base.armor, glyph: base.glyph, color: base.color, xp: Math.round(base.xp * scale),
     behavior: base.behavior, alive: true, poison: base.poison || 0, frost: base.frost || 0, fire: base.fire || 0,
-    lifesteal: !!base.lifesteal, regen: base.regen || 0, boss: !!base.boss, dropGold: !!base.dropGold,
+    lifesteal: !!base.lifesteal,
+    // ---- REGEN SCALING FIX: regen used to be copied straight from base.regen with no scale
+    // applied, unlike every other combat stat two lines up (hp/str/atk all multiply by `scale`).
+    // A troll's regen:2 was a real, felt mechanic against its unscaled ~50 HP at shallow depth,
+    // but the exact same monster (or a repopulated/infernal-empowered copy of it) can spawn far
+    // deeper too, where its HP might be scaled 10-30x -- and its regen would stay exactly 2,
+    // silently vanishing as a threat. Scaling it the same way its other stats already are keeps
+    // "this thing heals itself, you need to out-damage it" a real mechanic at every depth it can
+    // appear, not just the shallowest one.
+    regen: Math.round((base.regen || 0) * scale), boss: !!base.boss, dropGold: !!base.dropGold,
     state: 'idle', target: null, statusPoison: 0, statusSlow: 0, statusFear: 0, powerScale: scale, depthScale,
   };
   for (const f of MONSTER_EXTRA_FIELDS) if (base[f] !== undefined) m[f] = base[f];
@@ -17519,23 +17550,48 @@ function openCalledShotMenu() {
     { label: 'The weapon arm (stagger)', action: () => beginCalledShot('arms') },
   ]);
 }
+// ---- BUGFIX + REWORK (resting scalability): the old version fast-forwarded one endTurn() per
+// 20ms real-time tick, hard-capped at 80 ticks total, and simply stopped -- with NO log message --
+// if it hit that cap before reaching full HP/MP. Combined with the flat +1/tick regen bug fixed
+// above (see the regenInterval block in the main turn loop), a high-level character could press
+// [r], watch it silently stop after ~1.6 seconds having healed almost nothing, and have no idea
+// whether that was a bug, a hidden interruption, or intended behavior. Two independent problems,
+// two independent fixes:
+//   1. Regen amount now scales with maxHp/maxMp (fixed above), so a full rest takes a roughly
+//      constant NUMBER OF TURNS at any level instead of exploding with maxHp.
+//   2. This function now processes several turns per real-time tick (turnsPerBatch) so that
+//      constant turn-count doesn't turn into an unreasonably long real-time wait, raises the
+//      safety cap to a number no legitimate rest should ever hit, and -- critically -- always
+//      logs WHY it stopped if it stops short of full, so hitting the safety cap reads as "the
+//      game told me something," never as a silent freeze.
+const REST_SAFETY_CAP_TURNS = 6000; // generous; a real full-HP rest at any level needs well under this
+const REST_TURNS_PER_BATCH = 8; // turns processed per 20ms tick, keeps real-time wait reasonable
 function doRest() {
   if (gameState !== 'playing') return;
   if (player.hp >= player.maxHp && player.mp >= player.maxMp) { log('You are already at full strength.'); return; }
   const nearbyThreat = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 8 && hasLOS(player.x,player.y,m.x,m.y));
   if (nearbyThreat) { log("You can't rest with danger nearby!"); return; }
   autoRunActive = true;
-  let ticks = 0;
+  let turnsElapsed = 0;
   const interval = setInterval(() => {
-    const full = player.hp >= player.maxHp && player.mp >= player.maxMp;
-    if (gameState !== 'playing' || full || ticks >= 80 || !autoRunActive) {
-      if (full) { player.secondWindCharges = player.secondWindMax || 0; Sound.play('restComplete'); grantDiseaseCureProgress('restCure', 3); }
-      autoRunActive = false; clearInterval(interval); render(); return;
+    if (gameState !== 'playing' || !autoRunActive) { autoRunActive = false; clearInterval(interval); render(); return; }
+    for (let i = 0; i < REST_TURNS_PER_BATCH; i++) {
+      const full = player.hp >= player.maxHp && player.mp >= player.maxMp;
+      if (full) {
+        player.secondWindCharges = player.secondWindMax || 0; Sound.play('restComplete');
+        grantDiseaseCureProgress('restCure', 3);
+        autoRunActive = false; clearInterval(interval); render(); return;
+      }
+      if (turnsElapsed >= REST_SAFETY_CAP_TURNS) {
+        log(`You rest for a long while but can't seem to fully recover right now -- something is keeping your body from settling. (Rested ${turnsElapsed} turns.)`);
+        autoRunActive = false; clearInterval(interval); render(); return;
+      }
+      const threat = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 6 && hasLOS(player.x,player.y,m.x,m.y));
+      if (threat) { log('Your rest is interrupted!'); autoRunActive = false; clearInterval(interval); render(); return; }
+      endTurn();
+      turnsElapsed++;
+      if (gameState !== 'playing' || !player.alive) { clearInterval(interval); return; }
     }
-    const threat = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 6 && hasLOS(player.x,player.y,m.x,m.y));
-    if (threat) { log('Your rest is interrupted!'); autoRunActive = false; clearInterval(interval); render(); return; }
-    endTurn();
-    ticks++;
   }, 20);
 }
 
@@ -20561,11 +20617,21 @@ function processEntityStatus(e) {
     if (e.hp <= 0) onDeath(e, null);
   }
   if (e.regen) e.hp = Math.min(e.maxHp, e.hp + e.regen);
-  if (e === player && player.mutationRegen) player.hp = Math.min(player.maxHp, player.hp + player.mutationRegen);
+  // ---- REGEN SCALING FIX: mutationRegen (mutations/cybernetics/eldritch talents) used to add its
+  // flat point total directly as HP every turn -- see REGEN_PCT_PER_LEGACY_POINT's comment near
+  // MONSTER_SCALE_BASE for why that's fine at level 1 and irrelevant by level 99. Converted to a
+  // percentage of the player's OWN maxHp (not a monster's), stack-capped the same way, so a fully
+  // invested Symbiotic/eldritch-corruption build's signature "wounds close almost as quickly as
+  // they open" fantasy stays true at every level instead of decaying into an invisible rounding
+  // error by the time a build could realistically stack many of its sources together.
+  if (e === player && player.mutationRegen) player.hp = Math.min(player.maxHp, player.hp + scaledRegenFromLegacyPoints(player.mutationRegen, player.maxHp));
   // Eye of the Storm capstone: thrives specifically in weather severe enough to matter (proxied by
   // a strong visMod -- the same field driving the vision/accuracy penalties everyone else suffers).
   if (e === player && player.stormRegenBonus && !curIsDungeon() && Math.abs(currentWeatherDef().visMod || 0) >= 2 && player.hp < player.maxHp && Math.random() < 0.3) {
-    player.hp = Math.min(player.maxHp, player.hp + 1);
+    // ---- REGEN SCALING FIX: same flat-point issue as mutationRegen just above -- this used to be
+    // a hardcoded +1, meaningful at level 1 and irrelevant by endgame despite requiring a tier-5,
+    // level-20 capstone talent to unlock.
+    player.hp = Math.min(player.maxHp, player.hp + scaledRegenFromLegacyPoints(1, player.maxHp));
   }
   // ---- BODY & HEALTH OVERHAUL: bleeding, wound healing, and infection risk for a neglected
   // Maimed limb. See the framework block near igniteTile (ensureBodyParts et al) for the design
@@ -26782,8 +26848,35 @@ function endTurn() {
   // Willpower (WIL) quickens the passive HP/MP trickle: every ~3 points of WIL above baseline
   // shaves a turn off the interval, floored so it can never tick every single turn.
   const wilRegenSpeedup = Math.floor(Math.max(0, player.wil - 8) / 3);
-  const regenInterval = Math.max(4, (player.regenBonus ? 5 : 10) - wilRegenSpeedup);
-  if (turnCount % regenInterval === 0) { player.hp = Math.min(player.maxHp, player.hp + 1); player.mp = Math.min(player.maxMp, player.mp + 1); }
+  // ---- REGEN STACKING FIX: player.regenBonus used to be a plain boolean set (independently) by
+  // three different sources -- the 'vitality' talent (tier 1, no prerequisites), the Elf "Old
+  // Magic" racial trait, and 'stormward7' (a tier-7 capstone gated behind level 50 and 6 prior
+  // talent picks). Because it was a boolean, having ANY ONE of those three made the other two
+  // complete dead picks -- a character who already took Vitality got precisely nothing from later
+  // spending a talent point (a scarce resource, one every 3 levels) on stormward7, with no way to
+  // tell without reading source. Converted to player.regenBonusStacks, a real counter: each source
+  // increments it once (see the three apply() functions), and speed scales with stacks instead of
+  // just their presence. 1 stack reproduces the exact old "twice as often" behavior bit-for-bit
+  // (so nothing about single-source builds changes); 2-3 stacks now give real, further, diminishing
+  // returns instead of nothing, so every one of the three sources is worth taking no matter what
+  // order a build picks them up in.
+  const regenStacks = player.regenBonusStacks || 0;
+  const baseRegenInterval = 10 / (1 + regenStacks);
+  const regenInterval = Math.max(4, Math.round(baseRegenInterval - wilRegenSpeedup));
+  // ---- BUGFIX (resting scalability): this used to add a flat +1 HP/+1 MP per tick no matter what
+  // player.maxHp/maxMp were. That's invisible at level 1 (28 max HP) but by level 99, maxHp has
+  // grown roughly 180x (see levelUp's per-level HP formula) while this stayed exactly 1 -- passive
+  // regen and doRest() (which just calls endTurn() in a loop until full or interrupted, see below)
+  // both silently became almost useless at high level: fully healing a 5,000 HP endgame character
+  // this way could take tens of thousands of turns. Scaling the per-tick amount off maxHp/maxMp
+  // (floored at the old flat 1 so early game feels EXACTLY the same as before) keeps "how long a
+  // full rest takes" roughly constant across the entire 1-99 range instead of quietly exploding.
+  if (turnCount % regenInterval === 0) {
+    const hpRegenAmt = Math.max(1, Math.round(player.maxHp * 0.006));
+    const mpRegenAmt = Math.max(1, Math.round(player.maxMp * 0.006));
+    player.hp = Math.min(player.maxHp, player.hp + hpRegenAmt);
+    player.mp = Math.min(player.maxMp, player.mp + mpRegenAmt);
+  }
   // ---- v3: passive auto-repair from talents/cybernetics/mutations (Blacksmith's Touch, Nanite
   // Repair Mesh, Flesh-Melding Symbiosis) -- slow, steady, and stacks if you have more than one ----
   if (player.autoRepairRate > 0 && turnCount % 20 === 0) {
