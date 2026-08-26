@@ -515,7 +515,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.39.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.40.0-alpha</div>
     </div>
   </div>
 
@@ -1344,11 +1344,30 @@ function baseDurabilityFor(base, affixTier) {
 // the item's base damage/armor/value after affixes are applied. Rarity still
 // controls affix quality; this controls the base the affixes sit on top of.
 // ============================================================================
+// BALANCE PASS 3: exponent raised from 0.55 to 2/3. Measured the actual growth rates against each
+// other rather than guessing: makeMonster scales monster HP/STR/ATK uniformly by up to 40x from
+// depthScale 1 to 14 (see REBALANCE PASS 1 comment there), but this formula at 0.55 only grew
+// monster-drop gear power by ~8.5x over that same range -- a real ~4.7x growth-rate mismatch that
+// would make high-level fights increasingly slow, sponge-y damage races even though the player's
+// own HP pool (which grows faster still, ~180x by level 99 -- see levelUp) was never actually in
+// danger. That's not "hard", it's tedious, and a long grindy fight has more turns for dodge/crit
+// variance to eventually go wrong anyway, which quietly reintroduces unfair-feeling deaths through
+// the back door. 2/3 was chosen for a second reason, not just the monster-HP curve: it makes
+// itemPowerMult(40) land at ~12.2x, matching what playerLevelPowerMult(99) below -- the OTHER
+// half of this same two-curve system, used for quest rewards instead of monster drops -- already
+// implied a level-99 character's gear power should be. Monster loot and quest rewards intended
+// for the same character now actually agree with each other instead of loot quietly undershooting
+// quest gear by ~30% at every level, which was true before this change and had nothing to do with
+// monster HP at all.
 function itemPowerMult(monsterScale) {
-  return 1 + Math.pow(Math.max(0, (monsterScale || 1) - 1), 0.55);
+  return 1 + Math.pow(Math.max(0, (monsterScale || 1) - 1), 2/3);
 }
 // Companion curve for gear sources that don't have a specific monster driving them (radiant
-// quest rewards, and anywhere else that only has the player's own level to key off of).
+// quest rewards, and anywhere else that only has the player's own level to key off of). Kept as
+// its own formula (rather than routed through itemPowerMult + a level-to-scale conversion)
+// because it's tuned directly against player level, which is what quest design actually reasons
+// about -- see the BALANCE PASS 3 comment above for how the two are now calibrated to agree at
+// endgame despite staying independent formulas.
 function playerLevelPowerMult(level) {
   return 1 + Math.pow(Math.max(0, (level || 1) - 1) / 12, 1.15);
 }
@@ -1425,7 +1444,16 @@ function makeItem(baseId, rarity, rng, powerMult) {
   // endgame-scaled monster is a stronger Sharp Waraxe, not just a coin-flip for a better affix.
   if (powerMult && powerMult > 1) {
     if (dmg) { dmg[0] = Math.max(1, Math.round(dmg[0] * powerMult)); dmg[1] = Math.max(dmg[0], Math.round(dmg[1] * powerMult)); }
-    if (base.type === 'armor') armor = Math.round(armor * powerMult);
+    // BALANCE PASS 6: floor at -3 BEFORE scaling by powerMult, not after -- found via a real
+    // 50,000-item generation stress test (not hand-picked cases): "Cracked"/"Cursed" affixes carry
+    // a flat armorMod:-2 intended as mild, always-visible-at-a-glance curse flavor, but multiplying
+    // that negative value by the same powerMult that scales positive stats made the penalty grow
+    // WITH drop level -- a "Cursed Ring" found at level 90 rolled armor as low as -20 to -25 in the
+    // stress test, effectively a level-scaling trap nothing in the design intended. A debuff
+    // shouldn't get worse just because it dropped later in the game the same way a buff gets
+    // better. Clamped here so any cursed item's penalty stays flat and bounded (-3 max) regardless
+    // of when or how powerful a monster it happened to drop from.
+    if (base.type === 'armor') armor = armor < 0 ? Math.max(-3, armor) : Math.round(armor * powerMult);
     for (const s in bonuses) bonuses[s] = Math.round(bonuses[s] * powerMult);
     value *= powerMult;
     it.powerMult = powerMult;
@@ -1750,7 +1778,7 @@ MONSTER_BASES.alphawolf = { name:'Alpha Wolf', glyph:'w', color:'#e0e0e0', hp:30
 Object.assign(MONSTER_BASES.orcwarlord, { bossTier:'uncommon' });
 MONSTER_BASES.vampire = { name:'Vampire', glyph:'V', color:'#8a1a2a', hp:55, str:15, dex:16, atk:[5,10], armor:2, xp:60, behavior:'aggressive', dtier:3, boss:true, bossTier:'uncommon', lifesteal:true };
 Object.assign(MONSTER_BASES.lich, { bossTier:'rare' });
-MONSTER_BASES.demonlord = { name:'Demon Lord', glyph:'D', color:'#c92a2a', hp:100, str:22, dex:12, atk:[7,16], armor:5, xp:120, behavior:'aggressive', dtier:5, boss:true, bossTier:'rare', fire:5 };
+MONSTER_BASES.demonlord = { name:'Demon Lord', glyph:'D', color:'#c92a2a', hp:260, str:24, dex:13, atk:[10,19], armor:8, xp:460, behavior:'aggressive', dtier:5, boss:true, bossTier:'rare', fire:5 };
 MONSTER_BASES.ancientdragon = { name:'Ancient Dragon', glyph:'&', color:'#2ac97a', hp:140, str:25, dex:10, atk:[9,20], armor:7, xp:180, behavior:'aggressive', dtier:6, boss:true, bossTier:'rare', fire:6 };
 
 // ---- new true bosses filling faction gaps (previously only minibosses existed for these), each
@@ -1807,7 +1835,7 @@ const RECIPES = [
   { id:'smelt_iron', name:'Smelt Iron Ingot', category:'crafting', inputs:[{id:'ore',qty:2}], output:{id:'iron_ingot',qty:1} },
   { id:'craft_repair_kit', name:'Assemble Repair Kit', category:'crafting', inputs:[{id:'iron_ingot',qty:1},{id:'leather',qty:1}], output:{id:'repair_kit',qty:1} },
   { id:'craft_leather', name:'Craft Leather Armor', category:'crafting', inputs:[{id:'pelt',qty:3}], output:{id:'leather',qty:1} },
-  { id:'craft_boneamulet', name:'Craft Bone Amulet', category:'crafting', inputs:[{id:'bone',qty:3}], output:{id:'amulet',qty:1} },
+  { id:'craft_boneamulet', name:'Craft Bone Amulet', category:'crafting', inputs:[{id:'bone',qty:3},{id:'iron_ingot',qty:1}], output:{id:'amulet',qty:1} },
   { id:'craft_gloves', name:'Stitch Leather Gloves', category:'crafting', inputs:[{id:'leather_scrap',qty:2},{id:'cloth',qty:1}], output:{id:'gloves',qty:1} },
 ];
 
@@ -2412,10 +2440,10 @@ const TALENTS_V2 = [
   { id:'waterborn', name:'Waterborn', desc:'Swimming no longer drains stamina', tier:2, requires:{level:5}, apply:()=>{ player.freeSwim=true; } },
   { id:'blacksmithstouch', name:"Blacksmith's Touch", desc:'Equipped gear slowly repairs itself over time (1 durability every 20 turns)', tier:2, requires:{level:5}, apply:()=>{ player.autoRepairRate=(player.autoRepairRate||0)+1; } },
   // tier 3 — requires level 10 + a specific tier-2 talent
-  { id:'undying', name:'Undying', desc:'Second Wind can trigger one additional time before resting', tier:3, requires:{level:10, talent:'secondwind'}, apply:()=>{ player.secondWindMax=(player.secondWindMax||1)+1; player.secondWindCharges=player.secondWindMax; } },
-  { id:'archmage', name:'Archmage', desc:'+20% damage from all offensive spells', tier:3, requires:{level:10, talent:'manaflow'}, apply:()=>{ player.spellDmgBonus=0.2; } },
+  { id:'undying', name:'Reprieve', desc:'Second Wind can trigger one additional time before resting', tier:3, requires:{level:10, talent:'secondwind'}, apply:()=>{ player.secondWindMax=(player.secondWindMax||1)+1; player.secondWindCharges=player.secondWindMax; } },
+  { id:'archmage', name:'Arcane Adept', desc:'+20% damage from all offensive spells', tier:3, requires:{level:10, talent:'manaflow'}, apply:()=>{ player.spellDmgBonus=0.2; } },
   { id:'warlord', name:'Warlord', desc:'+3 STR, +3 DEX, +5% critical hit chance', tier:3, requires:{level:10, talent:'battlehardened'}, apply:()=>{ player.str+=3; player.dex+=3; player.critBonus=(player.critBonus||0)+0.05; } },
-  { id:'grandnecromancer', name:'Grand Necromancer', desc:'Summoned allies gain +2 Armor and never expire from duration', tier:3, requires:{level:10, talent:'necrobond'}, apply:()=>{ player.allyArmorBonus=2; player.allyPermanent=true; } },
+  { id:'grandnecromancer', name:'Necromancer', desc:'Summoned allies gain +2 Armor and never expire from duration', tier:3, requires:{level:10, talent:'necrobond'}, apply:()=>{ player.allyArmorBonus=2; player.allyPermanent=true; } },
   // tier 4 — capstones, requires level 15 + a tier-3 talent
   { id:'ascended', name:'Ascended', desc:'+30 Max HP, +20 Max MP, +2 to all attributes', tier:4, requires:{level:15, talent:'archmage'}, apply:()=>{ player.maxHp+=30; player.hp+=30; player.maxMp+=20; player.mp+=20; player.str+=2; player.dex+=2; player.int+=2; player.con+=2; player.wil+=2; player.cha+=2; } },
   { id:'juggernaut', name:'Juggernaut', desc:'+30 Max HP, +5 Armor, +2 STR', tier:4, requires:{level:15, talent:'warlord'}, apply:()=>{ player.maxHp+=30; player.hp+=30; player.talentArmor=(player.talentArmor||0)+5; player.str+=2; } },
@@ -2931,7 +2959,7 @@ const TECHNIQUES = [
   // throwRadiusBonus all read straight into resolveThrownWeapon() and the grenade-throw path, so
   // these techniques (and the matching Throwing talents below) buff actual thrown items too, not
   // just themselves.
-  { id:'quickdraw', name:'Quick Draw', resource:'stamina', mp:7, type:'damage', power:[8,15], range:5, school:'Throwing', desc:'A blade leaves your hand before the target even registers the motion.' },
+  { id:'quickdraw', name:'Quick Draw', resource:'stamina', mp:8, type:'damage', power:[7,14], range:5, school:'Throwing', desc:'A blade leaves your hand before the target even registers the motion.' },
   { id:'fanofknives', name:'Fan of Knives', resource:'stamina', mp:15, type:'damage', power:[5,9], range:4, aoe:true, aoeRadius:2, school:'Throwing', desc:'A spread of blades loosed in a single motion.' },
   { id:'pinningthrow', name:'Pinning Throw', resource:'stamina', mp:10, type:'debuff', stat:'dex', power:-8, dur:10, range:5, school:'Throwing', desc:'A throw aimed at tendon and joint, not the kill.' },
   { id:'huntersfocus', name:"Hunter's Focus", resource:'stamina', mp:8, type:'buff', stat:'crit', power:0.15, dur:15, range:0, school:'Throwing', desc:'Your grip steadies and your next several throws will not miss by chance.' },
@@ -3091,7 +3119,7 @@ const CYBERNETICS = [
   { id:'threatscanner', name:'Threat Scanner', category:'Sensory', activation:'active', resource:'charge', mp:10, type:'detectability', range:0, desc:'Pings the area for hostile signatures.' },
   { id:'neuralcoprocessor', name:'Neural Coprocessor', category:'Sensory', activation:'passive', desc:'An implanted chip that accelerates your own thoughts.', apply:()=>{ player.int+=3; }, remove:()=>{ player.int-=3; } },
   { id:'painsuppressor', name:'Pain Suppressor', category:'Sensory', activation:'passive', desc:'Dulls pain signals, letting you keep fighting through wounds.', apply:()=>{ player.maxHp+=12; player.hp+=12; }, remove:()=>{ player.maxHp-=12; player.hp=Math.min(player.hp,player.maxHp); } },
-  { id:'nanoiterepair', name:'Nanite Repair Mesh', category:'Sensory', activation:'active', resource:'charge', mp:16, type:'heal', power:[14,24], range:0, desc:'Releases a cloud of repair nanites into your bloodstream.' },
+  { id:'nanoiterepair', name:'Nanite Cloud', category:'Sensory', activation:'active', resource:'charge', mp:16, type:'heal', power:[14,24], range:0, desc:'Releases a cloud of repair nanites into your bloodstream.' },
 
   { id:'ballisticweave', name:'Ballistic Weave', category:'Defense', activation:'passive', desc:'Fibers woven under the skin that shrug off impacts.', apply:()=>{ player.cyberArmor=(player.cyberArmor||0)+3; }, remove:()=>{ player.cyberArmor=(player.cyberArmor||0)-3; } },
   { id:'adrenalinjector', name:'Adrenal Injector', category:'Defense', activation:'active', resource:'charge', mp:14, type:'heal', power:[12,20], range:0, desc:'An automated injector floods you with combat stims.' },
@@ -3340,7 +3368,7 @@ TALENTS_V2.push(
   { id:'cyberslot2', name:'Wetware Expansion II', desc:'+1 more Cybernetic slot', tier:3, requires:{level:10, talent:'cyberslot1'}, apply:()=>{ player.cyberSlots=(player.cyberSlots||3)+1; } },
   { id:'chargeflow', name:'Charge Flow', desc:'Active cybernetics cost 20% less Charge', tier:3, requires:{level:10, talent:'overclocked'}, apply:()=>{ player.cyberCostReduction=0.2; } },
   { id:'deepersight', name:'Deeper Sight', desc:'All mutations become accessible 10 corruption earlier', tier:3, requires:{level:10, talent:'corruptedvigor'}, apply:()=>{ player.corruptionReqReduction=10; } },
-  { id:'weaponmaster', name:'Weapon Master', desc:'+15% damage from all techniques', tier:3, requires:{level:10, talent:'martialdiscipline'}, apply:()=>{ player.techniqueDmgBonus=0.15; } },
+  { id:'weaponmaster', name:'Blade Adept', desc:'+15% damage from all techniques', tier:3, requires:{level:10, talent:'martialdiscipline'}, apply:()=>{ player.techniqueDmgBonus=0.15; } },
   // tier 4 (level 15 + prereq)
   { id:'ironsynapse', name:'Iron Synapse', desc:'+2 Cybernetic slots', tier:4, requires:{level:15, talent:'cyberslot2'}, apply:()=>{ player.cyberSlots=(player.cyberSlots||3)+2; } },
   { id:'unholyvessel', name:'Unholy Vessel', desc:'+20 Max HP; active mutations cost 25% less HP', tier:4, requires:{level:15, talent:'deepersight'}, apply:()=>{ player.maxHp+=20; player.hp+=20; player.mutationHpCostReduction=0.25; } },
@@ -3370,7 +3398,7 @@ for (const id in LEGACY_TALENT_CATEGORIES) { const t = TALENTS_V2.find(x => x.id
 // ===================== TALENT EXPANSION: cooking, alchemy, swimming, eldritch, and more combat variety =====================
 TALENTS_V2.push(
   // ---- tier 1: no requirements ----
-  { id:'masterchef', name:'Master Chef', category:'cooking', desc:'Foods you cook heal 30% more', tier:1, requires:null, apply:()=>{ player.cookingHealBonus=(player.cookingHealBonus||0)+0.3; } },
+  { id:'masterchef', name:'Camp Cook', category:'cooking', desc:'Foods you cook heal 30% more', tier:1, requires:null, apply:()=>{ player.cookingHealBonus=(player.cookingHealBonus||0)+0.3; } },
   { id:'spicehand', name:'Spice Hand', category:'cooking', desc:'Stat buffs from food last 30% longer', tier:1, requires:null, apply:()=>{ player.cookingDurBonus=(player.cookingDurBonus||0)+0.3; } },
   { id:'herbalist', name:'Herbalist', category:'alchemy', desc:'+25% potency on all potions and elixirs you drink', tier:1, requires:null, apply:()=>{ player.alchemyPotencyBonus=(player.alchemyPotencyBonus||0)+0.25; } },
   { id:'steadyhands', name:'Steady Hands', category:'alchemy', desc:'Thrown grenades/bombs deal 20% more damage', tier:1, requires:null, apply:()=>{ player.throwDmgBonus=(player.throwDmgBonus||0)+0.2; } },
@@ -3433,7 +3461,7 @@ TALENTS_V2.push(
   { id:'deepdiver', name:'Deep Diver', category:'survival', desc:'Swimming no longer drains stamina (same as Waterborn if not already taken)', tier:2, requires:{level:5}, apply:()=>{ player.freeSwim=true; } },
   { id:'cartographer', name:'Cartographer', category:'survival', desc:'Reveal a wide area around you whenever you enter a new dungeon level', tier:2, requires:{level:5}, apply:()=>{ player.autoRevealOnLevel=true; } },
   { id:'nightowl', name:'Night Owl', category:'survival', desc:'Permanent minor night vision', tier:2, requires:{level:5}, apply:()=>{ player.permaNightVision=true; } },
-  { id:'dodgemaster', name:'Dodge Master', category:'combat', desc:'8% chance to fully evade an incoming attack', tier:2, requires:{level:5}, apply:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.08; } },
+  { id:'dodgemaster', name:'Nimble Step', category:'combat', desc:'8% chance to fully evade an incoming attack', tier:2, requires:{level:5}, apply:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.08; } },
   { id:'thornskin', name:'Thornskin', category:'combat', desc:'Reflect 10% of melee damage taken back at the attacker', tier:2, requires:{level:5}, apply:()=>{ player.thornsPercent=(player.thornsPercent||0)+0.1; } },
   { id:'executioner', name:'Executioner', category:'combat', desc:'+25% damage against enemies below 25% HP', tier:2, requires:{level:5}, apply:()=>{ player.executeBonus=(player.executeBonus||0)+0.25; } },
   { id:'elementalist', name:'Elementalist', category:'magic', desc:'+15% damage from fire/frost/poison sources', tier:2, requires:{level:5}, apply:()=>{ player.elementalDmgBonus=(player.elementalDmgBonus||0)+0.15; } },
@@ -3442,9 +3470,9 @@ TALENTS_V2.push(
   { id:'voidtouched', name:'Void-Touched', category:'eldritch', desc:'Corruption requirements for eldritch abilities are 8 lower', tier:2, requires:{level:5}, apply:()=>{ player.corruptionReqReduction=(player.corruptionReqReduction||0)+8; } },
   { id:'trapsense', name:'Trap Sense', category:'survival', desc:'You are 40% less likely to trigger hidden traps', tier:2, requires:{level:5}, apply:()=>{ player.trapAvoidBonus=(player.trapAvoidBonus||0)+0.4; } },
   // ---- tier 3: level 10 + prereq ----
-  { id:'grandchef', name:'Grand Chef', category:'cooking', desc:'Foods you cook heal 30% more (stacks further); buffs last another 20% longer', tier:3, requires:{level:10, talent:'masterchef'}, apply:()=>{ player.cookingHealBonus=(player.cookingHealBonus||0)+0.3; player.cookingDurBonus=(player.cookingDurBonus||0)+0.2; } },
+  { id:'grandchef', name:'Skilled Chef', category:'cooking', desc:'Foods you cook heal 30% more (stacks further); buffs last another 20% longer', tier:3, requires:{level:10, talent:'masterchef'}, apply:()=>{ player.cookingHealBonus=(player.cookingHealBonus||0)+0.3; player.cookingDurBonus=(player.cookingDurBonus||0)+0.2; } },
   { id:'banquethall', name:'Banquet Hall', category:'cooking', desc:'Another cooking yield bonus, and 15% chance foods grant a bonus second effect', tier:3, requires:{level:10, talent:'banquet'}, apply:()=>{ player.cookingYieldBonus=(player.cookingYieldBonus||0)+1; player.cookingBonusEffectChance=(player.cookingBonusEffectChance||0)+0.15; } },
-  { id:'grandalchemist', name:'Grand Alchemist', category:'alchemy', desc:'+25% more potency on potions/elixirs (stacks)', tier:3, requires:{level:10, talent:'herbalist'}, apply:()=>{ player.alchemyPotencyBonus=(player.alchemyPotencyBonus||0)+0.25; } },
+  { id:'grandalchemist', name:'Skilled Alchemist', category:'alchemy', desc:'+25% more potency on potions/elixirs (stacks)', tier:3, requires:{level:10, talent:'herbalist'}, apply:()=>{ player.alchemyPotencyBonus=(player.alchemyPotencyBonus||0)+0.25; } },
   { id:'demolitionist', name:'Demolitionist', category:'alchemy', desc:'Thrown bombs/grenades affect a wider area', tier:3, requires:{level:10, talent:'steadyhands'}, apply:()=>{ player.throwRadiusBonus=(player.throwRadiusBonus||0)+1; } },
   { id:'abyssalstride', name:'Abyssal Stride', category:'survival', desc:'+5 DEX while in water; waterbreathing while swimming', tier:3, requires:{level:10, talent:'tidewalker'}, apply:()=>{ player.waterDexBonus=(player.waterDexBonus||0)+5; player.permaWaterbreathing=true; } },
   { id:'assassinseye', name:"Assassin's Eye", category:'combat', desc:'+10% critical hit chance', tier:3, requires:{level:10, talent:'quickfingers'}, apply:()=>{ player.critBonus=(player.critBonus||0)+0.1; } },
@@ -3452,20 +3480,20 @@ TALENTS_V2.push(
   { id:'evasive', name:'Evasive', category:'combat', desc:'+7% dodge chance', tier:3, requires:{level:10, talent:'dodgemaster'}, apply:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.07; } },
   { id:'briarskin', name:'Briarskin', category:'combat', desc:'Reflect another 10% of melee damage taken', tier:3, requires:{level:10, talent:'thornskin'}, apply:()=>{ player.thornsPercent=(player.thornsPercent||0)+0.1; } },
   { id:'slayer', name:'Slayer', category:'combat', desc:'+25% damage against bosses and minibosses', tier:3, requires:{level:10, talent:'executioner'}, apply:()=>{ player.bossDmgBonus=(player.bossDmgBonus||0)+0.25; } },
-  { id:'archelementalist', name:'Arch-Elementalist', category:'magic', desc:'+15% more damage from fire/frost/poison sources', tier:3, requires:{level:10, talent:'elementalist'}, apply:()=>{ player.elementalDmgBonus=(player.elementalDmgBonus||0)+0.15; } },
+  { id:'archelementalist', name:'Elemental Adept', category:'magic', desc:'+15% more damage from fire/frost/poison sources', tier:3, requires:{level:10, talent:'elementalist'}, apply:()=>{ player.elementalDmgBonus=(player.elementalDmgBonus||0)+0.15; } },
   { id:'treasurehunter', name:'Treasure Hunter', category:'survival', desc:'+25% more gold from loot', tier:3, requires:{level:10, talent:'goldenTouch'}, apply:()=>{ player.goldBonus=(player.goldBonus||0)+0.25; } },
   { id:'fastlearner', name:'Fast Learner', category:'survival', desc:'+15% more XP from all kills', tier:3, requires:{level:10, talent:'quickstudy'}, apply:()=>{ player.xpBonus=(player.xpBonus||0)+0.15; } },
   { id:'maddeningpresence', name:'Maddening Presence', category:'eldritch', desc:'Your eldritch attacks have a chance to confuse the target', tier:3, requires:{level:10, talent:'voidtouched'}, apply:()=>{ player.eldritchConfuseChance=(player.eldritchConfuseChance||0)+0.2; } },
   { id:'trapmaster', name:'Trap Master', category:'survival', desc:'You never trigger hidden dungeon traps', tier:3, requires:{level:10, talent:'trapsense'}, apply:()=>{ player.trapAvoidBonus=(player.trapAvoidBonus||0)+0.3; player.trapImmune=true; } },
   // ---- tier 4: level 15 + prereq (capstones) ----
-  { id:'legendarychef', name:'Legendary Chef', category:'cooking', desc:'All food effects are dramatically stronger and longer-lasting', tier:4, requires:{level:15, talent:'grandchef'}, apply:()=>{ player.cookingHealBonus=(player.cookingHealBonus||0)+0.4; player.cookingDurBonus=(player.cookingDurBonus||0)+0.4; } },
+  { id:'legendarychef', name:'Master Chef', category:'cooking', desc:'All food effects are dramatically stronger and longer-lasting', tier:4, requires:{level:15, talent:'grandchef'}, apply:()=>{ player.cookingHealBonus=(player.cookingHealBonus||0)+0.4; player.cookingDurBonus=(player.cookingDurBonus||0)+0.4; } },
   { id:'grandmaster_alchemist', name:'Grandmaster Alchemist', category:'alchemy', desc:'+30% more potion potency; bombs deal +30% more damage', tier:4, requires:{level:15, talent:'grandalchemist'}, apply:()=>{ player.alchemyPotencyBonus=(player.alchemyPotencyBonus||0)+0.3; player.throwDmgBonus=(player.throwDmgBonus||0)+0.3; } },
   { id:'leviathansgrace', name:"Leviathan's Grace", category:'survival', desc:'+30 Max HP; move freely and fight at full strength underwater', tier:4, requires:{level:15, talent:'abyssalstride'}, apply:()=>{ player.maxHp+=30; player.hp+=30; player.waterDexBonus=(player.waterDexBonus||0)+3; } },
   { id:'deathdealer', name:'Death Dealer', category:'combat', desc:'+12% critical chance; crits deal 25% more damage', tier:4, requires:{level:15, talent:'assassinseye'}, apply:()=>{ player.critBonus=(player.critBonus||0)+0.12; player.critDmgBonus=(player.critDmgBonus||0)+0.25; } },
   { id:'fortress', name:'Fortress', category:'survival', desc:'+6 Armor (innate); +30 Max HP', tier:4, requires:{level:15, talent:'ironbulwark'}, apply:()=>{ player.talentArmor=(player.talentArmor||0)+6; player.maxHp+=30; player.hp+=30; } },
   { id:'wraithstep', name:'Wraith Step', category:'combat', desc:'+10% dodge chance', tier:4, requires:{level:15, talent:'evasive'}, apply:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.1; } },
   { id:'thornlord', name:'Thornlord', category:'combat', desc:'Reflect another 15% of melee damage taken', tier:4, requires:{level:15, talent:'briarskin'}, apply:()=>{ player.thornsPercent=(player.thornsPercent||0)+0.15; } },
-  { id:'apexpredator', name:'Apex Predator', category:'combat', desc:'+25% more damage against bosses and minibosses', tier:4, requires:{level:15, talent:'slayer'}, apply:()=>{ player.bossDmgBonus=(player.bossDmgBonus||0)+0.25; } },
+  { id:'apexpredator', name:'Champion Slayer', category:'combat', desc:'+25% more damage against bosses and minibosses', tier:4, requires:{level:15, talent:'slayer'}, apply:()=>{ player.bossDmgBonus=(player.bossDmgBonus||0)+0.25; } },
   { id:'primordialforce', name:'Primordial Force', category:'magic', desc:'+20% more damage from fire/frost/poison sources', tier:4, requires:{level:15, talent:'archelementalist'}, apply:()=>{ player.elementalDmgBonus=(player.elementalDmgBonus||0)+0.2; } },
   { id:'kingsransom', name:"King's Ransom", category:'survival', desc:'+30% more gold from loot; +20% more XP', tier:4, requires:{level:15, talent:'treasurehunter'}, apply:()=>{ player.goldBonus=(player.goldBonus||0)+0.3; player.xpBonus=(player.xpBonus||0)+0.2; } },
   { id:'mindshatter', name:'Mind Shatter', category:'eldritch', desc:'Eldritch attacks have a much higher chance to confuse or frighten the target', tier:4, requires:{level:15, talent:'maddeningpresence'}, apply:()=>{ player.eldritchConfuseChance=(player.eldritchConfuseChance||0)+0.2; player.eldritchFearChance=(player.eldritchFearChance||0)+0.2; } },
@@ -3516,7 +3544,189 @@ TALENTS_V2.push(
   { id:'rallyingpresence', name:'Rallying Presence', category:'survival', desc:'Companions are 15% stronger across the board', tier:2, requires:{level:5, talent:'bornleader'}, apply:()=>{ player.companionPowerBonus=(player.companionPowerBonus||0)+0.15; (player.companions||[]).forEach(scaleCompanionToPlayer); } },
   { id:'unbreakablebond', name:'Unbreakable Bond', category:'survival', desc:'Companions are 15% stronger still; +2 more CHA', tier:3, requires:{level:10, talent:'rallyingpresence'}, apply:()=>{ player.companionPowerBonus=(player.companionPowerBonus||0)+0.15; player.cha+=2; (player.companions||[]).forEach(scaleCompanionToPlayer); } },
   { id:'warleader', name:'War Leader', category:'survival', desc:'Companions are 20% stronger still; +3 CHA', tier:4, requires:{level:15, talent:'unbreakablebond'}, apply:()=>{ player.companionPowerBonus=(player.companionPowerBonus||0)+0.2; player.cha+=3; (player.companions||[]).forEach(scaleCompanionToPlayer); } },
-  { id:'legendaryleader', name:'Legendary Leader', category:'survival', desc:'Companions are 25% stronger still; +5 CHA', tier:5, requires:{level:20, talent:'warleader'}, apply:()=>{ player.companionPowerBonus=(player.companionPowerBonus||0)+0.25; player.cha+=5; (player.companions||[]).forEach(scaleCompanionToPlayer); } }
+  { id:'legendaryleader', name:'Legendary Leader', category:'survival', desc:'Companions are 25% stronger still; +5 CHA', tier:5, requires:{level:20, talent:'warleader'}, apply:()=>{ player.companionPowerBonus=(player.companionPowerBonus||0)+0.25; player.cha+=5; (player.companions||[]).forEach(scaleCompanionToPlayer); } },
+  // ---- Seven tier-4 lines (battletrance, masterofblades, wraithstep, thornlord, apexpredator,
+  // primordialforce, kingsransom) were left without a tier-5 capstone at all -- a genuine gap from
+  // before this pass, not an intentional design choice (every other tier-4 talent in the file leads
+  // somewhere). Closing that gap here, using the same "level 20 + prereq" shape as every other
+  // capstone, before extending every line (these included) up through tier 9 below.
+  { id:'warmaster', name:'Warmaster', category:'combat', desc:'+15% technique damage; +5% critical hit chance', tier:5, requires:{level:20, talent:'battletrance'}, apply:()=>{ player.techniqueDmgBonus=(player.techniqueDmgBonus||0)+0.15; player.critBonus=(player.critBonus||0)+0.05; } },
+  { id:'bladestorm', name:'Bladestorm', category:'Throwing', desc:'+20% thrown weapon damage; +15% chance to instantly recover a thrown weapon', tier:5, requires:{level:20, talent:'masterofblades'}, apply:()=>{ player.throwDmgBonus=(player.throwDmgBonus||0)+0.2; player.throwRecoverChance=(player.throwRecoverChance||0)+0.15; } },
+  { id:'ghostwalker', name:'Ghostwalker', category:'combat', desc:'+12% dodge chance', tier:5, requires:{level:20, talent:'wraithstep'}, apply:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.12; } },
+  { id:'thornking', name:'Thorn King', category:'combat', desc:'Reflect another 15% of melee damage taken', tier:5, requires:{level:20, talent:'thornlord'}, apply:()=>{ player.thornsPercent=(player.thornsPercent||0)+0.15; } },
+  { id:'bossbreaker', name:'Bossbreaker', category:'combat', desc:'+30% more damage against bosses and minibosses', tier:5, requires:{level:20, talent:'apexpredator'}, apply:()=>{ player.bossDmgBonus=(player.bossDmgBonus||0)+0.3; } },
+  { id:'primordialmaster', name:'Primordial Master', category:'magic', desc:'+25% more damage from fire/frost/poison sources', tier:5, requires:{level:20, talent:'primordialforce'}, apply:()=>{ player.elementalDmgBonus=(player.elementalDmgBonus||0)+0.25; } },
+  { id:'emperorsransom', name:"Emperor's Ransom", category:'survival', desc:'+35% more gold from loot; +25% more XP', tier:5, requires:{level:20, talent:'kingsransom'}, apply:()=>{ player.goldBonus=(player.goldBonus||0)+0.35; player.xpBonus=(player.xpBonus||0)+0.25; } },
+
+  // ==================== TALENT ASCENSION: tiers 6-9 (levels 30/50/70/90) ====================
+  // Every talent tree used to go quiet the instant its tier-5 capstone was taken at level 20 --
+  // with the level cap at 99 (see LEVEL_CAP) and a talent point every 3 levels (see
+  // maybeAwardTalentPoint), that left roughly 26 of a 33-point career with nothing new to spend on
+  // beyond mopping up whatever was left in unrelated trees. Every one of the 25 capstone lines
+  // above (18 original + the 7 filled in just now) gets four more nodes here, each requiring the
+  // previous tier of the SAME line plus a level threshold (30/50/70/90), so a build a player
+  // committed to at level 20 keeps paying off in real, escalating numbers all the way to the level
+  // cap instead of the game's power curve outrunning its own talent tree. Every apply() below
+  // reuses an existing, already-wired player field (the same ones the tier 1-5 talents in that
+  // line already use) -- nothing here introduces a new mechanic that isn't already read somewhere
+  // in combat/ability code, so nothing here can silently no-op.
+  // Extend a line further: add one more { id, requires:{level, talent: THIS_TIER'S_ID} } entry
+  // below the last one -- the talent screen (renderTalents/generateTalentGuideHTML) sorts tiers
+  // generically and needs no changes to pick it up.
+
+  // -- Transcendence (universal capstone: every core stat + every resource pool) --
+  { id:'transcendence6', name:'Overwhelming Presence', category:'combat', desc:'+2 to all attributes; +15 Max HP/MP', tier:6, requires:{level:30, talent:'transcendence'}, apply:()=>{ player.str+=2; player.dex+=2; player.int+=2; player.con+=2; player.wil+=2; player.cha+=2; player.maxHp+=15; player.hp+=15; player.maxMp+=15; player.mp+=15; } },
+  { id:'transcendence7', name:'Beyond Mortal Limits', category:'combat', desc:'+3 to all attributes; +20 Max Stamina/Charge', tier:7, requires:{level:50, talent:'transcendence6'}, apply:()=>{ player.str+=3; player.dex+=3; player.int+=3; player.con+=3; player.wil+=3; player.cha+=3; player.maxStamina=(player.maxStamina||100)+20; player.stamina=(player.stamina||100)+20; player.maxCharge=(player.maxCharge||60)+20; player.charge=(player.charge||60)+20; } },
+  { id:'transcendence8', name:"Godslayer's Frame", category:'combat', desc:'+3 to all attributes; +25 Max HP/MP', tier:8, requires:{level:70, talent:'transcendence7'}, apply:()=>{ player.str+=3; player.dex+=3; player.int+=3; player.con+=3; player.wil+=3; player.cha+=3; player.maxHp+=25; player.hp+=25; player.maxMp+=25; player.mp+=25; } },
+  { id:'transcendence9', name:'Apotheosis', category:'combat', desc:'+5 to all attributes; +40 Max HP/MP/Stamina/Charge', tier:9, requires:{level:90, talent:'transcendence8'}, apply:()=>{ player.str+=5; player.dex+=5; player.int+=5; player.con+=5; player.wil+=5; player.cha+=5; player.maxHp+=40; player.hp+=40; player.maxMp+=40; player.mp+=40; player.maxStamina=(player.maxStamina||100)+40; player.stamina=(player.stamina||100)+40; player.maxCharge=(player.maxCharge||60)+40; player.charge=(player.charge||60)+40; } },
+
+  // -- Perfect Soldier (pure martial: STR/DEX, technique damage, crit) --
+  { id:'perfectsoldier6', name:'Elite Operative', category:'combat', desc:'+3 STR/DEX; +5% technique damage', tier:6, requires:{level:30, talent:'perfectsoldier'}, apply:()=>{ player.str+=3; player.dex+=3; player.techniqueDmgBonus=(player.techniqueDmgBonus||0)+0.05; } },
+  { id:'perfectsoldier7', name:'One-Man Army', category:'combat', desc:'+4 STR/DEX; +5% critical hit chance', tier:7, requires:{level:50, talent:'perfectsoldier6'}, apply:()=>{ player.str+=4; player.dex+=4; player.critBonus=(player.critBonus||0)+0.05; } },
+  { id:'perfectsoldier8', name:'Living Weapon', category:'combat', desc:'+5 STR/DEX; +10% technique damage', tier:8, requires:{level:70, talent:'perfectsoldier7'}, apply:()=>{ player.str+=5; player.dex+=5; player.techniqueDmgBonus=(player.techniqueDmgBonus||0)+0.1; } },
+  { id:'perfectsoldier9', name:'Apex Soldier', category:'combat', desc:'+6 STR/DEX; +10% critical hit chance; +10% technique damage', tier:9, requires:{level:90, talent:'perfectsoldier8'}, apply:()=>{ player.str+=6; player.dex+=6; player.critBonus=(player.critBonus||0)+0.1; player.techniqueDmgBonus=(player.techniqueDmgBonus||0)+0.1; } },
+
+  // -- Lich King (necromancy: spell damage, ally strength) --
+  { id:'lichking6', name:'Deathless Sovereign', category:'magic', desc:'+15% spell damage', tier:6, requires:{level:30, talent:'lichking'}, apply:()=>{ player.spellDmgBonus=(player.spellDmgBonus||0)+0.15; } },
+  { id:'lichking7', name:'Crown of Bone', category:'magic', desc:'+20% ally HP; +2 INT', tier:7, requires:{level:50, talent:'lichking6'}, apply:()=>{ player.allyHpBonus=(player.allyHpBonus||0)+0.2; player.int+=2; } },
+  { id:'lichking8', name:'Master of the Grave', category:'magic', desc:'+20% spell damage', tier:8, requires:{level:70, talent:'lichking7'}, apply:()=>{ player.spellDmgBonus=(player.spellDmgBonus||0)+0.2; } },
+  { id:'lichking9', name:'Undying Emperor', category:'magic', desc:'+30% spell damage; +30% ally HP', tier:9, requires:{level:90, talent:'lichking8'}, apply:()=>{ player.spellDmgBonus=(player.spellDmgBonus||0)+0.3; player.allyHpBonus=(player.allyHpBonus||0)+0.3; } },
+
+  // -- Machine Ascendant (cyber: slots, charge economy) --
+  { id:'cybergod6', name:'Networked Ascendant', category:'cyber', desc:'+1 Cybernetic slot', tier:6, requires:{level:30, talent:'cybergod'}, apply:()=>{ player.cyberSlots=(player.cyberSlots||3)+1; } },
+  { id:'cybergod7', name:'Full-Spectrum Sync', category:'cyber', desc:'Active cybernetics cost another 10% less Charge', tier:7, requires:{level:50, talent:'cybergod6'}, apply:()=>{ player.cyberCostReduction=(player.cyberCostReduction||0)+0.1; } },
+  { id:'cybergod8', name:'Distributed Mind', category:'cyber', desc:'+2 Cybernetic slots', tier:8, requires:{level:70, talent:'cybergod7'}, apply:()=>{ player.cyberSlots=(player.cyberSlots||3)+2; } },
+  { id:'cybergod9', name:'Machine God', category:'cyber', desc:'+2 Cybernetic slots; active cybernetics cost another 15% less Charge', tier:9, requires:{level:90, talent:'cybergod8'}, apply:()=>{ player.cyberSlots=(player.cyberSlots||3)+2; player.cyberCostReduction=(player.cyberCostReduction||0)+0.15; } },
+
+  // -- The Elder One Stirs (eldritch mutations: HP pool, mutation cost) --
+  { id:'elderone6', name:'It Stirs Further', category:'eldritch', desc:'+20 Max HP', tier:6, requires:{level:30, talent:'elderone'}, apply:()=>{ player.maxHp+=20; player.hp+=20; } },
+  { id:'elderone7', name:'The Elder One Wakes', category:'eldritch', desc:'Active mutations cost another 15% less HP; +2 all attributes', tier:7, requires:{level:50, talent:'elderone6'}, apply:()=>{ player.mutationHpCostReduction=(player.mutationHpCostReduction||0)+0.15; player.str+=2; player.dex+=2; player.int+=2; player.con+=2; player.wil+=2; player.cha+=2; } },
+  { id:'elderone8', name:'Vessel of the Deep', category:'eldritch', desc:'+30 Max HP', tier:8, requires:{level:70, talent:'elderone7'}, apply:()=>{ player.maxHp+=30; player.hp+=30; } },
+  { id:'elderone9', name:'The Elder One Ascendant', category:'eldritch', desc:'+50 Max HP; active mutations cost another 20% less HP; +3 all attributes', tier:9, requires:{level:90, talent:'elderone8'}, apply:()=>{ player.maxHp+=50; player.hp+=50; player.mutationHpCostReduction=(player.mutationHpCostReduction||0)+0.2; player.str+=3; player.dex+=3; player.int+=3; player.con+=3; player.wil+=3; player.cha+=3; } },
+
+  // -- Storm Ward (weather/temperature: already full immunity by tier 5, so growth pivots into
+  // the same "the environment doesn't touch me" theme via CON/HP and the general regen-tick talent
+  // (see 'vitality') rather than restacking an already-maxed boolean flag) --
+  { id:'stormward6', name:'Hardened by the Storm', category:'survival', desc:'+3 CON; +15 Max HP', tier:6, requires:{level:30, talent:'stormward_capstone'}, apply:()=>{ player.con+=3; player.maxHp+=15; player.hp+=15; } },
+  { id:'stormward7', name:'One With the Weather', category:'survival', desc:'HP/MP regeneration ticks twice as often', tier:7, requires:{level:50, talent:'stormward6'}, apply:()=>{ player.regenBonus=true; } },
+  { id:'stormward8', name:'Eye of Every Storm', category:'survival', desc:'+4 CON; +20 Max HP', tier:8, requires:{level:70, talent:'stormward7'}, apply:()=>{ player.con+=4; player.maxHp+=20; player.hp+=20; } },
+  { id:'stormward9', name:'Avatar of the Elements', category:'survival', desc:'+6 CON; +30 Max HP', tier:9, requires:{level:90, talent:'stormward8'}, apply:()=>{ player.con+=6; player.maxHp+=30; player.hp+=30; } },
+
+  // -- Singularity Core (cyber: EMP-immune by tier 5, growth pivots into raw cyberware damage and
+  // charge pool rather than restacking the maxed EMP-immunity flag) --
+  { id:'singularitycore6', name:'Overclocked Singularity', category:'cyber', desc:'+3 cyberware damage', tier:6, requires:{level:30, talent:'singularitycore'}, apply:()=>{ player.cyberDmgBonus=(player.cyberDmgBonus||0)+3; } },
+  { id:'singularitycore7', name:'Recursive Core', category:'cyber', desc:'+20 Max Charge', tier:7, requires:{level:50, talent:'singularitycore6'}, apply:()=>{ player.maxCharge=(player.maxCharge||60)+20; player.charge=(player.charge||60)+20; } },
+  { id:'singularitycore8', name:'Singular Intelligence', category:'cyber', desc:'+4 cyberware damage', tier:8, requires:{level:70, talent:'singularitycore7'}, apply:()=>{ player.cyberDmgBonus=(player.cyberDmgBonus||0)+4; } },
+  { id:'singularitycore9', name:'The Machine Made Flesh', category:'cyber', desc:'+6 cyberware damage; +30 Max Charge', tier:9, requires:{level:90, talent:'singularitycore8'}, apply:()=>{ player.cyberDmgBonus=(player.cyberDmgBonus||0)+6; player.maxCharge=(player.maxCharge||60)+30; player.charge=(player.charge||60)+30; } },
+
+  // -- Chef of the Gods (cooking as a real endgame path) --
+  { id:'chefofthegods6', name:'Recipe of Legends', category:'cooking', desc:'Foods you cook heal another 15% more', tier:6, requires:{level:30, talent:'chefofthegods'}, apply:()=>{ player.cookingHealBonus=(player.cookingHealBonus||0)+0.15; } },
+  { id:'chefofthegods7', name:'The Endless Feast', category:'cooking', desc:'Cooking recipes yield one more portion', tier:7, requires:{level:50, talent:'chefofthegods6'}, apply:()=>{ player.cookingYieldBonus=(player.cookingYieldBonus||0)+1; } },
+  { id:'chefofthegods8', name:'Culinary Divinity', category:'cooking', desc:'+15% chance foods grant a bonus second effect', tier:8, requires:{level:70, talent:'chefofthegods7'}, apply:()=>{ player.cookingBonusEffectChance=(player.cookingBonusEffectChance||0)+0.15; } },
+  { id:'chefofthegods9', name:"The Last Supper's Gift", category:'cooking', desc:'Foods you cook heal another 25% more; yield one more portion', tier:9, requires:{level:90, talent:'chefofthegods8'}, apply:()=>{ player.cookingHealBonus=(player.cookingHealBonus||0)+0.25; player.cookingYieldBonus=(player.cookingYieldBonus||0)+1; } },
+
+  // -- Philosopher's Stone (alchemy as a real endgame path) --
+  { id:'philosophersstone6', name:'Alkahest Adept', category:'alchemy', desc:'+15% chance to not consume an ingredient when crafting', tier:6, requires:{level:30, talent:'philosophersstone'}, apply:()=>{ player.craftYieldChance=(player.craftYieldChance||0)+0.15; } },
+  { id:'philosophersstone7', name:'Perfect Transmutation', category:'alchemy', desc:'+15% more potion/elixir potency', tier:7, requires:{level:50, talent:'philosophersstone6'}, apply:()=>{ player.alchemyPotencyBonus=(player.alchemyPotencyBonus||0)+0.15; } },
+  { id:'philosophersstone8', name:'The Great Work', category:'alchemy', desc:'+20% more bomb/grenade damage', tier:8, requires:{level:70, talent:'philosophersstone7'}, apply:()=>{ player.throwDmgBonus=(player.throwDmgBonus||0)+0.2; } },
+  { id:'philosophersstone9', name:'Magnum Opus', category:'alchemy', desc:'+25% chance to not consume an ingredient; +20% more potency', tier:9, requires:{level:90, talent:'philosophersstone8'}, apply:()=>{ player.craftYieldChance=(player.craftYieldChance||0)+0.25; player.alchemyPotencyBonus=(player.alchemyPotencyBonus||0)+0.2; } },
+
+  // -- Kraken's Bane (water mastery) --
+  { id:'krakensbane6', name:'Abyssal Sovereign', category:'survival', desc:'+20 Max HP', tier:6, requires:{level:30, talent:'krakensbane'}, apply:()=>{ player.maxHp+=20; player.hp+=20; } },
+  { id:'krakensbane7', name:"Leviathan's Chosen", category:'survival', desc:'+5 DEX while in water', tier:7, requires:{level:50, talent:'krakensbane6'}, apply:()=>{ player.waterDexBonus=(player.waterDexBonus||0)+5; } },
+  { id:'krakensbane8', name:'Master of the Deep', category:'survival', desc:'+30 Max HP', tier:8, requires:{level:70, talent:'krakensbane7'}, apply:()=>{ player.maxHp+=30; player.hp+=30; } },
+  { id:'krakensbane9', name:'The Sea Answers to You', category:'survival', desc:'+50 Max HP; +8 DEX while in water', tier:9, requires:{level:90, talent:'krakensbane8'}, apply:()=>{ player.maxHp+=50; player.hp+=50; player.waterDexBonus=(player.waterDexBonus||0)+8; } },
+
+  // -- Grim Reaper (pure crit) --
+  { id:'grimreaper6', name:"Death's Herald", category:'combat', desc:'+5% critical hit chance', tier:6, requires:{level:30, talent:'grimreaper'}, apply:()=>{ player.critBonus=(player.critBonus||0)+0.05; } },
+  { id:'grimreaper7', name:'Harvester of Souls', category:'combat', desc:'+15% critical damage', tier:7, requires:{level:50, talent:'grimreaper6'}, apply:()=>{ player.critDmgBonus=(player.critDmgBonus||0)+0.15; } },
+  { id:'grimreaper8', name:'The Final Cut', category:'combat', desc:'+7% critical hit chance', tier:8, requires:{level:70, talent:'grimreaper7'}, apply:()=>{ player.critBonus=(player.critBonus||0)+0.07; } },
+  { id:'grimreaper9', name:'Death Incarnate', category:'combat', desc:'+10% critical hit chance; +25% critical damage', tier:9, requires:{level:90, talent:'grimreaper8'}, apply:()=>{ player.critBonus=(player.critBonus||0)+0.1; player.critDmgBonus=(player.critDmgBonus||0)+0.25; } },
+
+  // -- Immovable Object (pure tank) --
+  { id:'immovableobject6', name:'Unyielding Bastion', category:'survival', desc:'+4 Armor (innate)', tier:6, requires:{level:30, talent:'immovableobject'}, apply:()=>{ player.talentArmor=(player.talentArmor||0)+4; } },
+  { id:'immovableobject7', name:'The Wall That Walks', category:'survival', desc:'+30 Max HP', tier:7, requires:{level:50, talent:'immovableobject6'}, apply:()=>{ player.maxHp+=30; player.hp+=30; } },
+  { id:'immovableobject8', name:'Foundation of the World', category:'survival', desc:'+5 Armor (innate)', tier:8, requires:{level:70, talent:'immovableobject7'}, apply:()=>{ player.talentArmor=(player.talentArmor||0)+5; } },
+  { id:'immovableobject9', name:'Nothing Moves Me', category:'survival', desc:'+8 Armor (innate); +50 Max HP', tier:9, requires:{level:90, talent:'immovableobject8'}, apply:()=>{ player.talentArmor=(player.talentArmor||0)+8; player.maxHp+=50; player.hp+=50; } },
+
+  // -- Elder God (eldritch: confuse/fear/damage) --
+  { id:'eldergod6', name:'Whispers Made Flesh', category:'eldritch', desc:'+10% eldritch damage', tier:6, requires:{level:30, talent:'eldergod'}, apply:()=>{ player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.1; } },
+  { id:'eldergod7', name:'Herald of the Old Ones', category:'eldritch', desc:'+15% chance to confuse on eldritch hits', tier:7, requires:{level:50, talent:'eldergod6'}, apply:()=>{ player.eldritchConfuseChance=(player.eldritchConfuseChance||0)+0.15; } },
+  { id:'eldergod8', name:'Reality Unraveler', category:'eldritch', desc:'+15% chance to frighten on eldritch hits', tier:8, requires:{level:70, talent:'eldergod7'}, apply:()=>{ player.eldritchFearChance=(player.eldritchFearChance||0)+0.15; } },
+  { id:'eldergod9', name:'A God Among the Small', category:'eldritch', desc:'+20% eldritch damage; +15% confuse and frighten chance', tier:9, requires:{level:90, talent:'eldergod8'}, apply:()=>{ player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.2; player.eldritchConfuseChance=(player.eldritchConfuseChance||0)+0.15; player.eldritchFearChance=(player.eldritchFearChance||0)+0.15; } },
+
+  // -- Apex Ascendant (eldritch: Predatory mutations) --
+  { id:'apexascendant6', name:'Alpha Predator', category:'eldritch', desc:'+10% damage from Predatory mutations', tier:6, requires:{level:30, talent:'apexascendant'}, apply:()=>{ player.predatoryDmgBonus=(player.predatoryDmgBonus||0)+0.1; } },
+  { id:'apexascendant7', name:"Nature's Cruelest Hunter", category:'eldritch', desc:'+3 STR', tier:7, requires:{level:50, talent:'apexascendant6'}, apply:()=>{ player.str+=3; } },
+  { id:'apexascendant8', name:'The Hunt Eternal', category:'eldritch', desc:'Lifetap-style mutations return another 20% more HP', tier:8, requires:{level:70, talent:'apexascendant7'}, apply:()=>{ player.mutationLifetapBonus=(player.mutationLifetapBonus||0)+0.2; } },
+  { id:'apexascendant9', name:'Apex of All Apexes', category:'eldritch', desc:'+15% damage from Predatory mutations; +5 STR; lifetap mutations return another 30% more HP', tier:9, requires:{level:90, talent:'apexascendant8'}, apply:()=>{ player.predatoryDmgBonus=(player.predatoryDmgBonus||0)+0.15; player.str+=5; player.mutationLifetapBonus=(player.mutationLifetapBonus||0)+0.3; } },
+
+  // -- True Union (eldritch: Symbiotic mutations) --
+  { id:'trueunion6', name:'Perfect Symbiosis', category:'eldritch', desc:'+10% damage from Symbiotic mutations', tier:6, requires:{level:30, talent:'trueunion'}, apply:()=>{ player.symbioticDmgBonus=(player.symbioticDmgBonus||0)+0.1; } },
+  { id:'trueunion7', name:'One Flesh, One Will', category:'eldritch', desc:'+1 more mutation regeneration per turn', tier:7, requires:{level:50, talent:'trueunion6'}, apply:()=>{ player.mutationRegen=(player.mutationRegen||0)+1; } },
+  { id:'trueunion8', name:'The Passenger Awakens', category:'eldritch', desc:'+15% damage from Symbiotic mutations', tier:8, requires:{level:70, talent:'trueunion7'}, apply:()=>{ player.symbioticDmgBonus=(player.symbioticDmgBonus||0)+0.15; } },
+  { id:'trueunion9', name:'Indivisible', category:'eldritch', desc:'+20% damage from Symbiotic mutations; +2 more mutation regeneration; one more Second Wind charge', tier:9, requires:{level:90, talent:'trueunion8'}, apply:()=>{ player.symbioticDmgBonus=(player.symbioticDmgBonus||0)+0.2; player.mutationRegen=(player.mutationRegen||0)+2; player.secondWindMax=(player.secondWindMax||0)+1; player.secondWindCharges=(player.secondWindCharges||0)+1; } },
+
+  // -- Walking Epidemic (eldritch: Plague mutations) --
+  { id:'walkingepidemic6', name:'Patient Eternal', category:'eldritch', desc:'+10% damage from Plague mutations', tier:6, requires:{level:30, talent:'walkingepidemic'}, apply:()=>{ player.plagueDmgBonus=(player.plagueDmgBonus||0)+0.1; } },
+  { id:'walkingepidemic7', name:'The Epidemic Spreads', category:'eldritch', desc:'+2 CON', tier:7, requires:{level:50, talent:'walkingepidemic6'}, apply:()=>{ player.con+=2; } },
+  { id:'walkingepidemic8', name:'Vector of the End', category:'eldritch', desc:'+15% damage from Plague mutations', tier:8, requires:{level:70, talent:'walkingepidemic7'}, apply:()=>{ player.plagueDmgBonus=(player.plagueDmgBonus||0)+0.15; } },
+  { id:'walkingepidemic9', name:'Pandemic Incarnate', category:'eldritch', desc:'+20% damage from Plague mutations; infection now spreads to up to 3 nearby foes on kill', tier:9, requires:{level:90, talent:'walkingepidemic8'}, apply:()=>{ player.plagueDmgBonus=(player.plagueDmgBonus||0)+0.2; player.plagueSpreadOnKill=3; } },
+
+  // -- Apex Singularity (eldritch: Void/Cosmic mutations) --
+  { id:'apexsingularity6', name:"Gravity's Own Voice", category:'eldritch', desc:'+10% damage from Void/Cosmic mutations', tier:6, requires:{level:30, talent:'apexsingularity'}, apply:()=>{ player.voidCosmicDmgBonus=(player.voidCosmicDmgBonus||0)+0.1; } },
+  { id:'apexsingularity7', name:'Beyond the Horizon', category:'eldritch', desc:'Missing-HP execute bonus increased further', tier:7, requires:{level:50, talent:'apexsingularity6'}, apply:()=>{ player.voidExecuteBonus=(player.voidExecuteBonus||0)+0.5; } },
+  { id:'apexsingularity8', name:'The Void Remembers You', category:'eldritch', desc:'+15% damage from Void/Cosmic mutations', tier:8, requires:{level:70, talent:'apexsingularity7'}, apply:()=>{ player.voidCosmicDmgBonus=(player.voidCosmicDmgBonus||0)+0.15; } },
+  { id:'apexsingularity9', name:'Singularity Made Flesh', category:'eldritch', desc:'+20% damage from Void/Cosmic mutations; execute bonus doubled again; +3 INT', tier:9, requires:{level:90, talent:'apexsingularity8'}, apply:()=>{ player.voidCosmicDmgBonus=(player.voidCosmicDmgBonus||0)+0.2; player.voidExecuteBonus=(player.voidExecuteBonus||0)+1.0; player.int+=3; } },
+
+  // -- Legendary Leader (companion strength) --
+  { id:'legendaryleader6', name:'Commander of Legend', category:'survival', desc:'Companions are 10% stronger still', tier:6, requires:{level:30, talent:'legendaryleader'}, apply:()=>{ player.companionPowerBonus=(player.companionPowerBonus||0)+0.1; (player.companions||[]).forEach(scaleCompanionToPlayer); } },
+  { id:'legendaryleader7', name:'Bound by Loyalty', category:'survival', desc:'+3 CHA', tier:7, requires:{level:50, talent:'legendaryleader6'}, apply:()=>{ player.cha+=3; (player.companions||[]).forEach(scaleCompanionToPlayer); } },
+  { id:'legendaryleader8', name:'Undisputed General', category:'survival', desc:'Companions are 15% stronger still', tier:8, requires:{level:70, talent:'legendaryleader7'}, apply:()=>{ player.companionPowerBonus=(player.companionPowerBonus||0)+0.15; (player.companions||[]).forEach(scaleCompanionToPlayer); } },
+  { id:'legendaryleader9', name:'A Name Sung Forever', category:'survival', desc:'Companions are 20% stronger still; +5 CHA', tier:9, requires:{level:90, talent:'legendaryleader8'}, apply:()=>{ player.companionPowerBonus=(player.companionPowerBonus||0)+0.2; player.cha+=5; (player.companions||[]).forEach(scaleCompanionToPlayer); } },
+
+  // -- Warmaster (pure technique/stamina martial) --
+  { id:'warmaster6', name:'Battle-Forged', category:'combat', desc:'+15% technique damage', tier:6, requires:{level:30, talent:'warmaster'}, apply:()=>{ player.techniqueDmgBonus=(player.techniqueDmgBonus||0)+0.15; } },
+  { id:'warmaster7', name:'Unbroken Momentum', category:'combat', desc:'+5% critical hit chance', tier:7, requires:{level:50, talent:'warmaster6'}, apply:()=>{ player.critBonus=(player.critBonus||0)+0.05; } },
+  { id:'warmaster8', name:'Storm of Blades', category:'combat', desc:'+20% technique damage', tier:8, requires:{level:70, talent:'warmaster7'}, apply:()=>{ player.techniqueDmgBonus=(player.techniqueDmgBonus||0)+0.2; } },
+  { id:'warmaster9', name:'The War Never Ends', category:'combat', desc:'+25% technique damage; +10% critical hit chance', tier:9, requires:{level:90, talent:'warmaster8'}, apply:()=>{ player.techniqueDmgBonus=(player.techniqueDmgBonus||0)+0.25; player.critBonus=(player.critBonus||0)+0.1; } },
+
+  // -- Bladestorm (thrown weapons) --
+  { id:'bladestorm6', name:'Endless Quiver', category:'Throwing', desc:'+15% chance to hit with thrown weapons', tier:6, requires:{level:30, talent:'bladestorm'}, apply:()=>{ player.throwAccuracyBonus=(player.throwAccuracyBonus||0)+0.15; } },
+  { id:'bladestorm7', name:"Death's Aim", category:'Throwing', desc:'+15% critical hit chance with thrown weapons', tier:7, requires:{level:50, talent:'bladestorm6'}, apply:()=>{ player.throwCritBonus=(player.throwCritBonus||0)+0.15; } },
+  { id:'bladestorm8', name:'A Thousand Blades', category:'Throwing', desc:'+20% thrown weapon damage', tier:8, requires:{level:70, talent:'bladestorm7'}, apply:()=>{ player.throwDmgBonus=(player.throwDmgBonus||0)+0.2; } },
+  { id:'bladestorm9', name:'The Storm Given Form', category:'Throwing', desc:'+25% thrown weapon damage; +20% critical hit chance with thrown weapons', tier:9, requires:{level:90, talent:'bladestorm8'}, apply:()=>{ player.throwDmgBonus=(player.throwDmgBonus||0)+0.25; player.throwCritBonus=(player.throwCritBonus||0)+0.2; } },
+
+  // -- Ghostwalker (pure dodge -- see the 75% dodgeChance cap added in the combat resolver, since
+  // this line alone can now realistically approach it) --
+  { id:'ghostwalker6', name:'Half a Step Ahead', category:'combat', desc:'+8% dodge chance', tier:6, requires:{level:30, talent:'ghostwalker'}, apply:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.08; } },
+  { id:'ghostwalker7', name:'The Uncatchable', category:'combat', desc:'+8% dodge chance', tier:7, requires:{level:50, talent:'ghostwalker6'}, apply:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.08; } },
+  { id:'ghostwalker8', name:'A Shadow, Not a Target', category:'combat', desc:'+10% dodge chance', tier:8, requires:{level:70, talent:'ghostwalker7'}, apply:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.1; } },
+  { id:'ghostwalker9', name:"You Cannot Hit What Isn't There", category:'combat', desc:'+12% dodge chance', tier:9, requires:{level:90, talent:'ghostwalker8'}, apply:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.12; } },
+
+  // -- Thorn King (damage reflection) --
+  { id:'thornking6', name:'Bramble Wall', category:'combat', desc:'Reflect another 8% of melee damage taken', tier:6, requires:{level:30, talent:'thornking'}, apply:()=>{ player.thornsPercent=(player.thornsPercent||0)+0.08; } },
+  { id:'thornking7', name:'Vengeful Thicket', category:'combat', desc:'Reflect another 8% of melee damage taken', tier:7, requires:{level:50, talent:'thornking6'}, apply:()=>{ player.thornsPercent=(player.thornsPercent||0)+0.08; } },
+  { id:'thornking8', name:'The Briar Throne', category:'combat', desc:'Reflect another 10% of melee damage taken', tier:8, requires:{level:70, talent:'thornking7'}, apply:()=>{ player.thornsPercent=(player.thornsPercent||0)+0.1; } },
+  { id:'thornking9', name:'Every Blow Returned', category:'combat', desc:'Reflect another 12% of melee damage taken', tier:9, requires:{level:90, talent:'thornking8'}, apply:()=>{ player.thornsPercent=(player.thornsPercent||0)+0.12; } },
+
+  // -- Bossbreaker (anti-boss specialist) --
+  { id:'bossbreaker6', name:'Giant Slayer', category:'combat', desc:'+10% more damage against bosses and minibosses', tier:6, requires:{level:30, talent:'bossbreaker'}, apply:()=>{ player.bossDmgBonus=(player.bossDmgBonus||0)+0.1; } },
+  { id:'bossbreaker7', name:'Titanfall', category:'combat', desc:'+15% more damage against bosses and minibosses', tier:7, requires:{level:50, talent:'bossbreaker6'}, apply:()=>{ player.bossDmgBonus=(player.bossDmgBonus||0)+0.15; } },
+  { id:'bossbreaker8', name:'Nothing Stands Long', category:'combat', desc:'+15% more damage against bosses and minibosses', tier:8, requires:{level:70, talent:'bossbreaker7'}, apply:()=>{ player.bossDmgBonus=(player.bossDmgBonus||0)+0.15; } },
+  { id:'bossbreaker9', name:'The Reckoning', category:'combat', desc:'+20% more damage against bosses and minibosses', tier:9, requires:{level:90, talent:'bossbreaker8'}, apply:()=>{ player.bossDmgBonus=(player.bossDmgBonus||0)+0.2; } },
+
+  // -- Primordial Master (fire/frost/poison elemental damage) --
+  { id:'primordialmaster6', name:"Nature's Fury", category:'magic', desc:'+10% more damage from fire/frost/poison sources', tier:6, requires:{level:30, talent:'primordialmaster'}, apply:()=>{ player.elementalDmgBonus=(player.elementalDmgBonus||0)+0.1; } },
+  { id:'primordialmaster7', name:'Elemental Convergence', category:'magic', desc:'+15% more damage from fire/frost/poison sources', tier:7, requires:{level:50, talent:'primordialmaster6'}, apply:()=>{ player.elementalDmgBonus=(player.elementalDmgBonus||0)+0.15; } },
+  { id:'primordialmaster8', name:'World-Ender', category:'magic', desc:'+15% more damage from fire/frost/poison sources', tier:8, requires:{level:70, talent:'primordialmaster7'}, apply:()=>{ player.elementalDmgBonus=(player.elementalDmgBonus||0)+0.15; } },
+  { id:'primordialmaster9', name:'Force of Creation and Ruin', category:'magic', desc:'+20% more damage from fire/frost/poison sources', tier:9, requires:{level:90, talent:'primordialmaster8'}, apply:()=>{ player.elementalDmgBonus=(player.elementalDmgBonus||0)+0.2; } },
+
+  // -- Emperor's Ransom (gold/XP) --
+  { id:'emperorsransom6', name:"Midas's Successor", category:'survival', desc:'+15% more gold from loot', tier:6, requires:{level:30, talent:'emperorsransom'}, apply:()=>{ player.goldBonus=(player.goldBonus||0)+0.15; } },
+  { id:'emperorsransom7', name:'Wisdom of Ages', category:'survival', desc:'+15% more XP from all kills', tier:7, requires:{level:50, talent:'emperorsransom6'}, apply:()=>{ player.xpBonus=(player.xpBonus||0)+0.15; } },
+  { id:'emperorsransom8', name:'Hoard Beyond Counting', category:'survival', desc:'+20% more gold from loot', tier:8, requires:{level:70, talent:'emperorsransom7'}, apply:()=>{ player.goldBonus=(player.goldBonus||0)+0.2; } },
+  { id:'emperorsransom9', name:'A Legend Beyond Measure', category:'survival', desc:'+25% more gold from loot; +20% more XP', tier:9, requires:{level:90, talent:'emperorsransom8'}, apply:()=>{ player.goldBonus=(player.goldBonus||0)+0.25; player.xpBonus=(player.xpBonus||0)+0.2; } }
 );
 
 // ---- vessels: a data-driven water-travel framework. A "vessel" is just a carryable item (like
@@ -3660,7 +3870,7 @@ RECIPES.push(
   { id:'craft_gas_grenade', name:'Assemble Gas Grenade', category:'crafting', inputs:[{id:'sulfur',qty:1},{id:'nightshade',qty:1}], output:{id:'gas_grenade',qty:1} },
   { id:'craft_greater_gas_grenade', name:'Assemble Greater Gas Grenade', category:'crafting', inputs:[{id:'sulfur',qty:2},{id:'nightshade',qty:2},{id:'spider_venom',qty:1}], output:{id:'greater_gas_grenade',qty:1} },
   { id:'craft_flashbang', name:'Assemble Flashbang', category:'crafting', inputs:[{id:'sulfur',qty:1},{id:'saltpeter',qty:1}], output:{id:'flashbang',qty:1} },
-  { id:'craft_caltrops', name:'Forge Caltrops', category:'crafting', inputs:[{id:'iron_ingot',qty:1}], output:{id:'caltrops',qty:3} },
+  { id:'craft_caltrops', name:'Forge Caltrops', category:'crafting', inputs:[{id:'iron_ingot',qty:2}], output:{id:'caltrops',qty:3} },
   { id:'craft_net_trap', name:'Weave Net Trap', category:'crafting', inputs:[{id:'spider_silk',qty:2},{id:'cloth',qty:1}], output:{id:'net_trap',qty:1} },
   { id:'craft_emp_grenade', name:'Assemble EMP Grenade', category:'crafting', inputs:[{id:'circuit_board',qty:2},{id:'nanite_cluster',qty:1}], output:{id:'emp_grenade',qty:1} },
   { id:'craft_landmine', name:'Assemble Landmine', category:'crafting', inputs:[{id:'sulfur',qty:2},{id:'saltpeter',qty:2},{id:'iron_ingot',qty:1}], output:{id:'landmine',qty:1} },
@@ -3673,17 +3883,17 @@ RECIPES.push(
   { id:'craft_void_core_bomb', name:'Bind Void Core Bomb', category:'crafting', inputs:[{id:'void_core',qty:2},{id:'eldritch_essence',qty:2},{id:'obsidian_shard',qty:1}], output:{id:'void_core_bomb',qty:1} },
   { id:'craft_antimatter_charge', name:'Assemble Antimatter Charge', category:'crafting', inputs:[{id:'void_core',qty:2},{id:'refined_uranium',qty:2},{id:'eldritch_essence',qty:1}], output:{id:'antimatter_charge',qty:1} },
   // ---- crafting: gear & utility ----
-  { id:'craft_medkit', name:'Assemble Medkit', category:'crafting', inputs:[{id:'cloth',qty:2},{id:'herb',qty:1}], output:{id:'medkit',qty:1} },
+  { id:'craft_medkit', name:'Assemble Medkit', category:'crafting', inputs:[{id:'cloth',qty:2},{id:'herb',qty:3},{id:'bandage',qty:2}], output:{id:'medkit',qty:1} },
   { id:'craft_nanoweave_stim', name:'Synthesize Nanoweave Stim', category:'crafting', inputs:[{id:'nanite_cluster',qty:1},{id:'circuit_board',qty:1}], output:{id:'nanoweave_stim',qty:1} },
-  { id:'craft_bandage', name:'Roll Bandages', category:'crafting', inputs:[{id:'cloth',qty:1}], output:{id:'bandage',qty:3} },
-  { id:'craft_splint', name:'Assemble Splint', category:'crafting', inputs:[{id:'wood',qty:2},{id:'cloth',qty:1}], output:{id:'splint',qty:1} },
+  { id:'craft_bandage', name:'Roll Bandages', category:'crafting', inputs:[{id:'cloth',qty:3},{id:'herb',qty:1}], output:{id:'bandage',qty:3} },
+  { id:'craft_splint', name:'Assemble Splint', category:'crafting', inputs:[{id:'wood',qty:2},{id:'cloth',qty:3},{id:'iron_ingot',qty:1}], output:{id:'splint',qty:1} },
   { id:'craft_hoe', name:'Assemble Hoe', category:'crafting', inputs:[{id:'wood',qty:2},{id:'ore',qty:1}], output:{id:'hoe',qty:1} },
   { id:'craft_fishing_rod', name:'Assemble Fishing Rod', category:'crafting', inputs:[{id:'wood',qty:2},{id:'cloth',qty:1}], output:{id:'fishing_rod',qty:1} },
   { id:'craft_charge_cell', name:'Assemble Charge Cell', category:'crafting', inputs:[{id:'circuit_board',qty:1},{id:'nanite_cluster',qty:1}], output:{id:'charge_cell',qty:1} },
   { id:'craft_greater_charge_cell', name:'Assemble Greater Charge Cell', category:'crafting', inputs:[{id:'circuit_board',qty:2},{id:'nanite_cluster',qty:2}], output:{id:'greater_charge_cell',qty:1} },
-  { id:'craft_silver_shot', name:'Cast Silver Shot', category:'crafting', inputs:[{id:'silver_ore',qty:1}], output:{id:'silver_shot',qty:3} },
+  { id:'craft_silver_shot', name:'Cast Silver Shot', category:'crafting', inputs:[{id:'silver_ore',qty:3}], output:{id:'silver_shot',qty:3} },
   { id:'craft_throwing_knife', name:'Forge Throwing Knife', category:'crafting', inputs:[{id:'iron_ingot',qty:1}], output:{id:'throwing_knife',qty:2} },
-  { id:'craft_throwing_star', name:'Forge Throwing Star', category:'crafting', inputs:[{id:'iron_ingot',qty:1}], output:{id:'throwing_star',qty:3} },
+  { id:'craft_throwing_star', name:'Forge Throwing Star', category:'crafting', inputs:[{id:'iron_ingot',qty:1},{id:'wood',qty:2}], output:{id:'throwing_star',qty:3} },
   { id:'craft_silvered_knife', name:'Forge Silvered Knife', category:'crafting', inputs:[{id:'silver_ore',qty:1},{id:'iron_ingot',qty:1}], output:{id:'silvered_knife',qty:1} },
   { id:'craft_scroll_recall', name:'Inscribe Scroll of Recall', category:'crafting', inputs:[{id:'moonstone',qty:1},{id:'cloth',qty:1}], output:{id:'scroll_recall',qty:1} },
   { id:'craft_scroll_cureall', name:'Inscribe Scroll of Cure All', category:'crafting', inputs:[{id:'herb',qty:2},{id:'moonstone',qty:1}], output:{id:'scroll_cureall',qty:1} },
@@ -4559,7 +4769,7 @@ SPELLS.push(
   { id:'invigoratingtonic', name:'Invigorating Tonic', mp:12, type:'buff', stat:'regen', power:3, dur:14, range:0, school:'Herblore', tier:2, desc:'A bracing tonic that keeps your wounds slowly closing.' },
   { id:'toxinburst', name:'Toxin Burst', mp:22, type:'damage', power:[14,22], range:4, poison:5, school:'Herblore', tier:3, desc:'A concentrated dose that hits like a blow before the poison even sets in.' },
   { id:'blightbloom', name:'Blightbloom', mp:32, type:'damage', power:[22,34], range:4, aoe:true, aoeRadius:2, poison:6, school:'Herblore', tier:4, desc:'A patch of toxic blooms bursts open in an instant, coating everything nearby.' },
-  { id:'natureswrath', name:"Nature's Wrath", mp:46, type:'damage', power:[36,56], range:5, aoe:true, aoeRadius:2, poison:8, school:'Herblore', tier:5, desc:'Every toxin you know how to brew, unleashed at once.' },
+  { id:'natureswrath', name:"Verdant Ruin", mp:46, type:'damage', power:[36,56], range:5, aoe:true, aoeRadius:2, poison:8, school:'Herblore', tier:5, desc:'Every toxin you know how to brew, unleashed at once.' },
 );
 
 // ---- v3 balance pass: soft stat requirements for spells & techniques ----
@@ -5039,7 +5249,39 @@ STORY_BOSSES.forEach(b => {
   };
 });
 BOSS_POWER.oathbroken = 4; BOSS_POWER.hollow_king = 5; BOSS_POWER.vex9 = 5; BOSS_POWER.windrender = 4; BOSS_POWER.unblinking_eye = 6;
+// The whole aquatic OVERWORLD_BOSSES sub-roster (loch_devourer, megalodon, sea_serpent, the_kraken)
+// plus the_recursion were missing from BOSS_POWER entirely -- likely added in a later pass focused
+// on water content that never looped back to register them here, the same class of gap as Umbroth
+// above. Assigned by the SAME pattern the rest of this table already follows (verified, not
+// guessed): every bossTier:'rare' entry here is power 6 regardless of HP variance (ancient_wyrm
+// 220, corrupted_colossus 260, umbroth 420 all =6), while bossTier:'uncommon' scales 3-5 with HP
+// (thunderbird 130=3, frost_yeti_king/desert_wyrm/bog_horror/alpha_direwolf 140-170=4,
+// elder_treant 190=5). the_kraken(280) and the_recursion(210) are both 'rare' -> 6; loch_devourer
+// (150,'uncommon') sits in the 4-band; megalodon(200) and sea_serpent(230,'uncommon') sit past
+// elder_treant's 190 -> 5-band.
+BOSS_POWER.loch_devourer = 4; BOSS_POWER.megalodon = 5; BOSS_POWER.sea_serpent = 5;
+BOSS_POWER.the_kraken = 6; BOSS_POWER.the_recursion = 6;
+// Direct assignments too, same reason as Umbroth above: these are OVERWORLD_BOSSES ids, not
+// STORY_BOSSES, so they're covered by neither the generic "for id in BOSS_POWER" loop (already
+// ran earlier in file execution order, before these lines) nor the STORY_BOSSES-scoped loop below
+// (wrong array). Verified by checking execution order directly, not assumed -- this is exactly
+// the mistake my first Umbroth fix made before I re-checked it.
+MONSTER_BASES.loch_devourer.bossPower = 4; MONSTER_BASES.megalodon.bossPower = 5;
+MONSTER_BASES.sea_serpent.bossPower = 5; MONSTER_BASES.the_kraken.bossPower = 6;
+MONSTER_BASES.the_recursion.bossPower = 6;
 BOSS_POWER.broken_blade = 2; BOSS_POWER.blightspeaker = 3; BOSS_POWER.choir_of_rust = 5; BOSS_POWER.snowbound_warden = 6;
+// Umbroth was missing from BOSS_POWER entirely -- a fully hand-authored scripted boss (own
+// STORY_BOSS_AI, own lore, a unique weapon drop worth 530 gold) with 420 base HP, higher than
+// every other power-6 entry (ancientdragon:140, iron_sovereign:240) -- silently excluded from
+// ever being picked as a main-quest target or bossPower-matched dungeon boss (sortedBossPool
+// filters on `!m.bossPower`) despite clearly being built as significant, notable content.
+// Direct assignment, not just added to the BOSS_POWER lookup table: umbroth is in
+// OVERWORLD_BOSSES, not STORY_BOSSES, so it's covered by neither propagation loop nearby (the
+// generic `for id in BOSS_POWER` loop already ran earlier in file order, and the
+// `STORY_BOSSES.map` loop below is scoped to the wrong array) -- verified by tracing both loops,
+// not assumed.
+BOSS_POWER.umbroth = 6;
+MONSTER_BASES.umbroth.bossPower = 6;
 for (const id of STORY_BOSSES.map(b => b.id)) MONSTER_BASES[id].bossPower = BOSS_POWER[id];
 OVERWORLD_BOSSES.push(...STORY_BOSSES);
 
@@ -7262,8 +7504,9 @@ function maybeRepopulateChunk(chunk, cx, cy) {
   }
   chunk.dirty = true;
 }
-function maybeRepopulateDungeonLevel(level, theme, depth) {
+function maybeRepopulateDungeonLevel(level, theme, depth, depthScaleBonus) {
   if (!level || level.monsters.filter(m => m.alive).length >= 6) return;
+  depthScaleBonus = depthScaleBonus || 0;
   const meta = DUNGEON_THEMES[theme] || { genre: 'rooms', dtierMax: 2 };
   const dtierCeil = Math.min(meta.dtierMax || 2, Math.ceil(depth / 3));
   let pool = Object.keys(MONSTER_BASES).filter(k => MONSTER_BASES[k].dtier && MONSTER_BASES[k].dtier <= dtierCeil && !MONSTER_BASES[k].boss);
@@ -7278,7 +7521,7 @@ function maybeRepopulateDungeonLevel(level, theme, depth) {
     if (entityAt(c.x, c.y)) continue;
     if ((level.upStairs && c.x === level.upStairs.x && c.y === level.upStairs.y) || (level.downStairs && c.x === level.downStairs.x && c.y === level.downStairs.y)) continue;
     const mid = choice(Math.random, usablePool);
-    level.monsters.push(makeMonster(mid, c.x, c.y, depth, Math.random));
+    level.monsters.push(makeMonster(mid, c.x, c.y, depth + depthScaleBonus, Math.random));
   }
 }
 // Called once per turn (from endTurn()): stamps the player's current chunk/level with "you were
@@ -7293,7 +7536,7 @@ function trackVisitAndMaybeRepopulate() {
     if (lvl.lastVisitedTurn !== undefined) {
       const elapsed = turnCount - lvl.lastVisitedTurn;
       if (elapsed >= REPOPULATE_MIN_TURNS && Math.random() < Math.min(0.5, elapsed / 4000)) {
-        maybeRepopulateDungeonLevel(lvl, curDungeon().theme, player.dungeonDepth);
+        maybeRepopulateDungeonLevel(lvl, curDungeon().theme, player.dungeonDepth, curDungeon().depthScaleBonus);
       }
     }
     lvl.lastVisitedTurn = turnCount;
@@ -7481,6 +7724,11 @@ for (const _mid in MONSTER_BASES) {
   const base = MONSTER_BASES[_mid];
   if (base.scriptedAI || base.fixedStats) continue;
   const name = (base.name || '').toLowerCase();
+  // underscores count as \w in JS regex, so "worm_process" has no word-boundary at the
+  // underscore -- \bprocess\b wouldn't match inside it. Normalizing to spaces first is what makes
+  // the \b-bounded patterns above/below actually catch id-only entries like worm_process,
+  // uncounted_angle, hollow_signal, master_cog.
+  const hay = (name + ' ' + _mid.toLowerCase()).replace(/_/g, ' ');
 
   // -- swimming / flying: real terrain traversal (see canFly/canSwim), not flavor text --
   if (base.aquatic === undefined && (base.faction === 'aquatic' || base.faction === 'drowned' ||
@@ -7498,6 +7746,47 @@ for (const _mid in MONSTER_BASES) {
       /shark|fish|eel|kraken|leviathan|serpent|siren|merfolk|jellyfish|squid|manta|stingray|whale/.test(name)) base.waterOnly = true;
   if (base.flying === undefined && /bat|hawk|vulture|wyvern|drake|harpy|griffin|phoenix|thunderbird|wisp|specter|spectre|ghost|wraith|banshee|imp|gargoyle|angel|seraph|gull/.test(name)) base.flying = true;
   if (base.flying === undefined && base.faction === 'dragon' && !/wyrm|worm/.test(name)) base.flying = true;
+
+  // ---- BODY MECHANICS EXTENSION: locational wounds / bleeding / disease (see the framework
+  // near ensureBodyParts) used to be rolled only for the player as defender. Extending it onto
+  // monsters means asking, for each one, the same three questions a GM would: does this thing
+  // have blood to lose, a body plan with limbs worth crippling, and a biology a mundane infection
+  // could take hold in? Classified the same two-layer way as flying/aquatic just above -- a name
+  // pattern first (works for the ~40 legacy entries with no faction tag at all), a faction rule
+  // second, explicit hand-set values on a monster always win over both (checked via `=== undefined`).
+  // Every word pattern below is \b-bounded on both sides -- an earlier draft matched "mist" inside
+  // "alchemist" and nearly flagged a Rogue Alchemist as an incorporeal gas cloud.
+  // A wraith/spirit/ghost has no body at all -- noBodyParts (no locational wounds, no bleeding).
+  // A skeleton or golem has bones/plating to break but no blood -- bloodless, keeps body parts.
+  // A slime/swarm/elemental/piece of rogue code has no single "arm" to wound either.
+  if (base.noBodyParts === undefined) {
+    base.noBodyParts = /\b(slime|ooze|jelly|blob|swarm|elemental|gas|cloud|mist|vapor|process|exception|angle|signal|wraith|spirit|ghost|phantom|specter|spectre|spectral|shade|banshee)\b/.test(hay) ||
+      base.faction === 'virus' || base.faction === 'ooze';
+  }
+  if (base.bloodless === undefined) {
+    base.bloodless = base.noBodyParts ||
+      /\b(golem|construct|armor|robot|drone|android|turret|sentry|sentinel|automaton|skeleton|bone|lich|mummy|zombie|revenant|cog)\b/.test(hay) ||
+      ['undead', 'construct', 'cyber', 'drowned'].includes(base.faction);
+  }
+  if (base.diseaseImmune === undefined) {
+    base.diseaseImmune = base.bloodless ||
+      /\b(demon|archdemon|angel|seraph|deity|god)\b/.test(hay) ||
+      ['undead', 'construct', 'cyber', 'celestial', 'plant', 'eldritch', 'cosmic', 'nonEuclid', 'dream', 'demonic', 'drowned'].includes(base.faction) ||
+      base.fixedStats;
+  }
+  // A short explicit-override tail for cases the pattern/faction rules above get wrong -- either
+  // a unique superboss id that doesn't tokenize cleanly (seraphiel), or flavor that lives only in
+  // a name/lore string the classifier never reads (a "Stone Guardian" reads as construct-flavored
+  // to a person the instant they see it, but "guardian" alone is too generic a word to safely
+  // pattern-match against every current and future monster). Same "explicit beats pattern"
+  // precedent as an authored dmgType beating WEAPON_DAMAGE_TYPE_PATTERNS elsewhere in this file.
+  if (_mid === 'seraphiel') base.diseaseImmune = true; // a literal seraph/angel superboss
+  if (_mid === 'stoneguardian') base.bloodless = true; // a living-statue guardian, same family as claygolem/stonegolem
+  if (_mid === 'vampire') base.diseaseImmune = true; // undead -- can still bleed (vampire blood matters thematically), just doesn't sicken
+  if (_mid === 'black_ice') { base.noBodyParts = true; base.bloodless = true; base.diseaseImmune = true; } // cyberpunk term for a digital security system, not a physical body -- same family as the other virus-faction glitch entities
+  if (_mid === 'admin7') { base.bloodless = true; base.diseaseImmune = true; } // "Chrome-plated" per its own lore text -- a robotic warden despite predating the faction tag convention
+  if (_mid === 'unburied_queen') { base.bloodless = true; base.diseaseImmune = true; } // an undead queen ruling the restless dead, per its own lore text
+  if (_mid === 'rootmind') { base.bloodless = true; base.diseaseImmune = true; } // "everything...that used to be separate plants" per its own lore text -- sap, not blood
 
   // -- racial traits: humanoid templates that map cleanly onto an existing SPECIES entry get
   // that species' real racial traits (poison/fear resistance, armor, crit, etc), the same way
@@ -7599,6 +7888,8 @@ const MONSTER_EXTRA_FIELDS = [
   // ---- Living World AI framework (see Part A above / Part B near monsterAI) ----
   'abilities', 'usesMp', 'usesCharge', 'thrower', 'speciesId', 'predator', 'prey',
   'fearless', 'fleeHpPct', 'sleeper', 'patrolRadius', 'visionRange', 'intelligent',
+  // ---- BODY MECHANICS EXTENSION (see the classification loop near isBloodlessMonster below) ----
+  'bloodless', 'diseaseImmune', 'noBodyParts',
 ];
 // ---- v3 balance pass: overworld monsters now scale with distance from the origin ----
 // Previously every overworld spawn passed a flat depthScale of 1 no matter how far you'd
@@ -8502,9 +8793,19 @@ const DUNGEON_VARIANTS = [
   { id:'corrupted', label:'Corrupted', weight:10, powerMod:2, lootMod:1.45, minibossChanceMod:0.15, extraFaction:'eldritch' },
   { id:'legendary', label:'Legendary', weight:4, powerMod:3, lootMod:1.8, minibossChanceMod:0.25, guaranteedMiniboss:true },
 ];
-function rollDungeonVariant(rng, distFromOrigin) {
+// maxPowerMod (optional): filters out variants stronger than this BEFORE weighting, not just
+// de-emphasizes them -- added after a real large-scale simulation (not hand-picked scenarios)
+// found ~5.5% of normal-biome dungeons displaying recommendedLevel 51-57, breaking the "normal
+// biomes never exceed 50" guarantee. Root cause: a normal-biome dungeon's maxDepth was already
+// capped, but nothing stopped it from independently rolling a Corrupted/Legendary variant
+// (powerMod +2/+3), which contributes to depthScaleBonus on its own, unrelated to biome danger.
+// The exact same "a powerful dungeon showing up somewhere it makes no sense" complaint this whole
+// system exists to prevent, just via a second, independent knob (variant) instead of the first
+// one (dtier) that was already fixed. See placeDungeonEntrance's isNormalBiome check for the call.
+function rollDungeonVariant(rng, distFromOrigin, maxPowerMod) {
   const distBonus = Math.min(1, distFromOrigin / 20);
-  const weights = DUNGEON_VARIANTS.map(v => {
+  const pool = maxPowerMod === undefined ? DUNGEON_VARIANTS : DUNGEON_VARIANTS.filter(v => v.powerMod <= maxPowerMod);
+  const weights = pool.map(v => {
     let w = v.weight;
     if (v.powerMod > 0) w *= (1 + distBonus * 1.5);
     if (v.powerMod < 0) w *= (1 - distBonus * 0.6);
@@ -8539,37 +8840,83 @@ function placeDungeonEntrance(chunk, cx, cy, seedVal, centerBiome) {
   const t = chunk.tiles[ly][lx];
   if (!t.walkable) return;
   const distFromOrigin = Math.sqrt(cx*cx + cy*cy);
+  // REBALANCE PASS 2: dtier cap comes first now, and it's a hard filter, not a soft weight -- a
+  // biome's family (see biomeDtierCap/BIOMES) decides which dungeon themes are even eligible here
+  // before rarity/affinity get a say, so an ordinary Plains chunk physically cannot roll a dtier-5
+  // superboss lair regardless of how the rarity dice land.
+  const maxAllowedDtier = biomeDtierCap(centerBiome, distFromOrigin);
   let tierWeights = Object.entries(DUNGEON_TIER_WEIGHTS).map(([k,v]) => [k,v]);
   // rare dungeons are now genuinely rare close to spawn (was 0.2x, letting one appear right next
   // to town and be reachable at level 1-2 with nothing to show for the "rare" label but a
   // mismatched boss) -- tightened gradient below fixes that without banning them outright.
   if (distFromOrigin < 5) tierWeights = tierWeights.map(([k,v]) => [k, k === 'rare' ? v * 0.05 : (k === 'uncommon' ? v * 0.5 : v)]);
   else if (distFromOrigin < 10) tierWeights = tierWeights.map(([k,v]) => [k, k === 'rare' ? v * 0.35 : v]);
-  const tier = weightedChoice(rng, tierWeights);
-  const themesOfTier = Object.entries(DUNGEON_THEMES).filter(([,meta]) => meta.tier === tier).map(([id]) => id);
-  const pool = themesOfTier.length ? themesOfTier : Object.keys(DUNGEON_THEMES);
   const preferred = BIOME_DUNGEON_AFFINITY[centerBiome] || [];
-  const theme = weightedChoice(rng, pool.map(id => [id, preferred.includes(id) ? 4 : 1]));
+  // Pool = every theme this biome/distance is allowed to host at all, weighted by its rarity tier
+  // (flavor: how ornate/rare-labeled it reads) and by biome affinity (flavor: does this biome
+  // "make sense" hosting it) -- both are preferences now layered *on top of* the hard dtier cap
+  // above, instead of being the only thing deciding what can appear.
+  const maxThemeDepthFloor = biomeMaxThemeDepthFloor(centerBiome);
+  let pool = Object.keys(DUNGEON_THEMES).filter(id => {
+    const m = DUNGEON_THEMES[id];
+    return m.tier !== 'dimension' && (m.dtierMax || 2) <= maxAllowedDtier && m.depthRange[0] <= maxThemeDepthFloor;
+  });
+  if (!pool.length) pool = Object.keys(DUNGEON_THEMES).filter(id => (DUNGEON_THEMES[id].dtierMax || 2) <= 1);
+  const tierWeightOf = Object.fromEntries(tierWeights);
+  const theme = weightedChoice(rng, pool.map(id => {
+    const meta = DUNGEON_THEMES[id];
+    let w = tierWeightOf[meta.tier] ?? 1;
+    if (preferred.includes(id)) w *= 4;
+    return [id, Math.max(0.1, w)];
+  }));
   const meta = DUNGEON_THEMES[theme];
+  const tier = meta.tier;
   const [dMin, dMax] = meta.depthRange;
   const sizeTier = rollDungeonSize(rng, meta);
   // Size and depth trade off: a big physical footprint gets far fewer floors (see
   // DUNGEON_SIZE_TIERS.maxDepthCap) so a "massive" dungeon reads as one huge excavation rather
   // than a ten-floor tower with a huge floor plan repeated ten times.
   const maxDepth = Math.max(1, Math.min(sizeTier.maxDepthCap, Math.max(dMin, Math.min(dMax, dMin + Math.floor(distFromOrigin / 4) + randInt(rng,0,2)))));
-  const variant = rollDungeonVariant(rng, distFromOrigin);
-  // recommended level: derived from the dungeon's *actual* depth/dtier ceiling and variant power
-  // mod, not the tier label -- this is the number that now genuinely predicts difficulty.
-  const targetPower = Math.max(1, Math.min(6, (meta.dtierMax || 2) + Math.floor(maxDepth / 4) + variant.powerMod));
-  const recommendedLevel = recommendedLevelForPower(targetPower);
+  // A theme's own depth ceiling (dMax) can sit well above maxThemeDepthFloor even when its floor
+  // (dMin) doesn't -- e.g. dream_sanctum spans depth 5-8, so the dMin<=5 filter above lets it into
+  // normal biomes, but at high distFromOrigin the distance term can still push maxDepth up to its
+  // dMax of 8, which alone would produce a boss well past level 50. Clamping maxDepth itself here
+  // (never below dMin, since maxThemeDepthFloor >= dMin was already guaranteed by the pool filter)
+  // is what actually keeps normal-biome dungeons -- their displayed level AND their real monsters,
+  // both of which now derive from this same maxDepth -- inside the "never above 50" promise in
+  // every case, not just the typical one.
+  const cappedMaxDepth = Math.max(dMin, Math.min(maxDepth, maxThemeDepthFloor));
+  // Normal biomes (maxThemeDepthFloor finite, see biomeMaxThemeDepthFloor) cap variant power at
+  // Ancient (+1) -- Corrupted/Legendary (+2/+3) are reserved for special biomes, same rule as the
+  // dtier cap just above, closing the gap the simulation found.
+  const variant = rollDungeonVariant(rng, distFromOrigin, maxThemeDepthFloor === Infinity ? undefined : 1);
+  // targetPower: still the 1-6 bucket, but now used ONLY to pick an appropriately-strong boss
+  // species from BOSS_POWER (see generateDungeonLevel) -- it no longer drives the displayed
+  // recommended level (see below).
+  const targetPower = Math.max(1, Math.min(6, (meta.dtierMax || 2) + Math.floor(cappedMaxDepth / 4) + variant.powerMod));
+  const dangerMult = (BIOMES[centerBiome] && BIOMES[centerBiome].dangerMult) || 1;
+  const depthScaleBonus = dungeonDepthScaleBonus(variant, dangerMult);
+  // BALANCE PASS 5: fixed a genuine bug found by actually tracing a real fight rather than just
+  // checking the formula's shape -- the boss on the last floor is generated at depthScale
+  // maxDepth+2+depthScaleBonus (see generateDungeonLevel), which for a maxDepth-10 dungeon in a
+  // moderately dangerous biome can be a full ~30 LEVELS stronger than the old 0.7-weighted
+  // "average floor" this used to compute (verified: displayed 66, boss actually needed 96). A
+  // recommended-level sign that undersells the exact fight most likely to kill the player is
+  // worse than not having one -- it's the "unfair, unpredictable difficulty spike" complaint this
+  // whole system exists to prevent, just reintroduced one level up. Anchored on the boss's own
+  // true depthScale now, with a small (-1.0, ~7-8 levels) buffer for the fact a player genuinely
+  // does grow stronger fighting through the dungeon's earlier floors on the way down, rather than
+  // arriving at the final floor exactly as under-leveled as they were at the entrance.
+  const repDepthScale = cappedMaxDepth + 1 + depthScaleBonus;
+  const recommendedLevel = levelForDepthScale(repDepthScale);
   const id = 'd_' + cx + '_' + cy;
   decorateDungeonEntrance(chunk, lx, ly, theme);
   const eg = ENTRANCE_GLYPHS[theme] || { glyph: '>', name: 'an entrance' };
   const sizePrefix = sizeTier.label ? sizeTier.label + ' ' : '';
   const displayName = variant.label ? `${sizePrefix}${variant.label} ${meta.name}` : `${sizePrefix}${meta.name}`;
   t.glyph = eg.glyph; t.color = tier === 'rare' ? '#e05ae0' : (tier === 'uncommon' ? '#5ac9e0' : '#9ac95a'); t.feature = 'dungeon_entrance'; t.dungeonId = id; t.walkable = true;
-  chunk.dungeonEntrance = { id, theme, maxDepth, tier, name: displayName, entranceName: eg.name, x: cx*CH+lx, y: cy*CH+ly, variant: variant.id, recommendedLevel, size: sizeTier.id };
-  dungeonRegistry.set(id, { id, theme, maxDepth, tier, name: displayName, entranceName: eg.name, levels: [], x: cx*CH+lx, y: cy*CH+ly, variant: variant.id, targetPower, recommendedLevel, originMode: 'overworld', size: sizeTier.id });
+  chunk.dungeonEntrance = { id, theme, maxDepth: cappedMaxDepth, tier, name: displayName, entranceName: eg.name, x: cx*CH+lx, y: cy*CH+ly, variant: variant.id, recommendedLevel, size: sizeTier.id };
+  dungeonRegistry.set(id, { id, theme, maxDepth: cappedMaxDepth, tier, name: displayName, entranceName: eg.name, levels: [], x: cx*CH+lx, y: cy*CH+ly, variant: variant.id, targetPower, recommendedLevel, depthScaleBonus, originMode: 'overworld', size: sizeTier.id });
 }
 
 // ===================== WORLD GENERATION v5 =====================
@@ -11762,7 +12109,14 @@ function weaponDamageType(weapon) {
 // likely to cave it in. Body armor gives a partial assist to the limbs and torso alike (a
 // breastplate covers real shoulder/hip area), which is why it isn't 1.0 everywhere.
 function getPartArmorValue(e, part) {
-  if (e !== player) return 0;
+  if (e !== player) {
+    // Monsters don't wear discrete gear slots the way the player does, but plenty of them do
+    // have a flat `armor` stat (plate-skinned golems, an actual knight in actual plate, a
+    // dragon's scales) that should still make a locational wound harder to land, not just soften
+    // the raw HP damage the way it already does elsewhere. A flat fraction across every part
+    // rather than per-slot modeling -- proportionate to what's actually being represented here.
+    return (e.armor || 0) * 0.3;
+  }
   const eq = player.equipment;
   const pieceVal = (slot) => { const it = eq[slot]; if (!it) return 0; return it.broken ? Math.round((it.armor || 0) * 0.25) : (it.armor || 0); };
   switch (part) {
@@ -12639,6 +12993,11 @@ function rollHit(att, def, ranged, calledShotPenalty) {
   let chance = 0.6 + (effDex(att) - effDex(def)) * 0.025;
   if (att === player) chance -= weaponStrDeficit() * 0.02;
   if (def === player) chance += armorStrDeficit() * 0.015; // over-encumbered defenders are easier to hit
+  // A concussed head (see recalcBodyPenalties) throws off aim and coordination -- this field
+  // existed and was computed for every entity already but was never actually read anywhere,
+  // making a "wounded head" mechanically invisible outside its own status-list entry. Applies to
+  // whoever's attacking, player or monster alike, same as the arm/leg injury penalties nearby.
+  if (att.headInjuryPenalty) chance -= att.headInjuryPenalty * 0.5;
   // Weather/Climate overhaul: wind, storms, and low visibility make ranged attacks specifically
   // less reliable (a thrown weapon or arrow drifts, a sandstorm blots out the target) -- melee is
   // unaffected since it doesn't rely on a flight path.
@@ -12662,18 +13021,100 @@ function rollHit(att, def, ranged, calledShotPenalty) {
 // achievable target -- roughly 450,000 total XP, paced so early levels are
 // quick and late levels are a genuine grind, not a wall.
 // ============================================================================
+// BALANCE PASS 4: replaced the old polynomial cost curve (level^2.35) with one built from the
+// SAME exponential curve monster power (and now, since BALANCE PASS 3, gear power) already scales
+// on -- measured, not guessed: the old curve produced a non-monotonic "kills needed per level"
+// shape (roughly 2 kills at L1, climbing to ~31-34 through L20-50, then dropping back to ~13-23 by
+// L99), because a polynomial cost curve and an exponential monster-XP-reward curve (monster XP
+// scales with the same `scale` factor as its HP/damage, see makeMonster) mathematically cross over
+// rather than tracking each other. That's a real mid-game grind hump most players would feel around
+// levels 20-50 even if they never saw the math -- progression visibly slows down for 30 levels and
+// then speeds back up for no in-fiction reason. Quest XP doesn't rescue this either: most quest
+// rewards (see the rewardXp formulas near generateBountyQuest et al.) are small, roughly-flat
+// values that stay relevant early but become marginal well before level 50, where xpNeededForLevel
+// is already in the thousands.
+// XP_EARLY_RAMP keeps the deliberately fast, dopamine-quick first ~12 levels (a genuine, common,
+// good RPG-design choice worth preserving) by discounting cost early and ramping to full cost by
+// level 12; from there on, cost tracks the exact same exponential curve monster XP rewards do,
+// so "kills needed per level" is constant (~22, verified numerically) for the entire back 87% of
+// the game instead of humping and un-humping. XP_CURVE_A is calibrated so total XP to hit
+// LEVEL_CAP lands at ~450,000, matching the previous curve's overall endgame total -- same total
+// playtime-scale, smoothed shape.
 const LEVEL_CAP = 99;
-const XP_CURVE_EXP = 2.35;
-const XP_CURVE_A = 450000 / Math.pow(LEVEL_CAP, XP_CURVE_EXP);
-function xpTotalForLevel(level) { return Math.round(XP_CURVE_A * Math.pow(level, XP_CURVE_EXP)); }
-function xpNeededForLevel(level) { return Math.max(20, xpTotalForLevel(level + 1) - xpTotalForLevel(level)); }
-// Dungeons and bosses have always been rated on a 1-6 "power" scale (dtierMax/bossPower). That
-// scale itself doesn't change here -- but what it *means* in player levels does. The old formula
-// (power*3-2) topped out at level 16 for the toughest power-6 content in the game, which is why
-// level 99 was never reachable through anything the game actually offered. This spreads the same
-// six tiers across the full 1-99 range instead, so existing "power 6" bosses (ancient_wyrm,
-// corrupted_colossus, Malphegor, Yog'tha, etc.) become genuine ~level 90+ endgame encounters.
-function recommendedLevelForPower(power) { return Math.max(1, Math.round(3 + (power - 1) * 19)); }
+function xpEarlyRamp(level) { return level <= 12 ? 0.25 + 0.75 * (level - 1) / 11 : 1; }
+const XP_CURVE_A = 444.85;
+function xpNeededForLevel(level) {
+  return Math.max(20, Math.round(XP_CURVE_A * Math.pow(MONSTER_SCALE_BASE, depthScaleForPlayerLevel(level) - 1) * xpEarlyRamp(level)));
+}
+function xpTotalForLevel(level) {
+  let total = 0;
+  for (let l = 1; l < level; l++) total += xpNeededForLevel(l);
+  return total;
+}
+// Dungeons and bosses have always been rated on a 1-6 "power" scale (dtierMax/bossPower) used to
+// pick an appropriate BOSS SPECIES for a given dungeon (see targetPower / BOSS_POWER matching
+// below) -- that lookup is untouched. recommendedLevelForPower used to *also* double as the
+// number shown on a dungeon entrance ("recommended level X+"), which was the actual bug: real
+// in-dungeon monster strength has never come from this 1-6 bucket -- it comes from the
+// continuous depthScale curve (see depthScaleForPlayerLevel/makeMonster) fed the dungeon's raw
+// floor number. Six coarse buckets stretched across 1-99 (3/22/41/60/79/98) could not possibly
+// track a continuous per-floor curve, so the displayed number and the dungeon's actual danger
+// were frequently wildly out of sync (e.g. a theme whose *minimum* floor count already implied
+// power 5-6 would show "98+" even though floor 7 of that dungeon is nowhere near level-98
+// strength). Fixed below by deriving the displayed number from the SAME curve that generates the
+// monsters, via levelForDepthScale -- see REBALANCE PASS 2 near placeDungeonEntrance.
+function levelForDepthScale(depthScale) {
+  return Math.max(1, Math.min(LEVEL_CAP, Math.round(1 + (depthScale - 1) * 98 / 13)));
+}
+// Extra depthScale (on top of raw floor number) applied to every monster generated on a dungeon's
+// floors -- see generateDungeonLevel's `depthScaleBonus` parameter. Two real, numeric sources of
+// extra danger, not just cosmetic ones:
+//  - variant.powerMod: a Legendary dungeon's mobs now actually hit harder than a Weathered one at
+//    the same floor, not just carry a scarier name and better loot.
+//  - biome dangerMult: a dungeon buried under the Void Scar or Ancient Megaruins is now
+//    mechanically more dangerous than the same theme sitting under Plains, matching the fact that
+//    the world already treats those biomes as more dangerous for overworld wildlife
+//    (overworldDangerScale * dangerMult). `extraBase` lets dimension placement (see
+//    placeDimensionDungeonEntrance/placeDimensionSubDungeon) shift the whole floor range up into
+//    genuine endgame territory, since dimensions are unlocked only after defeating a dtier-5
+//    overworld/story boss and are meant to ask for a near-max-level character.
+function dungeonDepthScaleBonus(variant, dangerMult, extraBase) {
+  const variantBonus = (variant.powerMod || 0) * 0.8;
+  const biomeBonus = ((dangerMult || 1) - 1) * 4;
+  return variantBonus + biomeBonus + (extraBase || 0);
+}
+// How dangerous a dungeon THEME is allowed to be (its dtierMax ceiling) given the biome it's
+// rolling under and how far that biome-chunk sits from the starting town. This is what makes the
+// placement itself make sense, not just the number on the sign: an ordinary Plains/Forest/Desert
+// chunk (family:'normal' in BIOMES) can only ever host dtier 1-3 content (roughly levels 3-50,
+// see levelForDepthScale), and only reaches dtier 3 once you're well off the beaten path --
+// dtier 4-5 dungeons (labyrinths, dragon lairs, demon gates...) are reserved entirely for the
+// "special" biome families (fantastical/eldritch/scifi/ruins, all of which already carry a
+// dangerMult in BIOMES) and for dimensions. A random forest next to a village can no longer roll
+// a 90+ superboss lair.
+function biomeDtierCap(biome, distFromOrigin) {
+  const b = BIOMES[biome] || {};
+  const family = b.family || 'normal';
+  if (family === 'normal') return Math.max(1, Math.min(3, 1 + Math.floor(distFromOrigin / 10)));
+  const dangerMult = b.dangerMult || 1;
+  const dangerBonus = Math.round((dangerMult - 1) * 5);
+  return Math.max(2, Math.min(5, 2 + Math.floor(distFromOrigin / 8) + dangerBonus));
+}
+// dtierMax alone isn't a tight enough leash for normal biomes: a theme's own minimum floor count
+// (depthRange[0]) sets a floor UNDER the boss's depthScale (bossDepthScale = maxDepth+2, and
+// maxDepth can never go below depthRange[0] -- see the maxDepth clamp in placeDungeonEntrance)
+// that dtierMax capping alone doesn't touch. 'fortress'/'tower' are labeled dtierMax 3 (which
+// biomeDtierCap does let normal biomes reach) but their own depthRange floor of 6 already implies
+// a boss around level ~54 even at their shallowest -- quietly breaking the "normal biomes never
+// exceed level 50" rule the dtier cap was supposed to guarantee. Filtering candidate themes by
+// their own minimum depth as well (not just their ceiling) closes that gap at the source, so
+// maxDepth for anything placed in a normal biome can never get deep enough to produce an
+// out-of-band boss in the first place -- the display and the actual monsters it generates stay
+// honest with each other by construction, not by a separate clamp bolted on afterward.
+function biomeMaxThemeDepthFloor(biome) {
+  const family = (BIOMES[biome] || {}).family || 'normal';
+  return family === 'normal' ? 5 : Infinity;
+}
 
 function gainXP(amount) {
   if (player.level >= LEVEL_CAP) return;
@@ -15498,7 +15939,7 @@ function gatherNearbyGroundItems() {
 function enterDungeon(id) {
   clearAreaFx();
   const dg = dungeonRegistry.get(id);
-  if (!dg.levels[0]) dg.levels[0] = generateDungeonLevel(dg.theme, 1, dg.maxDepth, dg.variant, dg.size);
+  if (!dg.levels[0]) dg.levels[0] = generateDungeonLevel(dg.theme, 1, dg.maxDepth, dg.variant, dg.size, dg.depthScaleBonus);
   player.overworldReturn = { x: player.x, y: player.y, mode: player.mode, dimensionId: player.dimensionId || null };
   player.mode = 'dungeon'; player.dungeonId = id; player.dungeonDepth = 1;
   const lvl = dg.levels[0];
@@ -15514,7 +15955,7 @@ function descend() {
   const dg = curDungeon(); const nd = player.dungeonDepth + 1;
   if (nd > dg.maxDepth) { log('This is the deepest level.'); checkMainQuestDungeonTier(dg.tier); return; }
   clearAreaFx();
-  if (!dg.levels[nd - 1]) dg.levels[nd - 1] = generateDungeonLevel(dg.theme, nd, dg.maxDepth, dg.variant, dg.size);
+  if (!dg.levels[nd - 1]) dg.levels[nd - 1] = generateDungeonLevel(dg.theme, nd, dg.maxDepth, dg.variant, dg.size, dg.depthScaleBonus);
   player.dungeonDepth = nd;
   const lvl = dg.levels[nd - 1];
   player.x = lvl.upStairs.x; player.y = lvl.upStairs.y;
@@ -15576,7 +16017,7 @@ function chasmFall() {
     return;
   }
   clearAreaFx();
-  if (!dg.levels[nd - 1]) dg.levels[nd - 1] = generateDungeonLevel(dg.theme, nd, dg.maxDepth, dg.variant, dg.size);
+  if (!dg.levels[nd - 1]) dg.levels[nd - 1] = generateDungeonLevel(dg.theme, nd, dg.maxDepth, dg.variant, dg.size, dg.depthScaleBonus);
   const lvl = dg.levels[nd - 1];
   const landing = pickChasmLanding(lvl);
   player.dungeonDepth = nd;
@@ -17518,8 +17959,33 @@ function dropLoot(def) {
       if (corruption >= 60 && Math.random() < 0.25) addItemToList(items, makeItem('corrupted_shard', 0, Math.random));
       else if (corruption >= 30 && Math.random() < 0.10) addItemToList(items, makeItem('corrupted_shard', 0, Math.random));
     }
-    if (Math.random() < 0.5 || def.dropGold) { const g = makeItem('gold', 0, Math.random); g.amount = Math.round(randInt(Math.random, 1, 10) * (def.boss ? 12 : 1) * goldMult); addItemToList(items, g); }
-    if (Math.random() < (0.10 + pTier * 0.05) || def.boss) { const baseIds = lootBaseIdsFor(def); addItemToList(items, makeItem(choice(Math.random, baseIds), def.boss ? Math.max(3, lootRarityFor(def)) : lootRarityFor(def), Math.random, itemPowerMult(def.powerScale || 1))); }
+    // BALANCE PASS 6: gold now scales with the monster's own powerScale (sqrt-dampened), found via
+    // a real simulation comparing this against dungeon floor gold piles (which already scaled with
+    // depth) and representative weapon prices at several levels. Before this, monster-kill gold was
+    // a flat 1-10 regardless of the monster's tier or level -- every other reward (HP, damage, XP,
+    // item value) scales with the same power curve, but gold from a kill didn't, so it went from
+    // "5 kills to afford a weapon" at level 1 to "55 kills" at level 90 in isolation, even though
+    // dungeon floor gold (unaffected by this) stayed a stable ~2-3 the whole way. sqrt-dampened
+    // rather than full-scaled so this doesn't overshoot and make grinding trash MORE lucrative than
+    // dungeon diving -- kills-to-afford now drifts gently from ~5.5 to ~10 across the whole level
+    // range instead of either flatlining into irrelevance or spiking past the (intentionally
+    // stronger) floor-loot economy.
+    if (Math.random() < 0.5 || def.dropGold) { const g = makeItem('gold', 0, Math.random); g.amount = Math.round(randInt(Math.random, 1, 10) * (def.boss ? 12 : 1) * goldMult * Math.sqrt(def.powerScale || 1)); addItemToList(items, g); }
+    if (Math.random() < (0.10 + pTier * 0.05) || def.boss) {
+      const baseIds = lootBaseIdsFor(def);
+      // BALANCE PASS 6: boss rarity floor changed from a flat 3 to pTier+1 (still capped at 4) --
+      // found via a real simulation across all 5 power tiers: at pTier 3-4, a regular monster's
+      // own natural rarity roll already reaches 3-4 most of the time, so the old flat floor of 3
+      // was a complete no-op there -- a level-90 boss's core drop averaged the exact same gold
+      // value (694) as a same-tier regular monster's, with the only difference being drop
+      // *chance* (guaranteed vs ~30%), not drop *quality*. A boss killing you slowly is supposed
+      // to feel like a better reward per item, not just a more reliable one. pTier+1 keeps a real
+      // quality edge at every tier that still has rarity headroom to give (0-3); at pTier 4 both
+      // converge on the max (4) since there's nowhere higher for either to go -- an unavoidable
+      // ceiling effect, not a gap.
+      const rarity = def.boss ? Math.min(4, Math.max(pTier + 1, lootRarityFor(def))) : lootRarityFor(def);
+      addItemToList(items, makeItem(choice(Math.random, baseIds), rarity, Math.random, itemPowerMult(def.powerScale || 1)));
+    }
     if (def.boss && Math.random() < 0.4) { const chestItem = makeItem('chest', 0, Math.random); chestItem.tier = Math.min(4, pTier + 1); chestItem.powerMult = itemPowerMult(def.powerScale || 1); addItemToList(items, chestItem); }
     if (def.boss && Math.random() < 0.5) addItemToList(items, makeTome(randInt(Math.random,2,3), Math.random));
     else if (Math.random() < 0.03) addItemToList(items, makeTome(randInt(Math.random,0,1), Math.random));
@@ -19796,8 +20262,15 @@ function doAttack(att, def) {
   const attName = isPlayer ? 'You' : att.name;
   const defName = def === player ? 'you' : def.name;
   // racial dodge (e.g. Thalassi Water's Grace) now applies to whoever's actually defending, not
-  // just the player -- plus the player's own buff/encumbrance modifiers layered on top when it's them.
-  const dodgeChance = (def.dodgeChance || 0) + (def === player ? getBuff('evasion') - armorStrDeficit() * 0.01 - (player.legInjuryPenalty || 0) * 0.5 : 0);
+  // just the player -- plus the player's own buff/encumbrance modifiers layered on top when it's
+  // them, and ANY defender's own leg injury (see recalcBodyPenalties) making them easier to hit,
+  // not just the player's.
+  // REBALANCE PASS 2: capped at 75% -- with the new tier 6-9 talent ascensions adding still more
+  // dodgeChance on top of the existing talent/gear/racial sources, this stack was otherwise
+  // uncapped and could mathematically reach or exceed 100% (literal unhittability), which has no
+  // place in a hardcore permadeath game. 75% keeps a heavily-invested dodge build feeling
+  // dramatically evasive without removing risk from combat entirely.
+  const dodgeChance = Math.min(0.75, (def.dodgeChance || 0) - (def.legInjuryPenalty || 0) * 0.5 + (def === player ? getBuff('evasion') - armorStrDeficit() * 0.01 : 0));
   if (dodgeChance > 0 && Math.random() < dodgeChance) { log(`${defName === 'you' ? 'You' : def.name} nimbly dodge${defName === 'you' ? '' : 's'} ${attName === 'You' ? 'the' : att.name + "'s"} attack!`); return; }
   if (!rollHit(att, def, !!(weapon && weapon.ranged), calledShot ? 0.22 : 0)) {
     Sound.play(isPlayer ? 'miss' : 'enemyMiss');
@@ -19815,9 +20288,11 @@ function doAttack(att, def) {
   if (!isPlayer && att.packTactics && countNearbyAllies(att, 2) > 0) dmg = Math.round(dmg * 1.25);
   if (isPlayer) dmg += Math.floor(player.level / 5);
   if (isPlayer && weapon) dmg = Math.round(dmg * abilityPenaltyFactor(weaponStrDeficit()));
-  // A wounded/maimed arm makes every swing weaker, on top of (not instead of) the existing
-  // under-strength penalty above -- see recalcBodyPenalties near igniteTile.
-  if (isPlayer && player.armInjuryPenalty) dmg = Math.round(dmg * (1 - player.armInjuryPenalty));
+  // A wounded/maimed attacking arm makes every swing weaker, on top of (not instead of) the
+  // existing under-strength penalty above -- see recalcBodyPenalties. Generalized off the
+  // attacker (att) rather than hardcoded to the player, so an injured monster or boss actually
+  // hits softer once you've crippled its weapon arm, the same way an injured player does.
+  if (att.armInjuryPenalty) dmg = Math.round(dmg * (1 - att.armInjuryPenalty));
   if (isPlayer && weapon && weapon.broken) dmg = Math.round(dmg * 0.35);
   if (isPlayer) {
     dmg += (player.cyberDmgBonus || 0);
@@ -19907,48 +20382,64 @@ function doAttack(att, def) {
     else if (calledShot === 'arms') { def.statusConfuse = (def.statusConfuse || 0) + 2; log(`${defCap} staggered -- the strike numbs the arm!`); }
     else if (calledShot === 'head') { log(`The called shot finds its mark -- straight past the guard!`); }
   }
-  // ---- BODY & HEALTH OVERHAUL: locational wounds + bleeding, rolled only for the player as
-  // defender (see the framework comment near ensureBodyParts near igniteTile for why) -- any hit
-  // that actually lands has a chance to bleed, scaling with how hard it hit, and a chance to
-  // wound whatever it happened to land on, which is where crit's rarer headshot chance actually
-  // matters mechanically instead of just being a bigger number.
-  if (def === player && def.hp > 0 && dmg > 0) {
+  // ---- BODY & HEALTH OVERHAUL, extended to every entity: locational wounds + bleeding now roll
+  // for ANY defender, not just the player (see the "extending onto monsters" comment near
+  // isBloodlessMonster's classification loop for how each monster's bloodless/noBodyParts/
+  // diseaseImmune got decided). A skeleton can have its arm shattered but never bleeds; a slime
+  // has neither a limb to break nor blood to lose and falls to the same lighter symmetric-bleed
+  // fallback a monster always had against the player. Disease infection risk from a neglected
+  // wound (below, in processEntityStatus) still only actually tracks on the player -- monster
+  // fights are too short-lived, and monsters have no rest/cure economy to ever resolve one, so a
+  // monster picking up a disease it can mechanically never shed isn't a real system, just a
+  // number nobody interacts with. Everything else here is fully shared code.
+  const defHasBodyParts = !def.noBodyParts;
+  const defCanBleed = !def.bloodless;
+  if (defHasBodyParts && def.hp > 0 && dmg > 0) {
     // Player attacks always know their exact weapon; monster/NPC attacks don't carry an item, so
     // weaponDamageType falls through to its generic slashing-attack guess for anything that
     // isn't explicitly tagged (see the pattern table near getPartArmorValue) -- claws and fangs
     // read close enough to "bladed" for this purpose without needing every monster base tagged.
     const dmgType = weaponDamageType(isPlayer ? weapon : att);
-    const dmgFraction = dmg / (player.maxHp || 30);
-    if (dmgFraction > 0.06) applyBleed(player, (crit ? 2 : 1) + (dmgType !== 'blunt' ? 1 : 0));
+    const dmgFraction = dmg / (def.maxHp || def.hp || 30);
+    if (defCanBleed && dmgFraction > 0.06) applyBleed(def, (crit ? 2 : 1) + (dmgType !== 'blunt' ? 1 : 0));
     const part = rollHitLocation(crit);
     // Locational armor (see getPartArmorValue near recalcBodyPenalties) softens THIS specific
     // roll -- a well-armored head can shrug off a hit that would otherwise concuss it, even
     // though the raw damage already got through and came off HP the normal way. Blunt weapons
     // (maces, hammers, fists) are worse for breaking bone than they are for opening a wound --
     // the extra bleed stack above skips them, but they escalate the wound level itself faster.
-    const partArmor = getPartArmorValue(player, part);
+    const partArmor = getPartArmorValue(def, part);
     const bluntMult = dmgType === 'blunt' ? 1.3 : 1;
-    const woundFraction = dmgFraction * Math.max(0.3, 1 - partArmor * 0.05) * bluntMult;
-    const levelBefore = ensureBodyParts(player)[part].level;
-    const levelAfter = woundBodyPart(player, part, woundFraction);
+    // A boss or miniboss's limbs are proportionally tougher than a regular monster's -- a dragon's
+    // leg isn't as easy to cripple, hit-for-hit-percentage-of-max-HP, as a goblin's. Without this,
+    // extending the full wound model onto monsters would let a long boss fight cripple every one
+    // of its limbs just as readily as a trash mob's, turning "tough, sustained fight" into "wound
+    // it a few times and it can barely act" -- a real risk given bosses are exactly where players
+    // land the most cumulative hits. Regular monsters are unaffected (bossWoundResist undefined).
+    const bossWoundResist = (def.boss || def.miniboss) ? 0.45 : 1;
+    const woundFraction = dmgFraction * Math.max(0.3, 1 - partArmor * 0.05) * bluntMult * bossWoundResist;
+    const levelBefore = ensureBodyParts(def)[part].level;
+    const levelAfter = woundBodyPart(def, part, woundFraction);
     if (levelAfter > levelBefore) {
-      recalcBodyPenalties(player);
+      recalcBodyPenalties(def);
       const partLabel = part.replace(/([A-Z])/g, ' $1').toLowerCase();
-      log(`Your ${partLabel} is ${WOUND_LEVEL_NAMES[levelAfter].toLowerCase()}!`);
-      if (levelAfter === 3) log(`Your ${partLabel} won't heal on its own like this -- it needs a splint.`);
-      if (levelAfter === 4) log(`*** Your ${partLabel} is permanently ruined -- no splint will fix this. You'll need a priest's Greater Restoration, or the rare blessing of a shrine. ***`);
-      if (part === 'torso') applyBleed(player, 1);
+      const subj = def === player ? 'Your' : `${def.name}'s`;
+      log(`${subj} ${partLabel} is ${WOUND_LEVEL_NAMES[levelAfter].toLowerCase()}!`);
+      if (def === player) {
+        if (levelAfter === 3) log(`Your ${partLabel} won't heal on its own like this -- it needs a splint.`);
+        if (levelAfter === 4) log(`*** Your ${partLabel} is permanently ruined -- no splint will fix this. You'll need a priest's Greater Restoration, or the rare blessing of a shrine. ***`);
+      }
+      if (part === 'torso' && defCanBleed) applyBleed(def, 1);
       // Any wound left at Maimed for a long stretch risks going septic -- see the infection check
       // in processEntityStatus's body-part tick, which is what actually punishes ignoring it
-      // rather than this moment of impact.
+      // rather than this moment of impact. Player-only, per the comment at the top of this block.
     }
-  } else if (crit && def.hp > 0 && dmg > 0 && weaponDamageType(isPlayer ? weapon : att) !== 'blunt' && Math.random() < 0.4) {
-    // Symmetric on the way out, minus the full locational model (see the framework note near
-    // ensureBodyParts on why monsters don't track six body parts each) -- a crit against
-    // something else still opens a real bleeding wound, which is what makes Bloodfrenzy and
-    // Hemorrhage's own flavor text ("wounds bleed worse...") true instead of aspirational. Gated
-    // off blunt weapons the same way the player's own wound hook above is -- a warhammer crit
-    // should crush, not lacerate.
+  } else if (defCanBleed && crit && def.hp > 0 && dmg > 0 && weaponDamageType(isPlayer ? weapon : att) !== 'blunt' && Math.random() < 0.4) {
+    // Symmetric fallback for anything with no body-part model at all (oozes, swarms, elementals,
+    // rogue code) -- a crit still opens a real bleeding wound where the creature has anything
+    // resembling blood to lose, which is what makes Bloodfrenzy and Hemorrhage's own flavor text
+    // ("wounds bleed worse...") true instead of aspirational. Gated off blunt weapons the same
+    // way the full locational model above is -- a warhammer crit should crush, not lacerate.
     applyBleed(def, 1);
   }
   // ---- v3 durability wear: only on crits (weapon under exceptional strain) and heavy hits
@@ -21608,7 +22099,18 @@ function placeDimensionDungeonEntrance(chunk, cx, cy, dimId, rng, distFromArriva
   const maxDepth = Math.max(1, Math.min(sizeTier.maxDepthCap, Math.max(dMin, Math.min(dMax, dMin + Math.floor(distFromArrival / 4) + randInt(rng, 0, 2)))));
   const variant = rollDungeonVariant(rng, distFromArrival);
   const targetPower = Math.max(1, Math.min(6, (meta.dtierMax || 2) + Math.floor(maxDepth / 4) + variant.powerMod));
-  const recommendedLevel = recommendedLevelForPower(targetPower);
+  // Dimensions are only reachable after felling a dtier-5 story/overworld boss (see
+  // unlockDimension callers), so even a dimension's ordinary dungeons start from a high
+  // depthScale floor (extraBase 7.5, roughly level 57+ from floor 1 alone -- see
+  // dungeonDepthScaleBonus/levelForDepthScale) rather than the gentle 1-3 ramp overworld dungeons
+  // use. They still grow across their own depth range on top of that floor, so the first
+  // dimension-side dungeon you find isn't automatically as hard as the last.
+  const depthScaleBonus = dungeonDepthScaleBonus(variant, 1, 7.5);
+  // BALANCE PASS 5: same boss-depthScale-anchored fix as the overworld placement above -- see
+  // that comment for the fight-trace evidence. maxDepth+1 (not the old maxDepth*0.7+1) so the
+  // sign tracks the boss most players will actually die to, not a diluted floor average.
+  const repDepthScale = maxDepth + 1 + depthScaleBonus;
+  const recommendedLevel = levelForDepthScale(repDepthScale);
   const id = 'dd_' + dimId + '_' + cx + '_' + cy;
   decorateDungeonEntrance(chunk, lx, ly, theme);
   const eg = ENTRANCE_GLYPHS[theme] || { glyph: '>', name: 'an entrance' };
@@ -21616,7 +22118,7 @@ function placeDimensionDungeonEntrance(chunk, cx, cy, dimId, rng, distFromArriva
   const displayName = variant.label ? `${sizePrefix}${variant.label} ${meta.name}` : `${sizePrefix}${meta.name}`;
   t.glyph = eg.glyph; t.color = '#5ac9e0'; t.feature = 'dungeon_entrance'; t.dungeonId = id; t.walkable = true;
   chunk.dungeonEntrance = { id, theme, maxDepth, tier: meta.tier, name: displayName, entranceName: eg.name, x: cx * CH + lx, y: cy * CH + ly, variant: variant.id, recommendedLevel, size: sizeTier.id };
-  dungeonRegistry.set(id, { id, theme, maxDepth, tier: meta.tier, name: displayName, entranceName: eg.name, levels: [], x: cx * CH + lx, y: cy * CH + ly, variant: variant.id, targetPower, recommendedLevel, originMode: 'dimension', originDimensionId: dimId, size: sizeTier.id });
+  dungeonRegistry.set(id, { id, theme, maxDepth, tier: meta.tier, name: displayName, entranceName: eg.name, levels: [], x: cx * CH + lx, y: cy * CH + ly, variant: variant.id, targetPower, recommendedLevel, depthScaleBonus, originMode: 'dimension', originDimensionId: dimId, size: sizeTier.id });
 }
 
 const DIMENSION_TRAIL_GUARDIANS = {
@@ -24029,12 +24531,21 @@ function placeDimensionSubDungeon(chunk, cx, cy, sub, dim, fill) {
   const sizeTier = rollDungeonSize(rng, meta);
   const maxDepth = Math.max(1, Math.min(sizeTier.maxDepthCap, meta.depthRange[1]));
   const targetPower = Math.max(1, Math.min(6, (meta.dtierMax || 2) + Math.floor(maxDepth / 4) + variant.powerMod));
-  const recommendedLevel = recommendedLevelForPower(targetPower);
+  // The single hardest, most deliberately-placed dungeon in each dimension (dtierMax 5, one per
+  // dimension, guarding that dimension's signature superboss) -- extraBase 9.5 puts even its
+  // first floor around level ~65+, climbing to the level cap by its final floor/boss. This is
+  // meant to be the last thing a genuinely maxed-out character does, not a detour.
+  const depthScaleBonus = dungeonDepthScaleBonus(variant, 1, 9.5);
+  // BALANCE PASS 5: same boss-depthScale-anchored fix as the other placements -- this one was
+  // already meant to read as near-max-level throughout, so anchoring on the true boss depthScale
+  // (rather than diluting it toward the entrance floor) just makes that intent honest on the sign.
+  const repDepthScale = maxDepth + 1 + depthScaleBonus;
+  const recommendedLevel = levelForDepthScale(repDepthScale);
   decorateDungeonEntrance(chunk, sub.lx, sub.ly, sub.decorateStyle);
   t.glyph = sub.entranceGlyph; t.color = sub.entranceColor; t.feature = 'dungeon_entrance'; t.dungeonId = sub.id;
   chunk.dungeonEntrance = { id: sub.id, theme: sub.theme, maxDepth, tier: 'rare', name: meta.name, entranceName: sub.entranceName, x: cx*CH+sub.lx, y: cy*CH+sub.ly, variant: variant.id, recommendedLevel, size: sizeTier.id };
   if (!dungeonRegistry.has(sub.id)) {
-    dungeonRegistry.set(sub.id, { id: sub.id, theme: sub.theme, maxDepth, tier: 'rare', name: meta.name, entranceName: sub.entranceName, levels: [], x: cx*CH+sub.lx, y: cy*CH+sub.ly, variant: variant.id, targetPower, recommendedLevel, originMode: 'dimension', originDimensionId: dim.id, size: sizeTier.id });
+    dungeonRegistry.set(sub.id, { id: sub.id, theme: sub.theme, maxDepth, tier: 'rare', name: meta.name, entranceName: sub.entranceName, levels: [], x: cx*CH+sub.lx, y: cy*CH+sub.ly, variant: variant.id, targetPower, recommendedLevel, depthScaleBonus, originMode: 'dimension', originDimensionId: dim.id, size: sizeTier.id });
   }
   if (!DIMENSION_SUBDUNGEONS.some(d => d.id === sub.id)) DIMENSION_SUBDUNGEONS.push({ id: sub.id, dimId: dim.id, cx, cy });
 }
@@ -24893,7 +25404,12 @@ function pickGeneratorId(theme, meta, sizeTier, rng) {
 // ---- dungeon generation v7: layered/mixed procgen (see the generator registry above), size-
 // driven footprints, zone-aware feature and encounter placement, hazard tiles per theme
 // (traps/poison/water) + cyber/eldritch loot bias ----
-function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId) {
+function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthScaleBonus) {
+  // depthScaleBonus (see dungeonDepthScaleBonus) folds the variant roll and this dungeon's
+  // biome/dimension danger into every monster's actual depthScale below, not just its displayed
+  // recommended level -- default 0 keeps old save-compatible callers (and any dungeon registered
+  // before this field existed) behaving exactly as a plain-depth dungeon always has.
+  depthScaleBonus = depthScaleBonus || 0;
   const meta = DUNGEON_THEMES[theme] || { genre: 'rooms', dtierMax: 2, tier: 'common' };
   const variant = DUNGEON_VARIANTS.find(v => v.id === variantId) || DUNGEON_VARIANTS[1];
   const sizeTier = dungeonSizeById(sizeId);
@@ -25035,24 +25551,24 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId) {
     if (theme === 'dream_sanctum') {
       grid[bc.y][bc.x] = { glyph: '\u25C8', walkable: true, color: '#b090ff', bg: '#140a2a', feature: 'slumbering_altar', items: [] };
     } else {
-      let boss = makeMonster(choice(rng, closest.length ? closest : bossCandidates), Math.max(1,bc.x-1), bc.y, depth+2, rng);
+      let boss = makeMonster(choice(rng, closest.length ? closest : bossCandidates), Math.max(1,bc.x-1), bc.y, depth+2+depthScaleBonus, rng);
       // ---- Malphegor, the Rift-Warden: a hand-authored, always-the-same gatekeeper boss, not left
       // to the procedural power-matching roll above. Guarding the Demon Gate specifically (and only
       // there) is what makes defeating him mean something -- and what opens the way into the
       // Abyssal Wastes dimension afterward. See DIMENSIONS.abyssal_wastes / unlockAbyssalWastes(). ----
       if (theme === 'demon_gate' && MONSTER_BASES.archdemon_malphegor) {
-        boss = makeMonster('archdemon_malphegor', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss = makeMonster('archdemon_malphegor', Math.max(1, bc.x - 1), bc.y, depth + 2 + depthScaleBonus, rng);
       }
       // ---- Seraphiel: the Sky Bastion's fixed gatekeeper, opening the way into the Gilded Choir.
       // Same pattern as Malphegor/demon_gate above -- see unlockGildedChoir(). ----
       if (theme === 'sky_bastion' && MONSTER_BASES.seraphiel) {
-        boss = makeMonster('seraphiel', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss = makeMonster('seraphiel', Math.max(1, bc.x - 1), bc.y, depth + 2 + depthScaleBonus, rng);
       }
       // ---- The Hollow Signal: the Derelict Hulk's fixed gatekeeper. Unlike Malphegor/Seraphiel,
       // its death doesn't open the rift directly -- it guarantees the Ignition Core, which has to
       // be carried out and used at a Launch Cradle. See useLaunchCradle(). ----
       if (theme === 'derelict_hulk' && MONSTER_BASES.hollow_signal) {
-        boss = makeMonster('hollow_signal', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss = makeMonster('hollow_signal', Math.max(1, bc.x - 1), bc.y, depth + 2 + depthScaleBonus, rng);
         boss.guaranteedDrops = (boss.guaranteedDrops || []).concat([
           { uid: 'i' + Math.random().toString(36).slice(2, 9), id: 'ignition_core', type: 'key', name: 'Ignition Core',
             glyph: '*', color: '#4ae0d0', value: 0,
@@ -25063,7 +25579,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId) {
       // of two components (with the Recursive Key) needed at the Folding Stone. See
       // useFoldingStone(). ----
       if (theme === 'folded_vault' && MONSTER_BASES.uncounted_angle) {
-        boss = makeMonster('uncounted_angle', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss = makeMonster('uncounted_angle', Math.max(1, bc.x - 1), bc.y, depth + 2 + depthScaleBonus, rng);
         boss.guaranteedDrops = (boss.guaranteedDrops || []).concat([
           { uid: 'i' + Math.random().toString(36).slice(2, 9), id: 'bent_lens', type: 'key', name: 'Bent Lens',
             glyph: '*', color: '#b090ff', value: 0,
@@ -25073,32 +25589,32 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId) {
       // ---- The Fathom Mother: the Flooded Crypt's fixed gatekeeper. Killing her opens the rift
       // directly, same pattern as Malphegor/Seraphiel. ----
       if (theme === 'flooded_crypt' && MONSTER_BASES.fathom_mother) {
-        boss = makeMonster('fathom_mother', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss = makeMonster('fathom_mother', Math.max(1, bc.x - 1), bc.y, depth + 2 + depthScaleBonus, rng);
       }
       // ---- The Master Cog: the Gear Sanctum's fixed gatekeeper. Killing it opens the rift
       // directly, same pattern as Malphegor/Seraphiel/the Fathom Mother. ----
       if (theme === 'gear_sanctum' && MONSTER_BASES.master_cog) {
-        boss = makeMonster('master_cog', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss = makeMonster('master_cog', Math.max(1, bc.x - 1), bc.y, depth + 2 + depthScaleBonus, rng);
       }
       // ---- The Rootmind: the Overgrown Sepulchre's fixed gatekeeper. ----
       if (theme === 'overgrown_sepulchre' && MONSTER_BASES.rootmind) {
-        boss = makeMonster('rootmind', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss = makeMonster('rootmind', Math.max(1, bc.x - 1), bc.y, depth + 2 + depthScaleBonus, rng);
       }
       // ---- The Unhandled Exception: the Corrupted Kernel's fixed gatekeeper. ----
       if (theme === 'corrupted_kernel' && MONSTER_BASES.unhandled_exception) {
-        boss = makeMonster('unhandled_exception', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss = makeMonster('unhandled_exception', Math.max(1, bc.x - 1), bc.y, depth + 2 + depthScaleBonus, rng);
       }
       // ---- ADMIN-7: the Undercity Spire's fixed gatekeeper. ----
       if (theme === 'undercity_spire' && MONSTER_BASES.admin7) {
-        boss = makeMonster('admin7', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss = makeMonster('admin7', Math.max(1, bc.x - 1), bc.y, depth + 2 + depthScaleBonus, rng);
       }
       // ---- The Unburied Queen: the Necropolis's fixed gatekeeper. ----
       if (theme === 'necropolis' && MONSTER_BASES.unburied_queen) {
-        boss = makeMonster('unburied_queen', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss = makeMonster('unburied_queen', Math.max(1, bc.x - 1), bc.y, depth + 2 + depthScaleBonus, rng);
       }
       // ---- Aurelith: the Wyrmreach Lair's fixed gatekeeper. ----
       if (theme === 'wyrmreach_lair' && MONSTER_BASES.aurelith) {
-        boss = makeMonster('aurelith', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss = makeMonster('aurelith', Math.max(1, bc.x - 1), bc.y, depth + 2 + depthScaleBonus, rng);
       }
       // ---- The Antagonist: whoever the procedural story named as its villain (see
       // generateMainQuest's `antagonist` name) is not just a name attached to reused bosses --
@@ -25106,7 +25622,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId) {
       // Their death is what reveals what's actually behind them. See STORY_BOSS_AI.the_antagonist
       // and the onDeath hook that triggers triggerGodReveal(). ----
       if (theme === 'gods_threshold' && MONSTER_BASES.the_antagonist) {
-        boss = makeMonster('the_antagonist', Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss = makeMonster('the_antagonist', Math.max(1, bc.x - 1), bc.y, depth + 2 + depthScaleBonus, rng);
         if (player.story && player.story.antagonist) boss.name = player.story.antagonist;
       }
       // ---- Dimension Trail Guardians: any interior sub-dungeon theme registered in
@@ -25119,7 +25635,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId) {
       const guardianEntry = Object.values(DIMENSION_TRAIL_GUARDIANS).find(g => g.theme === theme);
       if (guardianEntry && MONSTER_BASES[guardianEntry.monsterId]) {
         const gDef = TRAIL_GUARDIANS.find(g => g.id === guardianEntry.monsterId);
-        boss = makeMonster(guardianEntry.monsterId, Math.max(1, bc.x - 1), bc.y, depth + 2, rng);
+        boss = makeMonster(guardianEntry.monsterId, Math.max(1, bc.x - 1), bc.y, depth + 2 + depthScaleBonus, rng);
         if (gDef && gDef.dropItem) {
           boss.guaranteedDrops = (boss.guaranteedDrops || []).concat([
             { uid: 'i' + Math.random().toString(36).slice(2, 9), id: gDef.dropItem.id, type: 'key', name: gDef.dropItem.name,
@@ -25136,7 +25652,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId) {
             const gx = bc.x + randInt(rng, -3, 3), gy = bc.y + randInt(rng, -3, 3);
             const gt = grid[gy] && grid[gy][gx];
             if (!gt || !gt.walkable || occupiedInLevel(level, gx, gy) || (gx===up.x&&gy===up.y)) continue;
-            level.monsters.push(makeMonster(choice(rng, usablePool), gx, gy, depth, rng));
+            level.monsters.push(makeMonster(choice(rng, usablePool), gx, gy, depth + depthScaleBonus, rng));
             break;
           }
         }
@@ -25163,14 +25679,14 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId) {
       if (lairRooms.length && rng() < 0.7) { const lair = choice(rng, lairRooms); mc = { x: lair.cx, y: lair.cy }; }
       else mc = choice(rng, floors);
       if (mc && !((mc.x===up.x&&mc.y===up.y) || (mc.x===down.x&&mc.y===down.y)) && grid[mc.y] && grid[mc.y][mc.x] && grid[mc.y][mc.x].walkable) {
-        level.monsters.push(makeMonster(choice(rng, miniPool), mc.x, mc.y, depth + 1, rng));
+        level.monsters.push(makeMonster(choice(rng, miniPool), mc.x, mc.y, depth + 1 + depthScaleBonus, rng));
         if (rng() < 0.55) {
           for (let gI = 0; gI < randInt(rng, 1, 2); gI++) {
             for (let tries = 0; tries < 15; tries++) {
               const gx = mc.x + randInt(rng, -2, 2), gy = mc.y + randInt(rng, -2, 2);
               const gt = grid[gy] && grid[gy][gx];
               if (!gt || !gt.walkable || occupiedInLevel(level, gx, gy)) continue;
-              level.monsters.push(makeMonster(choice(rng, usablePool), gx, gy, depth, rng));
+              level.monsters.push(makeMonster(choice(rng, usablePool), gx, gy, depth + depthScaleBonus, rng));
               break;
             }
           }
@@ -26876,7 +27392,10 @@ function resolveThrownPotionSplash(it, wx, wy, target) {
   const potencyMult = 1 + (player.alchemyPotencyBonus || 0);
   switch (it.effect) {
     case 'heal': {
-      const amt = Math.round(it.power * potencyMult);
+      // Same playerLevelPowerMult fix as the drink-it-yourself 'heal' case above -- a potion
+      // thrown at a companion should heal them proportionally to your shared power level too,
+      // not a flat amount that becomes irrelevant to their (also level-scaled) max HP.
+      const amt = Math.round(it.power * potencyMult * playerLevelPowerMult(player.level));
       target.hp = Math.min(target.maxHp || target.hp, target.hp + amt);
       log(isPlayer ? `The potion douses you, restoring ${amt} HP!` : `${it.name} douses ${target.name}, restoring ${amt} HP!${target.kind !== 'ally' ? ' (probably not what you wanted)' : ''}`);
       break;
@@ -27019,13 +27538,23 @@ function useItem(it) {
   Sound.play(it.glyph === '%' ? 'eat' : 'drink');
   let consumed = true;
   switch (it.effect) {
-    case 'heal': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult * healMult()); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You consume ${it.name} and recover ${amt} HP.`); break; }
+    // BALANCE PASS 7: every pool-restoration consumable below (heal, bandage, mana, stamina,
+    // charge, food) now scales by playerLevelPowerMult(player.level) -- found by comparing this
+    // against the spell-casting Heal code (see castSpell's 'heal' case), which already applied
+    // this exact multiplier and was therefore fine. Potions/food never got the same treatment: a
+    // Potion of Healing restored a flat 16 HP whether found at level 1 (where max HP is ~30, so
+    // this heals over half your health) or level 99 (where max HP is ~6700, so the same potion
+    // heals a rounding error's worth, ~0.2%). The best healing item in the entire game topped out
+    // at power 90 -- still under 1.5% of endgame max HP. Every other resource pool this restores
+    // (MP, Stamina, Charge) grows with level the same way HP does, so the same fix applies to all
+    // of them, not just healing.
+    case 'heal': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult * playerLevelPowerMult(player.level) * healMult()); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You consume ${it.name} and recover ${amt} HP.`); break; }
     // ---- BODY & HEALTH OVERHAUL: bandage is its own effect now, not a reskinned 'heal' potion --
     // stanching active bleeding is the actual point, the modest HP recovery on top represents
     // properly cleaning and closing the wound rather than nothing at all.
     case 'bandage': {
       const wasBleeding = stanchBleed(player);
-      const amt = Math.round(it.power * (1 + (player.alchemyPotencyBonus || 0)) * healMult());
+      const amt = Math.round(it.power * (1 + (player.alchemyPotencyBonus || 0)) * playerLevelPowerMult(player.level) * healMult());
       player.hp = Math.min(player.maxHp, player.hp + amt);
       log(wasBleeding ? `You bind the wound tight, stopping the bleeding and recovering ${amt} HP.` : `You dress your wounds and recover ${amt} HP.`);
       break;
@@ -27050,7 +27579,7 @@ function useItem(it) {
       } else { log("You're not injured enough to need a splint."); consumed = false; }
       break;
     }
-    case 'mana': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult); player.mp = Math.min(player.maxMp, player.mp + amt); log(`You consume ${it.name} and recover ${amt} MP.`); break; }
+    case 'mana': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult * playerLevelPowerMult(player.level)); player.mp = Math.min(player.maxMp, player.mp + amt); log(`You consume ${it.name} and recover ${amt} MP.`); break; }
     case 'buffstr': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('str', it.power, Math.round((it.dur||40)*durMult)); break; }
     case 'buffdex': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('dex', it.power, Math.round((it.dur||40)*durMult)); break; }
     case 'buffint': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('int', it.power, Math.round((it.dur||40)*durMult)); break; }
@@ -27060,15 +27589,15 @@ function useItem(it) {
     case 'curefear': { player.statusFear = 0; log('Your courage steadies.'); break; }
     case 'cureconfuse': { player.statusConfuse = 0; log('Your mind clears.'); break; }
     case 'cureall': { player.statusPoison = 0; player.statusFear = 0; player.statusConfuse = 0; grantDiseaseCureProgress('remedyItem', 3); log('A wave of clarity washes over you — all afflictions cleansed.'); break; }
-    case 'stamina': { player.stamina = Math.min(player.maxStamina, player.stamina + it.power); log(`You recover ${it.power} Stamina.`); break; }
-    case 'charge': { player.charge = Math.min(player.maxCharge, (player.charge||0) + it.power); log(`Your systems recharge ${it.power} Charge.`); break; }
+    case 'stamina': { const amt = Math.round(it.power * playerLevelPowerMult(player.level)); player.stamina = Math.min(player.maxStamina, player.stamina + amt); log(`You recover ${amt} Stamina.`); break; }
+    case 'charge': { const amt = Math.round(it.power * playerLevelPowerMult(player.level)); player.charge = Math.min(player.maxCharge, (player.charge||0) + amt); log(`Your systems recharge ${amt} Charge.`); break; }
     case 'aoefire': case 'aoefrost': case 'aoepoison': case 'aoeconfuse': case 'throwdmg': case 'scrollfire': case 'oilsplash':
       // unreachable: THROWABLE_EFFECTS redirects these to beginThrowTargeting() before the
       // switch is ever entered. Cases kept only so this isn't mistaken for a missing effect.
       break;
     case 'cureposion': { player.statusPoison = 0; grantDiseaseCureProgress('remedyItem', 2); log('The poison is cleansed from your body.'); break; }
     case 'poison': { player.statusPoison = (player.statusPoison||0) + it.power; log('That was a terrible idea.'); break; }
-    case 'food': { const amt = Math.round((it.power || 2) * (1 + (player.cookingHealBonus || 0)) * healMult()); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You eat ${it.name} and recover ${amt} HP.`); maybeGrantCookingBonusEffect(it); break; }
+    case 'food': { const amt = Math.round((it.power || 2) * (1 + (player.cookingHealBonus || 0)) * playerLevelPowerMult(player.level) * healMult()); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You eat ${it.name} and recover ${amt} HP.`); maybeGrantCookingBonusEffect(it); break; }
     case 'identify': {
       // There's nothing in this game that's ever unidentified, so this used to be a pure no-op
       // -- flavor text and nothing else, every single time, regardless of anything the player
@@ -27598,7 +28127,7 @@ function applyLoadedSave(data) {
   if (player.mode === 'dungeon' && player.dungeonId) {
     const dg = dungeonRegistry.get(player.dungeonId);
     if (dg) {
-      if (!dg.levels[player.dungeonDepth - 1]) dg.levels[player.dungeonDepth - 1] = generateDungeonLevel(dg.theme, player.dungeonDepth, dg.maxDepth, dg.variant, dg.size);
+      if (!dg.levels[player.dungeonDepth - 1]) dg.levels[player.dungeonDepth - 1] = generateDungeonLevel(dg.theme, player.dungeonDepth, dg.maxDepth, dg.variant, dg.size, dg.depthScaleBonus);
     } else {
       player.mode = 'overworld';
       player.x = player.overworldReturn ? player.overworldReturn.x : 0;
@@ -28175,14 +28704,17 @@ function debugSpawnDungeonInstance(themeId) {
   const maxDepth = Math.max(1, Math.min(sizeTier.maxDepthCap, randInt(rng, dMin, dMax)));
   const variant = rollDungeonVariant(rng, 10);
   const targetPower = Math.max(1, Math.min(6, (meta.dtierMax || 2) + Math.floor(maxDepth / 4) + variant.powerMod));
-  const recommendedLevel = recommendedLevelForPower(targetPower);
+  const isDimensionAnchor = anchor.mode === 'dimension' || meta.tier === 'dimension';
+  const depthScaleBonus = dungeonDepthScaleBonus(variant, 1, isDimensionAnchor ? 8 : 0);
+  const repDepthScale = maxDepth + 1 + depthScaleBonus; // BALANCE PASS 5: boss-depthScale-anchored, see placeDungeonEntrance
+  const recommendedLevel = levelForDepthScale(repDepthScale);
   const eg = ENTRANCE_GLYPHS[themeId] || { glyph: '>', name: 'an entrance' };
   const sizePrefix = sizeTier.label ? sizeTier.label + ' ' : '';
   const displayName = variant.label ? `${sizePrefix}${variant.label} ${meta.name}` : `${sizePrefix}${meta.name}`;
   const id = 'debug_' + themeId + '_' + Date.now() + '_' + debugDungeonSpawnSeq;
   dungeonRegistry.set(id, {
     id, theme: themeId, maxDepth, tier, name: displayName, entranceName: eg.name, levels: [],
-    x: anchor.x, y: anchor.y, variant: variant.id, targetPower, recommendedLevel,
+    x: anchor.x, y: anchor.y, variant: variant.id, targetPower, recommendedLevel, depthScaleBonus,
     originMode: anchor.mode === 'dimension' ? 'dimension' : 'overworld',
     originDimensionId: anchor.mode === 'dimension' ? anchor.dimensionId : undefined,
     size: sizeTier.id,
@@ -28206,7 +28738,7 @@ function debugTeleportToDungeonType(themeId) {
     player.overworldReturn = { x: player.x, y: player.y, mode: player.mode, dimensionId: player.dimensionId || null };
   }
   const dg = dungeonRegistry.get(id);
-  dg.levels[0] = generateDungeonLevel(dg.theme, 1, dg.maxDepth, dg.variant, dg.size);
+  dg.levels[0] = generateDungeonLevel(dg.theme, 1, dg.maxDepth, dg.variant, dg.size, dg.depthScaleBonus);
   player.mode = 'dungeon'; player.dungeonId = id; player.dungeonDepth = 1;
   const lvl = dg.levels[0];
   player.x = lvl.upStairs.x; player.y = lvl.upStairs.y;
