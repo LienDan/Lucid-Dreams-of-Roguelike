@@ -515,7 +515,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.40.1-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.40.2-alpha</div>
     </div>
   </div>
 
@@ -601,10 +601,10 @@
 //     Hunters could roll a random NPC tier completely unrelated to player level.
 //
 // NOT YET DONE (as of v0.39.0): more quest chains (registry supports it trivially); hazard-tile damage
-// is dungeon-only outside Cinder Rift/Rift Tear by design; achievements/meta-progression don't exist yet;
-// chain antagonists use the standard NPC framework (no unique combat/death dialogue) by design; hunger/
-// thirst deliberately not implemented (declined by design); body/health locational model is player-only,
-// not extended to monsters (deliberate scope decision, see the framework note near ensureBodyParts).
+// is dungeon-only outside Cinder Rift/Rift Tear by design; chain antagonists use the standard NPC
+// framework (no unique combat/death dialogue) by design; hunger/thirst deliberately not implemented
+// (declined by design); body/health locational model is player-only, not extended to monsters
+// (deliberate scope decision, see the framework note near ensureBodyParts).
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
 // external audio files. This keeps the game a single portable HTML file and
@@ -890,27 +890,19 @@ function weightedChoice(rng, entries) {
 }
 
 // ===================== BIOME FRAMEWORK (World Overhaul) =====================
-// Every biome is one data entry in BIOMES. Beyond the original name/walkable/glyph/color/bg/
-// encounter fields, a biome can now optionally declare:
-//   - family:      which thematic group it belongs to ('normal'|'fantastical'|'eldritch'|'scifi'|'ruins')
-//                  -- purely descriptive/organizational, used by a couple of systems below to
-//                  reason about "is this an exotic place" without hardcoding biome ids.
-//   - effect:      a standing environmental effect applied to the player each turn they stand on
-//                  it (and, for a couple of effect types, to monsters too). See
-//                  applyBiomeEnvironmentalEffect() for the full list of effect `type`s and exactly
-//                  what each one does. This is what makes "a poison swamp actually poisons you".
-//   - structures:  optional array of extra WILDERNESS_STRUCTURE ids that should be weighted toward
-//                  this biome specifically, on top of any structure that already lists this biome
-//                  in its own `biomes` gate (see WILDERNESS_STRUCTURES / scatterBiomeStructures).
-//   - decor:       optional array of {glyph,color,name,chance,destructible} scenery-feature specs
-//                  scattered onto walkable tiles of this biome at chunk-gen time (the biome's
-//                  equivalent of "forest gets trees, desert gets cacti") -- see generateChunk's
-//                  decor pass, which replaces the old hardcoded per-biome if/else chain.
-//   - dangerMult:  optional multiplier applied to overworldDangerScale() for monsters spawned in
-//                  this biome specifically (exotic/eldritch/scifi biomes lean tougher).
-// Adding a new biome is therefore a single new entry here (plus, if it should have unique
-// monsters, a MONSTER_BASES entry or two) -- classifyBiomeFull() below is the only other place
-// that needs to know when a new biome should appear.
+// Every biome is one data entry in BIOMES. Beyond name/walkable/glyph/color/bg/encounter,
+// a biome can optionally declare:
+//   - family:     thematic group ('normal'|'fantastical'|'eldritch'|'scifi'|'ruins'), used to
+//                 reason about "is this an exotic place" without hardcoding biome ids.
+//   - effect:     standing environmental effect applied each turn (player, and some types monsters
+//                 too) -- see applyBiomeEnvironmentalEffect() for the full effect-type list.
+//   - structures: extra WILDERNESS_STRUCTURE ids weighted toward this biome, on top of whatever
+//                 already gates on it via `biomes` (see scatterBiomeStructures).
+//   - decor:      {glyph,color,name,chance,destructible} scenery scattered at chunk-gen time
+//                 (forest gets trees, desert gets cacti) -- see generateChunk's decor pass.
+//   - dangerMult: multiplier on overworldDangerScale() for monsters spawned in this biome.
+// New biome = one entry here (plus a MONSTER_BASES entry if it needs unique monsters);
+// classifyBiomeFull() below is the only other place that needs to know it exists.
 const BIOMES = {
   ocean:  { name: 'Ocean', walkable: false, glyph: '~', color: '#1c4b6b', bg: '#0a1a26', family:'normal',
     encounter: [['reef_shark',6],['giant_eel',5],['drowned_sailor',4],['tide_reaver',3],['siren',3],['current_stalker',2],['kraken_spawn',1],['tideglass_horror',1]] },
@@ -1333,32 +1325,15 @@ function baseDurabilityFor(base, affixTier) {
   return base60;
 }
 // ============================================================================
-// ---- REBALANCE PASS 2: itemization now scales with power, not just luck ---
-// Before this, rarity (0-4) only gated which affix *tier* could roll -- it was
-// never connected to monster/dungeon power level at all beyond a 0-4 cap that
-// any rare-tier boss reached instantly. A level-22 kill of Thessaly Voss and
-// a level-98 kill of Yog'tha could hand out the literal same "Godslayer"
-// weapon, because nothing scaled the item's own base numbers. This adds a
-// second, independent axis: itemPowerMult(), keyed off the dropping
-// monster's own powerScale (see makeMonster/MONSTER_SCALE_BASE), multiplies
-// the item's base damage/armor/value after affixes are applied. Rarity still
-// controls affix quality; this controls the base the affixes sit on top of.
-// ============================================================================
-// BALANCE PASS 3: exponent raised from 0.55 to 2/3. Measured the actual growth rates against each
-// other rather than guessing: makeMonster scales monster HP/STR/ATK uniformly by up to 40x from
-// depthScale 1 to 14 (see REBALANCE PASS 1 comment there), but this formula at 0.55 only grew
-// monster-drop gear power by ~8.5x over that same range -- a real ~4.7x growth-rate mismatch that
-// would make high-level fights increasingly slow, sponge-y damage races even though the player's
-// own HP pool (which grows faster still, ~180x by level 99 -- see levelUp) was never actually in
-// danger. That's not "hard", it's tedious, and a long grindy fight has more turns for dodge/crit
-// variance to eventually go wrong anyway, which quietly reintroduces unfair-feeling deaths through
-// the back door. 2/3 was chosen for a second reason, not just the monster-HP curve: it makes
-// itemPowerMult(40) land at ~12.2x, matching what playerLevelPowerMult(99) below -- the OTHER
-// half of this same two-curve system, used for quest rewards instead of monster drops -- already
-// implied a level-99 character's gear power should be. Monster loot and quest rewards intended
-// for the same character now actually agree with each other instead of loot quietly undershooting
-// quest gear by ~30% at every level, which was true before this change and had nothing to do with
-// monster HP at all.
+// itemPowerMult(): rarity (0-4) only gates affix *tier*, so without this a level-22 kill and a
+// level-98 kill of the same boss could hand out an identically-stat'd item. This adds a second,
+// independent axis keyed off the dropping monster's powerScale (see makeMonster/MONSTER_SCALE_BASE)
+// that multiplies the item's base damage/armor/value after affixes are applied.
+// Exponent is 2/3 (was 0.55): monster HP/STR/ATK scale up to 40x from depthScale 1->14, and at
+// 0.55 gear power only grew ~8.5x over that range, making high-level fights slow damage-sponge
+// races. 2/3 also makes itemPowerMult(40) land at ~12.2x, matching what playerLevelPowerMult(99)
+// (the quest-reward half of this same two-curve system) implies gear power should be at level 99,
+// so monster loot and quest rewards for the same character now agree with each other.
 function itemPowerMult(monsterScale) {
   return 1 + Math.pow(Math.max(0, (monsterScale || 1) - 1), 2/3);
 }
@@ -1839,67 +1814,44 @@ const RECIPES = [
   { id:'craft_gloves', name:'Stitch Leather Gloves', category:'crafting', inputs:[{id:'leather_scrap',qty:2},{id:'cloth',qty:1}], output:{id:'gloves',qty:1} },
 ];
 
-// dungeon theme metadata: tier drives rarity + monster/boss pool ceiling + size
-// ---- per-theme genPool / maxSizeTier (see player feedback: dungeons weren't matching their
-// theme -- e.g. an "Abandoned House" generating maze/cave-blob layouts that read as a generic
-// dungeon rather than a house). Before this pass every theme fell through to the shared
-// GENERATOR_WEIGHTS_BY_GENRE.rooms/.cave table (see pickGeneratorId), so a house, a sewer, and a
-// fortress all had the exact same odds of rolling a natural cave cavern or a hand-dug maze --
-// nothing distinguished them beyond monster roster. `genPool` overrides that shared table
-// per-theme so a layout is at least *plausible* for the place it claims to be; themes not listed
-// here (ruins, crypt, ruinedlibrary, castle, fortress, labyrinth) already fit their genre's
-// default pool reasonably well -- crumbling ruins/crypts naturally read as "structure reclaimed by
-// cave/maze," which is exactly what hybrid_cave_ruins/maze/drunken_walk depict -- so they're left
-// alone rather than churned for no reason. `maxSizeTier` (see rollDungeonSize) caps how big a
-// theme's footprint can roll -- a "Colossal Abandoned House" makes no sense the way a "Colossal
-// Ancient Ruins" does, so house-scale themes get capped at a size that still reads as a building.
+// Dungeon theme metadata: tier drives rarity + monster/boss pool ceiling + size.
+// `genPool` overrides the shared GENERATOR_WEIGHTS_BY_GENRE table (see pickGeneratorId) per-theme
+// so a layout is plausible for what it claims to be (e.g. a house shouldn't roll a natural cave
+// blob). Themes not listed here already fit their genre's default pool well enough to leave alone.
+// `maxSizeTier` (see rollDungeonSize) caps a theme's footprint so a "Colossal Abandoned House"
+// can't roll -- house-scale themes are capped at a size that still reads as a building.
 const DUNGEON_THEMES = {
   abandonedhouse: { name:'Abandoned House', tier:'common', genre:'rooms', depthRange:[1,2], dtierMax:1,
-    // a house is walls-and-rooms, full stop -- no natural caves, no hand-dug maze tunnels, no
-    // cave-reclaimed ruins. rooms_bsp carries most of the weight (ordinary rooms+halls); grand_hall
-    // gives an occasional great room; maze stays only as a rare "this house has a weird, cramped,
-    // add-on floor plan" outlier rather than a real labyrinth.
+    // walls-and-rooms only, no natural caves/cave-reclaimed ruins; maze is a rare cramped-floor-plan outlier
     genPool: [['rooms_bsp', 70], ['grand_hall', 20], ['maze', 10]], maxSizeTier: 'medium' },
   cave:           { name:'Cave', tier:'common', genre:'cave', depthRange:[2,5], dtierMax:1 },
   sewer:          { name:'Sewer', tier:'common', genre:'cave', depthRange:[2,4], dtierMax:1,
-    // built brick tunnels + drainage, not a natural cavern system -- maze/cave_noise (both read as
-    // engineered/eroded passageways) and drunken_walk (a hand-dug overflow tunnel) carry it;
-    // cave_ca's smooth organic blobs and hybrid_cave_ruins' "ancient structure" framing both fit a
-    // sewer poorly, so they're dropped rather than just deprioritized.
+    // built brick tunnels/drainage, not a natural cavern -- drops cave_ca's organic blobs and hybrid_cave_ruins
     genPool: [['maze', 32], ['cave_noise', 30], ['drunken_walk', 28], ['cave_ca', 10]] },
   ruins:          { name:'Ancient Ruins', tier:'uncommon', genre:'rooms', depthRange:[3,6], dtierMax:2 },
   crypt:          { name:'Forgotten Crypt', tier:'uncommon', genre:'rooms', depthRange:[3,6], dtierMax:2 },
   ruinedlibrary:  { name:'Ruined Library', tier:'uncommon', genre:'rooms', depthRange:[2,5], dtierMax:2, bookHeavy:true,
     factions:['undead','eldritch'] },
   castle:         { name:'Abandoned Castle', tier:'uncommon', genre:'rooms', depthRange:[4,7], dtierMax:2,
-    // a castle is defined by grand rooms and defensible, twisting corridors -- weighted up from the
-    // generic rooms pool; the smooth natural cave blob (cave_ca) is dropped since a castle interior
-    // caving in wholesale into a cavern doesn't read as "castle" the way a crumbling ruin does.
+    // grand rooms + defensible corridors; drops the natural cave_ca blob, which doesn't read as "castle"
     genPool: [['rooms_bsp', 34], ['grand_hall', 26], ['maze', 22], ['hybrid_cave_ruins', 18]] },
   fortress:       { name:'Ruined Fortress', tier:'rare', genre:'rooms', depthRange:[6,10], dtierMax:3,
     genPool: [['rooms_bsp', 32], ['maze', 26], ['grand_hall', 18], ['hybrid_cave_ruins', 24]] },
   tower:          { name:'Ancient Tower', tier:'rare', genre:'rooms', depthRange:[6,10], dtierMax:3,
-    // a tower is a tight, vertical, built structure -- rooms/maze dominate; cave_ca is dropped
-    // entirely (a natural cavern blob doesn't belong inside a tower's walls) and hybrid/drunken_walk
-    // stay as rare "the tower is crumbling into the hillside" outliers rather than a common outcome.
+    // tight vertical built structure; cave_ca dropped entirely, hybrid/drunken_walk stay rare
     genPool: [['rooms_bsp', 44], ['maze', 34], ['hybrid_cave_ruins', 12], ['drunken_walk', 10]] },
   labyrinth:      { name:'Labyrinth', tier:'rare', genre:'rooms', depthRange:[7,12], dtierMax:4 },
 };
 const DUNGEON_TIER_WEIGHTS = { common: 65, uncommon: 25, rare: 10 };
 
-// ---- dungeon SIZE tiers: a whole separate axis from tier/theme. Size decides the physical
-// footprint of every floor in the dungeon (grid w/h) and trades directly against depth -- a
-// "massive"/"colossal" dungeon is one huge excavation, not a ten-floor tower, so its
-// maxDepthCap pulls maxDepth way down while its footprint balloons. clusterCount controls how
-// many separate generation "clusters" (see genSprawlClusters) a floor gets stitched together
-// from; sizes with clusterCount[1] > 1 lean toward the sprawling multi-cluster generator instead
-// of one single layout, which is what makes a big dungeon feel like it spans real, distinct
-// areas rather than just a bigger version of the same room. Weighted so roughly half of all
-// dungeons land large-or-bigger -- small dungeons still exist and are still common, but they're
-// no longer the default experience. `colossal` is the genuine "mega dungeon" showpiece size: a
-// single sprawling floor built from 6-9 stitched-together clusters, roughly 10x the tile area of
-// a medium dungeon. Add a new size here and rollDungeonSize / generateDungeonLevel both pick it
-// up automatically -- nothing else needs to change.
+// Dungeon SIZE tiers: a separate axis from tier/theme. Size sets each floor's grid w/h and trades
+// against depth -- a "massive"/"colossal" dungeon is one huge excavation, so maxDepthCap drops as
+// footprint grows. clusterCount controls how many generation "clusters" (see genSprawlClusters) a
+// floor stitches together; clusterCount[1] > 1 leans on the multi-cluster generator so a big
+// dungeon feels like distinct areas, not just a bigger single room. Weighted so roughly half of
+// all dungeons land large-or-bigger. `colossal` is the mega-dungeon showpiece: one sprawling floor
+// from 6-9 stitched clusters, ~10x a medium dungeon's tile area. New sizes just need an entry here
+// -- rollDungeonSize / generateDungeonLevel pick them up automatically.
 const DUNGEON_SIZE_TIERS = [
   { id:'tiny',     label:'Tiny',     weight:6,  w:[26,32],   h:[16,20],  maxDepthCap:3, clusterCount:[1,1] },
   { id:'small',    label:'Small',    weight:18, w:[38,46],   h:[24,30],  maxDepthCap:5, clusterCount:[1,1] },
@@ -1932,22 +1884,15 @@ function rollDungeonSize(rng, meta) {
 const QUEST_MONSTER_POOL = ['wolf','boar','bandit','spider','jackal','snake','goblin','giantrat','skeleton'];
 
 // ===================== LORE & BOOKS =====================
-// Design goal (see player feedback): almost nothing about this game's systems should live only in
-// a Help menu nobody opens. Every entry below is a real, readable, in-world object -- a diary, a
-// field guide, a research paper, a half-burnt letter -- written first as a piece of the world, and
-// second (where it fits naturally) as the place a curious player learns a mechanic exists at all:
-// what dimensions are and how each is reached, that containers can be looted AND stocked, how
-// kingdom reputation and bounties work, what a waystone does, and so on. None of them read like a
-// tutorial; they read like something someone in this world would actually have written down.
+// Design goal: game systems should be taught in-world, not just in a Help menu nobody opens. Each
+// entry below is a readable in-world object (diary, field guide, research paper, letter) that
+// doubles as the place a curious player learns a mechanic exists -- dimensions, container
+// looting/stocking, reputation/bounties, waystones, etc -- without reading like a tutorial.
 //
-// These are the persistent, hand-authored books -- the same ~90 exist in every world, seeded to
-// specific container types/roles below so where you find one makes sense (a dead adventurer's
-// diary in a wilderness sack, not a noble's vault; a bestiary on a scholar's desk, not a barrel of
-// turnips). generateProceduralBook() (defined further down, near the container/book placement
-// glue) supplements these with an unlimited number of unique, mad-libs-from-world-data books for
-// flavor and volume -- but the ~90 below are the ones that matter for teaching the game and for
-// carrying real narrative weight, and they're identical from world to world so players can discuss
-// and reference them.
+// These ~90 are persistent and hand-authored, identical across worlds, and seeded to container
+// types/roles that make sense (a diary in a wilderness sack, not a noble's vault). For volume,
+// generateProceduralBook() (further down, near container/book placement) generates unlimited
+// mad-libs-from-world-data books on top of these.
 const BOOK_CATEGORIES = {
   diary: 'Diary', history: 'History', bestiary: 'Field Guide', research: 'Research',
   textbook: 'Textbook', letter: 'Letter', myth: 'Myth & Legend', guide: "Traveler's Guide",
@@ -2535,20 +2480,13 @@ const KINGDOM_ERAS = [
   'Bandits and worse have grown bold in its more remote reaches.',
   'Scholars say its ruling line can be traced back over a dozen generations.',
 ];
-// ============================================================================
-// ---- KINGDOM LORE & POLITICS OVERHAUL — PHASE 5 ---------------------------
-// The old system gave every kingdom a name and one throwaway line of flavor
-// text that never touched gameplay again. This gives kingdoms a trait, a
-// ruler, a real multi-beat history (including a notable historical figure
-// that can turn up in NPC rumors), and -- the actual point -- a genuine,
-// deterministic, symmetric political relationship with each neighboring
-// kingdom (war/tension/peace/trade pact/alliance). That relation isn't just
-// text: it ripples into shop prices (helping a kingdom's rival costs you
-// there), and into which radiant quests a kingdom's people offer you (a
-// kingdom at war offers sabotage/border-defense work; an allied one offers
-// caravan escorts). See getKingdomRelation(), rollRadiantQuestOffer(), and
-// repPriceMult() for the actual hooks.
-// ============================================================================
+// ---- KINGDOM LORE & POLITICS ----
+// Each kingdom has a trait, a ruler, a multi-beat history (with a notable historical figure that
+// can turn up in NPC rumors), and a deterministic, symmetric political relationship with each
+// neighbor (war/tension/peace/trade pact/alliance). That relation ripples into shop prices
+// (helping a rival kingdom costs you there) and which radiant quests are offered (war -> sabotage/
+// border-defense, alliance -> caravan escorts). See getKingdomRelation(), rollRadiantQuestOffer(),
+// repPriceMult().
 const KINGDOM_TRAITS = [
   { id:'militaristic', label:'militaristic', desc:'Its roads are patrolled by soldiers, and every able hand knows which end of a spear is which.' },
   { id:'mercantile', label:'mercantile', desc:'Merchant caravans outnumber farmers on its roads, and coin talks louder than titles here.' },
@@ -2574,21 +2512,12 @@ const KINGDOM_RELATION_STATES = [
   { id:'trade_pact', label:'bound by a trade pact', weight:20, priceRipple:-0.04 },
   { id:'alliance', label:'formal allies', weight:10, priceRipple:-0.08 },
 ];
-// ============================================================================
-// ---- DYNAMIC KINGDOM RELATIONS — later pass --------------------------------
-// Previously a relation was rolled once from the weighted distribution above
-// and then frozen for the rest of the run -- lore and rep hooked into it, but
-// the relation itself never moved no matter what the player did. Per explicit
-// feedback that this should have a real, lasting impact on the world, each
-// pair of neighboring kingdoms now has a numeric relation SCORE (-100..100)
-// that the player's own sabotage/caravan_guard quests nudge; the label above
-// (war/tension/peace/trade_pact/alliance) is derived live from that score
-// instead of being cached as fixed text, and crossing into a new band appends
-// a real, permanent line to both kingdoms' history text (visible via Look
-// Around, the region panel, and settlement-entry lines) plus a log message
-// and a persistent event-log entry the player can review. See
-// nudgeKingdomRelation(), and its two call sites in completeQuest().
-// ============================================================================
+// ---- DYNAMIC KINGDOM RELATIONS ----
+// Each pair of neighboring kingdoms has a numeric relation SCORE (-100..100), nudged by the
+// player's sabotage/caravan_guard quests. The label above (war/tension/peace/trade_pact/alliance)
+// is derived live from that score, and crossing into a new band appends a permanent line to both
+// kingdoms' history text (Look Around, region panel, settlement-entry lines) plus a log/event-log
+// entry. See nudgeKingdomRelation() and its two call sites in completeQuest().
 const kingdomRelationScores = new Map();
 const RELATION_BASELINE_SCORE = { war:-80, tension:-40, peace:0, trade_pact:40, alliance:80 };
 function relationPairKey(a, b) { return [a, b].sort().join('|'); }
@@ -2656,21 +2585,13 @@ function getKingdomByKey(key) {
   const [rx, ry] = key.split(',').map(Number);
   return getKingdom(rx * KINGDOM_REGION, ry * KINGDOM_REGION);
 }
-// ============================================================================
-// ---- SPECIES / SENTIENT RACES FRAMEWORK ------------------------------------
-// A deliberately data-driven, extensible roster of playable/settlement-dwelling
-// peoples. Adding a new species later is just pushing a new entry onto SPECIES
-// below -- everything that consumes it (character creation, kingdom dominant-
-// species rolls, settlement population, NPC appearance/dialogue, trade prices,
-// affection gain, and racial mechanics) reads the array generically rather than
-// switching on hardcoded ids, so new content drops in without touching the
-// systems around it. Racial "abilities" are intentionally implemented as real
-// world-state flags (freeSwim, fallDamageReduction, poisonDmgReduction, etc.)
-// that hook into systems that already exist (swimming, chasm falls, poison,
-// traps, vision, regen, corruption) rather than as menu-only stat blocks --
-// so a Naiad's "can't drown" is a genuine change to how the overworld water
-// tile behaves for you, not a description in a tooltip.
-// ============================================================================
+// ---- SPECIES / SENTIENT RACES FRAMEWORK ----
+// Data-driven roster of playable/settlement-dwelling peoples. New species = one new SPECIES entry
+// -- every consumer (char creation, kingdom dominant-species rolls, settlement population, NPC
+// appearance/dialogue, trade prices, affection, racial mechanics) reads the array generically.
+// Racial "abilities" are real world-state flags (freeSwim, fallDamageReduction, poisonDmgReduction,
+// etc.) hooked into existing systems, not menu-only stat blocks -- a Naiad's "can't drown" actually
+// changes how overworld water behaves for them, not just a tooltip.
 const SPECIES = [
   { id:'human', name:'Human', peopleLabel:'Humans', adjective:'', pluralAdj:'',
     desc:'Versatile and unremarkable in any one thing, adaptable in everything.',
@@ -3559,20 +3480,12 @@ TALENTS_V2.push(
   { id:'emperorsransom', name:"Emperor's Ransom", category:'survival', desc:'+35% more gold from loot; +25% more XP', tier:5, requires:{level:20, talent:'kingsransom'}, apply:()=>{ player.goldBonus=(player.goldBonus||0)+0.35; player.xpBonus=(player.xpBonus||0)+0.25; } },
 
   // ==================== TALENT ASCENSION: tiers 6-9 (levels 30/50/70/90) ====================
-  // Every talent tree used to go quiet the instant its tier-5 capstone was taken at level 20 --
-  // with the level cap at 99 (see LEVEL_CAP) and a talent point every 3 levels (see
-  // maybeAwardTalentPoint), that left roughly 26 of a 33-point career with nothing new to spend on
-  // beyond mopping up whatever was left in unrelated trees. Every one of the 25 capstone lines
-  // above (18 original + the 7 filled in just now) gets four more nodes here, each requiring the
-  // previous tier of the SAME line plus a level threshold (30/50/70/90), so a build a player
-  // committed to at level 20 keeps paying off in real, escalating numbers all the way to the level
-  // cap instead of the game's power curve outrunning its own talent tree. Every apply() below
-  // reuses an existing, already-wired player field (the same ones the tier 1-5 talents in that
-  // line already use) -- nothing here introduces a new mechanic that isn't already read somewhere
-  // in combat/ability code, so nothing here can silently no-op.
-  // Extend a line further: add one more { id, requires:{level, talent: THIS_TIER'S_ID} } entry
-  // below the last one -- the talent screen (renderTalents/generateTalentGuideHTML) sorts tiers
-  // generically and needs no changes to pick it up.
+  // Every tier-5 capstone line gets four more nodes here (each requiring the previous tier of the
+  // SAME line + a level threshold), so a build committed to at level 20 keeps paying off all the
+  // way to the level-99 cap instead of the power curve outrunning the talent tree. Every apply()
+  // reuses an existing player field already read by that line's tier 1-5 talents, so nothing here
+  // can silently no-op. Extend a line: add one more { id, requires:{level, talent: PREV_TIER_ID} }
+  // entry -- the talent screen sorts tiers generically and needs no other changes.
 
   // -- Transcendence (universal capstone: every core stat + every resource pool) --
   { id:'transcendence6', name:'Overwhelming Presence', category:'combat', desc:'+2 to all attributes; +15 Max HP/MP', tier:6, requires:{level:30, talent:'transcendence'}, apply:()=>{ player.str+=2; player.dex+=2; player.int+=2; player.con+=2; player.wil+=2; player.cha+=2; player.maxHp+=15; player.hp+=15; player.maxMp+=15; player.mp+=15; } },
@@ -4874,26 +4787,17 @@ const CREATION_ABILITY_CATS = [
   { key:'cyber', label:'Cyberware', pool: () => CYBERNETICS, costFn: CREATION_CYBER_COST, tagOf: (a) => a.category },
 ];
 
-// ---- settlement flavors: layered on top of the existing hamlet/village/town/city size tiers ----
-// (adds variety of purpose/decoration without re-engineering the tested size/layout system)
-// ---- SETTLEMENT OVERHAUL v1: every flavor now also carries a `layoutStyle` --
-// 'grid' (regimented lots -- garrisons, holds, estates: a settlement that SHOULD look uniform),
-// 'organic' (loose, jittered scatter -- farms, camps, villages: what most settlements should
-// look like), or 'radial' (rings around a central plaza -- temples, colleges, capitals). Only a
-// third of flavors keep the old strict grid now; the rest read as actually lived-in rather than
-// a barracks. See layoutBuildingsGrid/Organic/Radial and placeBuildingDoor below. `decor` names
-// which extra scatterDecorations() pass(es) to run for that flavor (several dozen new exterior
-// features live there now: farms/pens/wells/docks/stalls/etc. -- see DECOR_SETS).
-// ---- Settlement Boundary Overhaul: every settlement's outer boundary used to be an unconditional
-// square/rectangle (even flavors using 'organic'/'radial' *building placement* still sat inside a
-// square wall). `boundaryShape` below is the shape of the settlement's actual perimeter (wall or
-// clearing edge): 'square' (legacy behavior, unchanged), 'circular' (true disk), 'blob' (irregular
-// amoeba-like closed curve, several radius harmonics), 'coastal' (three walled sides, the fourth
-// left open onto the water since a shoreline is its own boundary), or 'mountainside' (three walled
-// sides, the fourth a natural jagged rock face instead of wall/water). See pickBoundaryShape,
-// computeBoundaryMask and drawShapedBoundary. Flavors with no strong shape identity omit
-// boundaryShape entirely and get a randomized mix (mostly square, some circular/blob) per
-// individual settlement instance for variety -- see pickBoundaryShape's fallback branch.
+// Settlement flavors, layered on top of the hamlet/village/town/city size tiers to add variety of
+// purpose/decoration without touching the size/layout system. Each carries a `layoutStyle`: 'grid'
+// (regimented lots -- garrisons, holds, estates), 'organic' (loose jittered scatter -- most
+// settlements), or 'radial' (rings around a plaza -- temples, colleges, capitals). See
+// layoutBuildingsGrid/Organic/Radial and placeBuildingDoor. `decor` names extra
+// scatterDecorations() passes to run (farms/pens/wells/docks/stalls/etc, see DECOR_SETS).
+// `boundaryShape` is the settlement's outer perimeter: 'square' (default), 'circular' (true disk),
+// 'blob' (irregular closed curve), 'coastal' (three walled sides, fourth open to water), or
+// 'mountainside' (three walled sides, fourth a rock face). See pickBoundaryShape,
+// computeBoundaryMask, drawShapedBoundary. Flavors with no strong shape identity omit
+// boundaryShape and get a randomized mix per instance instead.
 const SETTLEMENT_FLAVORS = {
   standard:  { name:'', weight:22, preferredBiomes:null, rolePool:['farmer','merchant','guard','scholar','tinker','ratcatcher','chimneysweep','towncrier','butcher'], layoutStyle:'organic' },
   farming:   { name:'Farming ', weight:12, preferredBiomes:['plains'], rolePool:['farmer','farmer','farmer','elder','child','merchant','miller','shepherd'], layoutStyle:'organic', decor:['farm'], boundaryShape:'blob' },
@@ -6717,50 +6621,25 @@ STORY_BOSS_AI.the_antagonist = function (m, dist, seesPlayer) {
 };
 
 
-// ============================================================================
-// ---- GOD — THE FINAL BOSS ---------------------------------------------------
-// Not procedurally generated, per the original design: this is the one fixed
-// encounter every playthrough eventually converges on, regardless of which
-// premise or antagonist that world rolled. Structured as 5 phases ("aspects"
-// of what GOD actually is -- an AI running the simulation), each unlocking a
-// new pool of named abilities, for 50 distinct moves total. Rather than 50
-// hand-copied if-blocks (which would be both worse code and far more
-// error-prone to balance), moves are data: a name, a flavor line, a type,
-// and parameters, run through a small set of well-tested primitive handlers
-// (the same bossMeleeHit/bossScaledDirectDamage/bossSummon/status-application
-// toolkit every other story boss already uses). Each move still has genuine,
-// distinct tactical identity -- this is how real large movesets get built
-// without becoming unmaintainable, not a shortcut around building 50 things.
-// ============================================================================
+// ---- GOD — THE FINAL BOSS ----
+// Not procedurally generated: the one fixed encounter every playthrough converges on regardless of
+// premise/antagonist. 5 phases ("aspects" of the AI running the simulation), each unlocking a new
+// ability pool, 50 moves total. Moves are data (name, flavor line, type, params) run through the
+// same bossMeleeHit/bossScaledDirectDamage/bossSummon/status-application primitives every other
+// story boss uses, rather than 50 hand-copied if-blocks.
 MONSTER_BASES.god = {
-  // ============================================================================
-  // ---- BALANCE PASS 2 (validated via test_godbalance.js Monte Carlo sim) -----
-  // Prior state (hp:9000, atk:[90,150], dex:20) looked reasonable on paper but a real simulated
-  // fight -- a maxed level-99 character with strong endgame gear -- won 0/80 attempts, while an
-  // identical character beat a comparable top-tier boss (ancient_wyrm) 93.75% of the time at the
-  // same depthScale. Root causes, found by tracing actual turn-by-turn combat rather than trusting
-  // the numbers on paper:
-  //   1. dex:20 was far below any realistic level-99 player's dex (naturally 50-100+ by endgame).
-  //      rollHit() is symmetric and dex-gap-sensitive -- melee/multihit moves (the only types that
-  //      actually roll to-hit; direct/execute/ultimate/status bypass rollHit entirely) whiffed
-  //      constantly, making the fight's felt difficulty a coinflip on how much DEX a given build
-  //      happened to have, not on actual play. Fixed at dex:65, close to a typical endgame
-  //      character's own dex, so both sides land hits at a comparable rate.
-  //   2. Five independent self-heal moves, all simultaneously available by phase 5 with their own
-  //      cooldowns, could collectively out-heal a real player's damage output and stall the fight
-  //      indefinitely (98% GOD hp remaining after 300 turns in early sim runs). Trimmed their pct
-  //      values so their combined theoretical throughput can't outpace real sustained damage.
-  //   3. Melee/multihit moves previously fired regardless of actual distance, unlike every other
-  //      boss in the game -- kiting/positioning had zero mechanical effect. Those two move types
-  //      now require real adjacency (see the dist>1 filter in STORY_BOSS_AI.god); at range, GOD
-  //      falls back to its still-dangerous ranged/direct/status/summon/ultimate kit. Backing away
-  //      from a telegraphed multihit is now a real, useful decision.
-  // Final numbers below were reached by iterating hp/atk against the simulation until a level-99
-  // character running a real ability rotation (not pure melee) landed at ~87-97% win rate across
-  // repeated 30-80 trial runs, with actual losses present and close (single-digit % GOD hp
-  // remaining on the losses that do happen) rather than either a stomp in either direction. That
-  // reads as "the hardest fight in the game, and a fair one" rather than a wall or a formality.
-  // ============================================================================
+  // ---- BALANCE PASS 2 (validated via test_godbalance.js Monte Carlo sim) ----
+  // Prior stats (hp:9000, atk:[90,150], dex:20) won 0/80 simulated fights against a maxed level-99
+  // character, vs. 93.75% for a comparable top-tier boss at the same depthScale. Root causes:
+  // 1) dex:20 was far below a realistic endgame player's dex, so melee/multihit (the only move
+  //    types that roll to-hit via rollHit()) whiffed constantly -- fixed at dex:65.
+  // 2) Five simultaneous self-heals could out-heal real damage output and stall the fight forever
+  //    (98% HP remaining after 300 turns) -- trimmed their combined throughput.
+  // 3) Melee/multihit ignored range, unlike every other boss -- now require real adjacency (dist>1
+  //    filter in STORY_BOSS_AI.god), so kiting is a real decision; at range GOD falls back to its
+  //    ranged/direct/status/summon/ultimate kit.
+  // Numbers below were tuned against the sim until a level-99 character running a real rotation
+  // landed at ~87-97% win rate with close losses -- the hardest fight in the game, and a fair one.
   name: 'GOD', desc: 'It does not have a shape so much as a place where a shape should be. Looking directly at it feels like reading a sentence that contradicts itself.',
   glyph: '&', color: '#ffffff', hp: 17000, str: 160, dex: 65, atk: [140, 220], armor: 28, xp: 5000,
   behavior: 'aggressive', boss: true, bossTier: 'rare', dtier: 5, faction: 'source',
@@ -7057,20 +6936,11 @@ Object.assign(DUNGEON_THEMES, {
   nightmare_pocket:       { name:'Nightmare Pocket',       tier:'dimension', genre:'rooms', depthRange:[3,5], dtierMax:4, factions:['dream','eldritch'], genPool:[['maze',45],['rooms_bsp',35],['grand_hall',20]] },
 });
 
-// ---- per-theme generator pools, second pass: every theme added by the two Object.assign blocks
-// above still fell through to the generic GENERATOR_WEIGHTS_BY_GENRE.rooms/.cave table (the same
-// class of issue the Abandoned House fix addressed for the original 10 themes -- see the big
-// comment on the base DUNGEON_THEMES literal). A lot of these have a strong, specific identity a
-// generic "rooms" roll can't express: a Witch's Hut is a single small building, not a maze; a
-// Derelict Hulk is a wrecked ship's corridors, not a natural cave blob; a Cyber Vault is server
-// racks and access corridors, not stalagmites. This pass tunes the ones with the clearest
-// mismatch. NOT included here (left on the generic pool deliberately): themes whose generic
-// "rooms"/"cave" roll already reads fine for what they are (goblin_stronghold, sunken_temple,
-// frozen_tomb, demon_gate, gods_threshold, necropolis, eldritch_rift, dragons_lair, spider_nest,
-// goblin_warren, flooded_cave, ossuary_ruins, sunken_ruins, overgrown_sepulchre, and most of the
-// rarer tier:'dimension' final-boss themes, which are curated one-off encounters rather than
-// commonly-rolled dungeons) -- churning those for no real gain risked introducing new mismatches
-// instead of fixing one.
+// Per-theme generator pools, second pass: themes added by the two Object.assign blocks above still
+// fell through to the generic GENERATOR_WEIGHTS_BY_GENRE.rooms/.cave table, same class of issue as
+// the Abandoned House fix (see the DUNGEON_THEMES comment above). Tunes the themes with the
+// clearest generic-vs-identity mismatch (a Witch's Hut isn't a maze, a Cyber Vault isn't
+// stalagmites). Themes not listed here already read fine on the generic pool and are left alone.
 const DUNGEON_THEME_GENPOOLS = {
   mineshaft:          [['drunken_walk', 35], ['maze', 30], ['cave_noise', 20], ['cave_ca', 15]],
   witch_hut:          [['rooms_bsp', 70], ['grand_hall', 30]],
@@ -7448,28 +7318,22 @@ const worldChunks = new Map();
 const dungeonRegistry = new Map(); // id -> {theme,maxDepth,levels:[],x,y}
 
 function chunkKey(cx, cy) { return cx + ',' + cy; }
-// ============================================================================
-// ---- SAVE SYSTEM: dirty-region tracking + time-gated repopulation ---------
-// The world is deterministic from SEED, so an unmutated chunk/dungeon-level looks identical
-// whether it's saved or simply regenerated on demand -- there's no need to write it to the save
-// file. Only locations actually touched by play (something killed, taken, opened, burned, etc.)
-// need to be persisted. This keeps save size bounded by "how much of the world you've actually
-// changed" rather than "how much of the world code has ever glanced at" -- which matters because
-// a few unrelated systems (start-of-game spawn placement, in particular) call getChunk() on
-// chunks the player never actually sets foot in.
+// ---- SAVE SYSTEM: dirty-region tracking + time-gated repopulation ----
+// The world is deterministic from SEED, so an unmutated chunk/dungeon-level looks the same
+// whether saved or regenerated on demand -- only locations actually touched by play (killed,
+// taken, opened, burned, etc.) need to be persisted, keeping save size bounded by "how much the
+// player has actually changed."
 //
-// Coverage: curMonsters()/curNPCs() already restrict all combat/interaction to the 3x3 chunk
-// neighborhood around the player, so marking that same neighborhood dirty every turn (see
-// markPlayerAreaDirty(), called from endTurn()) is provably enough to catch every possible
-// combat/environmental mutation. A handful of things mutate world state WITHOUT spending a turn
-// (shop trades, container transactions, dialogue/affection/marriage) -- those are marked dirty
-// individually at their own entry point (openDialogue, openContainer, completeQuest). Fire/gas
-// that keeps ticking in a chunk after the player has already left it is marked from inside
-// processTerrainEffects() itself, at the exact tile(s) it touches.
+// Coverage: curMonsters()/curNPCs() restrict combat/interaction to the 3x3 chunk neighborhood
+// around the player, so marking that neighborhood dirty every turn (markPlayerAreaDirty(), called
+// from endTurn()) catches every combat/environmental mutation. Things that mutate world state
+// without spending a turn (shop trades, container transactions, dialogue/affection/marriage) are
+// marked dirty individually at their own entry point. Fire/gas still ticking after the player
+// leaves a chunk is marked from inside processTerrainEffects() itself.
 //
-// Dungeon levels don't need any of this: they're only ever generated when a player actually
-// descends to that depth, so dungeonRegistry is small and naturally bounded already -- it's
-// saved in full, unconditionally. See getSaveData().
+// Dungeon levels skip all this: they only generate when a player actually descends to that depth,
+// so dungeonRegistry is small and naturally bounded -- saved in full, unconditionally. See
+// getSaveData().
 function markLocationDirty(wx, wy) {
   if (curIsDungeon()) return;
   const cx = Math.floor(wx / CH), cy = Math.floor(wy / CH);
@@ -7582,24 +7446,18 @@ function getTile(wx, wy) {
   return c.tiles[ly][lx];
 }
 
-// ============================================================================
-// ---- LIVING WORLD AI FRAMEWORK — PART A: factions, abilities, data ---------
-// A data-driven overhaul of how every non-player entity (monster, NPC, ally)
-// decides what to do with its turn. Three independently-extensible layers:
-//   1) FACTIONS: who is disposed to fight whom, and why (settlement guards vs
-//      raiders, predators vs prey, the restless dead vs the living...).
-//   2) ABILITIES: a monster-side spell/eldritch/cybernetic/thrown-weapon
-//      library, gated by real resource pools (mp/stamina/charge/ammo) so
-//      casters run dry and archers run out of arrows -- see Part B below
-//      (near monsterAI) for the state machine that actually calls into it.
-//   3) DATA HEURISTICS: the bulk passes at the bottom of this section that
-//      look at each monster's existing faction/name/behavior and wire in
-//      abilities, swimming/flying, racial traits, and personality (fearless/
-//      skittish/predatory) automatically -- adding a new MONSTER_BASES entry
-//      with a faction and a name is enough for it to pick up sensible
-//      behavior here without editing this file again, exactly like the
-//      SPECIES table above wires a new people into chargen for free.
-// ============================================================================
+// ---- LIVING WORLD AI FRAMEWORK — PART A: factions, abilities, data ----
+// A data-driven overhaul of how every non-player entity (monster, NPC, ally) decides what to do
+// with its turn. Three independently-extensible layers:
+//   1) FACTIONS: who is disposed to fight whom, and why (guards vs raiders, predators vs prey,
+//      restless dead vs the living...).
+//   2) ABILITIES: a monster-side spell/eldritch/cybernetic/thrown-weapon library gated by real
+//      resource pools (mp/stamina/charge/ammo) so casters run dry and archers run out of arrows --
+//      see Part B below (near monsterAI) for the state machine that calls into it.
+//   3) DATA HEURISTICS: bulk passes at the bottom of this section that look at each monster's
+//      existing faction/name/behavior and auto-wire abilities, swimming/flying, racial traits, and
+//      personality -- a new MONSTER_BASES entry with a faction and name picks up sensible behavior
+//      for free, same as SPECIES wires a new people into chargen.
 
 // ---- 1) FACTIONS: every faction belongs to one broad alignment. Disposition
 // between any two entities is a lookup between their two alignments, with a
@@ -8132,21 +7990,16 @@ function drawWallRingSides(chunk, sides, gateSide) {
 }
 
 // ======================= SETTLEMENT BOUNDARY OVERHAUL =======================
-// Previously every settlement's actual outer boundary (as opposed to its *building* layout, which
-// already had grid/organic/radial variety) was an unconditional square/rectangle -- an "organic"
-// village still sat inside a perfectly square wall-line. This section adds real boundary shapes:
-// circular, blob (irregular closed curve), coastal (open to the water on one side), and
-// mountainside (a natural jagged rock face on one side instead of wall or water). See
+// Real boundary shapes for a settlement's outer perimeter (separate from *building* layout, which
+// already had grid/organic/radial variety): circular, blob (irregular closed curve), coastal (open
+// to water on one side), and mountainside (a rock face instead of wall/water). See
 // SETTLEMENT_FLAVORS[...].boundaryShape for which flavor gets which, and pickBoundaryShape for the
 // randomized fallback used by flavors with no strong shape identity.
 //
-// Scoping note (documented honestly, same as the rest of this codebase's comments): this only
-// applies to single-chunk settlements (hamlet/village/town, via buildSettlement). Multi-chunk
-// city/capital districts (buildSettlementCell) keep the exact prior square wallSides system
-// untouched -- a circular/blob boundary that has to tile seamlessly across several independently-
-// generated chunks and still form clean avenues between districts is real, unaddressed future
-// scope, not something safe to retrofit here without risking the multi-chunk correctness work
-// already tested (see HANDOFF notes on findSettlementMembership).
+// Scoping note: only applies to single-chunk settlements (hamlet/village/town, via
+// buildSettlement). Multi-chunk city/capital districts (buildSettlementCell) keep the prior square
+// wallSides system untouched -- a shaped boundary that tiles seamlessly across several
+// independently-generated chunks is unaddressed future scope, not safe to retrofit here.
 
 // Reserves a rectangle just inside a gate so building placement can never seal it off. This isn't
 // specific to the boundary-shape work -- it's a general fix: nothing previously reserved the
@@ -9013,23 +8866,12 @@ function layoutBuildingsGrid(rng, margin, targetCount, sizeRange, avoid, insideF
   return placed;
 }
 
-// ---- Settlement Overhaul: organic layout -- a jittered grid rather than pure random rejection
-// sampling. (An earlier version used pure rejection sampling -- drop a building at a random spot,
-// retry on overlap -- which looked fine for a village's small target count but reliably "jammed"
-// far short of the true packing limit for a city/capital's higher targets, e.g. a "City" ending
-// up with 7-8 buildings instead of 16-20. Random sequential placement just can't reliably find
-// the remaining legal slots once the space gets crowded.) This instead divides the buildable area
-// into a grid of minimum-size-plus-gap cells, shuffles which cells get used (so it's an uneven,
-// gappy scatter, not a filled block), and jitters each used building's exact size and position
-// within its cell -- organic-*looking*, but with grid-like guaranteed yield.
-// ---- Settlement Overhaul v2: genuinely organic placement -- true random scatter with rejection
-// sampling (drop a building at a random spot, retry on overlap), producing an uneven, naturally
-// clustered footprint. An earlier version of this function used a "jittered grid" (pre-divide the
-// space into cells, jitter slightly within each) to guarantee a higher yield for city-scale target
-// counts -- but that made organic settlements look almost indistinguishable from a grid, which
-// defeated the entire point. Now that city/capital have moved to the multi-chunk settlement system
-// below (with real room to spare), this only needs to serve hamlet/village/town's modest target
-// counts, which true rejection sampling handles just fine.
+// Organic layout: true random scatter with rejection sampling (drop a building at a random spot,
+// retry on overlap), producing an uneven, naturally clustered footprint. An earlier "jittered
+// grid" approach guaranteed higher yield for city-scale target counts, but made organic
+// settlements look almost indistinguishable from a grid. Now that city/capital use the
+// multi-chunk settlement system below, this only needs to serve hamlet/village/town's modest
+// target counts, which true rejection sampling handles fine.
 function layoutBuildingsOrganic(rng, margin, targetCount, sizeRange, avoid, insideFn) {
   const span = CH - margin * 2;
   const placed = [];
@@ -9109,24 +8951,18 @@ function rectsOverlapWithGap(a, b, gap) {
   return !(a.x + a.w + gap <= b.x || b.x + b.w + gap <= a.x || a.y + a.h + gap <= b.y || b.y + b.h + gap <= a.y);
 }
 
-// ---- Settlement Overhaul: door placement -- previously every building's entrance was hard-coded
-// to bottom-center, which read as artificial ("why does every house face the same way"). Doors
-// now open onto any of the four walls, at a varied position along that wall (not just its
-// midpoint), weighted so a plurality still face the settlement's roads/plaza (south-facing is
-// still the most common, matching where paintRoad() actually lays streets) without being
-// universal. Tents get the same treatment, just with the tentwall glyph. ----
+// Door placement: doors open onto any of the four walls, at a varied position along that wall
+// (not just the midpoint), weighted so a plurality still face south (matching where paintRoad()
+// lays streets) without being universal. Tents get the same treatment with the tentwall glyph.
 // ===================== BUILDING INTERIOR LAYOUTS =====================
-// Previously every building, regardless of role or size, was just a hollow box -- one room, one
-// door. Most peasant houses genuinely would just be a single room, so plain houses still are
-// about half the time; but a real shop, a noble's manor, or (especially) the settlement's one
-// massive grand building should feel like an actual building with rooms in it, not a shed. Every
-// subdivision here is verified fully reachable from the building's actual entrance door before
-// being kept (see tryLayoutBuildingInterior) -- a candidate layout that would strand a room is
-// rolled back to a plain single room rather than ever shipping an unreachable pocket.
+// A shop, noble's manor, or the settlement's grand building gets subdivided into real rooms rather
+// than a hollow single-room box (plain houses still are one room about half the time). Every
+// subdivision is verified fully reachable from the building's entrance door before being kept
+// (see tryLayoutBuildingInterior) -- a layout that would strand a room rolls back to a plain
+// single room instead of shipping an unreachable pocket.
 //
-// Framework note: which roles get which room-count tier is a single lookup
-// (INTERIOR_SHOP_ROLES / pickInteriorRoomTarget) -- adding a new role to the "gets a real interior"
-// category is a one-line change, not a new mechanic.
+// Which roles get which room-count tier is a single lookup (INTERIOR_SHOP_ROLES /
+// pickInteriorRoomTarget) -- adding a role to the "gets a real interior" category is a one-line change.
 const INTERIOR_SHOP_ROLES = new Set([...SHOP_ROLES, 'priest', 'scholar', 'trainer', 'necromancer_trainer', 'curator', 'guildclerk', 'dealer', 'companion']);
 function pickInteriorRoomTarget(roleId, rect, rng, isGrand) {
   const minDim = Math.min(rect.w, rect.h);
@@ -9276,24 +9112,16 @@ function placeBuildingDoor(chunk, p, flavor, rng, wallSides) {
 // ===================== WORLD GENERATION v6 =====================
 SHOP_ROLES.add('cybersmith');
 
-// ---- destructible environment features v1 ----
-// Trees and cacti aren't just decoration that either blocks you or vanishes instantly under a
-// 'destructive' blast -- they carry their own HP pool now, the same way a monster does. A melee
-// swing into one (see movePlayer) chips away at that HP over a few hits until it comes down and
-// opens your path; ambient fire that spreads across nearby grass (see processTerrainEffects) has
-// a modest per-turn chance to catch one and slowly burn it down too, on its own separate clock,
-// since a tree isn't a walkable "flammable ground tile" that fire spreads onto directly. Direct
-// fire-and-forget effects (fireball blast radius, a dragon's breath, a thrown bomb) still level
-// anything destructible in their radius outright, exactly as before -- see destroyDestructibleAt.
-// To make some other overworld feature breakable later (a fence, a totem, a barricade...), add
-// one entry here; nothing in movement, melee, or fire-spread code needs to know it exists.
-// ---- GATHERING & TOOLS: felling a tree or breaking an ore vein used to just turn it into a
-// stump/rubble tile and give NOTHING -- a real dead end for a mechanic whose own flavor text
-// (see 'orepile' below) explicitly promised a payoff. `gatherType` + `yield` below are what
-// finally connects chopping/mining to the material economy raw material items already feed
-// (wood/ore/mushroom/gem, used throughout RECIPES) -- and doing it here, in this one shared
-// framework, means every destructible feature (including any added later) gets real loot for
-// free just by declaring what it drops, not by hand-wiring a payout at each call site.
+// ---- destructible environment features ----
+// Trees and cacti carry their own HP pool like a monster: a melee swing chips away at it over a
+// few hits until it comes down (see movePlayer); ambient fire spreading across grass has a modest
+// per-turn chance to catch and slowly burn one down on its own clock (see processTerrainEffects).
+// Direct fire-and-forget effects (fireball, dragon's breath, a thrown bomb) still level anything
+// destructible in their radius outright -- see destroyDestructibleAt. To make another overworld
+// feature breakable later (fence, totem, barricade...), just add one entry here.
+// `gatherType` + `yield` connect chopping/mining to the material economy (wood/ore/mushroom/gem,
+// used throughout RECIPES) so every destructible feature gets real loot just by declaring what it
+// drops, instead of hand-wiring a payout at each call site.
 const DESTRUCTIBLE_FEATURES = {
   tree: {
     hpRange: [16, 30], chopVerb: 'chop into', fallVerb: 'The tree splinters and crashes down!',
@@ -10880,24 +10708,17 @@ function tickWeather() {
   handleTemperatureExposure(currentTemperature());
 }
 
-// ============================================================================
-// ---- RANDOM WORLD EVENTS -----------------------------------------------------
+// ---- RANDOM WORLD EVENTS ----
 // A data-driven registry (WORLD_EVENTS below): each entry is almost always just data, not a new
 // function -- `type` picks one of a small set of reusable, parameterized handlers
 // (WORLD_EVENT_HANDLERS) that already know how to damage, buff, spawn, ignite, freeze, alter
-// weather, shift gold/xp, or move the player. Adding a new event later should, in the overwhelming
-// majority of cases, mean adding one object to WORLD_EVENTS, not writing new code.
+// weather, shift gold/xp, or move the player. Adding a new event usually means adding one object
+// to WORLD_EVENTS, not writing new code.
 //
-// Scheduling is a hybrid, per the brief's own "up to you": a small, constant per-turn chance for
-// ANY event to fire (so nothing is ever strictly tied to sleeping through a day), plus a larger,
-// guaranteed roll-opportunity the moment a new in-game day begins (so the pacing still feels tied
-// to "a new day, a new possibility" the way a roguelike calendar suggests). Rarity tiers weight
-// which pool gets rolled from; common events are common, legendary events are exactly as rare as
-// their name promises. Everything scope-gated per zone: overworld-only events won't fire in a
-// dimension, and vice versa -- and several dimensions have events nothing else shares (a `war
-// between settlements`-style raid makes no sense loose in the void of the Drift; a `meteor
-// shower` fits almost everywhere).
-// ============================================================================
+// Scheduling is a hybrid: a small constant per-turn chance for any event to fire, plus a larger
+// guaranteed roll-opportunity when a new in-game day begins. Rarity tiers weight which pool gets
+// rolled from. Everything is scope-gated per zone: overworld-only events won't fire in a
+// dimension, and several dimensions have events nothing else shares.
 
 // ---------------------------------------------------------------- WAR BETWEEN SETTLEMENTS ----
 // Real NPC-vs-NPC warfare, not a spawned-monster stand-in for it. A small detachment of real
@@ -11207,24 +11028,18 @@ function applyWorldEvent(def) {
   handler(def);
   if (def.duration) activeWorldEvents.push({ def, turnsLeft: def.duration });
 }
-// ---------------------------------------------------------------- FAIRNESS: TELEGRAPHING & AVOIDABILITY ----
-// Design pass: an event with a `telegraph` (turns) field doesn't fire immediately when rolled --
-// it logs `warnMsg` right away and only actually resolves once that many turns have passed. On
-// its own that's still not truly *fair* if the damage is unavoidable once warned about, so every
-// event that can hurt the player also declares exactly how to dodge it:
-//   - `fleeDistance: N` (local/positional disasters -- rockslide, tornado, tsunami, stampede,
-//     sinkhole, avalanche, deep current, gear jam): the danger is tied to where the player WAS
-//     standing when warned. Put at least N tiles between yourself and that spot before the timer
-//     runs out and the disaster fizzles around you, no damage at all. Stay put (or not move far
-//     enough), and it hits for its full, real, uncapped -- potentially lethal -- damage.
-//   - `type: 'lightningBarrage'` events instead mark the *exact* tiles that are going to be
-//     struck (see the special-case below) for the whole warning window, via the shared
-//     pendingLightningStrikes system -- stand somewhere else when the timer runs out and that
-//     particular strike does nothing.
-// Events without a telegraph (flavor, small gold/heal/xp, minor debuffs, buffs) still fire
-// instantly, on purpose -- warning about a shooting star or a dropped coin purse would just be
-// noise. Events that CAN deal real damage but have neither fleeDistance nor are a lightningBarrage
-// don't exist in the registry below by design -- if it can hurt you, it must be dodgeable.
+// ---- FAIRNESS: TELEGRAPHING & AVOIDABILITY ----
+// An event with a `telegraph` (turns) field doesn't fire immediately when rolled -- it logs
+// `warnMsg` right away and only resolves once that many turns have passed. Every event that can
+// hurt the player also declares exactly how to dodge it:
+//   - `fleeDistance: N` (rockslide, tornado, tsunami, stampede, sinkhole, avalanche, deep current,
+//     gear jam): put at least N tiles between yourself and where you were warned before the timer
+//     runs out and it fizzles with no damage. Stay put, and it hits for full, uncapped damage.
+//   - `type: 'lightningBarrage'` marks the exact tiles about to be struck for the whole warning
+//     window (see pendingLightningStrikes) -- stand elsewhere and that strike does nothing.
+// Events without a telegraph (flavor, small gold/heal/xp, minor debuffs/buffs) fire instantly on
+// purpose. Any event that can deal real damage must have fleeDistance or be a lightningBarrage --
+// there's no third case in the registry below.
 let pendingWorldEvents = []; // [{ def, turnsLeft, originX, originY }]
 function scheduleOrApplyWorldEvent(def) {
   if (def.type === 'lightningBarrage' && def.telegraph) {
@@ -11454,30 +11269,22 @@ function tickWorldEvents() {
     activeWorldEvents = activeWorldEvents.filter(ev => ev.turnsLeft > 0);
   }
   // Telegraphed threats already warned about keep counting down and resolving regardless of
-  // dungeon state too -- see scheduleOrApplyWorldEvent/tickPendingWorldEvents above. Marked
-  // lightning strikes tick the same way -- see resolveLightningStrike's own zone-mismatch guard.
+  // dungeon state -- see scheduleOrApplyWorldEvent/tickPendingWorldEvents above. Marked lightning
+  // strikes tick the same way (see resolveLightningStrike's zone-mismatch guard).
   tickPendingWorldEvents();
   if (!player.alive) return;
   tickLightningStrikes();
   if (!player.alive) return;
-  // Rolling brand-new events is gated behind curIsDungeon(), though: zoneKey() only ever
-  // recognizes 'overworld' or a dimension id, so without this guard it would silently misreport
-  // 'overworld' while the player is actually standing in a dungeon instance -- letting
-  // overworld-scoped events (wildfires, raids, weather changes) roll and apply their real,
-  // unguarded effects against dungeon terrain/monsters that were never meant to be in scope.
-  // Dungeons are meant to be self-contained instances; nothing about "a meteor shower" or "a
-  // bandit raid" should be reaching in from outside one.
+  // Rolling brand-new events is gated behind curIsDungeon(): dungeons are self-contained
+  // instances, and overworld-scoped events (wildfires, raids, weather) shouldn't reach in from
+  // outside one.
   //
-  // Also gated behind MIN_EVENT_GAP, a hard cooldown measured from the last time an event
-  // actually rolled successfully (not just any tick). The per-turn and daily probabilities below
-  // already average out to roughly one to one and a half events per in-game day on their own --
-  // perfectly reasonable pacing -- but probability alone can still get unlucky and cluster two
-  // hits close together. This cooldown makes that structurally impossible rather than just
-  // unlikely, which is what actually guarantees "never annoying" instead of merely "usually
-  // fine." concurrentEventLoadFactor() layers the rare-overlap possibility back in on top of that
-  // floor: even within the same MIN_EVENT_GAP-respecting cadence, a second/third thing landing
-  // while the first is still resolving gets rarer with each one already in flight, never
-  // impossible.
+  // Also gated behind MIN_EVENT_GAP, a hard cooldown from the last successful roll. The per-turn
+  // and daily probabilities below already average roughly one to one and a half events per
+  // in-game day, but probability alone can still cluster two hits close together; this cooldown
+  // makes that structurally impossible rather than just unlikely.
+  // concurrentEventLoadFactor() layers rare overlap back in on top of that floor: a second/third
+  // thing landing while the first is still resolving gets rarer with each one already in flight.
   if (!curIsDungeon() && (turnCount - lastWorldEventTurn) >= MIN_EVENT_GAP) {
     const zk = zoneKey();
     const loadFactor = concurrentEventLoadFactor();
@@ -11667,22 +11474,18 @@ function placeItemAt(x, y, it) {
 }
 
 // ===================== IN-WORLD CONTAINERS =====================
-// Design goal (see player feedback): a chest/barrel/sack/etc. should be a real object that stays
-// exactly where it is -- open it, take what you want, leave the rest, and it's still there (and
-// still holding whatever you left in it) next time you walk by, for as long as this play session
-// keeps that chunk/dungeon level loaded. That's the same persistence guarantee everything else in
-// the world already has (see the save/load design note above: the world is regenerated fresh from
-// its seed each session, same as monsters and ground loot always have been) -- containers don't
-// regress that, they just finally give you a reason to come back to a specific tile.
+// A chest/barrel/sack/etc. is a real object that stays exactly where it is -- open it, take what
+// you want, leave the rest, and it's still there (still holding whatever you left) next time you
+// walk by, for as long as this session keeps that chunk/dungeon level loaded. Same persistence
+// guarantee the rest of the world already has; containers just give you a reason to revisit a tile.
 //
 // A container lives in exactly one of two places, mirroring how items already work:
-//   - Overworld/dimension tiles: an array at t.containers (usually 0 or 1 entries, but nothing
-//     stops two barrels sharing a tile if a generator ever wants that).
-//   - Dungeon levels: level.containers, an array of {x, y, container} entries, exactly parallel
-//     to level.items's {x, y, item} shape.
-// Every container object itself looks like: { cuid, kind, name, glyph, color, locked, opened,
-// contents: [items] }. `contents` is a normal item array -- the same item objects/shapes that
-// live in player.inventory or on the ground -- so every existing item-rendering helper
+//   - Overworld/dimension tiles: an array at t.containers (usually 0-1 entries, but nothing stops
+//     two sharing a tile).
+//   - Dungeon levels: level.containers, an array of {x, y, container} entries, parallel to
+//     level.items's {x, y, item} shape.
+// Every container object looks like: { cuid, kind, name, glyph, color, locked, opened, contents:
+// [items] }. `contents` is a normal item array, so every existing item-rendering helper
 // (durabilityTag, describeItem, item icons, etc.) works on container contents unmodified.
 let containerUidCounter = 1;
 const CONTAINER_KINDS = {
@@ -12405,21 +12208,17 @@ function affectEntityWithGas(e, kind, power) {
   }
   return resisted ? null : `${e===player?'You breathe':e.name+' breathes'} in the toxic fumes.`;
 }
-// ---- typed traps: dart/spike are single-tile, fire/gas/alarm affect an area or the whole
-// level, same as the equivalent spells and grenades. Nothing here is a special case bolted onto
-// the trap system alone -- it's the same igniteArea/gasArea/engaged-monster machinery. ----
-// Kind-specific trap effects, now applied to whichever entity actually triggered it (defaults to
-// the player for old call sites that don't pass one) instead of being hardcoded to the player --
-// see enterTileAsEntity, which is what lets NPCs/monsters trigger traps at all now.
-// ---- level-wide alarm: one function, called by every alarm source in the game (trap runes,
-// wrong lever pulls, a hidden alarm rune sprung by a thrown item, a nuke going off...). The old
-// behavior was a single dice roll against monsters already within a fixed radius, which is why
-// "activating an alarm" in a bandit camp often did almost nothing -- most of the camp was never
-// close enough to be considered, and it only ever got that one roll. Now an alarm marks the
-// level as alerted for a number of turns; nearby monsters react immediately, and tickDungeonAlarm
-// (called once per turn from endTurn) keeps giving the rest of the level's monsters a chance to
-// notice and start converging as the turns pass, exactly like sound actually spreading through a
-// dungeon. Anything that should trigger a swarm just needs to call this -- no per-caller logic. ----
+// ---- typed traps: dart/spike are single-tile, fire/gas/alarm affect an area or the whole level,
+// via the same igniteArea/gasArea/engaged-monster machinery as the equivalent spells and grenades.
+// Kind-specific trap effects apply to whichever entity actually triggered it (defaults to the
+// player for old call sites that don't pass one) -- see enterTileAsEntity, which lets NPCs/
+// monsters trigger traps too.
+// ---- level-wide alarm: one function, called by every alarm source (trap runes, wrong lever
+// pulls, a thrown item springing a hidden rune, a nuke going off...). Marks the level as alerted
+// for a number of turns; nearby monsters react immediately, and tickDungeonAlarm (called once per
+// turn from endTurn) keeps giving the rest of the level's monsters a chance to notice and converge
+// as turns pass, like sound spreading through a dungeon. Anything that should trigger a swarm just
+// calls this -- no per-caller logic.
 function soundLevelAlarm(x, y, opts) {
   opts = opts || {};
   if (!curIsDungeon()) return;
@@ -13041,46 +12840,19 @@ function rollHit(att, def, ranged, calledShotPenalty) {
 }
 
 
-// ============================================================================
-// ---- REBALANCE PASS 1: the 1-99 level curve --------------------------------
-// The old formula (xpNext = xpNext*1.35+20, compounding every level) was fine
-// for the first ~15 levels and then went exponential: by level 40 it demanded
-// over 10 million XP for a single level, and by 99 it demanded ~5*10^14 --
-// mathematically unreachable. Level 99 was never actually end-game; it was
-// unreachable flavor text on a stat block. This replaces it with a fixed
-// curve (total XP for level L = A * L^2.35) so 99 is a real, if long,
-// achievable target -- roughly 450,000 total XP, paced so early levels are
-// quick and late levels are a genuine grind, not a wall.
-// ============================================================================
-// BALANCE PASS 4: replaced the old polynomial cost curve (level^2.35) with one built from the
-// SAME exponential curve monster power (and now, since BALANCE PASS 3, gear power) already scales
-// on -- measured, not guessed: the old curve produced a non-monotonic "kills needed per level"
-// shape (roughly 2 kills at L1, climbing to ~31-34 through L20-50, then dropping back to ~13-23 by
-// L99), because a polynomial cost curve and an exponential monster-XP-reward curve (monster XP
-// scales with the same `scale` factor as its HP/damage, see makeMonster) mathematically cross over
-// rather than tracking each other. That's a real mid-game grind hump most players would feel around
-// levels 20-50 even if they never saw the math -- progression visibly slows down for 30 levels and
-// then speeds back up for no in-fiction reason. Quest XP doesn't rescue this either: most quest
-// rewards (see the rewardXp formulas near generateBountyQuest et al.) are small, roughly-flat
-// values that stay relevant early but become marginal well before level 50, where xpNeededForLevel
-// is already in the thousands.
-// XP_EARLY_RAMP keeps the deliberately fast, dopamine-quick first ~12 levels (a genuine, common,
-// good RPG-design choice worth preserving) by discounting cost early and ramping to full cost by
-// level 12; from there on, cost tracks the exact same exponential curve monster XP rewards do,
-// so "kills needed per level" is constant (~22, verified numerically) for the entire back 87% of
-// the game instead of humping and un-humping. XP_CURVE_A is calibrated so total XP to hit
-// LEVEL_CAP lands at ~450,000, matching the previous curve's overall endgame total -- same total
-// playtime-scale, smoothed shape.
+// ---- THE 1-99 LEVEL CURVE ----
+// xpNeededForLevel is a two-part curve: XP_EARLY_RAMP keeps a fast, dopamine-quick first ~12
+// levels by discounting cost early and ramping to full cost by level 12. From there, cost tracks
+// the same exponential curve monster XP rewards scale on (monster XP scales with `scale`, same as
+// HP/damage -- see makeMonster), so "kills needed per level" stays roughly constant (~22) for the
+// rest of the game instead of humping mid-game and un-humping late (an earlier polynomial cost
+// curve crossed the exponential reward curve, producing a felt grind hump around levels 20-50).
+// XP_CURVE_A is calibrated so total XP to hit LEVEL_CAP lands at ~450,000.
 const LEVEL_CAP = 99;
 function xpEarlyRamp(level) { return level <= 12 ? 0.25 + 0.75 * (level - 1) / 11 : 1; }
 const XP_CURVE_A = 444.85;
 function xpNeededForLevel(level) {
   return Math.max(20, Math.round(XP_CURVE_A * Math.pow(MONSTER_SCALE_BASE, depthScaleForPlayerLevel(level) - 1) * xpEarlyRamp(level)));
-}
-function xpTotalForLevel(level) {
-  let total = 0;
-  for (let l = 1; l < level; l++) total += xpNeededForLevel(l);
-  return total;
 }
 // Dungeons and bosses have always been rated on a 1-6 "power" scale (dtierMax/bossPower) used to
 // pick an appropriate BOSS SPECIES for a given dungeon (see targetPower / BOSS_POWER matching
@@ -13336,19 +13108,14 @@ function stepAway(e, tx, ty) {
 }
 // ---- NPC Schedules: called for civilian NPCs before their normal wander(). Returns true if it
 // handled the NPC's movement this turn (asleep, or walking home), meaning npcAI should skip its
-// normal wander() call. A deliberate simplification, noted honestly: NPCs have one "home" area
-// (the building they were placed in at settlement generation, which for most roles doubles as
-// their shop/workplace -- living above the shop, a real and common arrangement) rather than
-// separate home/workplace buildings; a full separate-residence system is a larger future project.
-// ---- NPC Schedules v3 (Living World): previously the ONLY daytime behavior for a civilian NPC
-// was wander() -- a small bounded random walk near their own spawn point, every day, forever. No
-// sense of actually going anywhere. This gives a genuine (if simple) daily errand: once per
-// in-game day, seeded off the NPC's own uid plus the day number (so it's stable for that whole
-// day and doesn't flicker turn to turn, but genuinely differs day to day -- a farmer who visits
-// the market today might visit a different building tomorrow, or stay near home entirely the day
-// after), a chance of picking another building in their own settlement and actually walking there
-// for a few hours before returning to their normal routine. Not every NPC, not every day --
-// deliberately intermittent (see the chance below) rather than a whole town marching in lockstep.
+// normal wander() call. Deliberate simplification: NPCs have one "home" area (the building they
+// were placed in at settlement generation, which for most roles doubles as their shop/workplace)
+// rather than separate home/workplace buildings.
+//
+// Daily errands: once per in-game day, seeded off the NPC's own uid plus the day number (stable
+// within a day, varies day to day), a chance of picking another building in their own settlement
+// and walking there for a few hours before returning to their normal routine. Deliberately
+// intermittent, not every NPC/day, so the whole town doesn't march in lockstep.
 function npcDailyErrand(n) {
   if (curIsDungeon() || curIsDimension()) return false; // schedules are an overworld-settlement concept
   if (NPC_DEFENDER_ROLES.has(n.roleId) || NPC_HUNTER_ROLES.has(n.roleId)) return false; // guards/hunters keep their own patrol/hunt AI
@@ -14572,22 +14339,16 @@ function removeDeadEntity(def) {
   else c.npcs = c.npcs.filter(n => n !== def);
 }
 
-// ============================================================================
-// ---- STORY & QUEST SYSTEM OVERHAUL — PHASE 1: Foundation ----------------
-// This is the base layer that later phases (unique story bosses, dimensions,
-// the God fight) build on. It adds three things:
-//   1) A procedurally-generated Main Quest. The narrative premise, antagonist
-//      name, and which existing bosses/dungeons fill each beat are all rolled
-//      per-seed, so different worlds tell a differently-flavored story - but
-//      every world follows the same act structure and the same fixed, un-
-//      randomized finale (still to be built: the God fight).
-//   2) A Kingdom Reputation system that lore actually plugs into: completing
-//      quests for a kingdom's people measurably changes prices there.
-//   3) A richer set of radiant/side quest templates (bounty, boss bounty,
-//      gather, protect, delivery, explore) with varied, meaningful rewards
-//      instead of the old two flavors of "kill things"/"go anywhere".
+// ---- STORY & QUEST SYSTEM: Foundation ----
+// Base layer later systems (unique story bosses, dimensions, the God fight) build on. Three parts:
+//   1) A procedurally-generated Main Quest: narrative premise, antagonist name, and which existing
+//      bosses/dungeons fill each beat are rolled per-seed, so different worlds tell a differently-
+//      flavored story but follow the same act structure and fixed finale (the God fight).
+//   2) A Kingdom Reputation system: completing quests for a kingdom's people measurably changes
+//      prices there.
+//   3) A set of radiant/side quest templates (bounty, boss bounty, gather, protect, delivery,
+//      explore) with varied, meaningful rewards.
 // See the in-game guide (? then Quests) for the player-facing explanation.
-// ============================================================================
 
 // ---- Main Quest: narrative premises, procedurally chosen per seed (premise, antagonist
 // name, and which bosses fill each beat all vary per playthrough). 9 premises; boss
@@ -15012,22 +14773,18 @@ function checkMainQuestTrailGuardian(monsterId) {
 }
 
 // ===================== QUEST GUIDANCE / NAVIGATION AID SYSTEM =====================
-// Design goal (see player feedback): the main questline should never leave the player with no
-// idea where to go or what to do once they've actually got a lead, but it also shouldn't hand
-// over a GPS marker by default, and it definitely shouldn't hand over the answer before the
-// player has done anything to earn it -- the fun of this kind of game is asking around, reading
-// what you find, and following a trail. So there are really three tiers now:
-//   - Gated: until the player has learned the current lead in-world (an NPC tells them, they
-//     read a rumor note that happens to carry it), every surface shows the same honest "no lead
-//     yet" line. See hasQuestLead() / markQuestLeadKnown() just below.
-//   - Always on once unlocked: a direction + rough distance bucket ("north-east, a fair distance
-//     away"), or a narrative lead when there's no fixed coordinate to point at yet (e.g. "said to
-//     lurk in frozen mountains -- you'd have to go looking").
-//   - Opt-in (settings.exactQuestMarker, off by default): the same hint, but with an exact tile
-//     distance appended, for players who'd rather just have a marker.
-// mainQuestGuidance() is the single source of truth for quest guidance text -- the sidebar
-// tracker, the full quest log, and the "ask about your journey" dialogue option all call through
-// it, so the wording never drifts out of sync between the three places a player might see it.
+// The main questline should never leave the player with no idea where to go once they've got a
+// lead, but shouldn't hand over a GPS marker by default or the answer before it's earned. Three
+// tiers:
+//   - Gated: until the player has learned the current lead in-world (told by an NPC, or found in
+//     a rumor note), every surface shows the same "no lead yet" line. See hasQuestLead() /
+//     markQuestLeadKnown().
+//   - Always on once unlocked: a direction + rough distance bucket, or a narrative lead when
+//     there's no fixed coordinate yet.
+//   - Opt-in (settings.exactQuestMarker, off by default): the same hint with an exact tile
+//     distance appended.
+// mainQuestGuidance() is the single source of truth for quest guidance text -- sidebar tracker,
+// full quest log, and the "ask about your journey" dialogue option all call through it.
 
 // Maps each act-4 dimension gatekeeper boss to the dungeon theme that guards it, so a hint about
 // "defeat X" can point at "somewhere shaped like a <theme>" even before the exact dungeon is
@@ -17263,21 +17020,16 @@ const ZOOM_LEVELS = [
   { w:51, h:31 }, { w:65, h:39 }, { w:81, h:49 }, { w:95, h:57 },
 ];
 let zoomIndex = 5;
-// The canvas used to be pinned to a fixed 816x496 design resolution no matter how big the game
-// view actually was, leaving a dead gap between the game column and the sidebar on a wide screen.
 // dynamicAvailW/H track the actual available box (measured by recalcGameViewport() -- on load, on
 // window resize, and live while dragging #split-handle or #vsplit-handle) that the game view has
-// to work with. curView() derives everything else from those two numbers fresh on every call, so
-// it's always correct for whatever the current zoom level is, even if zoom changes without a new
-// measurement. 816x496 remain the fallback for the very first layout pass before
-// recalcGameViewport has run once.
+// to work with, so it's never pinned to a fixed design resolution leaving a dead gap on wide
+// screens. curView() derives everything else from those two numbers fresh on every call. 816x496
+// are the fallback before recalcGameViewport has run once.
 //
-// Tile size (ts) is deliberately driven by HEIGHT alone: it's whatever makes the zoom level's
-// fixed row count (lv.h) exactly fill the available height, so vertical extent never overflows
-// and the log never gets pushed off-screen. Any leftover horizontal space is then filled by
-// showing MORE COLUMNS of the map (w grows past lv.w) rather than by enlarging the tiles -- that's
-// what actually uses the width instead of just leaving a gap next to the sidebar, and it does so
-// without the tiles (and therefore the whole view) scaling up out of proportion to the height fit.
+// Tile size (ts) is driven by HEIGHT alone: whatever makes the zoom level's fixed row count
+// (lv.h) exactly fill the available height, so vertical extent never overflows. Leftover
+// horizontal space is filled by showing MORE COLUMNS of the map (w grows past lv.w) rather than
+// enlarging tiles, so the view uses the full width without scaling out of proportion.
 let dynamicAvailW = 816, dynamicAvailH = 496;
 function curView() {
   const lv = ZOOM_LEVELS[zoomIndex];
@@ -17849,11 +17601,6 @@ function addGoodwill(regionKey, amount, why) {
   player.goodwill = player.goodwill || {};
   player.goodwill[regionKey] = (player.goodwill[regionKey] || 0) + amount;
   if (why) log(`${why} (+${amount} standing)`);
-}
-function currentRegionGoodwill() {
-  if (curIsDungeon()) return 0;
-  player.goodwill = player.goodwill || {};
-  return player.goodwill[getRegionKey(player.x, player.y)] || 0;
 }
 // Folds both bounty (markup, capped at +50%) and goodwill (discount, capped at -20%) into a
 // single multiplier -- called from npcTierPriceMult, which every buy/sell/service price already
@@ -18867,22 +18614,18 @@ function showStartScreen() {
   renderModal('Choose Your Beginning', html, 'Letter/click to choose.');
 }
 // ===================== IN-WORLD NOTES & RUMOR SCRAPS =====================
-// Design goal: a new player should be able to figure out where to go by exploring and asking
-// around and reading what they find -- but only once they've actually done one of those things.
-// Nothing hands over the current lead for free; it has to come from somewhere a player could
-// plausibly point to afterward ("the innkeeper told me" / "I found a note in that desk").
-// This system has two layers:
+// A player should be able to figure out where to go by exploring and asking around -- but only
+// once they've actually done one of those things. Nothing hands over the current lead for free;
+// it has to come from somewhere a player could point to afterward. Two layers:
 //   1. A single fixed tutorial note dropped at the player's feet on new game start, teaching the
-//      pickup/read controls. It contains no quest information -- see spawnStarterRumorNote().
-//   2. World-scattered Rumor Notes that spawn in containers throughout the world, each pointing
-//      at the CURRENT quest objective in lore-voice (boss location, biome to search, dungeon to
-//      find), generated fresh from live quest state so they're always accurate. Finding and
-//      reading one of these is a legitimate way to learn the lead (see markQuestLeadKnown()),
-//      the same as an NPC volunteering it in conversation.
-// Notes are just book items with type:'note' instead of 'book' -- they share the same reader
-// UI, the same Library logging, and the same container/inventory/ground behavior. The only
-// difference is they're shorter, written in a more ad-hoc voice, and never listed under a
-// "by Author" heading in the Library (they just pile into a "Notes & Scraps" category).
+//      pickup/read controls. Contains no quest information -- see spawnStarterRumorNote().
+//   2. World-scattered Rumor Notes in containers throughout the world, each pointing at the
+//      CURRENT quest objective in lore-voice, generated fresh from live quest state so they're
+//      always accurate. Reading one is a legitimate way to learn the lead (see
+//      markQuestLeadKnown()), same as an NPC volunteering it in conversation.
+// Notes are book items with type:'note' instead of 'book' -- same reader UI, same Library
+// logging, same container/inventory/ground behavior, just shorter and filed under "Notes & Scraps"
+// instead of a "by Author" heading.
 BOOK_CATEGORIES.note = 'Note';
 function makeNoteItem(id, title, body, author) {
   return makeBookItemRaw({
@@ -21747,21 +21490,14 @@ function generateChunk(cx, cy) {
   return chunk;
 }
 
-// ============================================================================
-// ---- DIMENSIONS ENGINE (generalized in Phase 9) ---------------------------
-// Phase 3 built the Abyssal Wastes as a working proof of concept; this pass
-// generalizes that into a real, reusable engine so each additional dimension
-// (there are two now, with more to come) is a data entry plus a small amount
-// of glue, not a copy-pasted near-duplicate of the last one. Concretely:
-// dimensions can now have any fill biome (not hardcoded 'ashfields'), any
-// number of interior sub-dungeons (each using the game's real dungeon
-// generator), and any unlock trigger -- a boss kill (Abyssal Wastes) or a
-// pure discovery/interaction (the Lucid Expanse's dream altar), both funnel
-// through the same unlockDimension() core. Portal tiles remember which
-// dimension they lead to, so travelThroughRift() no longer hardcodes a
-// destination. curTileAt/curMonsters/curNPCs dispatch here exactly as
-// before, so combat, looting, and movement all just work.
-// ============================================================================
+// ---- DIMENSIONS ENGINE ----
+// A reusable engine so each dimension is a data entry plus a small amount of glue, not a
+// copy-pasted near-duplicate of the last one. Dimensions can have any fill biome, any number of
+// interior sub-dungeons (each using the game's real dungeon generator), and any unlock trigger --
+// a boss kill or a pure discovery/interaction -- both funnel through the same unlockDimension()
+// core. Portal tiles remember which dimension they lead to, so travelThroughRift() doesn't
+// hardcode a destination. curTileAt/curMonsters/curNPCs dispatch here exactly as for the
+// overworld, so combat, looting, and movement all just work.
 
 const dimensionChunks = new Map();
 function dimChunkKey(dimId, cx, cy) { return dimId + '|' + cx + ',' + cy; }
@@ -22203,7 +21939,6 @@ const DIMENSION_TRAIL_GUARDIANS = {
 };
 
 // ============================================================================================
-// ============================================================================================
 // HOW TO ADD A NEW DIMENSION -- checklist. All 12 existing dimensions touch this same set of
 // tables/functions; skipping a step means the new one is missing something every other has.
 //
@@ -22370,21 +22105,15 @@ DIMENSIONS.the_interstice = {
 };
 
 // Guarantees a given point in a dimension chunk can actually reach open ground beyond the
-// immediate area, not just the small local patch forceFillArea clears. That local patch alone
-// was never enough: if the biome noise happened to ring it with an impassable biome (several
-// dimensions have real impassable biomes -- brimstone chasms, cloud banks, the Null, molten
-// works, etc.), the player could find themselves sealed in a small box with no way out at all.
-// This does a flood-fill from the given tile; if the reachable area is small or never reaches a
-// chunk edge, it carves straight corridors out to all four edges, guaranteeing a real way out
-// regardless of how the surrounding terrain rolled.
+// immediate area (the small local patch forceFillArea clears isn't enough on its own -- several
+// dimensions have real impassable biomes, and the player could get sealed in a small box). Does a
+// flood-fill from the given tile; if the reachable area is small or never reaches a chunk edge, it
+// carves straight corridors out to all four edges.
 //
 // Called for EVERY generated chunk in a dimension, always at the same fixed local point (chunk
-// center), not just the one-time arrival chunk. That fixed point is what makes it work across
-// chunk boundaries: since every chunk is CH tiles square and the anchor is always
-// (CH/2, CH/2), a corridor carved out to, say, the east edge of chunk (0,0) lands at local
-// row CH/2 -- exactly where chunk (1,0) carves its own corridor out to the west edge. The spines
-// line up chunk to chunk, so the whole dimension (every chunk in every direction, forever) stays
-// traversable, instead of only the single chunk the player first steps into.
+// center). Since every chunk is CH tiles square and the anchor is always (CH/2, CH/2), a corridor
+// carved to the east edge of chunk (0,0) lands exactly where chunk (1,0) carves its own corridor
+// to the west edge -- spines line up chunk to chunk, keeping the whole dimension traversable.
 function ensureChunkConnectivity(tiles, lx, ly, fillBiomeDef) {
   const visited = new Set([lx + ',' + ly]);
   const queue = [[lx, ly]];
@@ -24814,26 +24543,22 @@ function travelThroughRift() {
 
 
 
-// ==================== DUNGEON GENERATION v7: layered, mixed procgen ====================
-// Overhaul goals (see design notes below each generator): more than one *kind* of layout per
-// theme instead of a single "rooms" or "cave" algorithm, layered/hybrid generation that lets a
-// cave open into structured ruins in the same floor, real size variety (a "massive" dungeon
-// trades floor count for a genuinely sprawling footprint -- see DUNGEON_SIZE_TIERS above), and
-// tile-level `.zone` tagging ('cave' | 'ruins' | 'hall' | 'maze' | 'tunnel') so everything
-// downstream -- monster packs, statues vs. stalagmites, chasms vs. pillars -- can react to what
-// kind of space a tile is actually in, not just the dungeon's overall theme.
+// ==================== DUNGEON GENERATION: layered, mixed procgen ====================
+// More than one *kind* of layout per theme instead of a single "rooms" or "cave" algorithm,
+// layered/hybrid generation that lets a cave open into structured ruins on the same floor, real
+// size variety (see DUNGEON_SIZE_TIERS above), and tile-level `.zone` tagging
+// ('cave' | 'ruins' | 'hall' | 'maze' | 'tunnel') so monster packs, statues vs. stalagmites,
+// chasms vs. pillars can react to what kind of space a tile is in, not just the dungeon's theme.
 //
 // Every generator below shares one contract: `(W, H, rng, opts) -> { grid, rooms, clusters? }`.
 //   - grid: W*H array-of-rows of dtile2() tiles.
-//   - rooms: rectangular rooms as {x,y,w,h,cx,cy,grand?,clusterId?} -- may be empty for
-//     room-less layouts (pure caves/mazes). Anything that wants "a room to work with" (lever
-//     puzzles, locked vaults, pillars) reads this list, so a generator that has no real rooms
-//     just contributes nothing there rather than needing special-casing everywhere else.
+//   - rooms: rectangular rooms as {x,y,w,h,cx,cy,grand?,clusterId?} -- may be empty for room-less
+//     layouts (pure caves/mazes). Anything that wants "a room to work with" (lever puzzles, locked
+//     vaults, pillars) reads this list.
 //   - clusters (sprawl_clusters only): the sub-regions a floor was stitched together from, so
 //     encounter/loot placement can treat a massive dungeon's separate wings independently.
-// Adding a new generator is a three-step, purely additive change: write the function, add it to
-// DUNGEON_GENERATORS, and give it a weight in GENERATOR_WEIGHTS_BY_GENRE (or a theme's own
-// `genPool`). Nothing else in generateDungeonLevel needs to know it exists.
+// Adding a new generator: write the function, add it to DUNGEON_GENERATORS, give it a weight in
+// GENERATOR_WEIGHTS_BY_GENRE (or a theme's own `genPool`). Nothing else needs to change.
 
 // ---- shared tile constructor: every generator and every feature-placer below builds tiles this
 // way, so wall/floor color+bg stay consistent across the whole dungeon system in one place. The
@@ -25248,21 +24973,13 @@ function genGrandHall(W, H, rng, opts) {
   return base;
 }
 
-// ---- 6) hybrid cave/ruins: partitions the floor into two regions along a wandering (not
-// straight) boundary line, generates a cave in one and structured rooms in the other at full
-// size, then clips each to its half. The two halves are stitched independently and very likely
-// won't line up passable tiles right at the seam -- that's fine, ensureConnectivity() (run once,
-// after generation, back in generateDungeonLevel) carves the actual transition tunnel, which is
-// exactly the "a cave that leads into a structured dungeon ruins" the overhaul asked for. ----
-// ---- 6) hybrid regions: partitions the floor along one or two wandering (not straight)
-// boundary lines and generates a DIFFERENT primary technique in each resulting band at full
-// size, clipping each to its slice. 65% of the time it's the original two-region cave/ruins
-// split; 35% of the time it's a genuine three-way split (cave | ruins | maze), sharing all three
-// techniques across the same floor. The bands are stitched independently and very likely won't
-// line up passable tiles right at each seam -- that's fine, ensureConnectivity() (run once, after
-// generation, back in generateDungeonLevel) carves the actual transition tunnels, which is
-// exactly the "a cave that leads into a structured dungeon ruins" the overhaul asked for, now
-// extended to "...which further in gives way to a maze" for the three-way case.
+// ---- 6) hybrid regions: partitions the floor along one or two wandering (not straight) boundary
+// lines and generates a DIFFERENT primary technique in each resulting band at full size, clipping
+// each to its slice. 65% of the time it's a two-region cave/ruins split; 35% of the time it's a
+// three-way split (cave | ruins | maze). The bands are stitched independently and very likely
+// won't line up passable tiles right at each seam -- that's fine, ensureConnectivity() (run once
+// after generation, in generateDungeonLevel) carves the actual transition tunnels, giving "a cave
+// that leads into structured ruins" (and, for the three-way case, "...which gives way to a maze").
 function genHybridCaveRuins(W, H, rng, opts) {
   const horiz = rng() < 0.5;
   const threeWay = rng() < 0.35;
@@ -28062,25 +27779,15 @@ function updateSidebar() {
 // identically on demand -- dead monsters stay dead, looted containers stay looted, and burned
 // ground stays burned, without needing to write out the whole procedural world every time.
 const SAVE_KEY = 'lucid_dreams_of_roguelike_save_v2';
-// ---- Living World AI framework: entities now hold live references to each other (m.target,
-// m.fleeFrom, a grudgeAgainst Set) for combat/AI purposes. Those are transient turn-to-turn state
-// -- see resetStaleAIRef, called on load -- and can easily form reference cycles once two entities
-// are fighting each other (A.target = B, B.target = A), which crashes a plain JSON.stringify with
-// "Converting circular structure to JSON". This replacer drops exactly those transient fields so
-// saving never touches the cycle in the first place; nothing meaningful is lost since they'd be
-// cleared on load anyway.
-// CRITICAL FIX: the key name 'target' is NOT unique to AI state -- every quest object also has a
-// plain string `target` field (the monster/item id it's tracking, e.g. q.target==='wolf'), and a
-// bare `key === 'target'` check was stripping THAT too on every single save, for every quest type
-// except boss_bounty/dimension_bounty (which happen not to re-check .target after load). Silent,
-// severe bug: after any save/load, checkBountyQuests' `q.target === monsterId` and
-// checkGatherQuests' `it.id === q.target` compare against `undefined` forever, permanently
-// soft-locking every bounty/protect/sabotage/caravan_guard/gather/chain_kill quest active at save
-// time -- they'd never complete, with no error and no visible sign why (the quest log's `desc`
-// text is a separate pre-baked string, so it still reads fine). Only strip target/fleeFrom when
-// they're actually an entity reference (truthy object) -- confirmed by checking every non-quest
-// `.target =`/`.fleeFrom =` assignment in the file, which are always an entity or null, never a
-// string -- so quest data (string or null) now survives the round-trip untouched.
+// Entities hold live references to each other (m.target, m.fleeFrom, a grudgeAgainst Set) for
+// combat/AI purposes. Those are transient turn-to-turn state -- see resetStaleAIRef, called on
+// load -- and can form reference cycles once two entities are fighting (A.target=B, B.target=A),
+// which crashes JSON.stringify. This replacer drops those transient fields before saving; nothing
+// meaningful is lost since they'd be cleared on load anyway.
+// IMPORTANT: the key name 'target' is NOT unique to AI state -- quest objects also have a plain
+// string `target` field (the monster/item id being tracked). Only strip target/fleeFrom when
+// they're an actual entity reference (truthy object) -- never a bare string -- or quest data gets
+// silently corrupted on every save/load round-trip.
 function saveDataReplacer(key, value) {
   if ((key === 'target' || key === 'fleeFrom') && value && typeof value === 'object') return undefined;
   if (value instanceof Set) return undefined;
