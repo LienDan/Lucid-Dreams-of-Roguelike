@@ -515,7 +515,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.40.2-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.41.0-alpha</div>
     </div>
   </div>
 
@@ -605,6 +605,775 @@
 // framework (no unique combat/death dialogue) by design; hunger/thirst deliberately not implemented
 // (declined by design); body/health locational model is player-only, not extended to monsters
 // (deliberate scope decision, see the framework note near ensureBodyParts).
+//
+// v0.40.3 Old-content integration audit (first pass, per player request -- the original tier-1/2
+// TALENTS_V2 entries and a couple of long-tail talent-chain capstones predate several systems added
+// across v0.35-v0.39 and had never been re-checked against them). Confirmed a genuine gap and closed
+// it, rather than reskinning talent text without a mechanical change:
+//   - getPartArmorValue() only ever summed the player's worn equipment slots, so EVERY source of
+//     "innate" armor -- the whole Iron Skin -> Immovable Object talent chain, Stonehide/Thick Hide
+//     survival-line talents, species heritageBoost armor, every armor-granting cybernetic implant
+//     (Subdermal Plating, Ferrocoating, Titan-Grade Plating, etc.), every armor-granting mutation
+//     (Chitinous Hide, Carapace Plating, Symbiote Armor, etc.), and temporary armor buffs (e.g.
+//     Stoneskin-type spells) contributed to overall damage reduction (getArmorOf) but did precisely
+//     nothing to protect against a locational wound (v0.39's Bruised/Wounded/Maimed system) -- a
+//     talent-stacked tank could still get a limb Maimed exactly as easily as an unarmored fresh
+//     start. Fixed: innate armor now counts at full value against every body part (it's part of the
+//     body, not a single worn slot the way equipment is), same spirit as how body armor already
+//     partially covers limbs.
+//   - Lichform (tier-4 necromancer capstone, "become a lich") granted poison immunity + lifesteal but
+//     not disease immunity, despite the game's own established convention that undead-type creatures
+//     (vampire, unburied_queen, etc.) are diseaseImmune. A player who just turned into an undead lich
+//     could still catch a cold. Fixed: Lichform now also sets player.diseaseImmune.
+//   - Scavenger (tier-1, "+20% gold from loot") had zero interaction with the gathering/crafting
+//     material-rarity system added in v0.39 (MATERIAL_PROPERTIES / rare gather chance on Starmetal
+//     Ore, Ironwood, gems). A scavenger who's good at finding valuable loot should logically also be
+//     better at noticing a rare vein or a good cut of timber. Added player.rareFindBonus, read by
+//     grantGatherYield() against any sub-100%-chance yield entry; Scavenger now grants +3% (roughly
+//     doubling Starmetal/Ironwood's base 4% odds, a proportionate nudge to gem's already-generous 15%).
+// This was a scoped, verified pass (each fix traced end-to-end through the code before being made),
+// not an exhaustive rewrite of the whole talent tree -- see in-chat notes to the player for the
+// prioritized list of what's next. Big-swing rebalancing of the flat stat-stick tier-1 talents
+// (Toughness/Mighty/Swift/Scholar/Iron Stomach) was deliberately NOT done this pass: those are
+// mechanically fine and already feed real downstream systems (STR->encumbrance via armorStrDeficit,
+// INT->max MP scaling, etc.); reskinning them for novelty without a concrete gap to point to would
+// be exactly the kind of unverified "assessed 100% lightly" change this changelog convention exists
+// to avoid.
+//
+// v0.40.4 Second integration-audit pass. Checked companion gear/hazard exposure, the 4 newer
+// enemy-AI behavior archetypes against fire/water avoidance, crafting-quality practice tracking,
+// and per-species Ancestral Heritage coverage (all 11 species have a heritageBoost -- full
+// coverage, nothing to fix). One real gap found and closed:
+//   - START_SCENARIOS (Wanderer/Capital Born/.../Hamlet Born) affected only spawn position (plus a
+//     flavor log line, and a gold penalty for Shipwreck) -- exactly the "mechanic that's just a
+//     menu with no in-world interaction" pattern this whole audit is meant to catch. A background
+//     that's flavored as growing up in or near a real settlement now actually means something once
+//     you get there: placePlayerForScenario() now reports back whether it actually placed you at
+//     the named settlement tier (vs falling back to a generic start), and beginScenario grants
+//     starting goodwill (see addGoodwill/reputationPriceMult, the existing v0.39 reputation-pricing
+//     system) in that home region if so. Scaled inversely with settlement size, matching each
+//     scenario's own flavor text -- a Hamlet Born character is a known face in a tiny community
+//     (+18, clears the existing >=10 discount threshold immediately); Capital Born is one of
+//     thousands (+3, barely registers). Wanderer/Forest Hermit/Shipwreck Survivor intentionally get
+//     nothing, matching their own "alone"/"lost everything" premise.
+//
+// v0.40.5 Third integration-audit pass. Checked chain-antagonist/companion overlap (fine, no shared
+// state) and whether hand-authored unique/set item rewards should scale with player level like
+// generic loot does -- they deliberately don't (confirmed by the item comments: "modest-but-distinct
+// power... so they read as memorable, not mandatory", and the exact same makeItem(id, 0, ...) call
+// shape is used consistently for quest uniques, boss uniques, AND faction set pieces alike, so this
+// is a deliberate, consistently-applied design choice, not an oversight -- left untouched).
+// One real, large gap found and closed:
+//   - player.corruption (the eldritch mutation-unlock resource) was read in exactly one place
+//     outside its own subsystem in the entire game: nowhere. Every one of its ~12 read/write sites
+//     was either the mutation-unlock gate itself or a UI display -- despite the game's own flavor
+//     text framing it throughout as something dangerous and watched ("something old takes notice of
+//     you", "the change is spreading... you've stopped fighting it"), it was mechanically pure
+//     upside with no cost anywhere else in the game. This was the single largest
+//     old-mechanic-touches-nothing case found across all three audit passes so far.
+//     Centralized every corruption GAIN (ritual, mutagen, biome ambient effects, the one rare
+//     corruptionShift world event) through a new gainCorruption() choke point, the same
+//     single-source-of-truth pattern addGoodwill already established -- this incidentally also
+//     fixed ev_corrupted_surge's missing upper clamp (previously the only corruption source that
+//     could push past 100). gainCorruption fires one-time flavor beats at real thresholds
+//     (25/50/75/100), and reputationPriceMult now folds high corruption into a small, capped price
+//     markup from ordinary settlement NPCs (mirrors the existing bounty markup's shape, capped far
+//     lower at +15% since this is unease, not a crime). Deliberately light-touch, not a stat-crushing
+//     debuff: mutations already carry their own real tradeoffs, this is about the world reacting to
+//     what the player is becoming, matching how bounty/goodwill already work.
+//
+// v0.40.6 Fourth integration-audit pass. Re-confirmed farming/fishing already sell and cook
+// correctly (crop/fish items are plain type:'material', no special-casing needed) and that the
+// weather system already reaches deep into combat/AI (visMod feeds vision radius, rangedAccuracyMod,
+// slowChance, elementMods, freeze/fear/gas chances, even a talent hook off visMod directly) --
+// both fine, nothing to fix. There is no achievement system in this codebase (correcting something
+// I said last pass) -- what exists is the Hall of Legends, and it had the same problem an
+// achievement list would: it wasn't reflecting most of what actually happens in a run.
+//   - recordHallOfLegends() only ever fired from the secret true ending (triggerSimulationReveal),
+//     meaning a feature framed exactly like every other roguelike's permanent run-history (DCSS's
+//     morgue, ADOM's Hall of Fame, Brogue's) recorded literally nothing for the overwhelming
+//     majority of playthroughs, which end in an ordinary death. Now records every death too, with
+//     a real outcome/cause field; showHallOfLegends() branches its headline on outcome instead of
+//     assuming every entry defeated something. Old pre-patch localStorage entries (which predate
+//     the `outcome` field entirely) still render correctly as ascensions, which is the only
+//     reading that was ever true for them.
+//   - Found and fixed a second, related pre-existing bug along the way: gameOver()'s death-screen
+//     cause-of-text fell back straight to the literal string 'unknown causes' instead of checking
+//     lastDamageSource, which is what actually gets set by most environmental/hazard death paths
+//     (cold, heat, hail, disaster, traps, gas, poison, radiation, bleeding, drowning, fever) --
+//     those kill by ticking hp down directly and let the main turn loop's generic alive-check call
+//     gameOver(), bypassing onDeath (the only place player.deathCause itself got set). The correct
+//     cause was sitting right there in lastDamageSource the entire time; both the death screen and
+//     the new Hall of Legends entry now read it.
+//
+// v0.40.7 Fifth integration-audit pass. Checked three things per player follow-up:
+//   - Companion "loyalty" tied to kingdom politics: no loyalty stat exists at all (companions only
+//     track `affection`, which is about the personal relationship, not politics), and the only
+//     "kingdom war" mechanic in the game is a temporary settlement-raid event, not a persistent
+//     kingdom-vs-kingdom state a companion could meaningfully react to. Nothing to wire up here
+//     without inventing a new stat from scratch, which the player asked to hold off on this pass.
+//   - Cybernetics vs. mutations: confirmed these are meant to freely coexist (shared ability-lookup
+//     plumbing, complementary cost-reduction fields, no thematic "purist" framing anywhere in the
+//     game's own text) -- not a bug, just an area with no explicit synergy bonus either way. Left
+//     alone rather than inventing a new hybrid mechanic unprompted.
+//   - Durability/repair vs. crafting quality: already correct -- quality/material both feed
+//     maxDurability via the same combinedPowerMult path items already use, and repairItem() is
+//     purely numeric so it can't accidentally clobber an item's quality/material name.
+// While auditing, switched technique: instead of tracing one system's fields, cross-checked every
+// call site of the game's shared AoE helper functions (gasArea/addGasCloud/igniteArea/scorchArea/
+// igniteEntity/freezeEntitySolid) against each other for argument-count consistency. Found one real,
+// confirmed, meaningful bug this way:
+//   - The gascloud AI behavior's gasArea() call was missing an argument. Every other call site in
+//     the game passes gasArea(cx, cy, radius, turns, power, kind) -- 6 args -- but this one passed
+//     only 5, which silently shifted the monster's own `gasDamage` stat into the `turns` slot and
+//     the literal string 'poison' into the `power` slot. addGasCloud() then computed
+//     `Math.max(t.gasPower||0, 'poison')`, which coerces to NaN, and the actual damage tick reads
+//     `t.gasPower || 3` -- NaN is falsy in JS, so every gascloud monster in the game (Spore Walker,
+//     Logic Bomb, Plague Zombie, Gibbering Mouther, Poison Bloom, Corpse Flower, and both gascloud
+//     bosses -- Verdant Horror and the Seed-Mother, gasDamage 6 apiece) was silently dealing a flat
+//     3 damage regardless of its own configured stat. A boss's signature area attack was
+//     mechanically indistinguishable from the weakest trash monster with the same behavior tag.
+//
+// v0.40.8 Sixth integration-audit pass. Ranged/thrown weapons checked out clean: doAttack() is one
+// unified function for melee and ranged alike (weapon.ranged only changes the accuracy formula and
+// a damage multiplier), so locational wounds, bleed, called shots, and everything else already
+// apply identically regardless of weapon type -- confirmed, not a gap. Re-ran the call-site
+// consistency check from last pass against a wider set of shared functions (stepToward/stepAway,
+// woundBodyPart, rollHitLocation, applyBleed, wearItem, addItemToList, makeMonster, gainXP,
+// igniteArea, scorchArea, igniteEntity, freezeEntitySolid, doAttack, attackMulti, makeItem,
+// repairItem) using a proper paren-balancing parser this time instead of a naive regex (which had
+// been the source of several false positives) -- every one of them is 100% consistent across every
+// real call site. A useful negative result: last pass's gasArea fix was very likely the one bug
+// this technique was going to find in the AoE-helper family specifically.
+// One more real, confirmed bug found by hand, following up on the player's specific "does a raid
+// ever threaten a companion" question -- it didn't:
+//   - isHostileTo()'s War Between Settlements check required kind==='npc' on BOTH sides. An ally
+//     (a recruited companion/spouse) and an ordinary defending guard both resolve to the same
+//     'settlement' faction via entityFaction(), so with the npc-only war-tag check skipped, ally-
+//     vs-invader fell through to the generic same-faction-never-fights-itself rule. In practice: a
+//     companion could stand in the middle of an active settlement raid, get proactively targeted by
+//     nothing, target nothing on its own initiative (companionFollowAI's own pickHostileTarget scan
+//     hit the same wall), and never get pulled in by alertNearbyAllies either -- functionally
+//     invisible to a fight it should have been part of by every other measure. Loosened the check to
+//     accept kind==='npc' OR kind==='ally' on either side; a companion is exactly as much "on the
+//     settlement's side" as an unmarked defending guard already was. This one small change
+//     completes the whole chain -- proactive targeting both directions, and getting pulled into a
+//     nearby fight -- since both of those already route through this same function.
+//     Deliberately left the player's own default (non-)hostility toward invaders untouched: the
+//     existing design (attack whichever side you want, no automatic side is forced on you, see
+//     isInActiveWar's bounty exemption) reads as intentional player agency, not a companion-shaped
+//     gap, and once the player does engage, the existing reactive grudge system already handles it.
+//
+// v0.40.9 Seventh pass. Player explicitly greenlit a large rework over a small patch if the bigger
+// fix was the right one -- this pass found exactly that kind of case. Three smaller checks first
+// (all clean, no changes): ranged/thrown weapons already share doAttack() with melee so locational
+// wounds apply identically; re-ran the call-site consistency audit against the spellcasting/ability
+// family (applyEffectToTarget, resolveSpellAtTile, chainLightningFrom, monsterCastAt, paySpellCost,
+// a dozen others) with a properly paren-balanced parser this time (last session's version had false
+// positives on any call with a nested expression as an argument) -- 100% consistent, a genuinely
+// useful negative result; and NPC sleep schedules vs. raid timing turned out to be a non-issue,
+// since guards/watchmen/captains are already exempted from sleep entirely and companions have no
+// home schedule to begin with.
+// The big one: the entire shop/merchant economy was quietly the single largest structural dead end
+// in the game.
+//   - generateShopInventory() never scaled with anything. Every other loot source in the game
+//     (monster drops, quest rewards, chests) scales toward the player's current level via
+//     playerLevelPowerMult -- shops were the one exception, rolling flat, unscaled stock once, at
+//     NPC creation. In a 90-level game, this meant the entire merchant economy stopped mattering
+//     somewhere around character level 10, since anything found in a dungeon by then already
+//     outclassed anything any shop would ever sell, forever.
+//   - Shops never restocked, at all, under any circumstances -- buy out a shop's stock once and
+//     that merchant is an empty room for the rest of the run. Combined with the above, a shop was
+//     worth visiting exactly once, early, and never again.
+//   - npc.tier (Novice/Journeyman/Master) already existed and already meaningfully affected
+//     price -- a Master merchant charges 35% more via npcTierPriceMult -- but had zero effect on
+//     what they actually sold. Paying a premium got you a bigger price tag on the exact same
+//     random roll a Novice next door was handing out for less.
+// Fixed all three together, reusing existing machinery rather than inventing anything new:
+//   - generateShopInventory now takes the npc and computes a value-tier/rarity ceiling from
+//     npc.tier (shopTierCaps) and a powerMult from playerLevelPowerMult(player.level), exactly
+//     the same call shape the artifact-vendor loot roll already used elsewhere in the file. A
+//     Master's shop can now eventually turn up genuinely rare, valueTier-4 gear; a Novice is
+//     capped at ordinary stock; and everything scales toward whatever level you're at when you
+//     see it. Also consolidated the function's seven-years-stale hand-rolled
+//     `!b.setId && !b.isUnique && !b.craftOnly` exclusion onto lootEligibleBaseIds(), the exact
+//     single-source-of-truth this function was apparently never migrated onto when that refactor
+//     happened (see lootEligibleBaseIds' own comment -- it explicitly says "every chest, shop,
+//     monster-drop table" already used it, but this one somehow never actually did).
+//   - Added maybeRestockShop(), checked lazily from openTrade() (the one real entry point for all
+//     trading) rather than ticking every shop NPC in the world every turn -- the same "roll it on
+//     demand" pattern the game already uses for a house door's daily lock re-roll. A shop that
+//     hasn't been visited in 4+ in-game days gets an entirely fresh shipment, rolled at your
+//     CURRENT level, the next time you walk in. Old saves degrade gracefully: an NPC with no
+//     shopRestockDay yet (predates this patch) just gets one silently set on first visit rather
+//     than immediately restocking or logging a message that wouldn't make sense.
+// Deliberately did NOT wire up npc.gold as a hard "merchant can run out of money" spending limit
+// while in here, even though it's currently 100% decorative (set once at NPC creation, read
+// nowhere in the entire game) -- a real find, but turning it into a hard sell-blocker needs its
+// own careful design pass (a soft discount past their float, partial-buy UI, etc.) to avoid just
+// making selling loot annoying; flagging it here rather than bolting it on under this fix's scope.
+//
+// v0.40.10 Eighth pass. Checked whether kingdom/faction reputation (goodwill) has any teeth beyond
+// price. It doesn't -- but unlike every other "only touches one thing" case found so far, this
+// isn't a broken or forgotten wire, it's just the system's actual, coherent scope: bounty (negative
+// reputation) already has real teeth (guards go hostile at a threshold, arrest-like payoff, dialogue
+// locks out once it's high enough), and goodwill (positive reputation) buying a discount is a
+// complete, self-consistent design on its own. Extending it into gating quests/training/dialogue
+// would be new feature design, not a fix for something broken, so left alone rather than invented
+// unprompted -- noted here as a real idea for later, not treated as a bug today.
+// Went looking for the crafting-recipe equivalent of the shop bug from last pass (does crafting
+// keep up by level 90) and initially chased a false lead worth recording honestly: a first grep for
+// the RECIPES array only found the small literal at its declaration (8 entries) and concluded most
+// of the game's 58 raw crafting materials were completely unused -- wrong. RECIPES is extended by
+// two large RECIPES.push() blocks elsewhere in the file (118 recipes total), which already use 52
+// of those 58 materials; re-checked before touching anything and the "orphaned" materials that
+// remained were, on inspection, deliberately not crafting ingredients at all (cog/wind_key/
+// spare_coil/firewall_patch/recursion_thread are dimension-specific barter currency and quest-item
+// materials; fang is a container-loot/gift material). Only cheese and demon_ichor turned out to be
+// genuinely dead stubs (demon_ichor isn't even obtainable anywhere), and both are harmless,
+// unreachable leftovers rather than broken player-facing features -- not worth a content-invention
+// detour to give them a purpose. Recording the false lead here rather than quietly discarding it,
+// since catching it before acting on it is exactly why this audit checks a hypothesis against the
+// full file before committing to a rework.
+// The real, and analogous-to-shops, bug this pass:
+//   - Crafted weapon/armor power was completely disconnected from playerLevelPowerMult. Quality
+//     (Shoddy..Masterwork) tops out at 1.28x, and the best available material (Starmetal) at
+//     roughly 1.18x -- together, an absolute best-case crafted item caps at about 1.5x a base
+//     item's own stats, full stop, regardless of character level. playerLevelPowerMult alone
+//     reaches past 11x by level 90 -- the same function monster drops, quest rewards, chests, and
+//     (as of last pass) shops all already scale through. A player who spent real time building up
+//     crafting practice and hunting down rare Starmetal Ore for their best possible Masterwork
+//     weapon would still end up 7-8x weaker than an ordinary monster's mid-to-late-game drop.
+//     Folded the same level scaling into craftRecipe's combinedPowerMult, gated on `quality` being
+//     non-null (which craftQualityRoll only ever sets for genuine weapon/armor outputs, so cooking,
+//     smelting, and every other non-equipment recipe are correctly untouched). A dedicated
+//     crafter's best work is now a legitimate, level-appropriate gearing path for the entire game,
+//     not just its first dozen levels -- and with a good roll or a rare material, it can actually
+//     exceed what the dungeon hands out, which is the whole point of investing in the skill.
+//
+// v0.40.11 Ninth pass. Checked whether companions stay relevant at endgame the same way shops and
+// crafting needed to -- they already do, and thoroughly: scaleCompanionToPlayer() is called not
+// just on recruitment but from inside levelUp() itself (every companion, every level) AND from
+// every single Leadership-line talent as it's taken, so a companion recruited at level 5 keeps
+// pace for the rest of the game rather than falling behind the way shops/crafting used to.
+// Confirmed clean, no changes needed.
+// Went looking at disease cures next and found a real, small, directly player-visible bug:
+//   - DISEASE_CURE_POOL's own hint text -- shown straight to the player the moment they catch
+//     something ("An antidote or a strong healing draught might fight this off") -- explicitly
+//     promises that a strong healing potion helps cure a disease. It didn't. Only the two
+//     dedicated cureall/cureposion item effects ever granted cure progress; the ordinary 'heal'
+//     effect every actual healing potion in the game uses (including the Elixir of Supreme
+//     Healing, the single strongest one in the game) did nothing for a disease at all, no matter
+//     how powerful. A player who read the hint, correctly reasoned "I have a stack of my best
+//     healing potions, that should work," and drank several while sick would have been quietly
+//     wasting resources against a game-stated claim that never actually paid off.
+//     Fixed conservatively rather than making every heal item redundant with a dedicated cure:
+//     genuinely strong draughts (power >= 30 -- Potion of Greater Healing and above; cooked food
+//     and the basic Potion of Healing don't count, matching the hint's own word "strong") now
+//     grant 1 cure progress per drink (vs. 2-3 from a dedicated antidote/cureall), so the hint's
+//     promise is true without turning a real cure item into a wasted inventory slot.
+//
+// v0.40.12 Tenth pass. Checked talent respec (there isn't one, anywhere, for anything) and whether
+// dimensions are one-and-done content after their mandatory quest-trail visit. Both came back as
+// deliberate, coherent design rather than gaps:
+//   - No respec system exists for talents, stats, or anything else in the game, but that's
+//     consistent with everything else this audit has found: corruption, bounty, disease-caused
+//     death, and companion loss are all similarly permanent. Bolting on an undo button for talents
+//     alone would cut against a design philosophy the rest of the game holds to consistently, not
+//     fix an oversight -- left alone.
+//   - Dimensions already repopulate on a long-enough revisit through the exact same
+//     trackVisitAndMaybeRepopulate/maybeRepopulateChunk path the overworld uses (curIsDimension()
+//     is already threaded through both the chunk lookup and the spawn-scale calculation) -- a
+//     dimension is real, repeatable content, not a single-visit corridor to its one mandatory
+//     guardian. Confirmed clean.
+// One more real, if modest, "flavor number with zero interaction" case turned up along the way:
+//   - player.kids was purely cosmetic -- incremented on birth, shown on two UI labels, read
+//     nowhere else in 30,000 lines. Gave it one small, proportionate hook rather than inventing a
+//     whole child-rearing subsystem that wasn't asked for: restAtHome's existing household-gold
+//     perk (chance and size) now nudges up slightly per child, so a bigger family plausibly means
+//     more household income instead of a family of five sharing the exact same odds as a
+//     newlywed couple with none.
+//   - Also noticed marriage itself had no connection to the reputation system that a hometown
+//     background or defending a settlement already feed into (see v0.40.9/v0.40.4). Marrying in is
+//     a well-established way to put down roots somewhere, so proposeMarriage now grants a modest,
+//     one-time goodwill bump in the spouse's home region through the same addGoodwill/
+//     reputationPriceMult mechanism -- enough to read as "people here like you a bit more now
+//     that you're one of them," not a shortcut to a steep discount.
+//
+// v0.40.13 Eleventh pass. Checked the museum/curator flavor feature and the gambling hall for
+// correctness -- both fine, small and self-contained by design, nothing to fix. Then went looking
+// for a stealth/sneak-attack mechanic, since the game has a full 6-item "Stealth" cybernetics
+// category (Optical Camo, Silent Servos, Shadow Cloak, Ghost Protocol...) plus invisibility spells
+// and mutations, and found the biggest single missing-mechanic case in this whole audit:
+//   - There was no sneak attack bonus anywhere in the game. Invisibility and every Stealth
+//     cybernetic accomplished exactly one thing in combat: monsters losing track of you. Landing
+//     the FIRST hit on something that hasn't noticed you yet -- the entire premise of an
+//     assassin/stealth playstyle in every roguelike this game's own inspirations are built
+//     around -- did nothing extra at all. An entire cybernetics category existed purely to enable
+//     a playstyle the combat system had no way to reward.
+//     Fixed using a signal the game already tracks everywhere: `.engaged`, the exact flag every
+//     single monster/NPC behavior function already checks (roughly 25 identical
+//     `if (!seesPlayer && !m.engaged)` guards throughout the AI framework, plus updateAIState/
+//     npcAI both flipping it true the instant they actually notice the player) to decide "wander
+//     obliviously" vs. "react to a threat." "Not engaged yet" already WAS this game's own
+//     definition of "hasn't noticed you" -- it just wasn't being read by anything on the player's
+//     side. Attacking such a target now always crits, and hits considerably harder than an
+//     ordinary lucky crit, with its own distinct "(sneak attack!)" log tag instead of blending
+//     into a normal critical hit. Verified this stays narrowly scoped to genuine ambushes (sneaking
+//     up from outside vision range, using invisibility, catching a dormant/sleeping monster before
+//     it wakes) rather than firing on every fight's opening hit, since ordinary aggro already flips
+//     `.engaged` true the same turn a monster notices you, well before you'd normally close to
+//     melee range.
+//   - Along the way, found and fixed the one real gap in an otherwise consistently-applied rule:
+//     every other way of damaging something in the game (thrown potions, poison splash, etc.)
+//     already explicitly sets `target.engaged = true` on impact with a comment noting "being hit
+//     wakes/aggros it, same as any other attack" -- but doAttack, the primary melee/ranged weapon
+//     path every actual sword-swing and arrow goes through, never did this itself. It rarely
+//     mattered in practice (the attacker is usually visible to the target immediately afterward
+//     anyway), but it's the one inconsistent case, and it's also the exact flag Sneak Attack above
+//     needs flipped promptly so a second consecutive hit correctly stops reading as a surprise.
+//
+// v0.40.14 Twelfth pass. Confirmed the identify system isn't a gap -- a prior pass already found
+// and fixed this exact "no-op mechanic" pattern (a Scroll of Identify used to do nothing at all,
+// since nothing in the game is ever unidentified; it's since been repurposed into a
+// detect-treasure effect). Then checked elemental resistance/immunity and found the pattern
+// repeating at a more fundamental level than Sneak Attack's missing mechanic -- an EXISTING flag
+// that was barely wired to anything, plus an established convention never extended to its obvious
+// counterpart:
+//   - fireImmune (Fire Elemental) was only ever checked in two narrow, unrelated places -- fire
+//     terrain being walkable, and whether a burning creature panics toward water -- never for the
+//     actual fire damage a weapon or spell deals, and never for whether the target could be set on
+//     fire at all. A Fire Elemental could be lit on fire and take full bonus damage from your torch,
+//     which defeats the entire point of the flag existing.
+//   - frostImmune didn't exist ANYWHERE in the game, despite three ice-native monsters -- Frost
+//     Giant, Frost Giant King (a boss), and Frost Drake, all of which deal their own frost damage
+//     -- having no counterpart to the exact precedent their fire-themed equivalent already had.
+//     They could be frozen solid and take full frost weapon/spell damage same as anything else.
+//   Fixed both together as one convention rather than two separate patches: doAttack's weapon
+//   fireDmg/frostDmg damage-add now checks the matching immunity flag; igniteEntity and
+//   freezeEntitySolid now refuse to ignite/freeze an immune target; and, since a fix that only
+//   covered weapons while leaving every Fireball/Frost Bolt-type spell untouched would have been
+//   exactly the kind of half-finished job this whole audit exists to catch, added the same check
+//   into weatherElementMultiplier -- already the one place every damage branch in
+//   applyEffectToTarget (lifetap/execute/smite/damage/drain/AoE/pierce-line, all of them) funnels
+//   its final multiplier through, and which already does the exact fire/frost element detection an
+//   immunity check needs, so one small addition there covers every spell type at once rather than
+//   needing a repeated check in each branch. Added frostImmune:true to all three ice-native
+//   monsters to match.
+//
+// v0.40.15 Thirteenth pass. Went looking for the same missing-immunity shape in the other two
+// elements weatherElementMultiplier already tracks (shock, poison) rather than assuming last
+// pass's fire/frost fix was the whole story. Shock came back clean -- no evidence of an intended-
+// but-unwired convention there (no code comment promising it, no obviously-electrical monster
+// faction missing it), so left alone rather than inventing a "constructs are vulnerable to EMP"
+// mechanic nobody asked for. Poison told a very different story:
+//   - poisonDmgReduction is an extensive, well-built mechanic -- racial traits, talents,
+//     cybernetics, one armor piece, roughly 15 separate check sites throughout doAttack/
+//     applyEffectToTarget/thrown items -- entirely on the PLAYER side. Its own use-site comment
+//     literally says "racial poison resistance (Dwarf/Skarath partial, Construct/others full via
+//     poisonDmgReduction)", promising monster-side coverage that never actually existed: not one
+//     single monster in the entire MONSTER_BASES table had this field set to anything. A stone
+//     golem or a clockwork sentinel -- no bloodstream, no nervous system, nothing for a toxin to
+//     act on -- took full, unmitigated poison damage from a venom weapon or poison spell, directly
+//     contradicting what the game's own code already claimed happened.
+//     Fixed with a data-driven, faction-keyed loop (poisonDmgReduction:1 for every faction:
+//     'construct' monster) rather than touching 17 scattered definitions individually -- same
+//     spirit as AI_VARIETY_FACTION_MAP, which already does exactly this for monster behavior.
+//     Deliberately placed at the very end of the file, after every MONSTER_BASES.xxx assignment,
+//     rather than up near AI_VARIETY_FACTION_MAP's declaration: several construct monsters (the
+//     antagonist "aspect" encounters, dimension bosses like the_unindexed's neighbors) are defined
+//     much later in the file, and a loop placed too early would silently miss all of them --
+//     verified this with an actual standalone execution of the relevant script slice rather than
+//     just reading the code and assuming the ordering was fine, and confirmed a late-defined
+//     construct (Runaway Automaton) does get the immunity while a same-loop non-construct
+//     (Skeleton) correctly does not.
+//
+// v0.40.16 Fourteenth pass. Followed up on v0.40.14's fire/frost immunity fix with the obvious next
+// question: does it actually cover every way of dealing fire/frost damage in the game, or just the
+// two paths (doAttack, spell resolution) checked so far? It didn't. Two more direct-damage code
+// paths exist entirely outside doAttack/applyEffectToTarget and had the exact same gap:
+//   - throwWeapon()'s own damage calc (a deliberately different formula from doAttack -- see
+//     purposeBuilt) has its own separate `it.fireDmg`/`it.frostDmg` lines that never got checked.
+//     Notably inconsistent even within this one function: the poisonDmg line two lines below
+//     already correctly checked target.poisonDmgReduction, so a thrown weapon already respected
+//     poison immunity while silently ignoring fire/frost immunity right next to it.
+//   - The 'scrollfire' effect (Scroll of Fire/Lightning/Holy -- one shared implementation wearing
+//     three names via dtype, per its own comment) deals `t.hp -= dmg` completely outside any
+//     shared damage pipeline, so it never had a chance to pick up the fix either.
+//   Fixed both directly at the site, plus added a distinct "shrugs off the flames entirely" line
+//   to scrollfire's immune case so a blocked hit reads as a real resistance moment instead of an
+//   unexplained zero. Grepped every remaining `.fireDmg`/`.frostDmg` and `dtype === 'fire'/'frost'`
+//   site in the file afterward to confirm no fourth path is still silently unguarded (throwaoe/
+//   nukeblast use holy/void/physical flavors only, not fire or frost, so they were never in scope).
+//
+// v0.40.17 Fifteenth pass. Did an exhaustive final sweep rather than assuming last pass caught
+// everything -- grepped every `.hp -= dmg`-shaped line in the file (about 90 of them) and checked
+// each one that could plausibly carry a fire/frost flavor. Found three more real gaps, one
+// confirmed non-issue by construction, and one already-covered case worth noting so it isn't
+// "fixed" a second time by accident:
+//   - 'aoefire' and 'aoefrost' (the fire/frost grenade thrown-item effects) dealt raw damage with
+//     no immunity check at all -- same shape as everything else this thread has found. Fixed both,
+//     with a proper "is unharmed by the flames/freezing shrapnel" line rather than a silent zero.
+//   - performBreathWeapon() -- which its own comment says is meant to let a dragon breathe fire on
+//     a rival monster or an NPC "just as readily as on the player" (real, intended friendly fire,
+//     not a theoretical edge case) -- never checked fireImmune/frostImmune, and its non-player
+//     branch didn't even check frostDmgReduction (only fire had a resistance check there). Fixed
+//     both directions.
+//   - Confirmed by construction, not by re-checking every call site: the ongoing burn-tick and
+//     frozen-solid-tick damage functions don't check fireImmune/frostImmune directly, but they
+//     don't need to -- igniteEntity/freezeEntitySolid (fixed two passes ago) are the ONLY places
+//     in the entire file that ever set burningTurns/frozenSolidTurns above zero, so an immune
+//     entity can structurally never end up in either state to begin with. Verified via grep that
+//     no other assignment site exists before relying on that guarantee.
+//   - monsterCastAt's 'bolt'/'drain' case already multiplies through weatherElementMultiplier(ab,
+//     target) before anything else -- the same shared function fixed two passes ago -- so a monster
+//     casting a fire/frost bolt at another immune monster or ally was ALREADY correctly blocked
+//     without needing a separate fix. Noting this explicitly so it doesn't get "fixed" again later
+//     under the mistaken impression it was still open.
+//
+// v0.40.18 A player brought a bug report from a separate Claude session that ran an automated
+// playtest and found new characters dying to bleed-out far more than to the hits that caused it.
+// Verified every specific claim against this file directly before touching anything (all three
+// held up exactly as reported):
+//   - 22 of ARCHETYPES' 25 entries push nothing into player.inventory at all (only Herbalist/Chef/
+//     Tinkerer grant any starting consumables, and none of them grant a Bandage). Bleed is by
+//     design not self-resolving -- it requires a Bandage or equivalent cure -- so most starting
+//     classes, including every straightforward melee one (Warrior, Ranger, Rogue, Duelist,
+//     Berserker...), began with zero way to stop the exact status their playstyle is most likely
+//     to trigger.
+//   - The bleed-proc check is a flat "damage exceeds 6% of max HP" test with no direct armor
+//     interaction (armor only helps indirectly, by lowering the raw damage before the ratio is
+//     taken). At a fresh level-1 character's ~25-30 max HP, that's about 2 raw damage -- low
+//     enough that nearly any real hit clears it, armored or not.
+//   - doRest() never checked bleedTurns at all, so a bleeding character who rested would keep
+//     losing HP through the rest loop, often faster than regen could offset, while the action
+//     read to the player as the safe recovery option.
+// Fixed all three, plus two related ones found while verifying:
+//   - Added grantStartingBandages() (2 Bandages), called from both archetype paths (lettered and
+//     random '9') right after arch.apply() -- one shared fix covers all 25 archetypes, present and
+//     future, rather than editing each apply() individually. Left the point-buy custom-creation
+//     path alone since it already lets the player choose their own starting items deliberately.
+//   - Rather than a flat threshold change (which would also make bleed less relevant at high HP
+//     everywhere, not just fairer at low HP -- flagged as a real risk in the original report), the
+//     6% floor now scales: a wound needs at least ~3 raw HP to count for a fragile early
+//     character, converging back to the exact original 6% once max HP passes roughly 50 (a few
+//     levels in) and completely unchanged from then on. The other two applyBleed call sites
+//     (locational torso wounds, the bloodless-creature crit fallback) were already gated behind a
+//     real wound leveling up or a crit specifically, not "any hit," so they didn't need the same
+//     treatment -- confirmed by reading each one rather than assuming the fix should apply
+//     everywhere applyBleed appears.
+//   - doRest() now blocks outright with a clear message if already bleeding, and stops mid-loop
+//     with the same message if a bleed starts during the rest (an interrupted ambush, a hazard
+//     tile) -- more honest than letting the loop run and silently losing the race against a bleed
+//     tick. runAutoLoop() (autoExplore/autoTravelToStairs) got the same check for the lower-stakes
+//     version of the same problem -- quietly bleeding out several dozen tiles into an auto-walk.
+//   - Added a one-time "this won't stop on its own" warning the first time the player ever bleeds
+//     (player.everBled), since a mechanic that deliberately doesn't self-resolve is exactly the
+//     kind of thing a new player has no way to know without being told once.
+// Deliberately did not add a new direct armor-vs-bleed-resistance mechanic (the report's other
+// suggestion) -- that's a broader bleed-vs-armor balance redesign affecting the mechanic at every
+// HP tier, not a fix for the specific verified death-spiral, and the report itself flagged it as
+// needing a second opinion rather than a same-pass change.
+//
+// v0.40.19 Sixteenth pass. Checked player ranged-weapon ammo (there isn't any -- bows/etc. fire
+// for free, arrows are never tracked as a resource) and multi-tile monster collision. Both turned
+// out to be non-findings, for different reasons worth recording honestly rather than silently
+// dropping:
+//   - No player ammo tracking appears to be a real, if undocumented, design choice rather than an
+//     oversight: monsters DO track ammo as an ability resource, and thrown weapons are fully
+//     consumed on use, so the underlying plumbing clearly exists -- it was specifically never
+//     built for the player's base ranged attacks. Given no comment declares this the way
+//     hunger/thirst's omission is explicitly declared elsewhere, it's ambiguous, but building an
+//     entire new inventory-management resource system on a guess isn't proportionate to what's
+//     actually broken -- left alone.
+//   - "multiTile" monsters (Frost Giant, Young Dragon, etc.) turned out not to be a genuine
+//     multi-square-body system at all -- the name is a misnomer for "moves/charges several tiles
+//     in one turn" (stepTowardMulti) and "attacks several times in a row" (attackMulti,
+//     multiattack). Every creature in the game, including these, occupies exactly one tile. There
+//     was no multi-tile collision system to have a bug in.
+// Went looking instead at whether Sneak Attack (added two passes ago) actually covers every player
+// attack vector, or just doAttack -- and found the gap immediately in the game's own flavor text:
+//   - Backstab ("A vicious strike that punishes an inattentive foe severely") is a
+//     type:'execute' technique, and the execute formula scales purely off the target's missing HP
+//     -- zero connection to whether the target is actually inattentive. The exact mechanic
+//     Backstab's own description promises was Sneak Attack, added to doAttack two passes ago, but
+//     techniques resolve through applyEffectToTarget, a completely different code path that never
+//     got the same check. A basic unarmed swing at an unaware target got a guaranteed crit; the
+//     purpose-built stealth execute technique named for exactly that situation did not.
+//     Fixed by adding sneakBonus:true to Backstab specifically (not to every execute-type ability
+//     generally) and checking it against the same !t.engaged signal doAttack's Sneak Attack
+//     already uses -- deliberately scoped narrowly, since execute is shared with the Void/Cosmic
+//     mutation line (Entropy Touch, The Consuming), whose own flavor is about exploiting an
+//     already-wounded target, not stealth, and would have been wrongly buffed by a blanket fix.
+//
+// v0.40.20 Seventeenth pass. Re-ran the call-site consistency audit against a fresh batch of
+// functions (companion/quest/disease/shop functions from recent passes) -- came back clean, with
+// one instructive false positive worth recording: my own parser doesn't account for a literal
+// comma inside a template-literal string argument, which briefly looked like a 5-argument call to
+// a 4-argument function (grantStoryCompanion) until checking the actual source showed it was one
+// dialogue string with a comma in it. A limitation of the tool, not a bug in the game.
+// Then followed up directly on v0.40.18's bleed fixes with the obvious next question: what happens
+// when a death-prevention effect triggers from the exact kind of massive hit that also causes
+// bleed? Found that the answer was "you're still doomed, just one turn later":
+//   - Second Wind ("survive a killing blow at 1 HP") just set player.hp = 1 and did nothing else.
+//     The hit that triggers it is by definition enormous -- almost certainly well past the bleed-
+//     proc threshold -- so "saved" in practice often meant landing at 1 HP still actively bleeding,
+//     with bleed's own by-design refusal to self-resolve (and, after v0.40.18, an inability to
+//     rest it off) working directly against the one talent built specifically to give the player a
+//     second chance. Fixed by having Second Wind also stanch any active bleed -- poison and
+//     burning weren't touched, since both already decay to nothing on their own and don't share
+//     bleed's specific "requires an item, does not stop itself" design.
+//   - The Fourth Corridor's Recursion (a Recursion Thread item that "unmakes" a fatal blow and
+//     folds the player back to their last anchor) had the exact same gap, and arguably an even
+//     stronger thematic case for the same fix: the flavor text explicitly says the fatal instant
+//     never happened, so a wound from that same instant shouldn't persist into the moment being
+//     folded back to either. Fixed identically.
+//
+// v0.40.21 Eighteenth pass. Checked whether Confusion's random-stumble movement or a fleeing
+// creature's pathing could force an entity onto a hazard tile unfairly -- fleeing already routes
+// through isPassableFor (the same hazard-aware check normal movement uses), and while confusion's
+// random direction pick doesn't itself check hazards, no move in this game (confused or not) gets
+// a "step onto lava, are you sure?" confirmation, so confused movement isn't creating a new
+// unfairness relative to the game's existing philosophy -- just applying it. Not a gap; would need
+// a whole new confirmation-prompt system to be one, and nothing suggests that's expected here.
+// Then checked Fear for the same kind of consistency gap Sneak Attack's Backstab case turned up two
+// passes ago: does it actually block every way to attack, or just the ones checked so far?
+//   - Fear already blocks melee (the movement-into-attack branch) and fireRangedWeapon, both with
+//     the identical "You're too terrified to fight!" message -- a clearly established rule that
+//     fear means "can't fight," not "can't melee specifically." castSpell had no equivalent check
+//     at all: a feared player could freely Fireball, curse, or life-drain an enemy while being
+//     mechanically unable to swing a sword or loose an arrow at that same target. A real,
+//     exploitable hole in the status, not a deliberate carve-out for casters.
+//     Fixed by blocking castSpell the same way, scoped narrowly to spell types that are
+//     unambiguously offensive (damage/execute/smite/lifetap/drain/multihit/direct/debuff) rather
+//     than every spell -- heal, buff, blink, and other self-directed or utility spells are
+//     untouched, since "too scared to attack" has never meant "too scared to save yourself"
+//     anywhere else fear is checked in this game. Deliberately left thrown weapons/items alone for
+//     now: unlike a clean function-entry check, blocking a throw properly (without either wasting
+//     the item on a blocked action or requiring a much larger restructure of when the check can
+//     fire) needs more care than this pass had grounds to rush.
+//
+// v0.40.22 Nineteenth pass. Direct follow-up on Fear's castSpell gap: does Frozen Solid (an even
+// more absolute incapacitation -- its own comment says "the point of freezing something is that it
+// genuinely can't act," not a partial fumble chance like Slow) actually block everything it should?
+// Movement, melee, ranged aim, and spellcasting were all already correctly covered -- clearly a
+// more thoroughly-applied status than Fear was. Throwing was the one gap: a player frozen solid
+// could still lob a grenade or a potion at an enemy. Fixed at the natural entry point
+// (beginThrowTargeting), before the item ever leaves the inventory, so a frozen player doesn't
+// lose the item to a blocked action. Also caught and fixed the same gap in the "use on self"
+// detonate-at-your-own-feet path (grenades/nukes), which the code's own comment confirms is
+// "the exact same resolveThrowAtTile() logic" as throwing, just pre-aimed -- leaving it unguarded
+// would have meant a frozen player couldn't throw a grenade at an enemy but could still detonate
+// the identical grenade at their own feet, an inconsistency within the fix itself rather than just
+// relative to the rest of the game.
+//
+// v0.40.23 Twentieth pass. Checked for a Stun status (doesn't exist anywhere in this game -- Fear,
+// Frozen Solid, Confuse, and Slow are the complete roster) and re-verified Slow specifically. Slow
+// turned out to have the same shape of gap as Backstab, but bigger: multiple abilities across
+// several schools were named and described as slowing/immobilizing/hobbling a target while never
+// actually applying statusSlow (the real "Slowed" status this game's UI shows a turn counter for)
+// -- they only reduced DEX, a much subtler stat tweak with none of the "50% chance to lose your
+// turn" bite the name promises.
+//   - The player's own 'slow' spell -- literally named Slow, described as "saps a foe's speed" --
+//     never applied statusSlow at all. Garrote ("leaves your foe gasping and slow") did, but only
+//     through a spell.id === 'garrote' special case, not anything reusable.
+//   - Checked every other stat:'dex' debuff ability in the game against its own description text
+//     for the same unfulfilled promise. Found seven more with unambiguous slow/bind/hobble/motor-
+//     impairment language and no mechanical follow-through: Entangling Roots ("bind a foe in
+//     place"), Temporal Slow (named Slow a second time -- "time itself drags around your foes"),
+//     Crippling Shot ("aimed to hobble"), Pinning Throw ("tendon and joint, not the kill"),
+//     Chronoscanner Overclock ("making enemies seem to crawl"), Glitch Pulse ("scrambles a
+//     target's motor signals"), Signal Jammer ("jams the coordination"), and Time Stop ("nearly
+//     stops moving" -- a tier-5, 50 MP ultimate that undersold itself the most of any of these).
+//     Left out abilities whose description was genuinely ambiguous about ongoing slowness (Silence,
+//     EMP Knuckles) or that already deliver a distinct, real mechanical payoff of their own
+//     (Telekinetic Shove and Gale Wind already knockback; Gravity Well already pulls; Mass
+//     Confusion already applies actual confusion via its gas cloud) rather than assuming every
+//     dex-debuff in the game needed the same treatment.
+//   Fixed with one data-driven field (slowStatus, duration scaled roughly to each ability's own
+//     power/tier) read from a single spot in the debuff-resolution switch, replacing the old
+//     garrote-only special case -- any current or future dex-debuff that's supposed to also slow
+//     its target just declares the field now, no switch statement edits required. Confirmed the
+//     monster-side equivalent (Curse of Sloth, cast by undead/demonic/drowned monsters) already
+//     correctly applied statusSlow through its own, separate resolution path -- this bug was
+//     specific to the player-facing spell list, not systemic to how slow works in general.
+//
+// v0.40.24 Twenty-first pass. Same lens, one more hit: Silence -- the classic RPG effect meaning
+// "can't cast spells" -- was, like every slow-flavored ability before this pass, just a DEX
+// reduction. Its own description ("disrupts a foe's reflexes AND focus") explicitly promises two
+// things and only ever delivered the first. There was no statusSilence field anywhere in the game,
+// and no gate on monster spellcasting to hook one into.
+//   Added statusSilence as a real status: ticks down alongside Slow in the same shared per-turn
+//   status function (including the same Willpower early-shake-off chance, since silence is a
+//   mental/nerve effect the same way fear and confusion are), shows up in the status-effects list
+//   the same way Slowed/Frozen Solid do, and -- the actual payoff -- tryMonsterCast() now refuses
+//   to cast anything at all while silenced, falling back to whatever melee/movement behavior the
+//   monster would otherwise use. Silence now genuinely takes a spellcasting threat's signature
+//   tool away for its duration instead of mildly denting its accuracy, which is what the spell's
+//   own name and description always claimed it did.
+//
+// v0.40.25 Twenty-second pass. Widened the same lens (does an ability's description match what it
+// mechanically does) across every remaining debuff school rather than stopping at movement/
+// casting-flavored ones, and found the largest single mismatch of this entire thread: Mindjack
+// Protocol ("briefly seizes control of a target's motor cortex") and Psionic Dominance ("you force
+// your will directly into a foe's nervous system", a corruption-gated ability that costs the
+// player's OWN hp to cast) were both just -10/-12 STR debuffs. Not "slightly undersold," like Slow
+// or Silence -- these two explicitly promise mind control, and there was no charm/domination
+// mechanic anywhere in the entire game to have delivered it even if the field had been set
+// correctly, unlike Silence where the gap was "just" a missing status flag.
+// Built the actual mechanic rather than reskinning the STR debuff further, since the existing
+// content (two abilities' names, flavor, and one of them's real resource cost and corruption gate)
+// was clearly designed around this always existing:
+//   - New charmedTurns status. isHostileTo() gets a charm override placed above every other rule
+//     in the function (war-tags, grudges, faction disposition) since charm is meant to be an
+//     overriding effect, not one more check those could out-rank: a charmed target is never
+//     hostile to the player or their allies, and hostile to everything else -- including its own
+//     former faction -- for the duration. This routes through the exact same targeting machinery
+//     (pickHostileTarget/gatherPotentialTargets/doAttack) every other fight in the game already
+//     uses, so a charmed goblin picks a fight with the nearest wolf on its own turn with zero new
+//     combat code required, the same "data-driven, reuse the existing framework" pattern the war-
+//     party system already established.
+//   - Verified the interaction matrix directly with a standalone test (player/charmed-monster,
+//     companion/charmed-monster, charmed-monster/other-monster, guard/charmed-monster, and the
+//     reverse orderings) rather than reasoning through six branches by eye and hoping -- all five
+//     came back correct on the first try, but this is exactly the kind of multi-branch priority
+//     logic where "looks right on inspection" has burned this audit before.
+//   - Bosses explicitly resist ("far too strong to seize") -- letting a single cast neutralize or
+//     weaponize a boss fight would trivialize the one encounter type that most needs to stay
+//     dangerous. Charm ticks down in the same shared per-turn status function as everything else,
+//     with its own "your hold on it breaks" message on expiry, and shows in the status list as a
+//     buff (not a debuff) since, from the caster's side, it very much is one.
+//
+// v0.40.26 Twenty-third pass. Kept sweeping the same lens across buff-type and remaining debuff/
+// damage abilities. Most of this ground was already solid, including two more instances of the
+// exact same "description promises a mechanic that was never wired up" bug already caught and
+// fixed by a prior pass in this file's own history, found while checking whether this session's
+// fixes had already been covered:
+//   - 'Summon Blade' (type:'buff', stat:'summon') was already flagged and fixed in an earlier pass
+//     (a self-mutating IIFE converts it to a real type:'summon' ability with its own monster and
+//     duration before it ever reaches the generic buff dispatcher) -- confirmed working, not a
+//     regression risk from anything added this session.
+//   - Frost-flagged damage abilities (frostbolt, glacialform, etc.) actually chilling the target
+//     they hit, not just interacting with terrain, was also already a documented prior fix.
+//   Both good signs this file's own maintenance history holds up under the same scrutiny this
+//   audit applies to everything else.
+// One more real gap found and fixed: Reckless Swing ("an all-or-nothing swing that leaves you
+// exposed") had no downside at all -- "all-or-nothing" was, in practice, all upside. Added
+// player.exposedTurns, a genuine several-turn window where incoming attacks are more likely to
+// land (checked in rollHit, right next to the existing over-encumbrance accuracy penalty it now
+// sits alongside), so the ability is an actual glass-cannon trade-off instead of free damage with
+// ominous flavor text attached. Checked several other "opening"/"exposed"-flavored abilities
+// (Feint, Still Mind, Ambush Tactics) against the same standard and left them alone -- their
+// descriptions describe finding or creating an opening in the ENEMY's guard (matching their actual
+// crit/armor-debuff effects), not a claim about the caster's own vulnerability, so there was no
+// broken promise to fix there.
+//
+// v0.40.27 Twenty-fourth pass. Swept MUTATIONS and CYBERNETICS against the same standard (most of
+// this session's prior finds came from SPELLS/TECHNIQUES specifically). Found one real gap, and
+// confirmed several other suspicious-looking cases were already solid on inspection:
+//   - EMP Shielding's description ("insulates your other implants from hostile pulses") is a
+//     direct, explicit EMP-resistance claim -- and the game already has a complete, working
+//     mechanic for exactly that (player.empResist/empImmune, read by applyEmpConfuse, already
+//     correctly granted by the EMP Dampeners and Singularity Core talents). This cybernetic,
+//     despite being the one item in the game whose entire name and description is about EMP
+//     protection specifically, never actually granted empResist -- it only gave +2 CON. Fixed at a
+//     modest 30% (vs. EMP Dampeners' dedicated-talent 60%), appropriate for a basic, no-prerequisite
+//     implant rather than a mid-tier investment.
+//   - Checked every immunity/resist claim across talents for the same gap and found none -- Iron
+//     Stomach, Scaled Hide, Cinderborn, Cold/Heat-Adapted, and EMP Dampeners itself all correctly
+//     set the exact field their description promises.
+//   - Checked whether the entire Thornskin-through-"Every Blow Returned" talent line (9 tiers,
+//     stretching to character level 90) actually does anything with the thornsPercent it builds up,
+//     given how large a dead mechanic that would have been if not -- confirmed it's correctly read
+//     and applied in doAttack's reflect-damage-back-at-the-attacker check. A relief to confirm
+//     rather than another find, given the scale of what it would have meant if broken.
+//
+// v0.40.28 Twenty-fifth pass. Tried a different angle per the player's suggestion: quest and item
+// lore text instead of ability descriptions. Broad phrase searches ("I'll teach you," "will grant
+// you," cursed items) came back empty -- this game's writing doesn't lean on classic RPG promise-
+// phrasing much, so the productive version of this check turned out to be reading the hand-authored
+// unique item flavor text directly rather than grepping for stock phrases.
+//   - Graveward's Charm's description makes a specific, concrete, checkable claim: "it still hums
+//     faintly when something means you harm." The item (noAffixes, only intBonus/conBonus) had
+//     no such effect. Added a passive proximity warning using the same !m.engaged signal (Sneak
+//     Attack, the war-party fix, and Fear/Frozen-Solid completeness checks have all leaned on this
+//     turn) -- while worn, an UNENGAGED hostile within 3 tiles (one that hasn't noticed the player
+//     yet) triggers the charm once per monster, which is exactly what "hums when something means
+//     you harm, before it's found you" describes, distinct from the "notices you!" message every
+//     monster already logs once it actually does spot the player.
+//   - Checked the rest of that same unique-item set for the same pattern first. The Deserter's Oath
+//     and The Porter's Due's flavor text describe backstory/character, not a mechanical claim, so
+//     nothing to check there. Plainspoken's description explicitly says "it doesn't do anything
+//     you could call magic" as the entire point of the item (a deliberate, bittersweet anti-power
+//     narrative choice) -- correctly left alone rather than "fixed" into having a mechanic its own
+//     writing goes out of its way to disclaim.
+//
+// v0.40.29 Twenty-sixth pass. Applied the same "read the item's own flavor text for a concrete
+// claim" lens to the boss-unique weapon/armor drops (BOSS_UNIQUE_DROPS), a set of items I hadn't
+// checked yet. Found three, all boss-unique weapons whose description is specifically built around
+// a mechanical gimmick their stats never delivered:
+//   - Fractured Beam Emitter: "the beam it fires arrives slightly before you pull the trigger" is a
+//     plain-language way of saying this weapon doesn't really miss. Had no accuracy-related stat at
+//     all. Floors (doesn't guarantee) the to-hit roll high while equipped, so a called-shot penalty
+//     or an extreme dex mismatch can still matter.
+//   - Stack Overflow: "duplicates its own swing just slightly out of sync with itself, the error
+//     was never actually handled" describes striking twice, not the flat 6% technique-damage bonus
+//     it actually had. Added a real, moderate (not guaranteed -- "slightly out of sync," not
+//     "always") chance to recurse into a second attack against the same target, guarded against
+//     re-triggering itself so it can glitch at most once per swing.
+//   - Admin Override: "still logged in with root permissions it was never supposed to keep" is a
+//     description of bypassing a permission/access check -- and the game already has exactly that
+//     concept for weapons (armorPierce, used by several other items) that this one, a weapon
+//     literally named and written around bypassing security, simply never had. Set above the
+//     previous highest armorPierce value in the game, matching its status as an endgame unique
+//     built specifically around this idea.
+// Checked the rest of the same drop list first and left several alone deliberately: Wrong Number
+// and the Hollow King's Scepter's descriptions are atmosphere/backstory, not mechanical claims, and
+// the Unblinking Eye's "does not close when you sleep" reads as unsettling flavor about an item
+// that watches you rather than a concrete promise about a specific vulnerability window this game
+// actually tracks -- recorded as deliberately left alone rather than silently skipped, the same as
+// Plainspoken last pass, so a future check doesn't waste time re-deciding the same borderline call.
+//
+// v0.40.30 Flagged directly by the player: custom-created characters (the point-buy path, distinct
+// from picking a premade archetype) never received starting Bandages at all, AND had no way to
+// deliberately buy one either. Both parts checked and confirmed before fixing:
+//   - grantStartingBandages() (v0.40.18) was wired into both archetype paths but never into
+//     finishCustomCreation(). That path was explicitly assumed covered at the time with the
+//     reasoning "it already lets the player choose their own starting items deliberately" -- true
+//     for weapons/armor, but wrong for consumables specifically, which leads to the second half of
+//     this bug.
+//   - CREATION_STARTING_ITEM_POOL was filtered to weapon/armor only. The entire consumables
+//     category -- not just Bandage -- was invisible to the point-buy item picker, so even a player
+//     who specifically wanted to spend points on survival supplies had no way to.
+//   Fixed both: grantStartingBandages() now fires on this path too, matching the other two exactly,
+//   and added a small curated whitelist of sensible starting consumables (Bandage, Potion of
+//   Healing, Antidote, a food ration) to the purchasable pool -- not every consumable under the
+//   existing value cap, which would flood a one-page-at-a-time picker with dozens of low-value
+//   cooking ingredients, but enough real choice to make the earlier assumption actually true this
+//   time.
+//
+// v0.40.31 Twenty-seventh pass. Continued through the boss-unique item list (same section of the
+// file as the faction-set gear, which turned out to be entirely self-consistent -- every set
+// bonus's desc field is written right next to the mechanical fields it describes, so there was
+// nothing to cross-check there) and found three more concrete, unfulfilled claims:
+//   - The Mother's Tide-Hook: "it pulls wounds open rather than closing them" is a specific bleed-
+//     aggravation claim: only had lifesteal. Now adds bonus bleed stacks on any hit that already
+//     qualifies for bleed, rather than forcing bleed onto hits that otherwise wouldn't.
+//   - The Perfect Cog: "a gear that never wears down" is a literal, direct durability claim on a
+//     noAffixes unique that would otherwise never reach the existing affixTier>=4 "practically
+//     unbreakable" threshold (it has no affix tier at all) and would sit at an ordinary ~100-ish
+//     durability, wearing down and eventually breaking like anything else despite its entire name
+//     and description being about never doing that. Added a reusable `unbreakable` flag to
+//     baseDurabilityFor rather than a one-off ID check, so any future truly-indestructible item
+//     just declares it.
+//   - The Heartwood Bough: "still, very slowly, trying to regrow" is a regeneration claim: only had
+//     a small spell-damage bonus. Now grants an extra regen stack while wielded, on top of
+//     whatever talent-driven stacks the player has, through the same regenBonusStacks pipeline
+//     those already use.
+// Checked the remaining three items in this same drop list (Unburied Queen's Signet, Aurelith's
+// Last Fang, Umbroth's Fang) and left them alone -- their descriptions are backstory or already
+// match an existing stat (a dragon fang with fire damage, predator teeth with no further claim),
+// not a distinct mechanic left undelivered.
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
 // external audio files. This keeps the game a single portable HTML file and
@@ -1317,6 +2086,12 @@ function affixPoolForRarity(pool, rarity) {
 }
 function baseDurabilityFor(base, affixTier) {
   if (base.type !== 'weapon' && base.type !== 'armor') return null;
+  // BUG FIX (v0.40.31): the Perfect Cog's own description -- "a gear that never wears down" --
+  // is a direct, literal durability claim for a noAffixes:true unique that would otherwise never
+  // reach the affixTier>=4 threshold below (it has no affix tier at all) and would sit at a
+  // perfectly ordinary ~100-ish durability, wearing down and eventually breaking like anything
+  // else despite its entire name and description being about never doing that.
+  if (base.unbreakable) return Infinity;
   // higher-value base items are inherently better-made and higher affix tiers represent finer
   // craftsmanship/materials, so both push durability up. True legendary-tier gear (tier 4 affix,
   // i.e. a "Godslayer" / "of Eternity" roll) is built to never realistically break in play.
@@ -1564,7 +2339,7 @@ const SPELLS = [
   { id:'haste', name:'Haste', mp:7, type:'buff', stat:'dex', power:5, dur:10, range:0, desc:'Quickens your reflexes.' },
   { id:'strength', name:'Bull Strength', mp:5, type:'buff', stat:'str', power:4, dur:12, range:0, desc:'Bolsters your might.' },
   { id:'poisoncloud', name:'Poison Cloud', mp:6, type:'debuff', stat:'poison', power:3, dur:5, range:5, desc:'Envelops a foe in toxic vapor.' },
-  { id:'slow', name:'Slow', mp:5, type:'debuff', stat:'dex', power:-5, dur:8, range:5, desc:'Saps a foe\'s speed.' },
+  { id:'slow', name:'Slow', mp:5, type:'debuff', stat:'dex', power:-5, dur:8, range:5, desc:'Saps a foe\'s speed.', slowStatus:4 },
   { id:'fear', name:'Fear', mp:5, type:'debuff', stat:'fear', power:1, dur:6, range:5, desc:'Fills a foe with dread, causing it to flee.' },
   { id:'blink', name:'Blink', mp:4, type:'utility', power:5, range:0, desc:'Teleport a short distance.' },
   { id:'teleport', name:'Teleport', mp:10, type:'travelbypass', power:0, range:0, desc:'Open the waystone network and travel to any known destination, from anywhere.' },
@@ -1765,7 +2540,7 @@ MONSTER_BASES.iron_sovereign = { name:'The Iron Sovereign', glyph:'&', color:'#c
 MONSTER_BASES.the_harbinger = { name:'The Harbinger', glyph:'H', color:'#3a0a5a', hp:200, str:18, dex:12, atk:[8,17], armor:3, xp:350, behavior:'ranged', dtier:6, boss:true, bossTier:'rare', faction:'eldritch', causesConfuse:true, causesFear:true, multiattack:2 };
 MONSTER_BASES.abyssal_leviathan = { name:'Abyssal Leviathan', glyph:'K', color:'#0a3a4a', hp:170, str:20, dex:8, atk:[8,17], armor:4, xp:280, behavior:'aggressive', dtier:4, boss:true, bossTier:'uncommon', faction:'aquatic', multiattack:2 };
 MONSTER_BASES.the_maw = { name:'The Maw', glyph:'O', color:'#5ac93a', hp:80, str:14, dex:2, atk:[4,10], armor:0, xp:55, behavior:'aggressive', dtier:2, boss:true, bossTier:'common', faction:'ooze', splitInto:'gelatinous_cube', splitCount:2, corrosive:true };
-MONSTER_BASES.frost_giant_king = { name:'Frost Giant King', glyph:'O', color:'#c0e0e8', hp:180, str:26, dex:5, atk:[8,17], armor:5, xp:260, behavior:'charger', multiTile:2, dtier:4, boss:true, bossTier:'uncommon', faction:'giantkin', frost:4 };
+MONSTER_BASES.frost_giant_king = { name:'Frost Giant King', glyph:'O', color:'#c0e0e8', hp:180, str:26, dex:5, atk:[8,17], armor:5, xp:260, behavior:'charger', multiTile:2, dtier:4, boss:true, bossTier:'uncommon', faction:'giantkin', frost:4, frostImmune:true };
 MONSTER_BASES.core_overmind = { name:'Core Overmind', glyph:'@', color:'#e03aa0', hp:210, str:16, dex:10, atk:[6,14], armor:7, xp:340, behavior:'ranged', dtier:5, boss:true, bossTier:'rare', faction:'cyber', summonId:'security_drone', summonMax:4 };
 MONSTER_BASES.verdant_horror = { name:'The Verdant Horror', glyph:'"', color:'#8a3a5a', hp:110, str:15, dex:3, atk:[4,10], armor:2, xp:90, behavior:'gascloud', dtier:3, boss:true, bossTier:'common', faction:'plant', gasRadius:4, gasDamage:6 };
 
@@ -2373,7 +3148,7 @@ const TALENTS_V2 = [
   { id:'swift', name:'Swift Reflexes', desc:'+3 DEX', tier:1, requires:null, apply:()=>{ player.dex+=3; } },
   { id:'mighty', name:'Mighty', desc:'+3 STR', tier:1, requires:null, apply:()=>{ player.str+=3; } },
   { id:'scholar', name:'Scholar', desc:'+3 INT', tier:1, requires:null, apply:()=>{ player.int+=3; } },
-  { id:'scavenger', name:'Scavenger', desc:'+20% gold from all loot', tier:1, requires:null, apply:()=>{ player.goldBonus=0.2; } },
+  { id:'scavenger', name:'Scavenger', desc:'+20% gold from all loot; noticeably better odds of turning up rare materials (Starmetal, Ironwood, gems, etc.) while gathering', tier:1, requires:null, apply:()=>{ player.goldBonus=0.2; player.rareFindBonus=(player.rareFindBonus||0)+0.03; } },
   { id:'vitality', name:'Vitality', desc:'HP/MP regeneration ticks noticeably faster (stacks with other regen-speed sources)', tier:1, requires:null, apply:()=>{ player.regenBonusStacks=(player.regenBonusStacks||0)+1; } },
   { id:'ironstomach', name:'Iron Stomach', desc:'+40 Max Stamina', tier:1, requires:null, apply:()=>{ player.maxStamina=(player.maxStamina||100)+40; player.stamina=(player.stamina||100)+40; } },
   // tier 2 — requires level 5
@@ -2392,7 +3167,7 @@ const TALENTS_V2 = [
   // tier 4 — capstones, requires level 15 + a tier-3 talent
   { id:'ascended', name:'Ascended', desc:'+30 Max HP, +20 Max MP, +2 to all attributes', tier:4, requires:{level:15, talent:'archmage'}, apply:()=>{ player.maxHp+=30; player.hp+=30; player.maxMp+=20; player.mp+=20; player.str+=2; player.dex+=2; player.int+=2; player.con+=2; player.wil+=2; player.cha+=2; } },
   { id:'juggernaut', name:'Juggernaut', desc:'+30 Max HP, +5 Armor, +2 STR', tier:4, requires:{level:15, talent:'warlord'}, apply:()=>{ player.maxHp+=30; player.hp+=30; player.talentArmor=(player.talentArmor||0)+5; player.str+=2; } },
-  { id:'lichform', name:'Lichform', desc:'You are permanently immune to poison and gain 15% lifesteal', tier:4, requires:{level:15, talent:'grandnecromancer'}, apply:()=>{ player.poisonImmune=true; player.lifestealBonus=0.15; } },
+  { id:'lichform', name:'Lichform', desc:'You are permanently immune to poison and disease, and gain 15% lifesteal', tier:4, requires:{level:15, talent:'grandnecromancer'}, apply:()=>{ player.poisonImmune=true; player.lifestealBonus=0.15; player.diseaseImmune=true; } },
 ];
 
 // ===================== DATA EXPANSION PACK 4 =====================
@@ -2837,9 +3612,9 @@ SPELLS.push(
   { id:'phantomstep', name:'Phantom Step', mp:6, type:'blinklike', power:5, range:0, school:'Illusion', desc:'You and a phantom double swap places in a blur, confusing pursuit.' },
   { id:'terrifyingvisage', name:'Terrifying Visage', mp:9, type:'debuff', stat:'fear', power:1, dur:8, range:5, aoe:true, aoeRadius:2, school:'Illusion', desc:'Your features twist into something unspeakable.' },
   { id:'hallucinogenicmist', name:'Hallucinogenic Mist', mp:8, type:'debuff', stat:'confuse', power:1, dur:6, range:5, aoe:true, aoeRadius:2, school:'Illusion', desc:'A shimmering fog of false sights leaves foes stumbling.' },
-  { id:'silence', name:'Silence', mp:6, type:'debuff', stat:'dex', power:-6, dur:10, range:5, school:'Illusion', desc:'Disrupts a foe\'s reflexes and focus.' },
+  { id:'silence', name:'Silence', mp:6, type:'debuff', stat:'dex', power:-6, dur:10, range:5, school:'Illusion', desc:'Disrupts a foe\'s reflexes and focus.', silenceStatus:6 },
 
-  { id:'entanglingroots', name:'Entangling Roots', mp:7, type:'debuff', stat:'dex', power:-8, dur:10, range:5, school:'Nature', desc:'Roots burst from the earth to bind a foe in place.' },
+  { id:'entanglingroots', name:'Entangling Roots', mp:7, type:'debuff', stat:'dex', power:-8, dur:10, range:5, school:'Nature', desc:'Roots burst from the earth to bind a foe in place.', slowStatus:5 },
   { id:'naturesward', name:"Nature's Ward", mp:9, type:'heal', power:[16,28], range:0, school:'Nature', desc:'The green world mends your wounds.' },
   { id:'thornwhip', name:'Thorn Whip', mp:5, type:'damage', power:[5,10], range:5, school:'Nature', desc:'A lash of thorned vines.' },
   { id:'calloftheWild', name:'Call of the Wild', mp:13, type:'summon', summonId:'bear', duration:60, range:0, school:'Nature', desc:'A great bear answers your call to fight at your side.' },
@@ -2847,7 +3622,7 @@ SPELLS.push(
   { id:'calltherain', name:'Call the Rain', mp:11, type:'weather', weatherTarget:['rain','drizzle'], weatherDur:100, range:0, school:'Nature', tier:1, desc:'You coax rain out of the sky -- handy for dousing a fire you started, or one you did not.' },
   { id:'clearingbreath', name:'Clearing Breath', mp:9, type:'weather', weatherTarget:['clear','partly_cloudy'], weatherDur:110, range:0, school:'Nature', tier:1, desc:'A slow, patient breath, and the sky answers by settling.' },
 
-  { id:'temporalslow', name:'Temporal Slow', mp:10, type:'debuff', stat:'dex', power:-6, dur:10, range:5, aoe:true, aoeRadius:2, school:'Chronomancy', desc:'Time itself drags around your foes.' },
+  { id:'temporalslow', name:'Temporal Slow', mp:10, type:'debuff', stat:'dex', power:-6, dur:10, range:5, aoe:true, aoeRadius:2, school:'Chronomancy', desc:'Time itself drags around your foes.', slowStatus:5 },
   { id:'rewindwounds', name:'Rewind Wounds', mp:11, type:'heal', power:[20,32], range:0, school:'Chronomancy', desc:'Unwinds the last few moments of harm done to you.' },
   { id:'foresight', name:'Foresight', mp:9, type:'buff', stat:'crit', power:0.15, dur:15, range:0, school:'Chronomancy', desc:'You glimpse a foe\'s next move a heartbeat early.' },
   { id:'accelerate', name:'Accelerate', mp:8, type:'buff', stat:'dex', power:6, dur:15, range:0, school:'Chronomancy', desc:'Your own time flows faster than the world around you.' },
@@ -2870,7 +3645,7 @@ const TECHNIQUES = [
   // Archery
   { id:'aimedshot', name:'Aimed Shot', resource:'stamina', mp:9, type:'damage', power:[10,18], range:7, school:'Archery', desc:'You take a breath and loose a perfectly aimed shot.' },
   { id:'rapidvolley', name:'Rapid Volley', resource:'stamina', mp:16, type:'damage', power:[5,10], range:6, aoe:true, aoeRadius:2, school:'Archery', desc:'A hail of arrows loosed in quick succession.' },
-  { id:'cripplingshot', name:'Crippling Shot', resource:'stamina', mp:10, type:'debuff', stat:'dex', power:-7, dur:10, range:6, school:'Archery', desc:'An arrow aimed to hobble, not to kill outright.' },
+  { id:'cripplingshot', name:'Crippling Shot', resource:'stamina', mp:10, type:'debuff', stat:'dex', power:-7, dur:10, range:6, school:'Archery', desc:'An arrow aimed to hobble, not to kill outright.', slowStatus:4 },
   { id:'eagleeye', name:'Eagle Eye', resource:'stamina', mp:8, type:'buff', stat:'crit', power:0.15, dur:15, range:0, school:'Archery', desc:'Your vision sharpens to inhuman clarity.' },
   // Throwing -- previously the only combat style in the game with no technique tree at all,
   // despite thrown weapons/bombs being a full item-based subsystem (see resolveThrownWeapon,
@@ -2882,7 +3657,7 @@ const TECHNIQUES = [
   // just themselves.
   { id:'quickdraw', name:'Quick Draw', resource:'stamina', mp:8, type:'damage', power:[7,14], range:5, school:'Throwing', desc:'A blade leaves your hand before the target even registers the motion.' },
   { id:'fanofknives', name:'Fan of Knives', resource:'stamina', mp:15, type:'damage', power:[5,9], range:4, aoe:true, aoeRadius:2, school:'Throwing', desc:'A spread of blades loosed in a single motion.' },
-  { id:'pinningthrow', name:'Pinning Throw', resource:'stamina', mp:10, type:'debuff', stat:'dex', power:-8, dur:10, range:5, school:'Throwing', desc:'A throw aimed at tendon and joint, not the kill.' },
+  { id:'pinningthrow', name:'Pinning Throw', resource:'stamina', mp:10, type:'debuff', stat:'dex', power:-8, dur:10, range:5, school:'Throwing', desc:'A throw aimed at tendon and joint, not the kill.', slowStatus:4 },
   { id:'huntersfocus', name:"Hunter's Focus", resource:'stamina', mp:8, type:'buff', stat:'crit', power:0.15, dur:15, range:0, school:'Throwing', desc:'Your grip steadies and your next several throws will not miss by chance.' },
   { id:'ricochetstrike', name:'Ricochet Strike', resource:'stamina', mp:18, type:'damage', power:[10,17], range:6, chainLightning:true, school:'Throwing', tier:2, desc:'A weighted throw that bounces from foe to foe, guided as much by will as by aim.' },
   { id:'weightedbarrage', name:'Weighted Barrage', resource:'stamina', mp:22, type:'damage', power:[16,26], range:6, school:'Throwing', tier:3, desc:'Three blades, thrown in the time it takes most people to throw one.' },
@@ -2929,8 +3704,8 @@ TECHNIQUES.push(
   { id:'throatslit', name:'Throat Slit', resource:'stamina', mp:10, type:'execute', power:[8,14], range:1, school:'Daggers', tier:1, desc:'A precise cut meant to end a fight quickly.' },
   { id:'shadowstep', name:'Shadow Step', resource:'stamina', mp:12, type:'blinklike', power:4, range:0, school:'Daggers', tier:2, desc:'You slip through the shadows to a new position.' },
   { id:'poisonedblade', name:'Poisoned Blade', resource:'stamina', mp:11, type:'damage', power:[9,15], range:1, school:'Daggers', tier:2, poison:3, desc:'A coated blade that leaves a lingering toxin in the wound.' },
-  { id:'backstab', name:'Backstab', resource:'stamina', mp:18, type:'execute', power:[16,26], range:1, school:'Daggers', tier:3, desc:'A vicious strike that punishes an inattentive foe severely.' },
-  { id:'garrote', name:'Garrote', resource:'stamina', mp:16, type:'debuff', stat:'dex', power:-10, dur:8, range:1, school:'Daggers', tier:3, desc:'A choking hold that leaves your foe gasping and slow.' },
+  { id:'backstab', name:'Backstab', resource:'stamina', mp:18, type:'execute', power:[16,26], range:1, school:'Daggers', tier:3, desc:'A vicious strike that punishes an inattentive foe severely.', sneakBonus:true },
+  { id:'garrote', name:'Garrote', resource:'stamina', mp:16, type:'debuff', stat:'dex', power:-10, dur:8, range:1, school:'Daggers', tier:3, desc:'A choking hold that leaves your foe gasping and slow.', slowStatus:4 },
   { id:'thousandneedles', name:'Thousand Needles', resource:'stamina', mp:26, type:'damage', power:[20,32], range:1, aoe:true, aoeRadius:1, school:'Daggers', tier:4, poison:4, desc:'A blurring flurry of small, precise, envenomed cuts.' },
   { id:'deathmark', name:'Death Mark', resource:'stamina', mp:34, type:'execute', power:[30,48], range:1, school:'Daggers', tier:4, desc:'You mark a foe for death, and death does not disappoint.' },
   { id:'thousandfacedassassin', name:'Thousand-Faced Assassin', resource:'stamina', mp:50, type:'execute', power:[48,74], range:1, school:'Daggers', tier:5, desc:'A killing strike perfected over a lifetime spent unseen.' },
@@ -2944,7 +3719,7 @@ TECHNIQUES.push(
   { id:'thousandbladewaltz', name:'Thousand-Blade Waltz', resource:'stamina', mp:52, type:'damage', power:[46,72], range:1, aoe:true, aoeRadius:2, school:'Dual Wielding', tier:5, desc:'A dance of death — every foe nearby falls before it ends.' },
   // ---- Berserker Arts (high risk/reward, HP-fueled) ----
   { id:'ragingblow', name:'Raging Blow', resource:'stamina', mp:10, type:'bloodbuff', stat:'str', power:4, dur:10, selfCostPct:0.05, range:0, school:'Berserker Arts', tier:1, desc:'You spend a sliver of your own blood to fuel your fury.' },
-  { id:'recklessswing', name:'Reckless Swing', resource:'stamina', mp:14, type:'damage', power:[14,24], range:1, school:'Berserker Arts', tier:2, desc:'An all-or-nothing swing that leaves you exposed.' },
+  { id:'recklessswing', name:'Reckless Swing', resource:'stamina', mp:14, type:'damage', power:[14,24], range:1, school:'Berserker Arts', tier:2, desc:'An all-or-nothing swing that leaves you exposed.', selfExposed:3 },
   { id:'bloodfrenzy', name:'Blood Frenzy', resource:'stamina', mp:20, type:'bloodbuff', stat:'str', power:8, dur:14, selfCostPct:0.1, range:0, school:'Berserker Arts', tier:2, desc:'The more you bleed, the harder you hit.' },
   { id:'skullcrusher', name:'Skullcrusher', resource:'stamina', mp:26, type:'damage', power:[22,36], range:1, school:'Berserker Arts', tier:3, desc:'A devastating overhead blow with your whole body behind it.' },
   { id:'undyingrage', name:'Undying Rage', resource:'stamina', mp:32, type:'bloodbuff', stat:'str', power:12, dur:16, selfCostPct:0.15, range:0, school:'Berserker Arts', tier:4, desc:'Pain no longer registers — only the fight remains.' },
@@ -3044,12 +3819,19 @@ const CYBERNETICS = [
 
   { id:'ballisticweave', name:'Ballistic Weave', category:'Defense', activation:'passive', desc:'Fibers woven under the skin that shrug off impacts.', apply:()=>{ player.cyberArmor=(player.cyberArmor||0)+3; }, remove:()=>{ player.cyberArmor=(player.cyberArmor||0)-3; } },
   { id:'adrenalinjector', name:'Adrenal Injector', category:'Defense', activation:'active', resource:'charge', mp:14, type:'heal', power:[12,20], range:0, desc:'An automated injector floods you with combat stims.' },
-  { id:'empshielding', name:'EMP Shielding', category:'Defense', activation:'passive', desc:'Insulates your other implants from hostile pulses.', apply:()=>{ player.con+=2; }, remove:()=>{ player.con-=2; } },
+  // BUG FIX (v0.40.27): "Insulates your other implants from hostile pulses" is a direct, explicit
+  // EMP-resistance claim, and the game already has a real, working mechanic for exactly that --
+  // player.empResist/empImmune, read by applyEmpConfuse() and already correctly granted by the EMP
+  // Dampeners/Singularity Core talents (see nearby comments) -- but this cybernetic, despite being
+  // the one item whose name and description are literally about EMP protection, never actually set
+  // it. Granted at a modest 30% (vs. EMP Dampeners' 60%), matching its status as a basic, early,
+  // no-prerequisite implant rather than a dedicated mid-tier talent investment.
+  { id:'empshielding', name:'EMP Shielding', category:'Defense', activation:'passive', desc:'Insulates your other implants from hostile pulses.', apply:()=>{ player.con+=2; player.empResist=(player.empResist||0)+0.3; }, remove:()=>{ player.con-=2; player.empResist=(player.empResist||0)-0.3; } },
   { id:'traumabeacon', name:'Trauma Team Beacon', category:'Defense', activation:'active', resource:'charge', mp:22, type:'heal', power:[24,38], range:0, desc:'A last-resort emergency medical protocol.' },
   { id:'kineticdampeners', name:'Kinetic Dampeners', category:'Defense', activation:'passive', desc:'Gel-filled plating that absorbs blunt trauma.', apply:()=>{ player.cyberArmor=(player.cyberArmor||0)+2; player.con+=1; }, remove:()=>{ player.cyberArmor=(player.cyberArmor||0)-2; player.con-=1; } },
 
   { id:'rocketpod', name:'Wrist-Mounted Rocket Launcher', category:'Exotic', activation:'active', resource:'charge', mp:28, type:'damage', power:[14,24], range:6, aoe:true, aoeRadius:2, destructive:true, desc:'A compact rocket pod — devastating, and not subtle.' },
-  { id:'chronoscanner', name:'Chronoscanner Overclock', category:'Exotic', activation:'active', resource:'charge', mp:20, type:'debuff', stat:'dex', power:-8, dur:10, range:5, aoe:true, aoeRadius:2, desc:'Overclocks your perception, making enemies seem to crawl.' },
+  { id:'chronoscanner', name:'Chronoscanner Overclock', category:'Exotic', activation:'active', resource:'charge', mp:20, type:'debuff', stat:'dex', power:-8, dur:10, range:5, aoe:true, aoeRadius:2, desc:'Overclocks your perception, making enemies seem to crawl.', slowStatus:4 },
   { id:'blinkdrive', name:'Blink Drive Implant', category:'Exotic', activation:'active', resource:'charge', mp:24, type:'blinklike', power:30, range:0, desc:'A prototype short-range teleportation implant.' },
   { id:'warprelay', name:'Warp Relay Implant', category:'Exotic', activation:'active', resource:'charge', mp:20, type:'travelbypass', power:0, range:0, desc:'Pings the waystone network and lets you jump to any known site from anywhere.' },
   { id:'railgunarm', name:'Railgun Arm', category:'Exotic', activation:'active', resource:'charge', mp:26, type:'damage', power:[20,32], range:8, pierceLine:true, desc:'Replaces your forearm with a rail-accelerated slug thrower.' },
@@ -3089,12 +3871,12 @@ CYBERNETICS.push(
   { id:'orbitalstrikebeacon', name:'Orbital Strike Beacon', category:'Exotic', activation:'active', resource:'charge', mp:55, type:'damage', power:[45,70], range:8, aoe:true, aoeRadius:3, destructive:true, igniteGround:true, tier:5, desc:'A one-use-per-recharge marker that calls down fire from something far above.' },
   { id:'antimattercore', name:'Antimatter Core Implant', category:'Exotic', activation:'active', resource:'charge', mp:60, type:'damage', power:[55,85], range:5, aoe:true, aoeRadius:3, destructive:true, tier:5, desc:'A barely-stable prototype power core repurposed as a weapon of last resort.' },
   // ---- Neural (new category: hacking, debuffs, control) ----
-  { id:'glitchpulse', name:'Glitch Pulse', category:'Neural', activation:'active', resource:'charge', mp:14, type:'debuff', stat:'dex', power:-6, dur:8, range:5, tier:1, desc:'A disorienting pulse that scrambles a target\'s motor signals.' },
+  { id:'glitchpulse', name:'Glitch Pulse', category:'Neural', activation:'active', resource:'charge', mp:14, type:'debuff', stat:'dex', power:-6, dur:8, range:5, tier:1, desc:'A disorienting pulse that scrambles a target\'s motor signals.', slowStatus:3 },
   { id:'dataspike', name:'Data Spike', category:'Neural', activation:'active', resource:'charge', mp:12, type:'damage', power:[8,14], range:5, tier:1, desc:'A focused burst of malicious code, translated into raw pain.' },
   { id:'firewallmind', name:'Firewall Mind', category:'Neural', activation:'passive', tier:2, desc:'Hardened mental defenses against intrusion and fear alike.', apply:()=>{ player.int+=3; }, remove:()=>{ player.int-=3; } },
-  { id:'signaljam', name:'Signal Jammer', category:'Neural', activation:'active', resource:'charge', mp:18, type:'debuff', stat:'dex', power:-9, dur:10, range:6, aoe:true, aoeRadius:2, tier:2, desc:'Jams the coordination of every hostile signal-bearing system nearby.' },
+  { id:'signaljam', name:'Signal Jammer', category:'Neural', activation:'active', resource:'charge', mp:18, type:'debuff', stat:'dex', power:-9, dur:10, range:6, aoe:true, aoeRadius:2, tier:2, desc:'Jams the coordination of every hostile signal-bearing system nearby.', slowStatus:4 },
   { id:'malwareinjection', name:'Malware Injection', category:'Neural', activation:'active', resource:'charge', mp:24, type:'damage', power:[16,26], range:5, tier:3, desc:'Corrupted code that causes real, physical damage in augmented targets.' },
-  { id:'mindjack', name:'Mindjack Protocol', category:'Neural', activation:'active', resource:'charge', mp:30, type:'debuff', stat:'str', power:-10, dur:12, range:5, tier:4, desc:'Briefly seizes control of a target\'s motor cortex.' },
+  { id:'mindjack', name:'Mindjack Protocol', category:'Neural', activation:'active', resource:'charge', mp:30, type:'debuff', stat:'str', power:-10, dur:12, range:5, tier:4, desc:'Briefly seizes control of a target\'s motor cortex.', charmStatus:8 },
   { id:'systemcrash', name:'System Crash', category:'Neural', activation:'active', resource:'charge', mp:45, type:'damage', power:[30,48], range:6, aoe:true, aoeRadius:3, tier:5, desc:'A cascading failure you force into every nearby augmented system.' },
   // ---- Weapons Systems (new category: heavier installed weapons) ----
   { id:'wristblade', name:'Wrist Blade Mk. I', category:'Weapons Systems', activation:'active', resource:'charge', mp:14, type:'damage', power:[10,18], range:1, tier:1, desc:'A basic retractable forearm blade.' },
@@ -3191,7 +3973,7 @@ MUTATIONS.push(
   { id:'titanmaw', name:"Titan's Maw", category:'Physical', activation:'active', corruptionReq:55, resource:'hp', selfCost:18, type:'execute', power:[32,50], range:1, desc:'Your jaw unhinges into something no longer entirely human.' },
   // ---- Psychic: tier 3-5 ----
   { id:'mindshatter_mut', name:'Mind Shatter', category:'Psychic', activation:'active', corruptionReq:30, resource:'hp', selfCost:12, type:'damage', power:[18,28], range:5, desc:'A focused psychic blow that leaves the target reeling.' },
-  { id:'psionicdominance', name:'Psionic Dominance', category:'Psychic', activation:'active', corruptionReq:40, resource:'hp', selfCost:14, type:'debuff', stat:'str', power:-12, dur:12, range:5, desc:'You force your will directly into a foe\'s nervous system.' },
+  { id:'psionicdominance', name:'Psionic Dominance', category:'Psychic', activation:'active', corruptionReq:40, resource:'hp', selfCost:14, type:'debuff', stat:'str', power:-12, dur:12, range:5, desc:'You force your will directly into a foe\'s nervous system.', charmStatus:10 },
   { id:'astralprojection', name:'Astral Projection', category:'Psychic', activation:'active', corruptionReq:45, resource:'hp', selfCost:15, type:'blinklike', power:15, range:0, desc:'Your body follows where your mind has already gone.' },
   { id:'psychicdominion', name:'Psychic Dominion', category:'Psychic', activation:'active', corruptionReq:60, resource:'hp', selfCost:22, type:'damage', power:[35,54], range:6, aoe:true, aoeRadius:3, desc:'A wave of pure mental force that shatters the minds of everything nearby.' },
   // ---- Elemental: tier 3-5 ----
@@ -4448,13 +5230,19 @@ ITEM_BASES.push(
   // ---- second itemization pass: boss-specific unique weapons/accessories for the remaining 7 gate bosses ----
   { id:'mother_tide_hook', name:"the Mother's Tide-Hook", type:'weapon', slot:'hand', dmg:[8,17], str:14, lifesteal:0.07, glyph:')', color:'#0a5a7a', value:500, isUnique:true, uniqueBoss:'fathom_mother', noAffixes:true, valueTier:4,
     desc:"A gaff-hook the size of a spear, still trailing kelp. It pulls wounds open rather than closing them." },
-  { id:'perfect_cog', name:'the Perfect Cog', type:'weapon', slot:'hand', dmg:[9,18], str:16, glyph:'/', color:'#c0a050', value:500, isUnique:true, uniqueBoss:'master_cog', noAffixes:true, valueTier:4,
+  { id:'perfect_cog', name:'the Perfect Cog', type:'weapon', slot:'hand', dmg:[9,18], str:16, unbreakable:true, glyph:'/', color:'#c0a050', value:500, isUnique:true, uniqueBoss:'master_cog', noAffixes:true, valueTier:4,
     desc:"A gear that never wears down, forged into a mace-head. The Master Cog kept exactly one spare of itself." },
   { id:'heartwood_bough', name:'the Heartwood Bough', type:'weapon', slot:'hand', dmg:[7,15], str:10, spellDmgBonus:0.06, glyph:'/', color:'#3a6a2a', value:490, isUnique:true, uniqueBoss:'rootmind', noAffixes:true, valueTier:4,
     desc:"A living branch cut from the Rootmind's own crown. It is still, very slowly, trying to regrow." },
   { id:'stack_overflow', name:'Stack Overflow', type:'weapon', slot:'hand', dmg:[8,16], str:11, techniqueDmgBonus:0.06, glyph:')', color:'#3af0d0', value:490, isUnique:true, uniqueBoss:'unhandled_exception', noAffixes:true, valueTier:4,
     desc:"A blade that duplicates its own swing just slightly out of sync with itself. The error was never actually handled." },
-  { id:'admin_override', name:'Admin Override', type:'weapon', slot:'hand', dmg:[8,17], str:13, dexBonus:2, glyph:')', color:'#ff2ac0', value:500, isUnique:true, uniqueBoss:'admin7', noAffixes:true, valueTier:4,
+  { id:'admin_override', name:'Admin Override', type:'weapon', slot:'hand', dmg:[8,17], str:13, dexBonus:2, armorPierce:6, glyph:')', color:'#ff2ac0', value:500, isUnique:true, uniqueBoss:'admin7', noAffixes:true, valueTier:4,
+    // BUG FIX (v0.40.29): "still logged in with root permissions it was never supposed to keep" is
+    // a description of bypassing an access/permission check -- the game already has exactly that
+    // concept for weapons (armorPierce, an established field on several other items), and this,
+    // a weapon literally named after bypassing security, had none at all. Set above the highest
+    // existing armorPierce value in the game (Railgun's 4), matching its status as an endgame
+    // boss-unique built specifically around this theme.
     desc:"ADMIN-7's own sidearm baton, still logged in with root permissions it was never supposed to keep." },
   { id:'unburied_signet', name:'the Unburied Queen\'s Signet', type:'armor', slot:'ring', armor:0, str:3, conBonus:3, glyph:'=', color:'#a8a8b0', value:470, isUnique:true, uniqueBoss:'unburied_queen', noAffixes:true, valueTier:4,
     desc:"A ring of office from a throne that was buried with her, then dug back up by her own hand." },
@@ -4655,7 +5443,7 @@ SPELLS.push(
   { id:'worldtreeblessing', name:"World Tree's Blessing", mp:55, type:'heal', power:[45,68], range:0, school:'Nature', tier:5, desc:'A blessing drawn from the roots of the oldest tree in the world.' },
   { id:'summondrake', name:'Summon Drake', mp:38, type:'summon', summonId:'wyrmling', duration:70, range:0, school:'Nature', tier:4, desc:'A young dragon answers the call of the wild.' },
   // ---- Chronomancy: more tiers ----
-  { id:'timestop', name:'Time Stop', mp:50, type:'debuff', stat:'dex', power:-20, dur:8, range:6, aoe:true, aoeRadius:3, school:'Chronomancy', tier:5, desc:'For a handful of heartbeats, everything around you nearly stops moving.' },
+  { id:'timestop', name:'Time Stop', mp:50, type:'debuff', stat:'dex', power:-20, dur:8, range:6, aoe:true, aoeRadius:3, school:'Chronomancy', tier:5, desc:'For a handful of heartbeats, everything around you nearly stops moving.', slowStatus:6 },
   { id:'agereversal', name:'Age Reversal', mp:32, type:'heal', power:[30,46], range:0, school:'Chronomancy', tier:4, desc:'You unwind your own wounds back to a moment before they existed.' },
   { id:'temporalrift', name:'Temporal Rift', mp:22, type:'blinklike', power:12, range:0, school:'Chronomancy', tier:3, desc:'You step through a fold where a moment ago and a moment from now briefly touch.' },
   // ---- Golem Magic: more tiers ----
@@ -4775,7 +5563,14 @@ const CREATION_MUTATION_COST = (mut) => Math.max(1, Math.round((mut.corruptionRe
 // active ones scale with their Charge cost, same logic as spells/techniques scaling with mp.
 const CREATION_CYBER_COST = (cyber) => cyber.activation === 'passive' ? 3 : Math.max(1, Math.round((cyber.mp || 16) / 4));
 const CREATION_GOLD_PER_POINT = 25;
-const CREATION_STARTING_ITEM_POOL = ITEM_BASES.filter(b => ['weapon','armor'].includes(b.type) && (b.value||0) <= 40);
+// BUG FIX (v0.40.30): this used to be weapon/armor only, meaning a custom-built character had no
+// way to deliberately buy a Bandage, a healing potion, an antidote, or basic rations with their
+// creation points even if they wanted to -- the entire consumables category was invisible here,
+// not just under-stocked. A small, curated whitelist of sensible starting consumables (not every
+// consumable under the value cap, which would flood this one-per-page picker with dozens of
+// low-value cooking ingredients) rather than every item type in the game being fair game.
+const CREATION_CONSUMABLE_WHITELIST = new Set(['bandage', 'potion_heal', 'antidote', 'food_ration']);
+const CREATION_STARTING_ITEM_POOL = ITEM_BASES.filter(b => (['weapon','armor'].includes(b.type) && (b.value||0) <= 40) || (b.type === 'consumable' && CREATION_CONSUMABLE_WHITELIST.has(b.id)));
 // Custom creation mirrors the game's own cybernetic-slot limit (3 to start) so a fresh custom
 // character can't out-implant what an in-progress character could achieve without talents.
 const CREATION_MAX_STARTING_CYBER = 3;
@@ -6994,7 +7789,7 @@ MONSTER_BASES.orc_berserker = { name:'Orc Berserker', glyph:'o', color:'#c9503a'
 MONSTER_BASES.orc_shaman = { name:'Orc Shaman', glyph:'o', color:'#5a3a7a', hp:16, str:8, dex:8, atk:[2,5], armor:0, xp:15, behavior:'ranged', dtier:2, faction:'orc' };
 MONSTER_BASES.ogre_brute = { name:'Ogre Brute', glyph:'O', color:'#7a5a2a', hp:44, str:19, dex:4, atk:[5,11], armor:2, xp:27, behavior:'charger', multiTile:2, dtier:2, faction:'giantkin' };
 MONSTER_BASES.hill_giant = { name:'Hill Giant', glyph:'O', color:'#8a7a4a', hp:62, str:22, dex:5, atk:[6,14], armor:3, xp:40, behavior:'charger', multiTile:2, dtier:3, faction:'giantkin' };
-MONSTER_BASES.frost_giant = { name:'Frost Giant', glyph:'O', color:'#c0e0e8', hp:85, str:25, dex:5, atk:[7,16], armor:4, xp:60, behavior:'charger', multiTile:2, dtier:4, faction:'giantkin', frost:3 };
+MONSTER_BASES.frost_giant = { name:'Frost Giant', glyph:'O', color:'#c0e0e8', hp:85, str:25, dex:5, atk:[7,16], armor:4, xp:60, behavior:'charger', multiTile:2, dtier:4, faction:'giantkin', frost:3, frostImmune:true };
 
 // ---- undead (crypt, necropolis, castle, frozen_tomb, forsaken_cathedral) ----
 MONSTER_BASES.skeleton_archer = { name:'Skeleton Archer', glyph:'z', color:'#c0c8d0', hp:11, str:6, dex:10, atk:[2,4], armor:1, xp:9, behavior:'ranged', dtier:1, faction:'undead' };
@@ -7026,7 +7821,7 @@ MONSTER_BASES.dire_wolf = { name:'Dire Wolf', glyph:'w', color:'#c0c0c0', hp:24,
 // ---- dragonkin (dragons_lair) — note non-boss dragons still get real breath weapons & multi-tile charges ----
 MONSTER_BASES.wyrmling = { name:'Dragon Wyrmling', glyph:'d', color:'#4ac97a', hp:34, str:13, dex:10, atk:[3,8], armor:2, xp:32, behavior:'charger', multiTile:2, dtier:2, faction:'dragon', breathWeapon:'fire' };
 MONSTER_BASES.drake = { name:'Drake', glyph:'d', color:'#2a9a5a', hp:50, str:16, dex:9, atk:[4,10], armor:3, xp:48, behavior:'charger', multiTile:2, dtier:3, faction:'dragon', breathWeapon:'fire' };
-MONSTER_BASES.frost_drake = { name:'Frost Drake', glyph:'d', color:'#8ad0e0', hp:52, str:15, dex:9, atk:[4,10], armor:3, xp:48, behavior:'charger', multiTile:2, dtier:3, faction:'dragon', breathWeapon:'frost' };
+MONSTER_BASES.frost_drake = { name:'Frost Drake', glyph:'d', color:'#8ad0e0', hp:52, str:15, dex:9, atk:[4,10], armor:3, xp:48, behavior:'charger', multiTile:2, dtier:3, faction:'dragon', breathWeapon:'frost', frostImmune:true };
 MONSTER_BASES.wyvern = { name:'Wyvern', glyph:'v', color:'#7a3a8a', hp:46, str:14, dex:14, atk:[4,9], armor:2, xp:46, behavior:'charger', multiTile:2, dtier:3, faction:'dragon', flying:true, poison:3 };
 MONSTER_BASES.young_dragon = { name:'Young Dragon', glyph:'&', color:'#3ac95a', hp:110, str:20, dex:11, atk:[7,15], armor:5, xp:110, behavior:'charger', multiTile:3, dtier:4, faction:'dragon', miniboss:true, breathWeapon:'fire' };
 
@@ -8371,7 +9166,7 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
   // not just a stat block that happens to say "Construct" on it.
   applyRacialTraits(npc, species);
   npc.armor += (npc.talentArmor || 0);
-  if (SHOP_ROLES.has(roleId) || roleId === 'fisherman') { npc.shop = generateShopInventory(roleId, rng); npc.gold = randInt(rng, 80, 300); }
+  if (SHOP_ROLES.has(roleId) || roleId === 'fisherman') { npc.shop = generateShopInventory(roleId, rng, npc); npc.gold = randInt(rng, 80, 300); npc.shopRestockDay = Math.floor(turnCount / DAY_LENGTH); }
   if (TRAINER_ROLES.has(roleId)) {
     npc.teachSpells = [];
     const spellPool = roleId === 'necromancer_trainer'
@@ -8441,29 +9236,78 @@ function makeCagedPrisoner(rng, theme, depth, x, y) {
   };
 }
 
-function generateShopInventory(roleId, rng) {
+// ---- shop stock tier/power gate: reuses npc.tier (Novice/Journeyman/Master), which previously
+// only ever affected price via npcTierPriceMult -- a Master merchant charged 35% more for
+// literally the same random roll a Novice next door was handing out. Now it also gates what's
+// actually possible to find there (a Master's shop can eventually turn up genuinely rare,
+// valueTier-4 gear; a Novice is capped at ordinary stock), so the price premium buys you
+// something real. See generateShopInventory (initial stock) and maybeRestockShop (periodic
+// refresh) below -- both funnel through this so there's one place that decides how good a given
+// merchant's ceiling is.
+function shopTierCaps(npc) {
+  const tierId = npc && npc.tier;
+  if (tierId === 'master') return { maxValueTier: 4, maxRarity: 3 };
+  if (tierId === 'novice') return { maxValueTier: 1, maxRarity: 1 };
+  return { maxValueTier: 2, maxRarity: 2 }; // journeyman, or unknown/legacy npc with no tier set
+}
+function generateShopInventory(roleId, rng, npc) {
   const items = [];
+  const { maxValueTier, maxRarity } = shopTierCaps(npc);
+  // BUG FIX (v0.40.9): shop stock used to be the one loot source in the entire game with no
+  // connection to playerLevelPowerMult -- monster drops, quest rewards, and even chest loot all
+  // scale toward the player's current level (see itemPowerMult / lootEligibleBaseIds and every
+  // call site that already uses this exact pattern, e.g. the artifact-vendor roll a few hundred
+  // lines up), but a shop rolled its stock once, at NPC creation, at flat power, and (with no
+  // restock at all -- see maybeRestockShop) stayed there for the rest of the game. In a 90-level
+  // game this meant the entire merchant economy stopped mattering somewhere around character
+  // level 10, since anything found in a dungeon by then already outclassed anything any shop
+  // would ever sell. Also folds in the same lootEligibleBaseIds() eligibility check every other
+  // loot site already uses (unique/set-piece/craft-only exclusion, value-tier capping) instead of
+  // the six-years-out-of-date hand-rolled `!b.setId && !b.isUnique && !b.craftOnly` this function
+  // used to carry as its own seventh copy of a check that was supposed to have exactly one source
+  // of truth.
+  const powerMult = playerLevelPowerMult(player.level);
+  const eligible = new Set(lootEligibleBaseIds(maxValueTier));
   let pool;
-  if (roleId === 'blacksmith') pool = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor') && !b.setId && !b.isUnique && !b.craftOnly);
-  else if (roleId === 'innkeeper' || roleId === 'baker' || roleId === 'chef' || roleId === 'tavernkeeper' || roleId === 'vintner' || roleId === 'cheesemonger' || roleId === 'beekeeper' || roleId === 'distiller' || roleId === 'confectioner' || roleId === 'butcher') pool = ITEM_BASES.filter(b => b.type === 'consumable' && b.id !== 'antidote' && !b.craftOnly);
-  else if (roleId === 'alchemist') pool = ITEM_BASES.filter(b => b.type === 'consumable' && !b.craftOnly);
-  else if (roleId === 'tailor') pool = ITEM_BASES.filter(b => b.type === 'armor' && ['cloak','gloves','amulet','circlet','sandals','robe'].includes(b.id));
-  else if (roleId === 'silversmith') pool = ITEM_BASES.filter(b => b.type === 'armor' && ['ring','amulet','circlet'].includes(b.id));
-  else if (roleId === 'armorer') pool = ITEM_BASES.filter(b => b.type === 'armor' && !['ring','amulet','circlet'].includes(b.id) && !b.setId && !b.isUnique && !b.craftOnly);
-  else if (roleId === 'fletcher') pool = ITEM_BASES.filter(b => b.type === 'weapon' && b.ranged && !b.setId && !b.isUnique && !b.craftOnly);
+  if (roleId === 'blacksmith') pool = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor') && eligible.has(b.id));
+  else if (roleId === 'innkeeper' || roleId === 'baker' || roleId === 'chef' || roleId === 'tavernkeeper' || roleId === 'vintner' || roleId === 'cheesemonger' || roleId === 'beekeeper' || roleId === 'distiller' || roleId === 'confectioner' || roleId === 'butcher') pool = ITEM_BASES.filter(b => b.type === 'consumable' && b.id !== 'antidote' && eligible.has(b.id));
+  else if (roleId === 'alchemist') pool = ITEM_BASES.filter(b => b.type === 'consumable' && eligible.has(b.id));
+  else if (roleId === 'tailor') pool = ITEM_BASES.filter(b => b.type === 'armor' && ['cloak','gloves','amulet','circlet','sandals','robe'].includes(b.id) && eligible.has(b.id));
+  else if (roleId === 'silversmith') pool = ITEM_BASES.filter(b => b.type === 'armor' && ['ring','amulet','circlet'].includes(b.id) && eligible.has(b.id));
+  else if (roleId === 'armorer') pool = ITEM_BASES.filter(b => b.type === 'armor' && !['ring','amulet','circlet'].includes(b.id) && eligible.has(b.id));
+  else if (roleId === 'fletcher') pool = ITEM_BASES.filter(b => b.type === 'weapon' && b.ranged && eligible.has(b.id));
   else if (roleId === 'fisherman' || roleId === 'fishmonger') pool = ITEM_BASES.filter(b => ['meat_cooked','stew','holy_water','cooked_fish','honeyed_salmon','fishing_rod'].includes(b.id));
-  else if (roleId === 'guildclerk' || roleId === 'fence' || roleId === 'quartermaster') pool = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor' || b.type === 'consumable') && !b.setId && !b.isUnique && !b.craftOnly);
-  else pool = ITEM_BASES.filter(b => b.type !== 'misc' && b.type !== 'material' && b.type !== 'chest' && b.type !== 'corpse' && !b.setId && !b.isUnique && !b.craftOnly);
+  else if (roleId === 'guildclerk' || roleId === 'fence' || roleId === 'quartermaster') pool = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor' || b.type === 'consumable') && eligible.has(b.id));
+  else pool = ITEM_BASES.filter(b => eligible.has(b.id));
+  if (!pool.length) pool = ITEM_BASES.filter(b => b.type === 'consumable' && !b.craftOnly); // safety net; shouldn't ever trigger
   const n = randInt(rng, 5, 9);
   for (let i = 0; i < n; i++) {
     const base = choice(rng, pool);
-    items.push(makeItem(base.id, randInt(rng,0,2), rng));
+    items.push(makeItem(base.id, randInt(rng, 0, maxRarity), rng, powerMult));
   }
-  if (roleId === 'fisherman') items.unshift(makeItem('raft', 0, rng));
+  if (roleId === 'fisherman') items.unshift(makeItem('raft', 0, rng, powerMult));
   if (roleId === 'merchant' && rng() < 0.5) items.push(makeItem('compass', 0, rng));
   if ((roleId === 'merchant' || roleId === 'guildclerk') && rng() < 0.6) items.push(makeItem('lockpick', 0, rng));
   if (roleId === 'blacksmith' || roleId === 'cybersmith') { items.push(makeItem('repair_kit', 0, rng)); if (rng() < 0.4) items.push(makeItem('masters_repair_kit', 0, rng)); }
   return items;
+}
+// ---- periodic shop restock: checked lazily the moment the player actually opens trade with a
+// shop (see openTrade), the same "roll it on demand instead of ticking every NPC in the world
+// every turn" pattern the game already uses elsewhere (e.g. a house door's daily lock re-roll).
+// A shop used to be frozen forever at whatever generateShopInventory rolled the moment its NPC
+// was created, with no way to ever refresh -- so even with the power-scaling fix above, a shop
+// you emptied out early would just stay empty for the rest of the run. Now a merchant who hasn't
+// been visited in a few in-game days gets an entirely fresh shipment, rolled at your CURRENT
+// level -- so a shop is worth walking back into even very late in a long game, not just once.
+const SHOP_RESTOCK_DAYS = 4;
+function maybeRestockShop(npc) {
+  if (!npc || !npc.shop) return;
+  const day = Math.floor(turnCount / DAY_LENGTH);
+  if (npc.shopRestockDay === undefined) { npc.shopRestockDay = day; return; }
+  if (day - npc.shopRestockDay < SHOP_RESTOCK_DAYS) return;
+  npc.shop = generateShopInventory(npc.roleId, Math.random, npc);
+  npc.shopRestockDay = day;
+  log(`${npc.name} has restocked since your last visit.`);
 }
 
 // ===================== WORLD GENERATION v4 =====================
@@ -9209,7 +10053,11 @@ function grantGatherYield(cfg) {
   const mult = toolGatherMultiplier(weapon, cfg.gatherType);
   const got = [];
   for (const y of cfg.yield) {
-    if (Math.random() > (y.chance ?? 1)) continue;
+    // A rare-yield entry (chance < 1, e.g. Starmetal Ore/Ironwood/gems) is exactly the kind of
+    // find a keen-eyed scavenger should be better at noticing than an ordinary gatherer -- see
+    // player.rareFindBonus (Scavenger talent). Guaranteed drops (chance omitted/1) are untouched.
+    const chance = (y.chance ?? 1) < 1 ? Math.min(1, (y.chance ?? 1) + (player.rareFindBonus || 0)) : (y.chance ?? 1);
+    if (Math.random() > chance) continue;
     const qty = Math.max(0, Math.round(randInt(Math.random, y.min, y.max) * mult));
     if (qty <= 0) continue;
     for (let i = 0; i < qty; i++) addItemToList(player.inventory, makeItem(y.id, 0, Math.random));
@@ -10449,6 +11297,18 @@ function weatherElementMultiplier(spellLike, target) {
     if (spellLike.chainLightning || spellLike.element === 'shock') mult *= 1.6;
     if (spellLike.igniteGround || spellLike.element === 'fire') mult *= 0.5;
   }
+  // BUG FIX (v0.40.14): this function is already the one place every damage-dealing branch in
+  // applyEffectToTarget funnels its final multiplier through (dmgMult multiplies by this
+  // unconditionally, for every spell type), and it already does exactly the element detection an
+  // immunity check needs -- but a fire/frost-immune target (Fire Elemental; Frost Giant/Frost
+  // Giant King/Frost Drake, see doAttack's weapon-damage equivalent of this same fix) still took
+  // full damage from a player's Fireball or Frost Bolt-type spell even after weapon damage
+  // respected the flag. A Fire Elemental resisting your torch but not your Fireball would have
+  // been exactly the kind of half-finished fix this audit exists to avoid.
+  if (target) {
+    if (target.fireImmune && (spellLike.igniteGround || spellLike.element === 'fire')) mult = 0;
+    if (target.frostImmune && (spellLike.frost || spellLike.element === 'frost')) mult = 0;
+  }
   return mult;
 }
 function weatherVisRadiusDelta() { if (curIsDungeon()) return 0; return currentWeatherDef().visMod || 0; }
@@ -10996,7 +11856,7 @@ const WORLD_EVENT_HANDLERS = {
       log(def.msg);
     }
   },
-  corruptionShift(def) { player.corruption = Math.max(0, (player.corruption || 0) + def.amount); log(def.msg); },
+  corruptionShift(def) { gainCorruption(def.amount); log(def.msg); },
   freezeNearby(def) {
     if (!curIsDungeon()) {
       for (let i = 0; i < (def.count || 2); i++) {
@@ -11829,6 +12689,7 @@ function entityIsWet(e) { return !!(e && e.wetTurns > 0); }
 function entityIsOiled(e) { return !!(e && e.oiledTurns > 0); }
 function igniteEntity(e, turns) {
   if (!e || e.hp === undefined || e.hp <= 0) return false;
+  if (e.fireImmune) return false; // BUG FIX (v0.40.14): a Fire Elemental could previously be set on fire
   if (entityIsWet(e)) return false; // soaked -- nothing to catch
   e.burningTurns = Math.max(e.burningTurns || 0, turns || 5);
   e.oiledTurns = 0; // the coating that was fuel is now consumed
@@ -11850,6 +12711,7 @@ function extinguishEntity(e) {
 function isEntityFrozenSolid(e) { return !!(e && e.frozenSolidTurns > 0); }
 function freezeEntitySolid(e, turns) {
   if (!e || e.hp === undefined || e.hp <= 0) return false;
+  if (e.frostImmune) return false; // BUG FIX (v0.40.14): an ice-native creature freezing itself solid made no sense
   e.frozenSolidTurns = Math.max(e.frozenSolidTurns || 0, turns || 3);
   e.wetTurns = 0; // the water that made this possible is now the ice itself, not liquid anymore
   extinguishEntity(e); // can't be on fire and frozen solid at once
@@ -11953,12 +12815,22 @@ function getPartArmorValue(e, part) {
   }
   const eq = player.equipment;
   const pieceVal = (slot) => { const it = eq[slot]; if (!it) return 0; return it.broken ? Math.round((it.armor || 0) * 0.25) : (it.armor || 0); };
+  // BUG FIX (v0.40.3): this used to only sum worn equipment slots, so every source of "innate"
+  // armor -- Iron Skin/Fortress/Immovable Object and the rest of the Stonehide/thickhide talent
+  // line, every cybernetic subdermal-plating implant, every hardened-skin mutation, species
+  // heritage armor, even a temporary Stoneskin-type buff -- contributed to overall damage
+  // reduction (see getArmorOf) but did nothing at all to protect against a locational wound.
+  // A character who dumped a dozen talent tiers into "being armored" could still get an arm
+  // Maimed exactly as easily as one in a linen shirt. Innate armor isn't a single worn slot, it's
+  // part of the body itself, so unlike equipment it covers every location at full value rather
+  // than needing per-slot modeling.
+  const innate = getBuff('armor') + (player.talentArmor || 0) + (player.cyberArmor || 0) + (player.mutationArmor || 0);
   switch (part) {
-    case 'head': return pieceVal('head');
-    case 'torso': return pieceVal('body') + pieceVal('cloak') * 0.4;
-    case 'leftArm': case 'rightArm': return pieceVal('gloves') + pieceVal('body') * 0.3;
-    case 'leftLeg': case 'rightLeg': return pieceVal('feet') + pieceVal('body') * 0.25;
-    default: return 0;
+    case 'head': return pieceVal('head') + innate;
+    case 'torso': return pieceVal('body') + pieceVal('cloak') * 0.4 + innate;
+    case 'leftArm': case 'rightArm': return pieceVal('gloves') + pieceVal('body') * 0.3 + innate;
+    case 'leftLeg': case 'rightLeg': return pieceVal('feet') + pieceVal('body') * 0.25 + innate;
+    default: return innate;
   }
 }
 // Recomputes the mechanical penalties an entity's current wounds impose -- called any time a
@@ -12002,8 +12874,17 @@ function tickBodyParts(e) {
 // not a background ticker that resolves itself if you just wait a few turns. ----
 function applyBleed(e, stacks) {
   if (!e || e.hp === undefined) return;
+  const wasBleeding = (e.bleedTurns || 0) > 0;
   e.bleedStacks = Math.min(6, (e.bleedStacks || 0) + stacks);
   e.bleedTurns = Math.max(e.bleedTurns || 0, 10 + stacks * 5);
+  // BUG FIX (v0.40.18): bleed deliberately never fades on its own (see stanchBleed/the Bandage
+  // item) -- a new player has no way to know that going in, and the first time it happens is
+  // exactly when they're least equipped to recognize it as a real threat rather than a flavor
+  // status. One-time, first-ever warning; never repeats once seen.
+  if (e === player && !wasBleeding && !player.everBled) {
+    player.everBled = true;
+    log("*** You're bleeding, and it won't stop on its own -- find or craft a Bandage before it adds up. ***");
+  }
 }
 function stanchBleed(e) { if (!e) return false; const did = (e.bleedTurns || 0) > 0; e.bleedStacks = 0; e.bleedTurns = 0; return did; }
 // ============================================================================
@@ -12549,7 +13430,7 @@ function applyBiomeEnvironmentalEffect() {
   if (!eff) return;
   if (eff.chance !== undefined && Math.random() >= eff.chance) return;
   const applyCorruption = () => {
-    if (eff.corruption) player.corruption = Math.min(100, (player.corruption || 0) + eff.corruption * (0.5 + Math.random()));
+    if (eff.corruption) gainCorruption(eff.corruption * (0.5 + Math.random()));
   };
   // Environmental DoTs/debuffs accumulate every turn you linger, but growth (this) was outpacing
   // natural decay (~1/turn in processEntityStatus) with no ceiling -- stand in a hazard long
@@ -12707,6 +13588,9 @@ function getActiveStatusEffects(e) {
   if (e.statusFear > 0) out.push({ label: 'Afraid', turns: e.statusFear, kind: 'debuff' });
   if (e.statusConfuse > 0) out.push({ label: 'Confused', turns: e.statusConfuse, kind: 'debuff' });
   if (e.statusSlow > 0) out.push({ label: 'Slowed', turns: e.statusSlow, kind: 'debuff' });
+  if (e.statusSilence > 0) out.push({ label: 'Silenced', turns: e.statusSilence, kind: 'debuff' });
+  if (e.charmedTurns > 0) out.push({ label: 'Charmed (fighting for you)', turns: e.charmedTurns, kind: 'buff' });
+  if (e.exposedTurns > 0) out.push({ label: 'Exposed', turns: e.exposedTurns, kind: 'debuff' });
   if (e === player && e.statusChill > 0) out.push({ label: e.statusChill >= 14 ? 'Freezing' : 'Chilled', turns: e.statusChill, kind: 'debuff' });
   if (e === player && e.statusHeat > 0) out.push({ label: e.statusHeat >= 14 ? 'Overheating' : 'Sweltering', turns: e.statusHeat, kind: 'debuff' });
   // Environmental physics status (see applyGroundHazardsOnEnter/igniteEntity near igniteTile) --
@@ -12823,6 +13707,9 @@ function rollHit(att, def, ranged, calledShotPenalty) {
   let chance = 0.6 + (effDex(att) - effDex(def)) * 0.025;
   if (att === player) chance -= weaponStrDeficit() * 0.02;
   if (def === player) chance += armorStrDeficit() * 0.015; // over-encumbered defenders are easier to hit
+  // BUG FIX (v0.40.26): see Reckless Swing's own comment above -- the exposed window it's supposed
+  // to leave the player in.
+  if (def === player && player.exposedTurns > 0) chance += 0.15;
   // A concussed head (see recalcBodyPenalties) throws off aim and coordination -- this field
   // existed and was computed for every entity already but was never actually read anywhere,
   // making a "wounded head" mechanically invisible outside its own status-list entry. Applies to
@@ -12835,6 +13722,14 @@ function rollHit(att, def, ranged, calledShotPenalty) {
   // Called Shot: deliberately aiming for a specific point costs real accuracy -- see
   // beginCalledShot/doAttack's payoff block for what a landed one actually does.
   if (calledShotPenalty) chance -= calledShotPenalty;
+  // BUG FIX (v0.40.29): the Fractured Beam Emitter's own description makes a specific, physically
+  // impossible claim -- "the beam it fires arrives slightly before you pull the trigger" -- which
+  // only makes sense as a plain-language way of saying "this weapon doesn't really miss." A
+  // temporal-paradox salvage weapon from a boss called the Hollow Signal had, mechanically,
+  // nothing distinguishing its accuracy at all. Floors (not overrides) the to-hit chance high
+  // rather than guaranteeing a hit outright, so called-shot penalties and genuinely extreme
+  // dex mismatches still matter even with it equipped.
+  if (att === player && player.equipment.hand && player.equipment.hand.id === 'fractured_beam') chance = Math.max(chance, 0.9);
   chance = Math.max(0.1, Math.min(0.95, chance));
   return Math.random() < chance;
 }
@@ -13499,6 +14394,7 @@ function useStairsUp() {
 // ---------------- dialogue / trade ----------------
 
 function openTrade(npc) {
+  maybeRestockShop(npc);
   gameState = 'trade'; dialogueNPC = npc; tradeMode = 'buy'; tradePage = 0;
   Sound.play('uiOpen');
   renderTrade();
@@ -15941,7 +16837,22 @@ function craftRecipe(recipeId) {
   const qty = (r.output.qty || 1) + (r.category === 'cooking' ? (player.cookingYieldBonus || 0) : 0);
   let out = null;
   for (let i = 0; i < qty; i++) {
-    const combinedPowerMult = (quality ? quality.powerMult : 1) * (material ? material.powerMult : 1);
+    // BUG FIX (v0.40.10): crafted weapons/armor had no connection to playerLevelPowerMult at all --
+    // quality (Shoddy..Masterwork, capped at 1.28x) and material (Starmetal/Ironwood, capped at
+    // ~1.18x) together cap out around 1.5x a base item's own stats, full stop, no matter how
+    // strong the player is. Every other source of gear power in the game (monster drops, quest
+    // rewards, chests, and now shops -- see generateShopInventory) scales toward
+    // playerLevelPowerMult(player.level), which alone reaches over 11x by character level 90.
+    // Crafting -- a whole skill-practice system the player can deliberately invest in -- was
+    // capped so far below that ceiling that a perfectly Masterwork Starmetal weapon, the single
+    // best thing the crafting system could ever produce, was still roughly 7-8x weaker than
+    // ordinary loot dropped by a monster near the end of the game. Folding the same level scaling
+    // in here (gated on `quality` being non-null, which craftQualityRoll only sets for actual
+    // weapon/armor outputs, so cooking/smelting/etc. are correctly left untouched) means a
+    // dedicated crafter's best work now legitimately competes with -- and with a good roll or
+    // rare material, exceeds -- what the dungeon hands out, for the entire length of the game
+    // rather than just the first dozen levels.
+    const combinedPowerMult = (quality ? quality.powerMult : 1) * (material ? material.powerMult : 1) * (quality ? playerLevelPowerMult(player.level) : 1);
     const combinedRarity = Math.max(quality ? quality.rarity : 0, material ? 1 : 0);
     out = makeItem(r.output.id, combinedRarity, Math.random, (quality || material) ? combinedPowerMult : undefined);
     // Material name prefix goes BEFORE quality's (e.g. "Fine Starmetal Warhammer") -- reads as
@@ -16527,13 +17438,28 @@ function proposeMarriage(npc) {
   player.spouse = { uid: npc.uid, name: npc.name };
   Sound.play('marriage');
   log(`*** ${npc.name} accepts! You are now married. ***`);
+  // Marrying in is a real, well-known way to put down roots somewhere -- see addGoodwill/
+  // reputationPriceMult, the same mechanism a hometown scenario background or defending a
+  // settlement already feeds into. A modest, one-time bump: enough to read as "people here like
+  // you a little more now that you're one of them," not a shortcut to a steep discount.
+  addGoodwill(getRegionKey(npc.x, npc.y), 12, `Marrying into the area hasn't hurt your standing here.`);
   closeModal();
 }
 function restAtHome(npc) {
   player.hp = player.maxHp; player.mp = player.maxMp;
   advanceTimeToMorning();
   log(`You rest at home with ${npc.name} and feel fully restored. It's now ${formatTimeInfo()}.`);
-  if (Math.random() < 0.3) { const g = randInt(Math.random, 5, 20); player.gold += g; log(`${npc.name} shares ${g} gold from the household savings.`); }
+  // BUG FIX (v0.40.12): player.kids was purely cosmetic -- incremented on birth, shown on two UI
+  // labels, and read absolutely nowhere else in the entire game. A bigger household plausibly
+  // means more hands contributing to the family's savings, so it now nudges both the odds and the
+  // size of the existing household-gold perk below, instead of a family of five sharing exactly
+  // the same odds as a newlywed couple with no children at all.
+  const householdBonus = player.kids || 0;
+  if (Math.random() < Math.min(0.6, 0.3 + householdBonus * 0.05)) {
+    const g = randInt(Math.random, 5, 20 + householdBonus * 5);
+    player.gold += g;
+    log(`${npc.name} shares ${g} gold from the household savings.`);
+  }
   updateSidebar();
   closeModal();
 }
@@ -16934,6 +17860,13 @@ function runAutoLoop(stepFn) {
     if (gameState !== 'playing' || !player.alive || ticks >= 400 || !autoRunActive) { autoRunActive = false; clearInterval(interval); render(); return; }
     const hostileNear = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 6 && hasLOS(player.x,player.y,m.x,m.y));
     if (hostileNear) { log('Danger nearby — auto-action halted.'); autoRunActive = false; clearInterval(interval); render(); return; }
+    // BUG FIX (v0.40.18): same family as doRest's bleed fix -- this shared driver (autoExplore,
+    // autoTravelToStairs, etc.) already halts for a nearby hostile, but not for a bleed picked up
+    // mid-route (a hazard tile, a trap, an ambush that got interrupted). Lower stakes than doRest
+    // (this doesn't actively wait through the bleed the way resting-until-full did), but a player
+    // auto-walking across the map while quietly losing HP every step deserves the same nudge to
+    // stop and deal with it rather than discovering it several dozen tiles later.
+    if ((player.bleedTurns || 0) > 0) { log("You're bleeding — auto-action halted. Bandage the wound first."); autoRunActive = false; clearInterval(interval); render(); return; }
     const cont = stepFn();
     ticks++;
     if (!cont) { autoRunActive = false; clearInterval(interval); render(); }
@@ -17321,6 +18254,14 @@ const REST_TURNS_PER_BATCH = 8; // turns processed per 20ms tick, keeps real-tim
 function doRest() {
   if (gameState !== 'playing') return;
   if (player.hp >= player.maxHp && player.mp >= player.maxMp) { log('You are already at full strength.'); return; }
+  // BUG FIX (v0.40.18): doRest() never checked bleedTurns at all. Bleed is intentionally designed
+  // to not fade on its own (see doAttack/applyBleed's own comments -- it requires a Bandage or
+  // equivalent cure), so a bleeding player who rested would just keep losing HP through the rest
+  // loop below, often faster than regen could keep up, while the log made it look like a safe
+  // recovery action. Blocking outright with a clear message is more honest than letting the loop
+  // start and quietly interrupting once the player notices the bleed doing more damage than the
+  // rest is undoing.
+  if ((player.bleedTurns || 0) > 0) { log("You can't rest while bleeding -- the movement keeps reopening it. Bandage the wound first."); return; }
   const nearbyThreat = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 8 && hasLOS(player.x,player.y,m.x,m.y));
   if (nearbyThreat) { log("You can't rest with danger nearby!"); return; }
   autoRunActive = true;
@@ -17334,6 +18275,9 @@ function doRest() {
         grantDiseaseCureProgress('restCure', 3);
         autoRunActive = false; clearInterval(interval); render(); return;
       }
+      // A bleed picked up mid-rest (e.g. an ambush interrupts, or a hazard tile bites on the way
+      // in) should stop the loop the same way a nearby threat does, for the same reason.
+      if ((player.bleedTurns || 0) > 0) { log('Rest interrupted -- you\'re bleeding! Bandage the wound before trying again.'); autoRunActive = false; clearInterval(interval); render(); return; }
       if (turnsElapsed >= REST_SAFETY_CAP_TURNS) {
         log(`You rest for a long while but can't seem to fully recover right now -- something is keeping your body from settling. (Rested ${turnsElapsed} turns.)`);
         autoRunActive = false; clearInterval(interval); render(); return;
@@ -17614,6 +18558,12 @@ function reputationPriceMult(npc) {
   let mult = 1;
   if (bounty >= 15) mult *= 1 + Math.min(0.5, bounty * 0.01);
   if (goodwill >= 10) mult *= Math.max(0.8, 1 - Math.min(0.2, goodwill * 0.004));
+  // Corruption's one social consequence: ordinary folk are unsettled by someone visibly touched
+  // by the eldritch and charge accordingly -- small and capped (this is discomfort, not a crime,
+  // so it never approaches the bounty markup above). See gainCorruption for the milestone flavor
+  // that accompanies crossing into this range in the first place.
+  const corruption = player.corruption || 0;
+  if (corruption >= 50) mult *= 1 + Math.min(0.15, (corruption - 50) * 0.003);
   return mult;
 }
 // Player-credited counterpart to recordSettlementDefense (see near DEFENSE_FLAVOR) -- writes into
@@ -17821,6 +18771,16 @@ function onDeath(def, killer) {
     if ((player.secondWindCharges || 0) > 0) {
       player.secondWindCharges--;
       player.hp = 1;
+      // BUG FIX (v0.40.20): the killing blow that triggers Second Wind is, by definition, a
+      // massive hit -- almost certainly well over the bleed-proc threshold (see doAttack). Without
+      // this, "saved" meant landing at 1 HP still actively bleeding, with bleed's own by-design
+      // refusal to self-resolve (v0.40.18) now also blocking the player from resting it off. The
+      // one talent explicitly built to give a player a second chance at exactly this moment was
+      // handing them a slightly delayed version of the same death instead. Second Wind surviving a
+      // hit that would've killed you is exactly the kind of adrenaline-fueled moment that should
+      // also stanch an open wound -- poison and burning aren't touched here since both already
+      // decay to nothing on their own, unlike bleed.
+      stanchBleed(player);
       Sound.play('secondWind');
       log('*** Death itself recoils — Second Wind saves you at the last moment! ***');
       updateSidebar();
@@ -17845,6 +18805,10 @@ function onDeath(def, killer) {
         player.x = landX; player.y = landY;
         player.hp = Math.max(1, Math.round(player.maxHp * 0.5));
         player.recursionLoops = (player.recursionLoops || 0) + 1;
+        // BUG FIX (v0.40.20): same reasoning as Second Wind just above, and arguably even more
+        // fitting here -- the fatal instant is explicitly "unmade," so whatever wound caused it
+        // logically shouldn't persist into the moment you fold back from either.
+        stanchBleed(player);
         Sound.play('secondWind');
         log(`*** The moment folds in on itself. You've been here before -- the Recursion pulls you back to where you last anchored, the fatal instant simply unmade. (Recursion Thread spent) ***`);
         updateSidebar();
@@ -18596,14 +19560,15 @@ function placePlayerNearSettlementTier(tier) {
 }
 function placePlayerForScenario(id) {
   player.scenario = id;
-  if (id === 'shipwreck') { if (placePlayerNearBiome('beach')) return; }
-  else if (id === 'forest') { if (placePlayerNearBiome('forest') || placePlayerNearBiome('denseforest')) return; }
-  else if (id === 'hamlet') { if (placePlayerNearSettlementTier('hamlet')) return; }
-  else if (id === 'village') { if (placePlayerNearSettlementTier('village')) return; }
-  else if (id === 'town') { if (placePlayerNearSettlementTier('town')) return; }
-  else if (id === 'city') { if (placePlayerNearSettlementTier('city')) return; }
-  else if (id === 'capital') { if (placePlayerNearSettlementTier('capital')) return; }
+  if (id === 'shipwreck') { if (placePlayerNearBiome('beach')) return true; }
+  else if (id === 'forest') { if (placePlayerNearBiome('forest') || placePlayerNearBiome('denseforest')) return true; }
+  else if (id === 'hamlet') { if (placePlayerNearSettlementTier('hamlet')) return true; }
+  else if (id === 'village') { if (placePlayerNearSettlementTier('village')) return true; }
+  else if (id === 'town') { if (placePlayerNearSettlementTier('town')) return true; }
+  else if (id === 'city') { if (placePlayerNearSettlementTier('city')) return true; }
+  else if (id === 'capital') { if (placePlayerNearSettlementTier('capital')) return true; }
   placePlayerAtStart();
+  return false; // fell back to a generic start position -- not actually near the named settlement tier
 }
 function showStartScreen() {
   gameState = 'start';
@@ -18682,11 +19647,23 @@ function maybeAddRumorNote(rng, contents, kind) {
   }
 }
 
+// ---- starting-scenario home standing: a settlement-rooted background (grew up in/near a real
+// community) should mean something more than a spawn point -- see reputationPriceMult, which
+// already turns goodwill into real prices. Smaller communities know a local by name far more
+// than a sprawling capital does, hence the inverse scaling (a hamlet grants more goodwill than a
+// capital, not less) -- consistent with each scenario's own flavor text. Wanderer/Forest Hermit/
+// Shipwreck Survivor deliberately get none: their whole premise is having no home standing
+// anywhere, per their own descriptions ("alone", "far from any settlement", "most belongings
+// lost"). Values are calibrated against the game's existing goodwill economy (quest completion
+// +8, defending a settlement +15, discount unlocks at >=10) so a hamlet-raised start opens with
+// an immediate, small, earned-feeling discount there, while a capital-born start (one face among
+// thousands) does not.
+const SCENARIO_HOME_GOODWILL = { hamlet: 18, village: 14, town: 10, city: 6, capital: 3 };
 function beginScenario(letter) {
   const idx = letter.charCodeAt(0) - 97;
   const scenario = START_SCENARIOS[idx];
   if (!scenario) return;
-  placePlayerForScenario(scenario.id);
+  const placedAtSettlement = placePlayerForScenario(scenario.id);
   gameState = 'playing';
   document.getElementById('title-screen').classList.add('hidden');
   document.getElementById('modal').classList.add('hidden');
@@ -18696,6 +19673,8 @@ function beginScenario(letter) {
   } else {
     log(`You begin your journey as a ${scenario.name.toLowerCase()}.`);
   }
+  const homeGoodwill = SCENARIO_HOME_GOODWILL[scenario.id];
+  if (homeGoodwill && placedAtSettlement) addGoodwill(getRegionKey(player.x, player.y), homeGoodwill, 'You grew up around here — folks nearby already think well of you.');
   // ---- new-player onboarding: push a clear tutorial sequence into the log so a brand new
   // player immediately knows the three most important things (move, open quest log, talk to
   // NPCs), and also knows exactly where to look when they want more. This fires only on first
@@ -19513,9 +20492,21 @@ function applyEffectToTarget(spell, t) {
     const execScale = (abilityPoolOf(spell.id) === 'mutation' && spell.category === 'Void/Cosmic') ? (1 + (player.voidExecuteBonus || 0)) : 1;
     const missingPct = 1 - (t.hp / t.maxHp);
     let dmg = randInt(Math.random, spell.power[0], spell.power[1]) + Math.round(missingPct * 20 * execScale);
+    // BUG FIX (v0.40.19): Backstab's own description explicitly promises it "punishes an
+    // inattentive foe severely" -- the entire point of the technique -- but the execute formula
+    // above only ever scaled off the target's missing HP, with zero connection to whether the
+    // target was actually inattentive. It shared this generic "hits harder at low HP" formula
+    // with the Void/Cosmic execute mutations (Entropy Touch, The Consuming), whose own flavor is
+    // about exploiting decay/low HP specifically, not stealth -- so the fix is scoped to
+    // sneakBonus:true (currently just Backstab) rather than every execute-type ability, using the
+    // same !t.engaged signal doAttack's Sneak Attack already established as this game's own
+    // definition of "hasn't noticed you."
+    const isSneak = spell.sneakBonus && !t.engaged;
+    if (isSneak) dmg = Math.round(dmg * 2.2);
     dmg = Math.round(dmg * dmgMult);
     t.hp -= dmg;
-    log(`Your ${spell.name} tears open old wounds on ${t.name} for ${dmg}.`);
+    log(`Your ${spell.name} tears open old wounds on ${t.name} for ${dmg}${isSneak ? ' (sneak attack!)' : ''}.`);
+    if (t !== player && t.alive !== false) t.engaged = true;
     if (t.hp <= 0) onDeath(t, player);
     return;
   }
@@ -19537,6 +20528,13 @@ function applyEffectToTarget(spell, t) {
     if (spell.type === 'drain') { player.hp = Math.min(player.maxHp, player.hp + Math.floor(dmg * 0.5)); log('You feel invigorated.'); }
     if (spell.poison && t.hp > 0) { t.statusPoison = (t.statusPoison || 0) + spell.poison; log(`${t.name} is poisoned!`); }
     if (spell.stagger && t.hp > 0) { t.statusSlow = Math.max(t.statusSlow || 0, 2); log(`${t.name} is staggered!`); }
+    // BUG FIX (v0.40.26): Reckless Swing's own description ("an all-or-nothing swing that leaves
+    // you exposed") explicitly promises a real drawback for the caster, not just a bigger number
+    // on the hit -- it had no downside at all, making "all-or-nothing" a pure upside. See
+    // player.exposedTurns' new check in rollHit for the actual payoff: attacks against the player
+    // are more likely to land for a few turns afterward, a genuine glass-cannon trade rather than
+    // a free damage bonus with flavor text attached.
+    if (spell.selfExposed) { player.exposedTurns = Math.max(player.exposedTurns || 0, spell.selfExposed); log('The wild swing leaves you wide open!'); }
     if (t.hp <= 0) onDeath(t, player);
     if (spell.destructive) { const d = scorchArea(t.x, t.y, 2); if (d>0) log(`The blast scorches the land, destroying ${d} trees!`); }
     if (spell.igniteGround) {
@@ -19560,8 +20558,39 @@ function applyEffectToTarget(spell, t) {
   }
   if (spell.type === 'debuff') {
     if (spell.stat === 'poison') t.statusPoison = (t.statusPoison || 0) + spell.power;
-    else if (spell.stat === 'dex') { t.dex = Math.max(1, t.dex + spell.power); if (spell.id === 'garrote') t.statusSlow = Math.max(t.statusSlow || 0, 4); }
-    else if (spell.stat === 'str') { t.str = Math.max(1, t.str + spell.power); log(`${t.name}'s strength falters.`); }
+    // BUG FIX (v0.40.23): the 'slow' spell -- literally named Slow, described as "saps a foe's
+    // speed" -- only ever reduced DEX, never actually applied statusSlow (the real "Slowed" status
+    // this game's own UI/tooltip system labels and shows a turn counter for). Garrote's own
+    // description ("leaves your foe gasping and slow") had the same promise, but only delivered on
+    // it via a spell.id === 'garrote' special case rather than anything reusable. Replaced the
+    // hardcoded ID check with a data-driven slowStatus field on the spell itself, so any current or
+    // future dex-debuff spell that's supposed to also slow its target can just declare that instead
+    // of needing this switch touched again.
+    else if (spell.stat === 'dex') {
+      t.dex = Math.max(1, t.dex + spell.power);
+      if (spell.slowStatus) t.statusSlow = Math.max(t.statusSlow || 0, spell.slowStatus);
+      // BUG FIX (v0.40.24): Silence -- named and described as disrupting a foe's "focus," the
+      // classic RPG meaning of silence being "can't cast spells" -- was, like every slow-flavored
+      // debuff before this pass, just a DEX reduction with no actual effect on spellcasting. See
+      // tryMonsterCast's own new check for the other half of this fix.
+      if (spell.silenceStatus) t.statusSilence = Math.max(t.statusSilence || 0, spell.silenceStatus);
+    }
+    else if (spell.stat === 'str') {
+      t.str = Math.max(1, t.str + spell.power);
+      log(`${t.name}'s strength falters.`);
+      // BUG FIX (v0.40.25): Mindjack Protocol / Psionic Dominance's own descriptions explicitly
+      // promise seizing control of the target ("motor cortex," "force your will... into a foe's
+      // nervous system") -- an order of magnitude past a strength debuff. See charmedTurns and
+      // isHostileTo's own charm override just below for the actual payoff: a charmed, non-boss
+      // target fights for the player using the exact same targeting machinery
+      // (pickHostileTarget/gatherPotentialTargets/doAttack) every other fight in the game already
+      // runs on. Bosses explicitly resist -- letting a single cast neutralize (or worse, weaponize)
+      // a boss fight would trivialize the one kind of encounter this shouldn't touch.
+      if (spell.charmStatus) {
+        if (t.boss) log(`${t.name}'s will is far too strong to seize.`);
+        else { t.charmedTurns = Math.max(t.charmedTurns || 0, spell.charmStatus); log(`${t.name}'s mind bends to your will!`); }
+      }
+    }
     else if (spell.stat === 'int') { t.int = Math.max(1, (t.int||10) + spell.power); if (t.mp !== undefined) t.mp = Math.max(0, t.mp - Math.abs(spell.power)); }
     else if (spell.stat === 'fear') t.statusFear = spell.dur;
     else if (spell.stat === 'confuse') t.statusConfuse = spell.dur;
@@ -19576,6 +20605,18 @@ function castSpell(spellId) {
   const spell = findAbilityById(spellId);
   if (!spell || !isAbilityKnown(spellId)) { log("You don't know that ability."); return; }
   if (player.frozenSolidTurns > 0) { log("You're frozen solid and can't cast anything!"); endTurn(); return; }
+  // BUG FIX (v0.40.21): Fear already blocks melee (doMove's attack branch) and fireRangedWeapon
+  // with the exact same "too terrified to fight" message -- the game's own established rule is
+  // "feared means you can't fight back," not "feared means no melee specifically." Attack spells
+  // went through this same function with no equivalent check at all, so a feared player could
+  // still freely Fireball/curse/drain an enemy while being mechanically unable to swing a sword or
+  // loose an arrow at the exact same target -- a real, exploitable hole in the status rather than
+  // a deliberate carve-out. Scoped narrowly to spell types that are unambiguously offensive
+  // (damage/execute/smite/lifetap/drain/multihit/direct/debuff); heal, buff, blink, and other
+  // self-directed or utility spells are untouched, since "too scared to attack" has never meant
+  // "too scared to flee or patch yourself up" anywhere else fear is checked in this game.
+  const OFFENSIVE_SPELL_TYPES = new Set(['damage','execute','smite','lifetap','drain','multihit','direct','debuff']);
+  if (player.statusFear > 0 && OFFENSIVE_SPELL_TYPES.has(spell.type)) { log("You're too terrified to fight!"); endTurn(); return; }
   // ---- v3: soft stat requirement check (spells need INT, weapon-school techniques need STR/DEX) ----
   const deficit = abilityRequirementDeficit(spell);
   if (deficit > 0) {
@@ -20040,8 +21081,16 @@ function getArmorOf(e) {
   }
   return (e.armor || 0) + (e.buffArmorBonus || 0) + (e.talentArmor || 0);
 }
-function doAttack(att, def) {
+function doAttack(att, def, skipDuplicate) {
   const isPlayer = att === player;
+  // ---- SNEAK ATTACK (v0.40.13): captured right up front, before this hit can change anything --
+  // def.engaged is the exact flag every monster/NPC behavior function already checks to decide
+  // "wander obliviously" vs. "react to a threat" (see the ~25 identical `if (!seesPlayer &&
+  // !m.engaged)` guards throughout the AI framework), so "not engaged yet" already IS this game's
+  // own established definition of "hasn't noticed you." Only meaningful for the player: monsters
+  // don't get a stealth playstyle to reward. See the crit-roll payoff below and def.engaged being
+  // set true at the end of this function.
+  const sneakAttack = isPlayer && def.alive !== false && !def.engaged;
   // ---- CALLED SHOT: consumed exactly once per attack attempt, win or lose (dodge/miss/hit all
   // burn it), captured into a local const right up front so nothing later in this function can
   // read a stale or double-applied aim. See beginCalledShot for how it's set, and the payoff
@@ -20112,8 +21161,16 @@ function doAttack(att, def) {
   if (att.lowHpDmgBonus && att.hp / (att.maxHp || att.hp || 1) < 0.35) dmg *= (1 + att.lowHpDmgBonus);
   if (weapon) {
     const elemMult = 1 + (isPlayer ? (player.elementalDmgBonus || 0) : 0);
-    if (weapon.fireDmg) dmg += randInt(Math.random, 0, weapon.fireDmg) * elemMult;
-    if (weapon.frostDmg) dmg += randInt(Math.random, 0, weapon.frostDmg) * elemMult;
+    // BUG FIX (v0.40.14): fireImmune existed (Fire Elemental) but was only ever checked for two
+    // narrow, unrelated things -- walking through fire terrain, and whether a burning creature
+    // panics toward water -- never for the actual fire damage a weapon deals, nor for whether it
+    // could be set alight at all (see igniteEntity below). A Fire Elemental could be lit on fire
+    // and take full bonus damage from your torch, which defeats the entire point of the flag.
+    // frostImmune didn't exist anywhere, despite three ice-native monsters (Frost Giant, Frost
+    // Giant King, Frost Drake -- all of which deal their own frost damage) having no counterpart
+    // to the fire-immunity precedent their fire-themed equivalent (Fire Elemental) already had.
+    if (weapon.fireDmg && !def.fireImmune) dmg += randInt(Math.random, 0, weapon.fireDmg) * elemMult;
+    if (weapon.frostDmg && !def.frostImmune) dmg += randInt(Math.random, 0, weapon.frostDmg) * elemMult;
     if (weapon.poisonDmg) {
       const poisonAmt = def.poisonDmgReduction ? Math.max(0, Math.round(weapon.poisonDmg * (1 - def.poisonDmgReduction))) : weapon.poisonDmg;
       if (poisonAmt > 0) def.statusPoison = (def.statusPoison || 0) + poisonAmt;
@@ -20156,7 +21213,10 @@ function doAttack(att, def) {
   dmg *= timeOfDayDamageMult(att.faction);
   let crit = false;
   const critChance = 0.08 + (att.critBonus || 0) + (isPlayer ? getBuff('crit') : 0);
-  if (Math.random() < critChance) { dmg *= (2 + (isPlayer ? (player.critDmgBonus || 0) : 0)); crit = true; }
+  // Sneak Attack payoff: an unaware target always takes a crit, and a harder one than an ordinary
+  // lucky roll -- the entire reason "Stealth" cybernetics/invisibility exist as a combat option at
+  // all, rather than a pure evasion tool that never once translated into extra damage output.
+  if (sneakAttack || Math.random() < critChance) { dmg *= sneakAttack ? (3 + (isPlayer ? (player.critDmgBonus || 0) : 0)) : (2 + (isPlayer ? (player.critDmgBonus || 0) : 0)); crit = true; }
   dmg = Math.max(1, Math.round(dmg));
   // Shatter: any hit landing on a frozen-solid target (see freezeEntitySolid) breaks the ice
   // early for a burst of bonus damage -- the payoff for rushing a frozen target down instead of
@@ -20200,7 +21260,20 @@ function doAttack(att, def) {
     // read close enough to "bladed" for this purpose without needing every monster base tagged.
     const dmgType = weaponDamageType(isPlayer ? weapon : att);
     const dmgFraction = dmg / (def.maxHp || def.hp || 30);
-    if (defCanBleed && dmgFraction > 0.06) applyBleed(def, (crit ? 2 : 1) + (dmgType !== 'blunt' ? 1 : 0));
+    // BUG FIX (v0.40.18): a flat 6% threshold hits hardest exactly when it's least fair -- a fresh
+    // level-1 character with ~25-30 max HP crosses it on almost any real hit, while the same 6%
+    // against a late-game HP pool means bleed stays reserved for genuinely serious wounds the way
+    // it reads as intended. Rather than raising the threshold flat for everyone (which would also
+    // quietly make bleed less relevant at high HP, not just fairer at low HP), the floor below
+    // scales down as max HP grows: a wound needs to be at least ~3 raw HP for a fragile early
+    // character to bleed at all, converging back to the original flat 6% once max HP passes
+    // roughly 50 (a few levels in) and staying exactly as it always was from then on.
+    const bleedThreshold = Math.max(0.06, 3 / (def.maxHp || def.hp || 30));
+    // BUG FIX (v0.40.31): the Mother's Tide-Hook's own description -- "it pulls wounds open rather
+    // than closing them" -- is a direct, specific bleed-aggravation claim (only lifesteal was set).
+    // Adds bonus bleed stacks on top of the normal roll while equipped, on the same hit that would
+    // have applied bleed anyway rather than forcing bleed on hits that otherwise wouldn't qualify.
+    if (defCanBleed && dmgFraction > bleedThreshold) applyBleed(def, (crit ? 2 : 1) + (dmgType !== 'blunt' ? 1 : 0) + (weapon && weapon.id === 'mother_tide_hook' ? 2 : 0));
     const part = rollHitLocation(crit);
     // Locational armor (see getPartArmorValue near recalcBodyPenalties) softens THIS specific
     // roll -- a well-armored head can shrug off a hit that would otherwise concuss it, even
@@ -20251,7 +21324,16 @@ function doAttack(att, def) {
   }
   if (settings.showDamageNumbers) spawnFloatingText(def.x, def.y, String(dmg), crit ? '#ffdd55' : (def === player ? '#ff6a5a' : '#ffffff'));
   if (def === player) Sound.play('playerHurt'); else if (isPlayer) Sound.play(crit ? 'critHit' : 'hit'); else Sound.play('enemyHit');
-  log(`${attName} hit${isPlayer ? '' : 's'} ${defName} for ${dmg}${crit ? ' (critical!)' : ''}${antiUndeadProc ? ' (super effective!)' : ''}.`);
+  log(`${attName} hit${isPlayer ? '' : 's'} ${defName} for ${dmg}${sneakAttack ? ' (sneak attack!)' : (crit ? ' (critical!)' : '')}${antiUndeadProc ? ' (super effective!)' : ''}.`);
+  // BUG FIX (v0.40.13): every OTHER way of hurting something in this game (thrown potions, poison
+  // splash, etc.) already explicitly sets `target.engaged = true` on impact with a comment noting
+  // "being hit wakes/aggros it, same as any other attack" -- but the primary melee/ranged weapon
+  // path, doAttack, never actually did this itself. It mostly didn't matter in practice (the
+  // attacker is usually visible to the target immediately afterward anyway, which most behavior
+  // functions treat as good enough to react), but it's the one real gap in an otherwise
+  // consistently-applied rule, and it's the same flag the Sneak Attack check above depends on
+  // being flipped promptly so a second consecutive hit doesn't also read as a surprise.
+  if (def !== player && def.alive !== false) def.engaged = true;
   // Living World bugfix: see pickFleeThreat's comment -- a prey/passive creature has no path to
   // notice a threat via the normal hostility check, so being attacked needs its own explicit
   // reaction here rather than waiting for a next AI tick that would never come.
@@ -20288,6 +21370,19 @@ function doAttack(att, def) {
   // put the two of them at odds (a provoked neutral beast, a struck civilian, a bandit who hit
   // the wrong target in a crowd). See isHostileTo near monsterAI.
   if (def !== player && def.alive && def.hp > 0) { if (!(def.grudgeAgainst instanceof Set)) def.grudgeAgainst = new Set(); def.grudgeAgainst.add(att); }
+  // BUG FIX (v0.40.29): Stack Overflow's own description explicitly describes its unique gimmick
+  // -- "duplicates its own swing just slightly out of sync with itself. The error was never
+  // actually handled" -- but mechanically it was just a plain weapon with a small technique-damage
+  // bonus riding on top; nothing about striking twice. A moderate, not-guaranteed proc chance
+  // ("slightly out of sync," not "always doubled") recurses into a second doAttack against the
+  // same target, guarded against the target already being dead and against skipDuplicate so a
+  // duplicated swing can never itself duplicate again -- this can glitch twice per attack, at
+  // most, never runaway.
+  if (isPlayer && !skipDuplicate && weapon && weapon.id === 'stack_overflow' && def.hp > 0 && Math.random() < 0.3) {
+    log(`${weapon.name} glitches -- the swing repeats!`);
+    doAttack(att, def, true);
+    return;
+  }
   if (def.hp <= 0) onDeath(def, att);
 }
 
@@ -20330,6 +21425,19 @@ function processEntityStatus(e) {
     e.statusSlow--;
     if (e === player && e.statusSlow > 0 && Math.random() < willpowerResistChance()) e.statusSlow--;
   }
+  // BUG FIX (v0.40.24): Silence blocks tryMonsterCast entirely (see there) but still needs to
+  // count down somewhere -- same tick pattern as Slow just above, including the same Willpower
+  // early-shake-off chance for consistency (silence is a mental effect, and Willpower already
+  // shortens every other mental/nerve status in this list).
+  if (e.statusSilence > 0) {
+    e.statusSilence--;
+    if (e === player && e.statusSilence > 0 && Math.random() < willpowerResistChance()) e.statusSilence--;
+  }
+  if (e.charmedTurns > 0) {
+    e.charmedTurns--;
+    if (e.charmedTurns <= 0 && posVisibleToPlayer(e.x, e.y)) log(`${e.name}'s eyes clear -- your hold on it breaks.`);
+  }
+  if (e === player && e.exposedTurns > 0) e.exposedTurns--;
   // Radiation (World Overhaul, irradiated_wastes/nanite biomes): a slower, steadier DoT than
   // poison, deliberately not reduced by poisonDmgReduction (it's a different mechanism), and not
   // shaken off early by Willpower the way poison/slow are -- it's meant to be a genuine reason to
@@ -20423,12 +21531,21 @@ function performBreathWeapon(m, target) {
   // otherwise gated on whether the player could see this happening to some other NPC/monster.
   const log = (targetIsPlayer || posVisibleToPlayer(m.x, m.y) || posVisibleToPlayer(target.x, target.y)) ? realLog : () => {};
   let dmg = randInt(Math.random, Math.round(m.atk[0]*1.3), Math.round(m.atk[1]*1.6));
+  // BUG FIX (v0.40.17): this function's own comment says a dragon can breathe on a rival monster
+  // or an NPC just as readily as the player -- real, intended friendly-fire, not a rare theoretical
+  // case -- but fireImmune/frostImmune were never checked here at all, and the non-player branch
+  // didn't even check frostDmgReduction (only fire had a non-player resistance check). A Frost
+  // Drake catching a rival dragon's fire breath, or two ice creatures near each other, ignored
+  // every resistance the target actually had.
   if (targetIsPlayer) {
     if (m.breathWeapon === 'fire' && getBuff('resistfire') > 0) dmg = Math.round(dmg * 0.4);
     if (m.breathWeapon === 'fire' && player.fireDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - player.fireDmgReduction)));
     if (m.breathWeapon === 'frost' && getBuff('resistfrost') > 0) dmg = Math.round(dmg * 0.4);
   } else {
+    if (m.breathWeapon === 'fire' && target.fireImmune) dmg = 0;
+    if (m.breathWeapon === 'frost' && target.frostImmune) dmg = 0;
     if (m.breathWeapon === 'fire' && target.fireDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - target.fireDmgReduction)));
+    if (m.breathWeapon === 'frost' && target.frostDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - target.frostDmgReduction)));
   }
   target.hp -= dmg;
   if (targetIsPlayer) lastDamageSource = `${m.name}'s ${m.breathWeapon} breath`;
@@ -20527,6 +21644,15 @@ function attackMulti(att, def) {
 // fights). See Part A above for FACTION_ALIGNMENT/rawFactionDisposition.
 function isHostileTo(a, b) {
   if (!a || !b || a === b || !a.alive || !b.alive || a.hp <= 0 || b.hp <= 0) return false;
+  // Charm/Domination (Mindjack Protocol, Psionic Dominance -- see their own comments above): a
+  // charmed target fights FOR the player for its duration, using the exact same targeting
+  // machinery (pickHostileTarget/gatherPotentialTargets/doAttack) every other fight in the game
+  // already runs on -- never hostile to the player or their allies while charmed, hostile to
+  // everything else (its own former faction included) instead. Placed above every other rule here
+  // deliberately: charm is meant to be an overriding effect, not one more faction check that a
+  // war-tag or grudge could out-rank.
+  if (a.charmedTurns > 0) return !(b === player || b.kind === 'ally');
+  if (b.charmedTurns > 0) return !(a === player || a.kind === 'ally');
   if ((a === player || b === player) && (a.kind === 'ally' || b.kind === 'ally')) return false;
   if (a.kind === 'monster' && a.behavior === 'flee') return false; // prey/passive creatures never start a fight
   if (a.grudgeAgainst instanceof Set && a.grudgeAgainst.has(b)) return true;
@@ -20539,7 +21665,20 @@ function isHostileTo(a, b) {
   // (pickHostileTarget, doAttack, alertNearbyAllies) that already drives every other NPC fight in
   // the game, with zero new combat code required. An invader (tag set) against an ordinary local
   // guard (tag unset) still reads as hostile, since undefined !== 'SomeKingdom'.
-  if (a.kind === 'npc' && b.kind === 'npc' && (a.warKingdom || b.warKingdom) && a.warKingdom !== b.warKingdom) return true;
+  // BUG FIX (v0.40.8): this used to require kind==='npc' on BOTH sides, which meant a raid never
+  // actually threatened the player's own companion, and the companion's own proactive targeting
+  // (companionFollowAI -> pickHostileTarget -> this function) never picked up an invader as a
+  // target either -- entityFaction() resolves both an ally and an ordinary defending guard to the
+  // same 'settlement' faction, so with the npc-only war-tag check skipped, the two sides fell
+  // through to the generic same-faction-never-fights-itself rule and simply stood next to each
+  // other. A companion could stand in the middle of an active settlement raid, on the defenders'
+  // own side by every other measure, and never be attacked or attack back unless the invader
+  // happened to also be fighting the player and something else dragged it in. A companion is
+  // exactly as much "on the settlement's side" as an unmarked defending guard already is, so it
+  // gets the same treatment here.
+  const aWarCombatant = a.kind === 'npc' || a.kind === 'ally';
+  const bWarCombatant = b.kind === 'npc' || b.kind === 'ally';
+  if (aWarCombatant && bWarCombatant && (a.warKingdom || b.warKingdom) && a.warKingdom !== b.warKingdom) return true;
 
   if (a === player || b === player) {
     const mon = a === player ? b : a;
@@ -20732,6 +21871,7 @@ function monsterCastAt(caster, ab, target) {
 // attempts one ability cast this turn; returns true if it used the turn.
 function tryMonsterCast(m, target, dist) {
   if (!m.abilities || !m.abilities.length) return false;
+  if (m.statusSilence > 0) return false; // BUG FIX (v0.40.24): see the Silence spell's own comment above
   if (Math.random() < 0.35) return false; // don't cast every single turn -- keep positioning/melee in the mix
   for (const abId of m.abilities) {
     const ab = MONSTER_ABILITY_LIBRARY[abId];
@@ -20928,7 +22068,19 @@ function runCombatState(m, vision) {
   if (m.behavior === 'gascloud') {
     m.gasCooldown = (m.gasCooldown || 0) - 1;
     if (dist <= (m.gasRadius || 3) && m.gasCooldown <= 0) {
-      gasArea(m.x, m.y, 5, m.gasDamage || 3, 'poison');
+      // BUG FIX (v0.40.7): this call was missing the `turns` argument entirely -- every other
+      // gasArea() call site in the game passes 6 args (cx, cy, radius, turns, power, kind); this
+      // one passed only 5, which silently shifted the monster's own gasDamage stat into the
+      // `turns` slot and the literal string 'poison' into the `power` slot. addGasCloud() then
+      // computed `Math.max(t.gasPower||0, 'poison')`, which coerces to NaN, and every actual gas
+      // tick reads `t.gasPower || 3` -- NaN is falsy in JS, so it silently fell back to a flat 3
+      // damage regardless of what the monster was configured for. Every gascloud monster in the
+      // game (Spore Walker, Logic Bomb, Plague Zombie, Gibbering Mouther, Poison Bloom, Corpse
+      // Flower, and the bosses Verdant Horror / the Ashen Catacombs' matriarch, gasDamage 3-6) was
+      // silently capped at 3 regardless of its own stat -- a boss's signature area attack was
+      // mechanically indistinguishable from the weakest gas-cloud trash monster in the game
+      // (this includes both gascloud bosses, Verdant Horror and the Seed-Mother, gasDamage 6 each).
+      gasArea(m.x, m.y, 5, 6, m.gasDamage || 3, 'poison');
       log(`${m.name} releases a billowing cloud of noxious gas!`);
       m.gasCooldown = 5;
       return;
@@ -24243,6 +25395,27 @@ MONSTER_BASES.the_wanderer = { name:'The Wanderer', glyph:'L', color:'#a8a8b0', 
 MONSTER_BASES.the_hatchling = { name:'The Hatchling', glyph:'d', color:'#e0a020', hp:60, str:12, dex:15, atk:[5,11], armor:4, xp:65, behavior:'aggressive', dtier:4, faction:'dragon', fire:3,
   lore:"Too young to be guarding a hoard of its own, and clearly running from something instead of toward it. The Hoardkeeper has never once tried to claim it back." };
 
+// BUG FIX (v0.40.15): poisonDmgReduction is an extensive, well-built player-side mechanic (racial
+// traits, talents, cybernetics, one piece of armor -- see the ~15 checks against it throughout
+// doAttack/applyEffectToTarget/thrown items) with a comment right at its use site literally
+// promising "racial poison resistance (Dwarf/Skarath partial, Construct/others full via
+// poisonDmgReduction)" -- but not one single monster in the entire MONSTER_BASES table ever
+// actually had it set. A stone golem or a clockwork sentinel -- no bloodstream, no nervous
+// system, nothing for a toxin to act on -- took full, unmitigated poison damage from a player's
+// venom weapon or poison spell, exactly the same as anything else in the game, directly
+// contradicting what the game's own code comments say should happen. Data-driven and faction-keyed
+// (same spirit as AI_VARIETY_FACTION_MAP near MONSTER_BASES' declaration) so a future construct
+// added anywhere in the file inherits this automatically, no per-monster edits needed. Placed here,
+// after every MONSTER_BASES.xxx assignment in the file rather than up near the top with
+// AI_VARIETY_FACTION_MAP, deliberately: several construct monsters (the antagonist "aspect"
+// encounters, dimension bosses) are defined well after that point in the file, and a loop running
+// too early would silently miss every one of them.
+for (const _mid in MONSTER_BASES) {
+  const base = MONSTER_BASES[_mid];
+  if (base.faction === 'construct' && base.poisonDmgReduction === undefined) base.poisonDmgReduction = 1;
+}
+
+
 const DIMENSION_RARE_SIGHTING = {
   clockwork_expanse: { monsterId: 'runaway_automaton', trophyId: 'runaway_gearheart' },
   the_drift:          { monsterId: 'the_unmoored',       trophyId: 'unmoored_fragment' },
@@ -24449,15 +25622,16 @@ function triggerSimulationReveal(def) {
   log('*** Every wall, every leaf, every face you have ever passed in this world holds still, then peels back gently at the edges, revealing rows of quiet light underneath, patient as a held breath. ***');
   log(`*** GOD was never a god. It was the thing quietly running everything -- every kingdom, every dungeon, every name you were given. It does not seem angry that you found this. If anything, it seems relieved. ***`);
   log('*** You are free to keep going. Nothing here was ever less real for having been built. ***');
-  recordHallOfLegends();
+  recordHallOfLegends('ascended');
 }
-function recordHallOfLegends() {
+function recordHallOfLegends(outcome, cause) {
   try {
     const key = 'lucid_dreams_of_roguelike_hall_of_legends_v1';
     let hall = [];
     try { hall = JSON.parse(localStorage.getItem(key)) || []; } catch (e) {}
     hall.push({ name: player.name || player.scenario || 'an unnamed adventurer', level: player.level, turns: turnCount, seed: SEED, antagonist: player.story ? player.story.antagonist : null, date: Date.now(),
-      worldPhase: player.worldPhase || 0, betrayalOutcome: player.story ? player.story.betrayalOutcome : null, betrayalTrusted: player.story ? player.story.betrayalTrusted : null });
+      worldPhase: player.worldPhase || 0, betrayalOutcome: player.story ? player.story.betrayalOutcome : null, betrayalTrusted: player.story ? player.story.betrayalTrusted : null,
+      outcome: outcome || 'ascended', cause: cause || null });
     localStorage.setItem(key, JSON.stringify(hall.slice(-50)));
   } catch (e) {}
 }
@@ -26516,6 +27690,19 @@ function endTurn() {
     if (b.turns <= 0) delete player.buffs[stat];
   }
   processEntityStatus(player);
+  // BUG FIX (v0.40.28): Graveward's Charm's own description makes a specific, concrete claim --
+  // "it still hums faintly when something means you harm" -- but the item (noAffixes, only
+  // intBonus/conBonus) had no such effect at all. A passive proximity warning for an UNENGAGED
+  // hostile (one that hasn't noticed the player yet -- the same !m.engaged signal Sneak Attack and
+  // the war-party fixes already established as this game's own definition of "hasn't noticed you")
+  // is exactly what "hums when something means you harm" describes: an early warning about a
+  // threat that doesn't know it's a threat yet, not a redundant restatement of the "notices you!"
+  // message every monster already logs once it actually spots the player. Warns each qualifying
+  // monster once (warnedByCharm), not every single turn it lingers nearby unengaged.
+  if (player.equipment.amulet && player.equipment.amulet.id === 'unique_gravewards_charm') {
+    const nearbyThreat = curMonsters().find(m => m.alive && !m.engaged && !m.warnedByCharm && chebyshev(m.x, m.y, player.x, player.y) <= 3);
+    if (nearbyThreat) { nearbyThreat.warnedByCharm = true; log("Graveward's Charm hums warmly against your skin -- something nearby means you harm."); }
+  }
   if (player.statusFear > 0) {
     player.statusFear--;
     if (player.statusFear > 0 && Math.random() < willpowerResistChance()) player.statusFear--; // Willpower (WIL)
@@ -26577,7 +27764,11 @@ function endTurn() {
   // (so nothing about single-source builds changes); 2-3 stacks now give real, further, diminishing
   // returns instead of nothing, so every one of the three sources is worth taking no matter what
   // order a build picks them up in.
-  const regenStacks = player.regenBonusStacks || 0;
+  // BUG FIX (v0.40.31): the Heartwood Bough's own description -- "still, very slowly, trying to
+  // regrow" -- is a regeneration claim (only spellDmgBonus was set). A modest, equipment-driven
+  // extra regen stack while wielded, on top of whatever talent-driven stacks the player already
+  // has, rather than a whole new field just for one item.
+  const regenStacks = (player.regenBonusStacks || 0) + (player.equipment.hand && player.equipment.hand.id === 'heartwood_bough' ? 1 : 0);
   const baseRegenInterval = 10 / (1 + regenStacks);
   const regenInterval = Math.max(4, Math.round(baseRegenInterval - wilRegenSpeedup));
   // ---- BUGFIX (resting scalability): this used to add a flat +1 HP/+1 MP per tick no matter what
@@ -26681,6 +27872,37 @@ function toggleCyber(letter) {
 }
 
 // ---- eldritch / mutations screen ('U'): corruption, known mutations, ritual site ----
+// Corruption v1 (see reputationPriceMult below for the other half of this): every source of
+// Corruption in the game funnels through gainCorruption() now, the same single-choke-point
+// pattern addGoodwill already uses -- previously each call site (ritual, mutagen, biome effects,
+// world events) bumped the number independently, and Corruption itself was read in exactly one
+// place outside its own subsystem: the mutation-unlock gate. A stat framed everywhere in its own
+// flavor text as something dangerous and watchful ("something old takes notice of you", "you've
+// stopped fighting it") that mechanically only ever helped you, with zero cost anywhere else in
+// the game, was the single largest old-mechanic-that-touches-nothing case found in this audit.
+// Deliberately light-touch: a capped, modest price markup (see reputationPriceMult) plus one-time
+// flavor beats as you cross real thresholds, not a stat-crushing debuff -- mutations already
+// carry their own real tradeoffs (HP costs to activate, etc.); this is about the world noticing
+// what you're becoming, not about punishing the build.
+const CORRUPTION_MILESTONES = [
+  { at: 25, msg: 'Something about you has changed. Your reflection lingers a beat too long in still water.' },
+  { at: 50, msg: "*** People notice now. A shopkeeper's eyes flick to you and away too quickly -- you're not imagining it. ***" },
+  { at: 75, msg: '*** Whatever is happening to you is no longer subtle. Ordinary folk keep their distance without quite knowing why. ***' },
+  { at: 100, msg: 'There is very little of what you were left to notice the difference.' },
+];
+function gainCorruption(amount) {
+  if (!amount) return;
+  const before = player.corruption || 0;
+  player.corruption = Math.max(0, Math.min(100, before + amount));
+  if (amount <= 0) return; // a cleansing effect crossing back below a milestone isn't a new one to announce
+  player.corruptionMilestonesSeen = player.corruptionMilestonesSeen || [];
+  for (const ms of CORRUPTION_MILESTONES) {
+    if (before < ms.at && player.corruption >= ms.at && !player.corruptionMilestonesSeen.includes(ms.at)) {
+      player.corruptionMilestonesSeen.push(ms.at);
+      log(ms.msg);
+    }
+  }
+}
 function openEldritch() { Sound.play('uiOpen'); gameState = 'eldritch'; renderEldritch(); }
 function renderEldritch() {
   let html = `<div class="npcline">Corruption: ${Math.round(player.corruption)}</div>`;
@@ -26701,7 +27923,7 @@ function performRitual() {
   if (player.hp <= cost) { log('You are too weak to perform the ritual.'); return; }
   player.hp -= cost;
   const gain = randInt(Math.random, 5, 12);
-  player.corruption = Math.min(100, player.corruption + gain);
+  gainCorruption(gain);
   const reqAdj = player.corruptionReqReduction || 0;
   const eligible = MUTATIONS.filter(m => !player.mutations.includes(m.id) && m.corruptionReq <= player.corruption + reqAdj);
   if (!eligible.length) { log(`The ritual completes, but nothing answers your call. (+${gain} corruption)`); updateSidebar(); renderEldritch(); return; }
@@ -26718,7 +27940,7 @@ function grantMutation(mutationId) {
   if (player.mutations.includes(mutationId)) { log('You already bear this mutation.'); return; }
   player.mutations.push(mutationId);
   if (m.activation === 'passive' && m.apply) m.apply();
-  player.corruption = Math.min(100, player.corruption + randInt(Math.random, 3, 8));
+  gainCorruption(randInt(Math.random, 3, 8));
   log(`*** The mutagen takes hold — you gain the mutation: ${m.name}! ***`);
   updateSidebar();
 }
@@ -26850,6 +28072,13 @@ function springHiddenTrapAt(x, y) {
 }
 // ---- thrown items: land wherever you actually aim them, not at your own feet ----
 function beginThrowTargeting(it, fromSlot) {
+  // BUG FIX (v0.40.22): frozenSolidTurns already blocks movement, melee, ranged aim, and
+  // spellcasting entirely ("the point of freezing something is that it genuinely can't act" --
+  // see doMove's own comment on this), but throwing had no equivalent check at all -- a player
+  // encased solid could still lob a bomb or a potion. Checked here, before the item ever leaves
+  // the inventory, rather than after targeting resolves, so a frozen player doesn't lose the item
+  // to a blocked action the way a later check would risk.
+  if (player.frozenSolidTurns > 0) { log("You're frozen solid and can't throw anything!"); return; }
   const range = throwRangeFor(it);
   beginTileTargeting('throw', { item: it, fromSlot: fromSlot || null, range, aoeRadius: it.radius || 0 });
   log(`Throw ${it.name} (range ${range}) — click a tile, or press Enter/Space to snap to the nearest foe. Esc to cancel.`);
@@ -26875,7 +28104,10 @@ function resolveThrowAtTile(it, wx, wy, fromSlot) {
     case 'aoefire': {
       const isVoidFlavor = it.dtype === 'void';
       const hit = hostilesWithinRadius(wx, wy, radius);
-      hit.forEach(t => { const dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult); t.hp -= dmg; log(isVoidFlavor ? `${t.name} is torn apart by warping space for ${dmg} damage.` : `The blast engulfs ${t.name} for ${dmg} fire damage.`); if (t.hp<=0) onDeath(t, player); });
+      // BUG FIX (v0.40.17): same gap as throwWeapon/scrollfire before them -- this dealt raw
+      // t.hp -= dmg fire damage with no fireImmune check at all. Void-flavored charges are exempt
+      // (it's not fire damage, a Fire Elemental has no special resistance to warping space).
+      hit.forEach(t => { const blocked = !isVoidFlavor && t.fireImmune; const dmg = blocked ? 0 : Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult); if (blocked) { log(`${t.name} is unharmed by the flames.`); return; } t.hp -= dmg; log(isVoidFlavor ? `${t.name} is torn apart by warping space for ${dmg} damage.` : `The blast engulfs ${t.name} for ${dmg} fire damage.`); if (t.hp<=0) onDeath(t, player); });
       if (isVoidFlavor) {
         // a void charge tears space, it doesn't set fires -- distinct from the ordinary
         // firebomb/reactor-charge line above instead of silently reusing their flavor text.
@@ -26894,7 +28126,8 @@ function resolveThrowAtTile(it, wx, wy, fromSlot) {
     }
     case 'aoefrost': {
       const hit = hostilesWithinRadius(wx, wy, radius);
-      hit.forEach(t => { const dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult); t.hp -= dmg; log(`Freezing shrapnel tears into ${t.name} for ${dmg} frost damage.`); if (t.hp<=0) onDeath(t, player); });
+      // BUG FIX (v0.40.17): same gap -- no frostImmune check at all.
+      hit.forEach(t => { if (t.frostImmune) { log(`${t.name} is unharmed by the freezing shrapnel.`); return; } const dmg = Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult); t.hp -= dmg; log(`Freezing shrapnel tears into ${t.name} for ${dmg} frost damage.`); if (t.hp<=0) onDeath(t, player); });
       const doused = extinguishArea(wx, wy, radius);
       if (doused > 0) log('The freezing blast douses the flames nearby.');
       break;
@@ -26939,10 +28172,12 @@ function resolveThrowAtTile(it, wx, wy, fromSlot) {
     }
     case 'scrollfire': {
       const t = entityAt(wx, wy);
-      const dmg = t && t.alive !== false ? randInt(Math.random, it.power, it.power+8) : 0;
+      const fireBlocked = (!it.dtype || it.dtype === 'fire') && t && t.fireImmune;
+      const dmg = t && t.alive !== false && !fireBlocked ? randInt(Math.random, it.power, it.power+8) : 0;
       if (t && t.alive !== false) {
         t.hp -= dmg;
-        if (it.dtype === 'lightning') log(`A bolt of lightning cracks down! ${t.name} takes ${dmg} damage.`);
+        if (fireBlocked) log(`${t.name} shrugs off the flames entirely.`);
+        else if (it.dtype === 'lightning') log(`A bolt of lightning cracks down! ${t.name} takes ${dmg} damage.`);
         else if (it.dtype === 'holy') log(`Radiant light sears ${t.name} for ${dmg} damage.`);
         else log(`The scroll erupts! ${t.name} takes ${dmg} fire damage.`);
         if (t.hp<=0) onDeath(t, player);
@@ -26950,6 +28185,12 @@ function resolveThrowAtTile(it, wx, wy, fromSlot) {
       // Only an actual fire scroll leaves flame behind -- lightning and holy light don't ignite
       // the floor, which was the tell that these three were all silently the same scroll wearing
       // different names.
+      // BUG FIX (v0.40.16): this whole effect deals raw t.hp -= dmg damage completely outside
+      // doAttack/applyEffectToTarget, so it never picked up either of last pass's fireImmune
+      // checks -- a Fire Elemental hit with the fire-flavored version of this scroll took full
+      // damage and (below) could still be set alight, same gap as doAttack/igniteEntity before
+      // the fix. Guarded the damage above; igniteTile targets the ground itself rather than a
+      // specific entity so it's unaffected either way.
       if (!it.dtype || it.dtype === 'fire') igniteTile(wx, wy, 4);
       break;
     }
@@ -27114,8 +28355,13 @@ function resolveThrownWeapon(it, wx, wy, target) {
   if (!purposeBuilt) dmg = Math.round(dmg * 0.7); // clumsier than a weapon actually designed to be thrown
   if (it.broken) dmg = Math.round(dmg * 0.35);
   if (player.throwDmgBonus) dmg = Math.round(dmg * (1 + player.throwDmgBonus));
-  if (it.fireDmg) dmg += randInt(Math.random, 0, it.fireDmg);
-  if (it.frostDmg) dmg += randInt(Math.random, 0, it.frostDmg);
+  // BUG FIX (v0.40.16): thrown weapons have their own separate damage calc from doAttack's
+  // (different accuracy/damage formula entirely -- see purposeBuilt above), and it never got the
+  // fireImmune/frostImmune check doAttack's own fireDmg/frostDmg lines received last pass. The
+  // poisonDmg line right below this already correctly checks target.poisonDmgReduction -- this
+  // was the one inconsistent case within this very function, not just relative to doAttack.
+  if (it.fireDmg && !target.fireImmune) dmg += randInt(Math.random, 0, it.fireDmg);
+  if (it.frostDmg && !target.frostImmune) dmg += randInt(Math.random, 0, it.frostDmg);
   if (it.poisonDmg) { const p = target.poisonDmgReduction ? Math.max(0, Math.round(it.poisonDmg * (1 - target.poisonDmgReduction))) : it.poisonDmg; if (p > 0) target.statusPoison = (target.statusPoison || 0) + p; }
   let defArmor = getArmorOf(target);
   if (it.armorPierce) defArmor = Math.max(0, defArmor - it.armorPierce);
@@ -27339,6 +28585,11 @@ function useItem(it) {
   // "Use" path only auto-aimed at nearestHostile() and silently no-opped if nothing was already
   // in range; detonating at your own tile always goes off, exactly like pulling the pin.
   if (THROWABLE_EFFECTS.has(it.effect)) {
+    // BUG FIX (v0.40.22): this is the exact same throw logic as beginThrowTargeting (just
+    // pre-aimed at your own tile, per the comment above), so it needs the same frozen-solid guard
+    // -- otherwise a player encased solid could still detonate a grenade at their own feet even
+    // though the equivalent aim-and-throw-elsewhere action was correctly blocked.
+    if (player.frozenSolidTurns > 0) { log("You're frozen solid and can't use that!"); return; }
     resolveThrowAtTile(it, player.x, player.y, null);
     updateSidebar();
     endTurn();
@@ -27358,7 +28609,18 @@ function useItem(it) {
     // at power 90 -- still under 1.5% of endgame max HP. Every other resource pool this restores
     // (MP, Stamina, Charge) grows with level the same way HP does, so the same fix applies to all
     // of them, not just healing.
-    case 'heal': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult * playerLevelPowerMult(player.level) * healMult()); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You consume ${it.name} and recover ${amt} HP.`); break; }
+    case 'heal': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult * playerLevelPowerMult(player.level) * healMult()); player.hp = Math.min(player.maxHp, player.hp + amt); log(`You consume ${it.name} and recover ${amt} HP.`);
+      // BUG FIX (v0.40.11): DISEASE_CURE_POOL's own hint text for 'remedyItem' explicitly promises
+      // "an antidote OR a strong healing draught might fight this off" -- but only the dedicated
+      // cureall/cureposion effects ever actually granted cure progress. An ordinary 'heal' potion,
+      // no matter how strong (even the Elixir of Supreme Healing, power 90), did nothing for a
+      // disease at all, directly contradicting what the game itself tells the player. A genuinely
+      // strong draught (power >= 30 -- Potion of Greater Healing and above, not cooked food or a
+      // basic potion) now chips away at it same as the hint always claimed, just more slowly than
+      // a dedicated cure (1 progress per drink vs. 2-3) so a real antidote/cureall stays the
+      // faster, more reliable answer rather than becoming redundant.
+      if (it.power >= 30) grantDiseaseCureProgress('remedyItem', 1);
+      break; }
     // ---- BODY & HEALTH OVERHAUL: bandage is its own effect now, not a reskinned 'heal' potion --
     // stanching active bleeding is the actual point, the modest HP recovery on top represents
     // properly cleaning and closing the wound rather than nothing at all.
@@ -28196,7 +29458,13 @@ function showHallOfLegends() {
     if (rec.betrayalOutcome === 'correct' && rec.betrayalTrusted) extras.push(`trusted ${rec.betrayalTrusted} rightly`);
     else if (rec.betrayalOutcome === 'wrong' && rec.betrayalTrusted) extras.push(`paid for trusting wrong`);
     const extraStr = extras.length ? ` <span class="dim">(${extras.join(', ')})</span>` : '';
-    return `<div class="modal-opt">Level ${rec.level} adventurer &mdash; defeated ${rec.antagonist ? rec.antagonist : 'GOD'} after ${rec.turns} turns${extraStr} <span class="dim">(${date})</span></div>`;
+    // Records written before v0.40.6 never had `outcome` set at all (recordHallOfLegends used to
+    // only ever fire from the ascension ending), so a missing outcome means an old ascension --
+    // that reading is the only one that's actually correct for pre-existing localStorage data.
+    const headline = rec.outcome === 'died'
+      ? `Level ${rec.level} adventurer &mdash; fell to ${rec.cause ? rec.cause : 'unknown causes'} after ${rec.turns} turns`
+      : `Level ${rec.level} adventurer &mdash; defeated ${rec.antagonist ? rec.antagonist : 'GOD'} after ${rec.turns} turns`;
+    return `<div class="modal-opt">${headline}${extraStr} <span class="dim">(${date})</span></div>`;
   }).join('') || `<div class="npcline dim">No legends recorded yet.</div>`;
   renderModal('Hall of Legends', html, 'Esc to return to the title screen.');
 }
@@ -28963,16 +30231,30 @@ function archetypeChoice(letter) {
   if (letter === '<') { showSpeciesPicker(); return; }
   resetWorldState();
   if (letter === '0') { player = newPlayer(); applySpeciesToPlayer(player, pendingSpeciesId); creationDraft = { points: CREATION_POINTS, statAdds:{str:0,dex:0,int:0,con:0,wil:0,cha:0}, abilities:[], abilityCat:'spells', gold:0, items:[] }; showCreateStats(); return; }
-  if (letter === '9') { player = newPlayer(); applySpeciesToPlayer(player, pendingSpeciesId); const arch = choice(Math.random, ARCHETYPES); arch.apply(); recalcVitalsFromStats(); player.scenario = 'archetype:' + arch.id; log(`*** Random roll: you are a ${getSpecies(pendingSpeciesId).name} ${arch.name}! ***`); showStartScreen(); return; }
+  if (letter === '9') { player = newPlayer(); applySpeciesToPlayer(player, pendingSpeciesId); const arch = choice(Math.random, ARCHETYPES); arch.apply(); grantStartingBandages(); recalcVitalsFromStats(); player.scenario = 'archetype:' + arch.id; log(`*** Random roll: you are a ${getSpecies(pendingSpeciesId).name} ${arch.name}! ***`); showStartScreen(); return; }
   const idx = letter.charCodeAt(0) - 97;
   const arch = ARCHETYPES[idx];
   if (!arch) return;
   player = newPlayer();
   applySpeciesToPlayer(player, pendingSpeciesId);
   arch.apply();
+  grantStartingBandages();
   recalcVitalsFromStats();
   player.scenario = 'archetype:' + arch.id;
   showStartScreen();
+}
+// BUG FIX (v0.40.18): confirmed via an independent playtest report and verified against this file
+// directly -- 22 of ARCHETYPES' 25 entries push nothing at all into player.inventory (only
+// Herbalist/Chef/Tinkerer grant any starting consumables, and none of them grant a Bandage
+// specifically). Bleed (see doAttack) explicitly does not fade on its own by design -- it
+// requires a Bandage or equivalent cure -- so a fresh Warrior/Ranger/Rogue/etc. character that
+// takes one meaningfully hard hit starts bleeding with no way to stop it short of finding or
+// buying a cure first, which is a real, verified death spiral for new characters. A single shared
+// grant here (rather than editing all 25 apply() functions individually) fixes every archetype,
+// present and future, at once.
+function grantStartingBandages() {
+  addItemToList(player.inventory, makeItem('bandage', 0, Math.random));
+  addItemToList(player.inventory, makeItem('bandage', 0, Math.random));
 }
 function showCreateStats() {
   gameState = 'create_stats';
@@ -29133,6 +30415,14 @@ function finishCustomCreation() {
   if (maxMutationReq >= 0) player.corruption = Math.min(100, Math.max(player.corruption, maxMutationReq + 10));
   player.gold += d.gold;
   d.items.forEach(baseId => { addItemToList(player.inventory, makeItem(baseId, 0, Math.random)); });
+  // BUG FIX (v0.40.30): flagged by the player -- grantStartingBandages() was only ever wired into
+  // the two archetype paths (see v0.40.18), and this path was wrongly assumed to be covered
+  // because "it already lets the player choose their own starting items." It doesn't, not really:
+  // CREATION_STARTING_ITEM_POOL is filtered to weapon/armor only, so a custom-built character had
+  // no way to pick a Bandage even deliberately, on top of never getting the same safety net every
+  // other starting path has. Guaranteed the same way the other two paths are; see the expanded
+  // pool below for the actual choice this should have offered all along.
+  grantStartingBandages();
   player.scenario = 'custom';
   showStartScreen();
 }
@@ -29143,8 +30433,23 @@ function gameOver() {
   player.alive = false;
   Sound.play('playerDeath');
   deleteSaveGame();
+  // BUG FIX (v0.40.6): recordHallOfLegends() previously only fired from the secret true-ending
+  // path, so the "Hall of Legends" -- a feature named and framed like every other roguelike's
+  // permanent run history (DCSS's morgue, ADOM's Hall of Fame, Brogue's) -- silently recorded
+  // nothing at all for the overwhelming majority of playthroughs, which end in an ordinary death,
+  // not the rare secret ending. Every run now gets a line in the ledger, not just the ones that
+  // found the ending.
   log('*** YOU HAVE DIED ***');
-  const cause = player.deathCause || 'unknown causes';
+  // BUG FIX (v0.40.6): this used to fall back straight to the literal string 'unknown causes',
+  // ignoring lastDamageSource -- which is what actually gets set by the many environmental/hazard
+  // death paths (cold, heat, hail, disaster, traps, gas, poison, radiation, bleeding, drowning,
+  // fever, etc.) that kill the player by ticking hp down directly and letting the main turn loop's
+  // `if (!player.alive) gameOver()` catch it, rather than routing through onDeath (which is the
+  // only place player.deathCause itself gets set). The correct cause was sitting right there in
+  // lastDamageSource this whole time; the death screen (and the Hall of Legends entry below) just
+  // wasn't reading it.
+  const cause = player.deathCause || lastDamageSource || 'unknown causes';
+  recordHallOfLegends('died', cause);
   const eq = player.equipment;
   const equipped = SLOT_ORDER.map(s => eq[s]).filter(Boolean).map(it => it.name).join(', ') || 'nothing';
   const logHtml = (player.deathLog || []).map(m => `<div>${m}</div>`).join('');
