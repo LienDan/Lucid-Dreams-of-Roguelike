@@ -1,0 +1,12 @@
+{
+  "name": "roguelike-playtest-kit",
+  "version": "1.0.0",
+  "description": "Headless automated playtester for the single-file HTML roguelike (lucid_dreams_of_roguelike.html). Boots the real game engine in jsdom and drives autonomous playthroughs to catch crashes, soft-locks, and balance issues.",
+  "main": "bot.js",
+  "scripts": {
+    "playtest": "node bot.js 20 8000 500"
+  },
+  "dependencies": {
+    "jsdom": "^24.1.3"
+  }
+}
