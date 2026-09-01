@@ -488,6 +488,7 @@
         <b>G</b> auto-travel &nbsp; <b>H</b> auto-home<br>
         <b>X</b> auto-explore &nbsp; <b>M</b> dungeon map<br>
         <b>&gt;</b> enter/descend &nbsp; <b>&lt;</b> ascend<br>
+        <b>S</b> search for secrets &nbsp; <b>D</b> dig (pickaxe in hand)<br>
         <b>?</b> full guide &nbsp; click map to examine
       </div>
     </div>
@@ -515,7 +516,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.41.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.42.0-alpha</div>
     </div>
   </div>
 
@@ -1374,6 +1375,147 @@
 // Last Fang, Umbroth's Fang) and left them alone -- their descriptions are backstory or already
 // match an existing stat (a dragon fang with fire damage, predator teeth with no further claim),
 // not a distinct mechanic left undelivered.
+// v0.41.0 Player-requested benchmark pass: asked to compare directly against CDDA/Caves of
+// Qud/Brogue/ToME4 and close genuine gaps against that bar, not just audit existing systems.
+// Confirmed by grep across the whole file (not assumption) that three specific things those
+// games are built around had zero presence here:
+//   - Secret doors & search (Brogue/NetHack staple): generateDungeonLevel can now roll a
+//     placeSecretVault() -- a door carved with the exact glyph/color of that dungeon's own walls
+//     (not a fixed style, so it reads identically across every theme/generator) sealing a small
+//     above-average-loot room. Found via a small passive per-turn chance while adjacent
+//     (trySearchAdjacentSecrets, called from endTurn) or the new deliberate [S]earch command
+//     (secretSearchChance, ~4x the passive rate, costs a turn) -- both scale with DEX/level, same
+//     shape as the existing lockPickChance/lockForceChance so all three "skill roll" mechanics
+//     feel consistent. A blast-radius explosion also force-reveals one if it's in range, matching
+//     how statues/doors already react to the same code path.
+//   - Salvage (CDDA staple): salvageItem() breaks an unwanted weapon/armor down into its base
+//     material (wood/cloth/leather/iron, classified by a keyword table so anything added later
+//     needs no per-item tagging) plus a partial refund of Starmetal/Ironwood if it was crafted
+//     from one, plus Arcane Dust if it carries real magic (an affix from it.mods, or Fine+ crafted
+//     quality). Reachable from any inventory item's action menu as [v] Salvage, equipped or not.
+//   - Reforge (ToME4/DCSS-style gear-chase staple, the natural sink for the dust above):
+//     reforgeItem() spends Arcane Dust + gold for a small permanent dmg/armor/durability bump to
+//     a piece of gear you're keeping, capped at 5 reforges/item so it's a long-tail investment in
+//     a favorite piece, not a stat treadmill that outpaces the loot table. Same item-action menu,
+//     [r] Reforge, cost scales with the item's own value so upgrading a legendary is a real spend.
+// All three wired into existing frameworks on purpose rather than bespoke systems: salvage/reforge
+// reuse MATERIAL_PROPERTIES and CRAFT_QUALITY_TIERS instead of parallel registries; secret vaults
+// reuse dtile2/placeLockedVault's exact room-carving shape. Guide (Crafting/Dungeons sections) and
+// the on-screen keyhint updated to match. Not done this pass, flagged for next: equipment
+// sockets/runes (no analog anywhere in the item system currently) and item disassembly's UI has
+// no batch/"salvage all junk" action yet -- one item at a time by design for now, revisit if it
+// proves tedious in practice.
+//
+// v0.41.1 Follow-up to v0.41.0: built the equipment sockets/runes system flagged above as the
+// next gap against ToME4's runics/DCS's jewelry -- something to keep upgrading on gear you
+// already like, past just finding a strictly-better item.
+//   - Sockets: rollSockets() (called from makeItem, keyed off the same rarity+affixTier signal
+//     everything else already uses) gives weapons/armor above a rarity threshold 0-3 empty
+//     sockets. Crafted gear gets this for free through the same makeItem() call craftRecipe()
+//     already made -- no separate hook needed.
+//   - Runes: a new item type, fully data-driven (RUNE_TYPES table, data-expansion section near
+//     the top of ITEM_BASES) -- 8 types (Might/Swiftness/Insight/Vitality/Warding/Ember/Frost/
+//     Precision) x 3 tiers (Minor/Greater/Major), with their ITEM_BASES entries and RECIPES
+//     entries both *generated* from that one table (ITEM_BASES.push(...RUNE_TYPES.map(...)),
+//     RECIPES.push(...RUNE_TYPES.flatMap(...))) rather than hand-written -- adding a 9th rune
+//     type later is one new table row, nothing else to touch. Crafted from Arcane Dust (the same
+//     material salvage produces, giving it a second use) plus a themed base material. Taught by
+//     blacksmiths/alchemists/tailors (each a few types, Minor only below master tier) via the
+//     existing NPC teachRecipes system, or found as an ordinary random recipe drop.
+//   - Socketing: [k] Socket a rune / [j] Remove a rune, new options on any weapon/armor's action
+//     menu (openItemAction) alongside Salvage/Reforge, each opening a lettered picker (same
+//     "own gameState + a-z options" shape as the existing quickslot-assign screen). socketRune/
+//     unsocketRune correctly bracket the mutation with applyStatBonuses/removeStatBonuses when
+//     the item is currently equipped -- necessary because str/dex/int/con and a few flat fields
+//     (critBonus etc.) are cached into player.* at equip time, while armor/fireDmg/frostDmg are
+//     read live off the equipped item every combat calc and need no such bracket; verified both
+//     paths independently since a rune socketed into an *equipped* item has to apply immediately,
+//     not just on the next equip. Removing a rune destroys it (a socket is a deliberate long-term
+//     commitment, not a costume swap) but never removes the socket itself.
+// Tested via a dedicated direct-call harness (not just the general playtest bot, which wouldn't
+// reliably stumble into a system this specific): craft+socket on both a cached stat (STR) and a
+// live-read stat (armor), unsocket correctly reverses the exact delta and destroys the rune,
+// socket-cap refusal, weapon-only/armor-only rune filtering, and a full [k]->pick->[j]->remove UI
+// round trip through real simulateKey() presses, not just the underlying functions. Zero window
+// errors across that suite plus a follow-up 6-life bot regression run.
+//
+// v0.41.2 A new gap, found the same way as before (grep the whole file for the mechanic, don't
+// assume): tunneling through dungeon walls. NetHack/CDDA-signature, and this codebase already had
+// half the pieces for it (pickaxes exist as a mining tool, GATHER_TOOL_PATTERNS.ore already
+// matches pickaxe/warhammer/hammer/maul) but zero wall-breaking mechanic to go with them.
+//   - [D] then a direction (beginDigTargeting -> beginDig, new 'digpick' gameState, same
+//     "own state, wait for the next MOVE_KEYS press" shape as the dig-direction input, not a
+//     bespoke targeting mode) starts a multi-turn dig on an adjacent wall, requiring the same
+//     pickaxe-class weapon already recognized for mining. Turns needed scale down with STR
+//     (clamped 3-8, so it's never instant and never runs forever), costs Stamina per turn, and is
+//     interrupted the instant a threat comes into view+range -- same nearbyThreat/hasLOS check
+//     doRest() already uses, reused rather than reinvented.
+//   - Can't dig through doors (there's already a way to open/force/find those), statues, or
+//     anything within 2 tiles of a level's edge (would otherwise let you dig into the unbuilt
+//     void outside the generated grid). Breaking through has a chance to drop loose ore, matching
+//     the flavor of the existing ore-vein gather nodes -- same kind of labor, different wall.
+// Verified with a direct test that registers a real dungeon via dungeonRegistry (not a shortcut --
+// matches exactly what enterDungeon() itself sets up) so curIsDungeon()/curDungeonLevel() see a
+// faithful in-dungeon state, confirmed the full multi-turn channel actually completes and leaves
+// the wall walkable, and confirmed the no-tool / not-in-dungeon refusals fire correctly. Bot
+// regression (6 lives) still clean afterward.
+//
+// v0.41.3 Closed the one deliberately-deferred item from v0.41.0's changelog: batch salvage.
+// [J] Salvage all junk (new option on the Inventory screen) finds everything salvageable that's
+// clearly worse (under 60% of value) than what's currently equipped in that exact slot, and
+// breaks it all down in one confirm step instead of one item at a time. Deliberately conservative
+// -- an item is never flagged unless there's already something equipped in that slot to compare
+// against, so an empty slot never gets its only candidate silently destroyed, and the two "close
+// in value" test items in this pass's test suite (150g vs a 200g equipped sword) were correctly
+// left untouched by the 60% cutoff. junkCandidates() is shared by both the confirm screen and the
+// live count already shown next to [J] on the Inventory screen, so what you see before confirming
+// is exactly what gets salvaged, not an approximation.
+// This pass also closes out the current round of CDDA/Qud/Brogue/ToME4 gap-closing (secret doors,
+// salvage, reforge, sockets/runes, tunneling, batch salvage -- v0.41.0 through v0.41.3). Deliberately
+// NOT pursuing several other candidates that came up during this comparison, on purpose rather than
+// by oversight: a full vehicle/base-building system (CDDA) would be a different game built on top of
+// this one's dungeon-crawl-plus-overworld-hub structure, not an addition to it; New Game+/meta-
+// progression bonuses across runs would cut against the permadeath-purity this file's own earlier
+// passes already chose deliberately (Hall of Legends as an honest historical record, no hunger/
+// thirst, no cross-run carryover of any kind) -- adding one now would quietly undo an existing
+// design decision rather than fill a gap. Both are noted here so a future pass doesn't reintroduce
+// them without knowing they were considered and set aside, not missed.
+//
+// v0.41.4 Polish/integration pass over everything added in v0.41.0-v0.41.3, per request: went back
+// looking specifically for bugs, missed cross-system interactions, and places two new systems
+// should have been talking to each other but weren't.
+//   - BUG FIX: reforgeItem()'s durability top-up set it.durability directly instead of going
+//     through repairItem(), which meant it.broken stayed true even after the item was restored to
+//     full durability -- reforging a broken item silently left it still flagged broken. Fixed by
+//     routing through repairItem() like every other durability restore in the game already does.
+//   - NEW SYNERGY: reforge and sockets previously didn't interact at all despite both spending the
+//     same Arcane Dust -- maxing a reforge out (5/5, the point where reforging alone stops doing
+//     anything) now has a 1-in-3 chance to punch a brand new socket into the item, capped at the
+//     same 3-socket ceiling loot generation itself uses.
+//   - NEW DEPTH: salvage yield now scales down with an item's remaining durability (floored at
+//     40% of pristine, rounded up to at least 1) -- a broken sword has less usable metal in it
+//     than a pristine one, which wasn't reflected before. Arcane Dust yield is deliberately
+//     unaffected -- the magic in an item doesn't dull just because its edge did.
+//   - NEW DEPTH: unsocketing no longer unconditionally destroys the rune -- an INT-scaled chance
+//     (3% per INT, capped at 35%) lets a sharp mind work it free intact instead, so experimenting
+//     with sockets isn't punished as hard as an outright mistake would be. Both outcomes verified
+//     actually occur in the same trial run, not just that the function doesn't crash.
+//   - CONFIRMED (no change needed): compareItem() already reads it.dmg/it.armor live off the item
+//     object, so reforged and rune-socketed bonuses were already flowing into gear comparisons
+//     automatically -- checked, not assumed.
+//   - DESIGN DECISION, not a bug: tunneling can dig around locked vaults, secret vaults, and lever
+//     puzzles alike, landing the player straight into whatever's on the other side (including,
+//     for a locked vault's island variant, potentially straight into its moat). Left this
+//     universal rather than carving out "undiggable" exceptions for those rooms specifically,
+//     because (a) it matches the genre's own convention -- NetHack has always explicitly rewarded
+//     digging around a locked door -- and (b) a blanket "every wall is diggable except doors and
+//     statues" rule is one a player can actually learn and rely on, where a patchwork of
+//     exceptions wouldn't be. Documented here so a future pass doesn't "fix" this by accident.
+// Verified with dedicated tests for each: the broken-flag fix, a 60-trial loop confirming the
+// bonus-socket roll actually fires, a pristine-vs-broken salvage yield comparison, and a 60-trial
+// loop at high INT confirming the unsocket preservation roll produces BOTH outcomes (not just
+// checking it doesn't crash). Zero window errors, plus a follow-up bot regression run.
+//
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
 // external audio files. This keeps the game a single portable HTML file and
@@ -2147,6 +2289,19 @@ function lootEligibleBaseIds(maxValueTier, opts) {
     return true;
   }).map(b => b.id);
 }
+// ---- socket count roll: shared by loot generation (makeItem, keyed off rarity+affixTier) and
+// crafted gear (craftRecipe already passes its own combinedRarity into makeItem, so crafted items
+// get this for free with no separate call needed). Deliberately modest odds even at the top end --
+// a socket is a genuine bonus on top of an already-good item, not something every legendary is
+// guaranteed to maximize.
+function rollSockets(rarity, affixTier) {
+  const tier = Math.max(rarity || 0, affixTier || 0);
+  if (tier >= 4) return 2 + (Math.random() < 0.5 ? 1 : 0);
+  if (tier === 3) return 1 + (Math.random() < 0.45 ? 1 : 0);
+  if (tier === 2) return Math.random() < 0.55 ? 1 : 0;
+  if (tier === 1) return Math.random() < 0.15 ? 1 : 0;
+  return 0;
+}
 function makeItem(baseId, rarity, rng, powerMult) {
   rng = rng || Math.random;
   const base = ITEM_BASES.find(b => b.id === baseId);
@@ -2213,6 +2368,10 @@ function makeItem(baseId, rarity, rng, powerMult) {
   if (strReqDelta && (base.type === 'weapon' || base.type === 'armor')) it.str = Math.max(0, (base.str || 0) + strReqDelta);
   it.value = Math.max(1, Math.round(value));
   it.bonuses = bonuses;
+  // ---- sockets (see RUNE_TYPES/rollSockets, data-expansion section): rolled off the same
+  // rarity + affixTier signal that already drives everything else about how "special" this drop
+  // is, so a plain rarity-0 dagger essentially never has one and a legendary reliably does.
+  if (base.type === 'weapon' || base.type === 'armor') { it.sockets = rollSockets(rarity, affixTier); it.socketedRunes = []; }
   // ---- durability (v3): normal attacks never touch this -- see wearItemDurability() in combat.
   const maxDur = baseDurabilityFor(base, affixTier);
   if (maxDur !== null) { it.maxDurability = maxDur; it.durability = maxDur; it.broken = false; }
@@ -2484,10 +2643,45 @@ ITEM_BASES.push(
   { id:'cloth', name:'Cloth', type:'material', glyph:'"', color:'#dcd6c8', value:2 },
   { id:'leather_scrap', name:'Leather Scrap', type:'material', glyph:'"', color:'#a9834a', value:3 },
   { id:'iron_ingot', name:'Iron Ingot', type:'material', glyph:'*', color:'#b6bcc4', value:9 },
+  // ---- SALVAGE & REFORGE: arcane_dust is what salvaging a magic (rarity>0) weapon/armor yields
+  // on top of its plain material breakdown -- see salvageItem()/SALVAGE_MATERIAL_BY_BASE below.
+  // Two uses by design (see RUNE_TYPES below for the second): reforgeItem() spends it directly on
+  // a piece of gear, or a rune-crafting recipe spends it to produce a rune to socket instead --
+  // both are "you found/broke down some magic, now turn it into a smaller permanent upgrade,"
+  // just via two different paths, so its value stays legible either way.
+  { id:'arcane_dust', name:'Arcane Dust', type:'material', glyph:'*', color:'#c9a0ff', value:14,
+    desc:'A fine, faintly-glowing residue left over from breaking down an enchanted item. Smiths and alchemists prize it for reforging gear that already has some magic in it, or for binding into a socketable rune.' },
   // misc / quest utility
   { id:'compass', name:'Wayfinder Compass', type:'misc', glyph:'*', color:'#e0c34a', value:60 },
   { id:'chest', name:'Chest', type:'chest', glyph:'=', color:'#e0c34a', value:0 },
 );
+
+// ============================================================================
+// ---- SOCKETS & RUNES: the equipment-depth chase ToME4's runics/infusions and DCSS's jewelry
+// both build their late game around -- something to keep upgrading on gear you already like,
+// beyond just "find a strictly better item." Weapons/armor above a rarity threshold roll 0-3
+// empty sockets (see rollSockets(), called from makeItem); runes are crafted (via the RECIPES
+// entries generated below, one minor/greater/major recipe per type) from Arcane Dust plus a
+// themed base material, then slotted in via [k] Socket Rune from that item's action menu.
+// Deliberately a DATA TABLE, not one-off code per rune -- adding a ninth rune type later is one
+// new entry here; everything else (recipes, ITEM_BASES entries, the socket UI, applying/removing
+// the bonus on equip) is generated or reads generically off this table with zero further wiring.
+const RUNE_TYPES = [
+  { id:'rune_might',     name:'Rune of Might',       appliesTo:'any',    stat:'strBonus',   tiers:[2,4,7],       glyph:':', color:'#e0704a', matId:'iron_ingot',    desc:'Bound strength.' },
+  { id:'rune_swiftness', name:'Rune of Swiftness',   appliesTo:'any',    stat:'dexBonus',   tiers:[2,4,7],       glyph:':', color:'#5ad06a', matId:'leather_scrap', desc:'Bound quickness.' },
+  { id:'rune_insight',   name:'Rune of Insight',     appliesTo:'any',    stat:'intBonus',   tiers:[2,4,7],       glyph:':', color:'#5a9ee0', matId:'cloth',         desc:'Bound clarity.' },
+  { id:'rune_vitality',  name:'Rune of Vitality',    appliesTo:'any',    stat:'conBonus',   tiers:[2,4,7],       glyph:':', color:'#e0c34a', matId:'bone',          desc:'Bound vigor.' },
+  { id:'rune_warding',   name:'Rune of Warding',     appliesTo:'armor',  stat:'armor',      tiers:[2,4,7],       glyph:':', color:'#b6bcc4', matId:'iron_ingot',    desc:'Bound resilience. Armor only.' },
+  { id:'rune_ember',     name:'Rune of the Ember',   appliesTo:'weapon', stat:'fireDmg',    tiers:[2,4,7],       glyph:':', color:'#e0562a', matId:'iron_ingot',    desc:'Bound flame. Weapons only.' },
+  { id:'rune_frost',     name:'Rune of Frost',       appliesTo:'weapon', stat:'frostDmg',   tiers:[2,4,7],       glyph:':', color:'#8ad0e0', matId:'iron_ingot',    desc:'Bound cold. Weapons only.' },
+  { id:'rune_precision', name:'Rune of Precision',   appliesTo:'weapon', stat:'critBonus',  tiers:[0.03,0.06,0.1], glyph:':', color:'#e0e04a', matId:'leather_scrap', desc:'Bound focus. Weapons only.' },
+];
+const RUNE_TIER_NAMES = ['Minor', 'Greater', 'Major'];
+ITEM_BASES.push(...RUNE_TYPES.map(rt => ({
+  id: rt.id, name: rt.name, type: 'rune', glyph: rt.glyph, color: rt.color, value: 20,
+  runeTypeId: rt.id, desc: rt.desc,
+})));
+
 
 // give more monster/npc-relevant loot tables to existing monsters
 Object.assign(MONSTER_BASES.rabbit,   { loot:[{id:'meat_raw',chance:0.7,min:1,max:1}] });
@@ -2588,6 +2782,15 @@ const RECIPES = [
   { id:'craft_boneamulet', name:'Craft Bone Amulet', category:'crafting', inputs:[{id:'bone',qty:3},{id:'iron_ingot',qty:1}], output:{id:'amulet',qty:1} },
   { id:'craft_gloves', name:'Stitch Leather Gloves', category:'crafting', inputs:[{id:'leather_scrap',qty:2},{id:'cloth',qty:1}], output:{id:'gloves',qty:1} },
 ];
+// One recipe per rune type per tier (minor/greater/major) -- cost scales with tier so a Major
+// rune, which rivals a small affix roll, is a real investment rather than a rounding error. See
+// RUNE_TYPES (data expansion section above) for the source table -- add a rune there and its
+// three craft recipes appear here automatically, no hand-written entries needed.
+RECIPES.push(...RUNE_TYPES.flatMap(rt => RUNE_TIER_NAMES.map((tierName, i) => ({
+  id: `craft_${rt.id}_t${i+1}`, name: `Craft ${tierName} ${rt.name}`, category: 'crafting',
+  inputs: [{ id: 'arcane_dust', qty: (i+1) * 3 }, { id: rt.matId, qty: (i+1) * 2 }],
+  output: { id: rt.id, qty: 1 }, runeTier: i + 1,
+}))));
 
 // Dungeon theme metadata: tier drives rarity + monster/boss pool ceiling + size.
 // `genPool` overrides the shared GENERATOR_WEIGHTS_BY_GENRE table (see pickGeneratorId) per-theme
@@ -9181,12 +9384,15 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
   if (roleId === 'chef' || roleId === 'blacksmith' || roleId === 'alchemist' || roleId === 'tailor') {
     npc.teachRecipes = RECIPES.filter(r => {
       if (roleId === 'chef') return r.category === 'cooking';
-      if (roleId === 'blacksmith') return r.id === 'smelt_iron' || r.id === 'craft_leather' || r.id === 'craft_starmetal_blade' || r.id === 'craft_starmetal_warhammer' || r.id === 'craft_ironwood_bow' || r.id === 'craft_ironwood_staff';
-      if (roleId === 'alchemist') return r.id === 'antidote';
-      if (roleId === 'tailor') return r.id === 'craft_gloves' || r.id === 'craft_boneamulet';
+      if (roleId === 'blacksmith') return r.id === 'smelt_iron' || r.id === 'craft_leather' || r.id === 'craft_starmetal_blade' || r.id === 'craft_starmetal_warhammer' || r.id === 'craft_ironwood_bow' || r.id === 'craft_ironwood_staff' || ['rune_might','rune_warding','rune_ember','rune_frost'].some(id => r.id.startsWith('craft_'+id+'_'));
+      if (roleId === 'alchemist') return r.id === 'antidote' || ['rune_insight','rune_vitality','rune_precision'].some(id => r.id.startsWith('craft_'+id+'_'));
+      if (roleId === 'tailor') return r.id === 'craft_gloves' || r.id === 'craft_boneamulet' || r.id.startsWith('craft_rune_swiftness_');
       return false;
     }).map(r => r.id);
-    // NPC overhaul: a still-learning novice craftsperson hasn't picked up everything yet
+    // NPC overhaul: a still-learning novice craftsperson hasn't picked up everything yet, and for
+    // rune recipes specifically only teaches the Minor (tier 1) version -- Greater/Major are
+    // master-only, so there's a reason to seek out a specialist once you can afford better runes.
+    if (npc.tier !== 'master') npc.teachRecipes = npc.teachRecipes.filter(id => !/_t[23]$/.test(id));
     if (npc.tier === 'novice' && npc.teachRecipes.length > 1) npc.teachRecipes = npc.teachRecipes.slice(0, Math.ceil(npc.teachRecipes.length / 2));
   }
   if (roleId === 'fisherman') { npc.teachRecipes = ['craft_raft']; }
@@ -14541,6 +14747,42 @@ function attemptForceOpen(name, difficulty, onSuccess, opts) {
   endTurn();
 }
 
+// ---- SECRET DOOR SEARCH: pairs with placeSecretVault (generateDungeonLevel) above. Two ways to
+// find one: a small passive chance every turn you spend adjacent to it (no action needed, just
+// reflects "you happened to notice"), or the deliberate [S]earch command, which spends a turn but
+// rolls at several times the passive rate -- the classic NetHack/Brogue tradeoff between exploring
+// briskly and deliberately checking a suspicious dead end. DEX and level both raise your odds (a
+// keen eye, and simply having seen more dungeons), same shape as lockPickChance/lockForceChance
+// above so all three "player skill roll" mechanics read consistently against each other.
+function secretSearchChance(active) {
+  const skill = effDex(player) + (player.level || 1) * 0.4;
+  const base = 0.015 + skill * 0.0035;
+  return Math.min(0.9, active ? base * 4 : base);
+}
+function trySearchAdjacentSecrets(active) {
+  let found = 0;
+  const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1],[0,0]];
+  for (const [dx,dy] of dirs) {
+    const t = curTileAt(player.x+dx, player.y+dy);
+    if (t && t.feature === 'secretdoor' && !t.discovered) {
+      if (Math.random() < secretSearchChance(active)) {
+        t.discovered = true; t.walkable = true; t.feature = 'door'; t.glyph = "'"; t.color = '#8a6a3a'; t.bg = '#1a140a';
+        log('You spot a seam in the stonework -- a hidden door swings open!');
+        Sound.play('door');
+        markPlayerAreaDirty();
+        found++;
+      }
+    }
+  }
+  return found;
+}
+function doSearch() {
+  if (gameState !== 'playing') return;
+  if (!curIsDungeon()) { log('There is nothing to search for out here.'); return; }
+  const found = trySearchAdjacentSecrets(true);
+  if (!found) log('You search the nearby walls, but find nothing.');
+  endTurn();
+}
 function openContainer(container) {
   Sound.play('uiOpen');
   gameState = 'container'; containerTarget = container; containerMode = 'take'; containerPage = 0;
@@ -16855,6 +17097,18 @@ function craftRecipe(recipeId) {
     const combinedPowerMult = (quality ? quality.powerMult : 1) * (material ? material.powerMult : 1) * (quality ? playerLevelPowerMult(player.level) : 1);
     const combinedRarity = Math.max(quality ? quality.rarity : 0, material ? 1 : 0);
     out = makeItem(r.output.id, combinedRarity, Math.random, (quality || material) ? combinedPowerMult : undefined);
+    // Runes are a data-driven recipe output (RUNE_TYPES/RECIPES.push, data-expansion section) --
+    // makeItem doesn't need to know anything about rune tiers, since the tier lives on the
+    // recipe itself (r.runeTier) rather than being rolled. Resolved here, the one place a rune
+    // recipe's output actually gets created.
+    if (r.runeTier) {
+      const rt = RUNE_TYPES.find(x => x.id === r.output.id);
+      if (rt) {
+        out.runeTier = r.runeTier; out.runeStat = rt.stat; out.runeValue = rt.tiers[r.runeTier - 1]; out.appliesTo = rt.appliesTo;
+        out.name = `${RUNE_TIER_NAMES[r.runeTier - 1]} ${out.name}`;
+        out.value = 20 * r.runeTier * r.runeTier;
+      }
+    }
     // Material name prefix goes BEFORE quality's (e.g. "Fine Starmetal Warhammer") -- reads as
     // "a fine [example of a] starmetal warhammer", material first, workmanship second, matching
     // how the same phrase would actually be said aloud.
@@ -16882,6 +17136,253 @@ function craftRecipe(recipeId) {
   else log(qty > 1 ? `You craft ${qty}x ${out.name}.` : `You craft ${out.name}.`);
   if (saved > 0) log('Your skill meant some ingredients were not consumed.');
   updateSidebar();
+}
+
+// ============================================================================
+// ---- SALVAGE & REFORGE: the crafting loop's other half. Everything above turns raw materials
+// into gear; this turns gear you don't want back into raw materials (plus, for anything with real
+// magic in it, Arcane Dust -- see arcane_dust's ITEM_BASES entry) and gives that dust exactly one
+// thing to spend on: nudging a piece of gear you DO want a step further. Two genuinely new
+// player-facing decisions this creates that didn't exist before: "is this drop worth more to me
+// broken down than sold/worn" (an answer that changes with your build, unlike a flat sell price),
+// and "which one piece of my kit is worth investing dust into" (reforging is deliberately
+// per-item and non-trivial in cost, so it reads as a real choice, not a free stat button).
+// ----------------------------------------------------------------------------
+// Classifies a weapon/armor base by what it's principally made of, purely from its own id/slot --
+// deliberately a keyword table rather than a new field on every one of the ~150 ITEM_BASES entries,
+// so any weapon/armor added later (by future work, or by the player) gets a sane default with zero
+// extra tagging. Order matters: checked top to bottom, first match wins.
+const SALVAGE_MATERIAL_RULES = [
+  { test: id => /(bow|staff|wand|spear|rod)/i.test(id), material: 'wood', qty: [1,2] },
+  { test: id => /(robe|circlet|sandals|cloak)/i.test(id), material: 'cloth', qty: [1,2] },
+  { test: id => /(gloves|boots|leather|jerkin)/i.test(id), material: 'leather_scrap', qty: [1,2] },
+  { test: () => true, material: 'iron_ingot', qty: [1,3] }, // default: swords/axes/maces/plate/shields/etc.
+];
+// Returns null if `it` can't be salvaged at all (not a weapon/armor -- there's nothing coherent to
+// break a potion or a book down into, and craft-only/quest-unique items are excluded on purpose so
+// a boss-drop unique can't be accidentally scrapped for a handful of iron ingots).
+function salvageYieldFor(it) {
+  if (!it || (it.type !== 'weapon' && it.type !== 'armor')) return null;
+  if (it.isUnique || it.setId || it.craftOnly) return null;
+  const yields = [];
+  // Base material: if this was crafted from a MATERIAL_PROPERTIES material (Starmetal/Ironwood),
+  // you get a partial refund of that specific rare material back -- reusing the exact registry
+  // reforging/crafting already keys off, rather than a parallel salvage-only material list.
+  const rareMat = Object.values(MATERIAL_PROPERTIES).find(m => it.craftedMaterial === m.label);
+  const rareMatId = rareMat ? Object.keys(MATERIAL_PROPERTIES).find(k => MATERIAL_PROPERTIES[k] === rareMat) : null;
+  if (rareMatId) yields.push({ id: rareMatId, qty: 1 });
+  else {
+    const rule = SALVAGE_MATERIAL_RULES.find(r => r.test(it.id));
+    yields.push({ id: rule.material, qty: randInt(Math.random, rule.qty[0], rule.qty[1]) });
+  }
+  // Value tier scales base yield modestly -- a masterwork platemail is worth more broken down than
+  // a starting dagger, same logic as everything else in this game that scales off value/rarity.
+  const valueTier = Math.min(4, Math.floor((it.value || 5) / 25));
+  if (valueTier >= 2) yields[0].qty += 1;
+  if (valueTier >= 4) yields[0].qty += 1;
+  // Polish pass: a badly worn or outright broken item has less usable material left to reclaim --
+  // durability now scales the base-material yield down (never below 40% of what a pristine copy
+  // would give, rounded up to at least 1 -- there's still SOME metal in a snapped sword, just
+  // less of it). Deliberately NOT applied to Arcane Dust below: dust reflects the magic bound into
+  // the item, which doesn't degrade just because the item's edge is dull.
+  if (it.maxDurability !== undefined && it.maxDurability !== Infinity && it.maxDurability > 0) {
+    const durFrac = Math.max(0, Math.min(1, (it.durability || 0) / it.maxDurability));
+    yields[0].qty = Math.max(1, Math.round(yields[0].qty * (0.4 + 0.6 * durFrac)));
+  }
+  // Real magic (an affix-bearing rare/epic/legendary drop, or a craftedQuality of Fine or better)
+  // breaks down into Arcane Dust on top of its base material -- this is the ONLY source of dust
+  // in the game besides the rare shrine/quest reward, so it's always tied to "you had a magic item
+  // you didn't need." `it.mods` (populated by makeItem) is the actual affix list every dropped/
+  // crafted weapon or armor carries -- there's no separate stored rarity field on the item itself.
+  const affixCount = (it.mods && it.mods.length) || 0;
+  const qualityTier = CRAFT_QUALITY_TIERS.findIndex(t => t.name === it.craftedQuality);
+  if (affixCount > 0 || qualityTier >= 2) {
+    yields.push({ id: 'arcane_dust', qty: Math.max(1, affixCount) + (qualityTier >= 3 ? 1 : 0) });
+  }
+  return yields;
+}
+function salvageItem(it, slot) {
+  const yields = salvageYieldFor(it);
+  if (!yields) { log(`${it.name} can't be broken down into anything useful.`); return; }
+  if (slot) unequipSlot(slot);
+  player.inventory = player.inventory.filter(i => i.uid !== it.uid);
+  const gained = [];
+  for (const y of yields) {
+    const matBase = ITEM_BASES.find(b => b.id === y.id);
+    if (!matBase) continue;
+    addItemToList(player.inventory, Object.assign({}, matBase, { uid: 'i'+Math.random().toString(36).slice(2,9), amount: y.qty }));
+    gained.push(`${y.qty}x ${matBase.name}`);
+  }
+  Sound.play('craftSuccess');
+  log(`You break down ${it.name} for ${gained.join(', ')}.`);
+  updateSidebar();
+}
+// ---- REFORGE: spend Arcane Dust (plus gold, so it's never purely free) to push an already-owned
+// weapon/armor one step further. Deliberately modest per-use (a flat, small numeric nudge to the
+// item's own existing dmg/armor range and a durability top-up) rather than a full quality-tier
+// reroll -- the intent is "make the gear you already committed to slightly better over time," a
+// long-tail gold/material sink for players who've found their build, not a way to shortcut past
+// the loot table. Cost scales with the item's current value, so reforging a legendary is a real
+// investment, not a rounding error.
+function reforgeCostFor(it) {
+  const dust = Math.max(2, Math.round((it.value || 10) / 15));
+  const gold = Math.max(10, Math.round((it.value || 10) * 0.8));
+  return { dust, gold };
+}
+function canReforge(it) {
+  if (!it || (it.type !== 'weapon' && it.type !== 'armor')) return false;
+  it.reforgeCount = it.reforgeCount || 0;
+  return it.reforgeCount < 5; // soft cap -- keeps this a meaningful early/mid investment, not an infinite stat treadmill
+}
+function reforgeItem(it) {
+  if (!canReforge(it)) { log(`${it.name} has already been reforged as far as it can go.`); return; }
+  const cost = reforgeCostFor(it);
+  const dustHeld = player.inventory.filter(i => i.id === 'arcane_dust').reduce((s,i) => s + (i.amount||1), 0);
+  if (dustHeld < cost.dust) { log(`Reforging ${it.name} needs ${cost.dust} Arcane Dust (you have ${dustHeld}).`); return; }
+  if (player.gold < cost.gold) { log(`Reforging ${it.name} needs ${cost.gold} gold (you have ${player.gold}).`); return; }
+  consumeMaterial('arcane_dust', cost.dust);
+  player.gold -= cost.gold;
+  it.reforgeCount = (it.reforgeCount || 0) + 1;
+  if (it.type === 'weapon' && it.dmg) {
+    const bump = Math.max(1, Math.round(it.dmg[1] * 0.06));
+    it.dmg = [it.dmg[0] + bump, it.dmg[1] + bump];
+  } else if (it.type === 'armor' && it.armor !== undefined) {
+    it.armor += Math.max(1, Math.round(it.armor * 0.06) || 1);
+  }
+  // Bug fix (found during the polish pass): durability was being set directly here, which left
+  // it.broken=true stuck even though the item was now at full durability -- repairItem() is the
+  // established helper for "restore durability AND correctly clear the broken flag," so route
+  // through it instead of duplicating (and getting wrong) that logic inline.
+  if (it.maxDurability && it.maxDurability !== Infinity) { it.maxDurability = Math.round(it.maxDurability * 1.1); repairItem(it, it.maxDurability); }
+  if (!/^Reforged /.test(it.name)) it.name = 'Reforged ' + it.name;
+  Sound.play('craftSuccess');
+  // Polish pass: reforge and sockets previously didn't touch each other at all despite both being
+  // funded by the same Arcane Dust -- maxing out a reforge (the moment it stops being useful on
+  // its own) now has a real payoff instead of just becoming a dead end: a 1-in-3 chance to punch a
+  // brand new socket into the item, if it has room for one (capped at the same 3-socket ceiling
+  // loot generation itself uses, so this can't out-do what the best possible drop could roll).
+  let bonusSocketMsg = '';
+  if (it.reforgeCount === 5 && (it.sockets || 0) < 3 && Math.random() < 1/3) {
+    it.sockets = (it.sockets || 0) + 1;
+    bonusSocketMsg = ` The final blow leaves a hairline seam in the material -- ${it.name} has room for one more rune now.`;
+  }
+  log(`<span style="color:#c9a0ff">The dust binds into the metal</span> -- ${it.name} feels sharper in your hands. (${it.reforgeCount}/5)${bonusSocketMsg}`);
+  updateSidebar();
+}
+
+// ---- SOCKETS: applying/removing a rune's bonus onto the item it's socketed into. str/dex/int/con
+// bonuses get cached into player.* at equip time (so socketing while equipped needs a
+// remove-then-reapply bracket, same pattern equipItem/unequipSlot already use for any item mod),
+// while armor/fireDmg/frostDmg/critBonus etc. are read live off the equipped item every combat
+// calc, so a direct field mutation on the item is visible immediately -- applyStatBonuses/
+// removeStatBonuses already only touch the str/dex/int/con + EQUIP_FLAT_BONUS_KEYS fields, so
+// bracketing every socket/unsocket with them is correct and sufficient for both cases at once.
+function openSocketableRunesFor(it) {
+  return player.inventory.filter(i => {
+    if (i.type !== 'rune') return false;
+    const rt = RUNE_TYPES.find(r => r.id === i.id);
+    return rt && (rt.appliesTo === 'any' || rt.appliesTo === it.type);
+  });
+}
+function canSocket(it) {
+  if (!it || (it.type !== 'weapon' && it.type !== 'armor')) return false;
+  const used = (it.socketedRunes || []).length;
+  return used < (it.sockets || 0) && openSocketableRunesFor(it).length > 0;
+}
+function socketRune(it, rune) {
+  const equippedHere = player.equipment[it.slot] === it;
+  if ((it.socketedRunes || []).length >= (it.sockets || 0)) { log(`${it.name} has no empty sockets.`); return; }
+  if (equippedHere) removeStatBonuses(it);
+  it.socketedRunes = it.socketedRunes || [];
+  it.socketedRunes.push({ id: rune.id, runeTier: rune.runeTier, name: rune.name });
+  it[rune.runeStat] = (it[rune.runeStat] || 0) + rune.runeValue;
+  if (equippedHere) applyStatBonuses(it);
+  player.inventory = player.inventory.filter(i => i.uid !== rune.uid);
+  Sound.play('craftSuccess');
+  log(`You socket ${rune.name} into ${it.name}.`);
+  updateSidebar();
+}
+// Removing a rune usually destroys it (matches the genre convention that sockets are the
+// meaningful long-term commitment, not a costume you swap freely) -- but a sharp mind has a
+// chance to work it free intact instead, see the INT-scaled roll below -- the item's socket
+// itself is never lost either way, so re-socketing a different rune later is always possible.
+function unsocketRune(it, socketIndex) {
+  const list = it.socketedRunes || [];
+  const entry = list[socketIndex];
+  if (!entry) return;
+  const rt = RUNE_TYPES.find(r => r.id === entry.id);
+  const equippedHere = player.equipment[it.slot] === it;
+  if (rt) {
+    if (equippedHere) removeStatBonuses(it);
+    it[rt.stat] = Math.max(0, (it[rt.stat] || 0) - rt.tiers[entry.runeTier - 1]);
+    if (equippedHere) applyStatBonuses(it);
+  }
+  list.splice(socketIndex, 1);
+  // Polish pass: a flat "always destroyed" felt like it was punishing curiosity (wanting to try a
+  // different rune) as hard as it punishes a genuine mistake. A sharp mind has some chance of
+  // teasing the binding apart cleanly instead of shattering it -- INT-scaled since runes are
+  // explicitly the arcane half of this system (RUNE_TYPES/Arcane Dust), not a strength check.
+  // Capped well under certain, so removal is still the deliberate, costly choice it's meant to be.
+  const preserveChance = Math.min(0.35, 0.03 * (player.int || 0));
+  if (Math.random() < preserveChance) {
+    const base = ITEM_BASES.find(b => b.id === entry.id);
+    if (base) {
+      const restored = Object.assign({}, base, { uid: 'i'+Math.random().toString(36).slice(2,9), runeTier: entry.runeTier, runeStat: rt.stat, runeValue: rt.tiers[entry.runeTier-1], appliesTo: rt.appliesTo, name: entry.name });
+      addItemToList(player.inventory, restored);
+      Sound.play('unequip');
+      log(`You carefully work ${entry.name} loose from ${it.name} -- it comes free intact.`);
+      updateSidebar();
+      return;
+    }
+  }
+  Sound.play('unequip');
+  log(`You pry ${entry.name} loose from ${it.name} -- the rune crumbles to dust in the process.`);
+  updateSidebar();
+}
+
+// ---- BATCH SALVAGE ("salvage all junk"): flagged as a follow-up when salvage first shipped --
+// one-at-a-time is fine for a deliberate choice about a specific item, but sifting a full
+// inventory of monster-drop trash one item at a time is exactly the kind of busywork that makes
+// people stop engaging with a system rather than use it. Deliberately conservative about what
+// counts as "junk" so it never risks something the player actually wants: an item only qualifies
+// if there's already something equipped in that same slot and this one is clearly worse (under
+// 60% of the equipped item's value) -- if nothing's equipped in a slot yet, nothing in it is
+// touched, since there's no baseline to call it worse than.
+function junkCandidates() {
+  return player.inventory.filter(it => {
+    if (it.type !== 'weapon' && it.type !== 'armor') return false;
+    if (!salvageYieldFor(it)) return false;
+    const equipped = player.equipment[it.slot];
+    if (!equipped || equipped.uid === it.uid) return false;
+    return it.value < equipped.value * 0.6;
+  });
+}
+function promptSalvageAllJunk() {
+  const list = junkCandidates();
+  if (!list.length) { log("Nothing in your inventory looks like clear junk right now (nothing that's both salvageable and clearly worse than what you already have equipped in that slot)."); return; }
+  gameState = 'salvageall';
+  const html = list.map(it => `<div class="modal-opt">${it.name} <span class="dim">(${it.value}g, vs your equipped ${player.equipment[it.slot].name} at ${player.equipment[it.slot].value}g)</span></div>`).join('')
+    + `<div class="modal-opt" style="margin-top:6px" onclick="simulateKey('y')">[y] Salvage all ${list.length} listed items</div>`
+    + `<div class="modal-opt" onclick="simulateKey('x')">[x] Cancel</div>`;
+  renderModal('Salvage All Junk', html, `${list.length} item${list.length===1?'':'s'} found that are both salvageable and clearly worse than what you have equipped in the same slot.`);
+}
+function confirmSalvageAllJunk() {
+  const list = junkCandidates();
+  const totals = {};
+  list.forEach(it => {
+    const yields = salvageYieldFor(it);
+    if (!yields) return;
+    player.inventory = player.inventory.filter(i => i.uid !== it.uid);
+    yields.forEach(y => { totals[y.id] = (totals[y.id] || 0) + y.qty; });
+  });
+  Object.keys(totals).forEach(id => {
+    const base = ITEM_BASES.find(b => b.id === id);
+    if (base) addItemToList(player.inventory, Object.assign({}, base, { uid: 'i'+Math.random().toString(36).slice(2,9), amount: totals[id] }));
+  });
+  Sound.play('craftSuccess');
+  const summary = Object.entries(totals).map(([id, q]) => `${q}x ${ITEM_BASES.find(b=>b.id===id).name}`).join(', ') || 'nothing usable';
+  log(`Salvaged ${list.length} item${list.length===1?'':'s'} for ${summary}.`);
+  gameState = 'inventory'; renderInventory();
 }
 
 // ---- item descriptions & comparisons ----
@@ -16955,6 +17456,8 @@ function renderInventory() {
   });
   html += `<div style="margin-top:6px" class="dim">Page ${player.invPage+1}/${totalPages} &nbsp; <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey('[')">[prev]</span> <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey(']')">[next]</span></div>`;
   html += `<div class="npcline" style="margin-top:8px">Gold: ${player.gold}</div>`;
+  const junkCount = junkCandidates().length;
+  html += `<div class="dim" style="margin-top:4px">${junkCount ? `<span style="cursor:pointer;color:var(--amber)" onclick="simulateKey('J')">[J] Salvage all junk (${junkCount} item${junkCount===1?'':'s'})</span>` : '[J] Salvage all junk (none right now)'}</div>`;
   renderModal('Inventory', html, 'Letter/click to select · Tab or click category to filter · [ ] page · Esc close');
 }
 function setInvFilter(f) { player.invFilter = f; player.invPage = 0; renderInventory(); }
@@ -16966,6 +17469,36 @@ function promptQuickslotAssign(it) {
     return `<div class="modal-opt" onclick="simulateKey('${i+1}')">[${i+1}] ${cur ? `Replace: ${cur.name}` : '(empty)'}</div>`;
   }).join('');
   renderModal(`Assign ${it.name} to which quickslot?`, html, 'Press 1-4 to choose, Esc to cancel.');
+}
+// ---- socket/unsocket letter-pickers, same "own gameState + lettered options" shape as
+// promptQuickslotAssign above (invSelected holds the target gear item throughout).
+function promptSocketRune(it) {
+  gameState = 'socketpick'; invSelected = it;
+  const runes = openSocketableRunesFor(it);
+  const html = runes.map((r, i) => `<div class="modal-opt" onclick="simulateKey('${String.fromCharCode(97+i)}')">[${String.fromCharCode(97+i)}] ${r.name}</div>`).join('')
+    + `<div class="modal-opt" onclick="simulateKey('x')">[x] Cancel</div>`;
+  renderModal(`Socket a rune into ${it.name}`, html, `${(it.socketedRunes||[]).length}/${it.sockets} sockets used. Letter to choose, Esc to cancel.`);
+}
+function doSocketRunePick(letter) {
+  const idx = letter.charCodeAt(0) - 97;
+  const runes = openSocketableRunesFor(invSelected);
+  const rune = runes[idx];
+  if (!rune) return;
+  socketRune(invSelected, rune);
+  gameState = 'playing'; closeModal();
+}
+function promptUnsocketRune(it) {
+  gameState = 'unsocketpick'; invSelected = it;
+  const list = it.socketedRunes || [];
+  const html = list.map((r, i) => `<div class="modal-opt" onclick="simulateKey('${String.fromCharCode(97+i)}')">[${String.fromCharCode(97+i)}] ${r.name}</div>`).join('')
+    + `<div class="modal-opt" onclick="simulateKey('x')">[x] Cancel</div>`;
+  renderModal(`Remove a rune from ${it.name}`, html, `Usually destroys the rune (a sharp mind has a chance to save it -- ${Math.round(Math.min(0.35,0.03*(player.int||0))*100)}% with your current INT). Letter to choose, Esc to cancel.`);
+}
+function doUnsocketRunePick(letter) {
+  const idx = letter.charCodeAt(0) - 97;
+  if (!invSelected.socketedRunes || !invSelected.socketedRunes[idx]) return;
+  unsocketRune(invSelected, idx);
+  gameState = 'playing'; closeModal();
 }
 function assignQuickslot(slot, it) {
   player.quickslots = player.quickslots || [null, null, null, null];
@@ -17009,6 +17542,10 @@ function openItemAction(it, slot) {
     opts.push(['q', 'Set quickslot']);
     opts.push(['d', 'Drop']);
   }
+  if (canReforge(it) && salvageYieldFor(it)) { const c = reforgeCostFor(it); opts.push(['r', `Reforge (${c.dust} dust, ${c.gold}g)`]); }
+  if (canSocket(it)) opts.push(['k', `Socket a rune (${(it.socketedRunes||[]).length}/${it.sockets||0} used)`]);
+  if ((it.socketedRunes||[]).length > 0) opts.push(['j', 'Remove a rune']);
+  if (salvageYieldFor(it)) opts.push(['v', 'Salvage (break down for materials)']);
   opts.push(['x', 'Cancel']);
   let html = `<div class="npcline"><b>${it.name}</b></div><div class="dim" style="margin:6px 0">${describeItem(it)}</div>`;
   if (!slot) { const cmp = compareItem(it); if (cmp) html += `<div style="margin-bottom:6px">${cmp}</div>`; }
@@ -17382,6 +17919,7 @@ function renderCraft() {
     html += `<div class="modal-opt" onclick="simulateKey('${letter}')" style="color:${have?'#7fd07f':'#8a7f6a'}">[${letter}] ${r.name} <span class="dim">→ ${ITEM_BASES.find(b=>b.id===r.output.id).name}</span><br><span class="dim">Needs: ${ingStr}</span></div>`;
   });
   if (totalPages > 1) html += `<div style="margin-top:6px" class="dim">Page ${player.craftPage+1}/${totalPages} &nbsp; <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey('[')">[prev]</span> <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey(']')">[next]</span></div>`;
+  html += `<div class="dim" style="margin-top:10px;border-top:1px solid var(--line);padding-top:6px">Don't need a piece of gear? Open it from your inventory [i] for [v] Salvage (break it down into materials, plus Arcane Dust if it's magic) or [r] Reforge (spend that dust to strengthen gear you're keeping).</div>`;
   renderModal('Crafting & Cooking', html, 'Letter/click to craft (needs ingredients highlighted green). [ ] page. Esc to close.');
 }
 
@@ -18288,6 +18826,66 @@ function doRest() {
       turnsElapsed++;
       if (gameState !== 'playing' || !player.alive) { clearInterval(interval); return; }
     }
+  }, 20);
+}
+
+// ---- TUNNELING: a NetHack/CDDA staple that had zero presence here despite pickaxes already
+// existing as a mining tool (see GATHER_TOOL_PATTERNS.ore) -- carving your own shortcut through a
+// dungeon wall, whether to bypass a locked door, cut a corner across a level, or break straight
+// into a room you spotted but couldn't path to. Reuses the exact same "own gameState, wait for a
+// direction key" shape as beginThrowTargeting rather than a bespoke input mode.
+let digState = null;
+function beginDigTargeting() {
+  if (gameState !== 'playing') return;
+  if (!curIsDungeon()) { log("There's nothing to dig through out here."); return; }
+  const weapon = player.equipment.hand;
+  if (!weapon || !GATHER_TOOL_PATTERNS.ore.test(weapon.name)) { log('Digging through solid rock needs a pickaxe (or similarly heavy tool) in hand.'); return; }
+  gameState = 'digpick';
+  log('Dig which direction? (arrow/hjkl/wasd, Esc to cancel)');
+}
+function beginDig(dx, dy) {
+  gameState = 'playing';
+  const lvl = curDungeonLevel();
+  const tx = player.x + dx, ty = player.y + dy;
+  const t = curTileAt(tx, ty);
+  if (!t) return;
+  if (t.walkable) { log("There's nothing solid to dig there."); return; }
+  if (tx <= 1 || ty <= 1 || tx >= lvl.w - 2 || ty >= lvl.h - 2) { log('That wall feels far too close to the edge of the level to risk breaking through.'); return; }
+  if (t.feature === 'door' || t.feature === 'lockeddoor' || t.feature === 'leverdoor' || t.feature === 'secretdoor') { log("That's a door, not a wall -- try opening or forcing it instead."); return; }
+  if (t.feature === 'statue') { log("That's a statue, not a wall you can dig through. Try attacking it if it's in your way."); return; }
+  const nearbyThreat = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 6 && hasLOS(player.x,player.y,m.x,m.y));
+  if (nearbyThreat) { log("You can't dig with danger nearby!"); return; }
+  // A brawnier character digs faster -- clamped so even a very weak character finishes eventually,
+  // and even a very strong one can't one-turn it (digging through solid rock should never feel free).
+  const turnsNeeded = Math.max(3, Math.min(8, Math.round(9 - effStr(player) * 0.35)));
+  digState = { x: tx, y: ty, turnsLeft: turnsNeeded, totalTurns: turnsNeeded };
+  autoRunActive = true;
+  log(`You brace your pickaxe against the wall and start digging... (about ${turnsNeeded} turns)`);
+  const interval = setInterval(() => {
+    if (gameState !== 'playing' || !autoRunActive || !digState) { autoRunActive = false; digState = null; clearInterval(interval); render(); return; }
+    const threat = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 6 && hasLOS(player.x,player.y,m.x,m.y));
+    if (threat) { log('Digging interrupted -- something is closing in!'); autoRunActive = false; digState = null; clearInterval(interval); render(); return; }
+    if (player.stamina < 3) { log('Too exhausted to keep digging. Rest up and try again.'); autoRunActive = false; digState = null; clearInterval(interval); render(); return; }
+    player.stamina = Math.max(0, player.stamina - 3);
+    digState.turnsLeft--;
+    if (digState.turnsLeft <= 0) {
+      const tile = curTileAt(digState.x, digState.y);
+      if (tile) { tile.walkable = true; tile.feature = 'floor'; tile.glyph = '.'; tile.color = '#5a4a38'; tile.discovered = true; }
+      // A modest chance of loose ore as a byproduct, matching the flavor of the existing ore-vein
+      // gather nodes elsewhere -- you're doing the same kind of work, just through a dungeon wall.
+      if (Math.random() < 0.4) {
+        addItemToList(player.inventory, Object.assign({}, ITEM_BASES.find(b=>b.id==='ore'), { uid:'i'+Math.random().toString(36).slice(2,9), amount: randInt(Math.random,1,2) }));
+        log('You break through -- some loose ore tumbles out with the rubble.');
+      } else {
+        log('You break through the wall!');
+      }
+      Sound.play('door');
+      markPlayerAreaDirty();
+      autoRunActive = false; digState = null; clearInterval(interval);
+      endTurn(); render();
+      return;
+    }
+    endTurn(); render();
   }, 20);
 }
 
@@ -26737,6 +27335,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
   if (rooms.length && rng() < 0.6) placePillars(grid, rooms, rng);
   if (rng() < 0.4) placeLockedVault(grid, floors, level, rng, up, down, meta);
   if (rooms.length >= 3 && rng() < 0.3) placeLeverPuzzle(grid, rooms, level, rng, up, down, meta);
+  if (rng() < 0.35) placeSecretVault(grid, floors, level, rng, up, down, meta);
   if ((meta.genre === 'rooms' || meta.genre === 'cave' || hasRuinsZone || hasCaveZone) && rng() < 0.4) placeStatues(grid, floors, rng, up, down, meta);
   guaranteeStairsReachable(grid);
   validateAndRepairLockedDoors(grid, up);
@@ -27156,6 +27755,51 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
         if (kc) lvl.items.push({ x: kc.x, y: kc.y, item: key });
         else lvl.items.push({ x: c.x, y: c.y, item: key });
       }
+      return;
+    }
+  }
+  // ---- SECRET VAULT (Brogue/NetHack-style hidden passage): unlike placeLockedVault above, this
+  // door isn't visible at all -- it's carved to look and behave exactly like an ordinary wall
+  // (same glyph/color/bg, walkable:false, blocksSight via the same "not walkable" rule everything
+  // else uses) until the player actually finds it via searchForSecrets()/passive search. No key,
+  // no puzzle -- the "puzzle" is exploration itself, which is the point: a floor that might be
+  // hiding something rewards walking its edges and searching dead ends, the classic tension those
+  // games are built around. Reuses the exact same footprint-carving approach as placeLockedVault
+  // (single-door vault room off a dead-end wall) so it's visually consistent with the rest of the
+  // dungeon's room shapes, just undiscoverable until searched.
+  function placeSecretVault(g, floorList, lvl, prng, upStairs, downStairs, dmeta) {
+    for (let attempt = 0; attempt < 25; attempt++) {
+      const c = choice(prng, floorList);
+      if (!g[c.y] || !g[c.y][c.x] || !g[c.y][c.x].walkable) continue;
+      if (chebyshev(c.x,c.y,upStairs.x,upStairs.y) < 5 || chebyshev(c.x,c.y,downStairs.x,downStairs.y) < 4) continue;
+      const [ddx,ddy] = choice(prng, [[1,0],[-1,0],[0,1],[0,-1]]);
+      const doorX = c.x+ddx, doorY = c.y+ddy;
+      const vx = doorX+ddx, vy = doorY+ddy;
+      if (doorX < 3 || doorY < 3 || doorX >= W-3 || doorY >= H-3) continue;
+      if (!g[doorY] || !g[doorY][doorX] || g[doorY][doorX].walkable) continue;
+      const cells = [];
+      let ok = true;
+      for (let oy=-1; oy<=1 && ok; oy++) for (let ox=-1; ox<=1; ox++) {
+        const x=vx+ox, y=vy+oy;
+        if (x<2||y<2||x>=W-2||y>=H-2) { ok=false; break; }
+        if ((x===upStairs.x&&y===upStairs.y)||(x===downStairs.x&&y===downStairs.y)) { ok=false; break; }
+        if (!g[y] || !g[y][x] || g[y][x].walkable) { ok=false; break; }
+        cells.push({x,y});
+      }
+      if (!ok) continue;
+      cells.forEach(p => { g[p.y][p.x] = dtile2('.', true); });
+      // The door tile keeps the SAME wall glyph/colors the rest of this dungeon's walls use (not
+      // a fixed '#'/color, so it reads identically no matter which generator/theme carved this
+      // floor) -- `discovered` is the only thing distinguishing it internally until search flips it.
+      const wallLike = g[doorY][doorX];
+      g[doorY][doorX] = { glyph: wallLike.glyph, color: wallLike.color, bg: wallLike.bg, walkable: false, feature: 'secretdoor', discovered: false };
+      // Secret vaults skew toward better loot than a plain chest of the same depth -- finding one
+      // at all already required beating the odds of the search roll, so the payoff should feel
+      // worth the extra attention paid to blank walls.
+      const rarity = Math.max(2, Math.min(4, Math.round(Math.floor((lvl.depth||1)/2) * 1.3) + 2));
+      const chestBase = ITEM_BASES.find(b=>b.id==='chest');
+      const chestItem = Object.assign({}, chestBase, { uid:'i'+Math.random().toString(36).slice(2,9), tier: rarity, lootBias: dmeta.lootBias, secured: true });
+      lvl.items.push({ x: vx, y: vy, item: chestItem });
       return;
     }
   }
@@ -27674,6 +28318,7 @@ function endTurn() {
   turnCount++;
   markPlayerAreaDirty();
   trackVisitAndMaybeRepopulate();
+  if (curIsDungeon()) trySearchAdjacentSecrets(false);
   // Turn-1 tutorial nudge: fires once, the turn after the world first renders, so the message
   // appears on the player's first deliberate action rather than buried in the start-up flood.
   if (turnCount === 1 && player._pendingTutorialNudge) {
@@ -28270,6 +28915,7 @@ function resolveThrowAtTile(it, wx, wy, fromSlot) {
           if (!t) continue;
           if (t.feature === 'statue') { t.walkable = true; t.feature = 'floor'; t.glyph = '.'; t.color = '#5a4a38'; structuresDestroyed++; }
           else if (t.feature === 'door' || t.feature === 'lockeddoor' || t.feature === 'leverdoor') { t.walkable = true; t.feature = 'floor'; t.glyph = "'"; t.color = '#5a4a38'; structuresDestroyed++; }
+          else if (t.feature === 'secretdoor' && !t.discovered) { t.discovered = true; t.walkable = true; t.feature = 'floor'; t.glyph = "'"; t.color = '#5a4a38'; structuresDestroyed++; }
         }
       }
       log(`*** ${it.name} DETONATES in a devastating ${isVoid ? 'implosion' : 'explosion'}! ***`);
@@ -28862,15 +29508,21 @@ function describeItem(it) {
     if (it.lifesteal) lines.push(`Drains ${Math.round(it.lifesteal*100)}% of damage dealt as HP`);
     if (it.armorPierce) lines.push(`Pierces ${it.armorPierce} armor`);
     if (it.str) lines.push(`Requires ${it.str} STR to wield effectively${effStr(player) < it.str ? ' (you fall short — expect reduced accuracy & damage)' : ''}`);
+    if (it.strBonus) lines.push(`+${it.strBonus} STR (socketed)`); if (it.dexBonus) lines.push(`+${it.dexBonus} DEX (socketed)`);
+    if (it.intBonus) lines.push(`+${it.intBonus} INT (socketed)`); if (it.conBonus) lines.push(`+${it.conBonus} CON (socketed)`);
     if (it.craftedQuality) lines.push(`Hand-crafted quality: ${it.craftedQuality}`);
     if (it.craftedMaterial) lines.push(`Worked from: ${it.craftedMaterial}`);
     if (it.maxDurability !== undefined) lines.push(it.maxDurability === Infinity ? 'Indestructible.' : `Durability: ${it.durability}/${it.maxDurability}${it.broken ? ' — BROKEN, repair to restore full performance' : ''}`);
+    if (it.sockets) lines.push(`Sockets: ${(it.socketedRunes||[]).length}/${it.sockets}${(it.socketedRunes||[]).length ? ' — ' + it.socketedRunes.map(r=>r.name).join(', ') : ''}`);
   } else if (it.type === 'armor') {
     lines.push(`Armor (${it.slot}) — Defense +${it.armor}`);
     if (it.str) lines.push(`Requires ${it.str} STR to wear comfortably${effStr(player) < it.str ? ' (you fall short — expect worse dodge & stamina recovery)' : ''}`);
+    if (it.strBonus) lines.push(`+${it.strBonus} STR (socketed)`); if (it.dexBonus) lines.push(`+${it.dexBonus} DEX (socketed)`);
+    if (it.intBonus) lines.push(`+${it.intBonus} INT (socketed)`); if (it.conBonus) lines.push(`+${it.conBonus} CON (socketed)`);
     if (it.craftedQuality) lines.push(`Hand-crafted quality: ${it.craftedQuality}`);
     if (it.craftedMaterial) lines.push(`Worked from: ${it.craftedMaterial}`);
     if (it.maxDurability !== undefined) lines.push(it.maxDurability === Infinity ? 'Indestructible.' : `Durability: ${it.durability}/${it.maxDurability}${it.broken ? ' — BROKEN, repair to restore full protection' : ''}`);
+    if (it.sockets) lines.push(`Sockets: ${(it.socketedRunes||[]).length}/${it.sockets}${(it.socketedRunes||[]).length ? ' — ' + it.socketedRunes.map(r=>r.name).join(', ') : ''}`);
   } else if (it.type === 'consumable' || it.type === 'scroll') {
     const eff = { heal:'Restores HP', mana:'Restores MP', buffstr:'Temporarily boosts Strength', poison:'Poisons you (bad idea to drink!)',
       food:'A simple food ration', identify:'Reveals hidden information', teleport:'Teleports you a great distance',
@@ -28882,6 +29534,12 @@ function describeItem(it) {
     lines.push(eff || 'A consumable item.');
   } else if (it.type === 'material') {
     lines.push('Crafting/cooking ingredient.');
+  } else if (it.type === 'rune') {
+    const rt = RUNE_TYPES.find(r => r.id === it.id);
+    const statLabel = { strBonus:'STR', dexBonus:'DEX', intBonus:'INT', conBonus:'CON', armor:'Armor', fireDmg:'fire damage', frostDmg:'frost damage', critBonus:'crit chance' }[it.runeStat] || it.runeStat;
+    const valStr = it.runeStat === 'critBonus' ? `${Math.round((it.runeValue||0)*100)}%` : `+${it.runeValue}`;
+    lines.push(`A socketable rune (${rt ? (rt.appliesTo === 'any' ? 'weapons or armor' : rt.appliesTo + 's only') : 'gear'}). Grants ${valStr} ${statLabel} while socketed.`);
+    lines.push('Socket it from the target item\'s action menu with [k]. Removing a rune later destroys it, so choose the gear you actually plan to keep.');
   } else if (it.type === 'corpse') {
     lines.push('A fresh corpse. Necromancers can Raise Dead or trigger Corpse Explosion on it.');
   } else if (it.type === 'chest') {
@@ -28912,7 +29570,6 @@ function describeItem(it) {
     if (b.str) parts.push(`+${b.str} STR`); if (b.dex) parts.push(`+${b.dex} DEX`); if (b.int) parts.push(`+${b.int} INT`); if (b.con) parts.push(`+${b.con} CON`);
     if (parts.length) lines.push(parts.join(', '));
   }
-  if (it.intBonus) lines.push(`+${it.intBonus} INT`);
   if (canThrowItem(it) && it.type !== 'chest') {
     const range = throwRangeFor(it);
     let blurb;
@@ -30973,7 +31630,29 @@ const GUIDE_SECTIONS = [
     Griffon Egg Omelet grants Blink, etc. — check the Abilities screen for a "Granted (temporary)" section after
     eating one). A pure cook/alchemist build is genuinely viable: the Cooking and Alchemy talent lines boost heal
     amount, buff duration, potion potency, thrown-weapon damage/radius, and ingredient efficiency, all the way up to
-    capstones that make crafting nearly free and food a real substitute for going into melee at all.</div>` },
+    capstones that make crafting nearly free and food a real substitute for going into melee at all.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Salvage &amp; Reforge (new).</b> Open any weapon or armor from
+    your inventory [i] and you'll now see [v] Salvage alongside the usual Equip/Drop options — breaks it down into
+    the raw materials it's made of (iron, wood, cloth, leather, or a partial refund of Starmetal/Ironwood if it was
+    crafted from one), plus Arcane Dust if it carries real magic (an affix from a drop, or Fine-or-better crafted
+    quality). Dust has two uses: [r] Reforge, spending it (plus gold) on a piece of gear you're actually keeping for
+    a small permanent bump to its damage/armor and durability (capped at 5 reforges per item — it's meant to make
+    your favorite find better over a long run, not replace finding better gear); or crafting a rune (see below).
+    The Inventory screen also has [J] Salvage all junk, finding everything salvageable that's clearly worse than
+    what you already have equipped in the same slot and breaking it all down at once — conservative on purpose
+    (nothing is touched unless you already have something better equipped in that exact slot), so it's safe to
+    use often without double-checking every item first.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Sockets &amp; Runes (new).</b> Weapons and armor above a certain
+    rarity can roll 0-3 empty sockets — check an item's description for "Sockets: x/y". Runes go in them: craft one
+    from the Crafting menu (learned from blacksmiths, alchemists, and tailors, each specializing in a few types) by
+    spending Arcane Dust plus a themed base material, then use [k] Socket a rune from the target gear's action menu
+    to slot it in. Minor/Greater/Major tiers scale the bonus; some runes (Warding, for armor; Ember/Frost/Precision,
+    for weapons) only fit one item type, others (Might/Swiftness/Insight/Vitality) fit either. [j] Remove a rune
+    pulls it back out, and usually destroys it in the process — but the higher your INT, the better your odds of
+    working it free intact instead (capped at 35%), so a keen mind can afford to experiment a bit more than most.
+    Either way, a socket is still meant as a slow, deliberate commitment to the gear it's on, not something to
+    shuffle every fight. Reforging a piece of gear all the way to 5/5 also has a chance to punch a brand new socket
+    into it, if it has room — the two systems share the same Arcane Dust for a reason.</div>` },
   { id:'water', label:'Water & Travel', html: () => `
     <div class="modal-opt">Swimming costs Stamina; running out causes damage until you reach shore. A Wooden Raft,
     the Flight spell, Micro-Thrusters cybernetic, or the Waterborn talent all let you cross freely.</div>
@@ -31232,6 +31911,17 @@ const GUIDE_SECTIONS = [
     <div class="modal-opt">Rooms in constructed dungeons can also contain statues and idols that block movement and
     line of sight — real cover and chokepoints instead of an empty box to fight in. Their exact flavor (weathered
     stone, an inert combat frame, a weeping obsidian idol) matches the dungeon's theme.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Secret vaults (new).</b> Some dungeons hide a door disguised as
+    an ordinary wall — same glyph and color as everything around it — sealing off a small vault room with better
+    loot than a normal chest deserves. You'll notice one automatically, over time, just from walking near it, but
+    press <b>[S]</b> next to a suspicious dead end to search deliberately and find it much faster. Nothing marks
+    which walls are worth checking; that's the point.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Tunneling (new).</b> With a pickaxe (or similarly heavy
+    hammer/maul/warhammer) in hand, press <b>[D]</b> then a direction to start digging through an ordinary wall in
+    that direction. It takes several turns (faster with more Strength), costs Stamina, and is interrupted if a
+    threat gets close -- but it lets you carve your own shortcut across a level, bypass a locked door entirely, or
+    break straight into a room you spotted but couldn't reach. Level boundaries, doors, and statues can't be dug
+    through. Breaking through occasionally turns up a bit of loose ore as a bonus.</div>
     <div class="modal-opt">Each of the ${Object.keys(DUNGEON_THEMES).length} dungeon themes can also roll one of 5
     rarity variants — Weathered, Standard, Ancient, Corrupted, or Legendary — which meaningfully change its danger,
     loot quality, and miniboss odds (Legendary guarantees one). That's roughly ${Object.keys(DUNGEON_THEMES).length * 5}
@@ -31530,6 +32220,8 @@ function handleKey(e) {
     if (key === '?') { openHelp(); return; }
     if (key === 'r') { doRest(); return; }
     if (key === 'a') { openCalledShotMenu(); return; }
+    if (key === 'S') { doSearch(); return; }
+    if (key === 'D') { beginDigTargeting(); return; }
     return;
   }
 
@@ -31606,6 +32298,7 @@ function handleKey(e) {
     if (key === '[') { if (player.invPage > 0) { player.invPage--; renderInventory(); } return; }
     if (key === ']') { player.invPage++; renderInventory(); return; }
     if (/^[A-I]$/.test(key)) { const slot = SLOT_ORDER[key.charCodeAt(0)-65]; if (slot && player.equipment[slot]) openItemAction(player.equipment[slot], slot); return; }
+    if (key === 'J') { promptSalvageAllJunk(); return; }
     if (/^[a-t]$/.test(key)) {
       const idx = key.charCodeAt(0) - 97;
       const list = filteredInventory();
@@ -31637,6 +32330,30 @@ function handleKey(e) {
       return;
     }
     if (key === 'd') { dropItem(invSelected); gameState='playing'; closeModal(); return; }
+    if (key === 'r' && canReforge(invSelected) && salvageYieldFor(invSelected)) { reforgeItem(invSelected); gameState='playing'; closeModal(); return; }
+    if (key === 'v' && salvageYieldFor(invSelected)) { const it = invSelected, slot = invSelectedSlot; salvageItem(it, slot); invSelectedSlot = null; gameState='playing'; closeModal(); return; }
+    if (key === 'k' && canSocket(invSelected)) { promptSocketRune(invSelected); return; }
+    if (key === 'j' && (invSelected.socketedRunes||[]).length > 0) { promptUnsocketRune(invSelected); return; }
+    return;
+  }
+  if (gameState === 'socketpick') {
+    if (key === 'Escape' || key === 'x') { gameState = 'itemaction'; openItemAction(invSelected, invSelectedSlot); return; }
+    if (/^[a-z]$/.test(key)) { doSocketRunePick(key); return; }
+    return;
+  }
+  if (gameState === 'unsocketpick') {
+    if (key === 'Escape' || key === 'x') { gameState = 'itemaction'; openItemAction(invSelected, invSelectedSlot); return; }
+    if (/^[a-z]$/.test(key)) { doUnsocketRunePick(key); return; }
+    return;
+  }
+  if (gameState === 'digpick') {
+    if (key === 'Escape') { gameState = 'playing'; log('Never mind.'); return; }
+    if (MOVE_KEYS[key]) { const [dx, dy] = MOVE_KEYS[key]; beginDig(dx, dy); return; }
+    return;
+  }
+  if (gameState === 'salvageall') {
+    if (key === 'Escape' || key === 'x') { gameState = 'inventory'; renderInventory(); return; }
+    if (key === 'y') { confirmSalvageAllJunk(); return; }
     return;
   }
   if (gameState === 'quickslotassign') {
