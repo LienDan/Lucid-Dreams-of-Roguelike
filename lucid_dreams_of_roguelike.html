@@ -516,7 +516,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.42.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.43.0-alpha</div>
     </div>
   </div>
 
@@ -1515,6 +1515,78 @@
 // bonus-socket roll actually fires, a pristine-vs-broken salvage yield comparison, and a 60-trial
 // loop at high INT confirming the unsocket preservation roll produces BOTH outcomes (not just
 // checking it doesn't crash). Zero window errors, plus a follow-up bot regression run.
+//
+// v0.43.0 Player-requested BLEED BALANCE PASS. The report: bleed felt like the main threat rather
+// than an occasional serious one, seemed to never end on its own, procced off attacks that had no
+// business causing it, and had no counterplay (no resist gear/talents) or NPC-healer support.
+// Read every bleed call site in the file before touching anything (doAttack x3, applyBleed,
+// stanchBleed, the tick in processEntityStatus, doRest/runAutoLoop's gates, payForHealing) rather
+// than assuming the v0.40.18/v0.40.31 comments were still accurate -- they were, which is exactly
+// what made bleed feel perpetual: v0.40.18 deliberately made it never self-resolve, and then made
+// it re-apply on almost every real non-blunt hit, so a wound would "expire" only to get refreshed
+// by the next qualifying hit before it ever actually ran out. Every verified issue got a real fix,
+// not a numbers-only tweak, per the actual request:
+//   - PROC GATING: bleed used to be a GUARANTEE on any hit clearing a damage-fraction threshold, on
+//     any weapon except blunt. Added BLEED_CHANCE_BY_TYPE (slashing 55%, piercing 22%, blunt 0%) --
+//     clearing the threshold now buys a chance, not a certainty, scaled up by how far past the
+//     threshold the hit landed and by a crit, scaled down by the new bleedResistChance stat. Applied
+//     at all three proc sites (the main hit, a fresh torso wound, and the bloodless-creature crit
+//     fallback) so a slashing weapon is a real bleed source, a dagger is a real but lesser one, and
+//     a mace or fist never causes it at all -- "not every attack should inflict bleed" from the
+//     report, addressed as an actual weapon-type mechanic instead of a flag on individual items.
+//   - NATURAL RESOLUTION: replaced the flat bleedTurns duration-floor (which is what made a
+//     re-applied bleed feel endless) with a clotting system. bleedClotTurns tracks how long the
+//     CURRENT bleed has stayed open; every tick rolls a chance to shave off a stack that starts low
+//     (4%) and climbs every turn the wound stays open, capped at 90% -- exactly the "low probability
+//     at first, goes up over time" shape asked for. Taking another qualifying hit while already
+//     bleeding knocks the clock back (doesn't reset it to zero) rather than refreshing a flat
+//     duration, so continued punishment still matters without making it as unrecoverable as before.
+//     bleedTurns itself is kept as a plain "currently bleeding" flag (now just incremented, never a
+//     countdown) so every existing >0 gate -- doRest's block, runAutoLoop's halt, the tick dispatch
+//     -- kept working with zero changes to those call sites; only the status-display line (which
+//     used to render it as "N turns left", now actively wrong) was updated to show severity instead.
+//   - RESISTANCE FRAMEWORK: bleed had no counterplay at all before this pass, unlike poison
+//     (poisonDmgReduction is threaded through racial traits, talents, cybernetics, and gear). Added
+//     the mirror-image bleedDmgReduction (reduces tick damage) and bleedResistChance (chance a new
+//     bleed simply doesn't take) as real accumulators, wired into EQUIP_FLAT_BONUS_KEYS so any
+//     future item just works. Extended three existing racial traits that already had the right
+//     flavor text for it rather than inventing unrelated ones: Orc's Thick Hide (reduction), Skarath's
+//     Scaled Hide (resist chance -- scales already resisted poison, cuts fit the same logic), and
+//     Troll's Regeneration (clot-speed bonus -- its own desc already said wounds "start closing
+//     almost as soon as they are made"). Added a 3-tier talent line (Scar Tissue -> Clotting Factor
+//     -> Iron Veins) shaped exactly like the existing Toxicologist poison-resistance line. Added new
+//     gear: Clotweave Wrap and Scarred Plate (armor), Amulet of Steady Blood, and Potion of Clotting
+//     (a temporary full-immunity buff, mirroring Potion of Poison Resistance) with its own brew recipe.
+//   - HEALER TIERS: payForHealing only ever restored HP/MP and touched nothing else, so a bleeding,
+//     poisoned, or diseased character paying for "healing" walked out exactly as afflicted as they
+//     walked in -- directly contradicting what the action claims to do. Reused the existing npc.tier
+//     (Novice/Journeyman/Master, which already gates trainer spell counts and craftsperson recipe
+//     rosters elsewhere) as the skill axis rather than inventing a second one: Novice stanches
+//     bleeding only, Journeyman adds poison/confuse/fear (the everyday afflictions), Master adds
+//     radiation sickness and cures ordinary (non-chronic) diseases outright -- exactly the "rarer,
+//     more potent" progression asked for. Chronic/permanent afflictions are deliberately untouched
+//     here; those still require Greater Restoration specifically (hasCurableAffliction), so the
+//     existing "some things need a real priest" design stays intact. Price scales with how many
+//     afflictions actually get treated, on top of the existing settlement-tier multiplier.
+//   - CUREALL GAP: Panacea/Scroll of Cleansing/thrown cureall potions claimed in their own flavor
+//     text to cleanse "all afflictions" but never touched bleeding at all. Fixed at both call sites
+//     (drunk directly and splashed on a target). Also fixed Medkit, which is literally crafted out
+//     of 2 Bandages (see craft_medkit) but used a plain 'heal' effect that did nothing for bleeding
+//     -- gave it a dedicated effect that heals AND stanches, matching its own recipe. Added Coagulant
+//     Salve as a craftable upgrade over a plain Bandage.
+// Deliberately did NOT touch: spell/potion 'heal' effects (Heal, Greater Heal, Regeneration, potion
+// healing, etc.) still don't stanch bleeding on their own. That split (mundane first-aid stops a
+// bleed, magical healing mends the HP but not the wound itself) was already the game's consistent
+// rule before this pass (see the original bandage-vs-heal comment near applyBleed's old version)
+// and isn't part of what was reported as broken -- changing it would be a much bigger, unrequested
+// swing in how trivial bleed is to ignore for any spellcaster build.
+// Verified with a dedicated Node harness (not just "doesn't crash"): 500-trial proc-rate check per
+// damage type confirms slashing/piercing/blunt land near their target rates and blunt never procs;
+// a 200-turn single-bleed simulation confirms it can and does resolve on its own well before the
+// old flat-duration floor would have allowed, while still doing real cumulative damage if ignored
+// immediately; payForHealing checked against all three tiers with a bleeding+poisoned+diseased
+// player fixture confirms each tier cures exactly its own list and no more. Full automated
+// playtest bot run afterward, zero window errors.
 //
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
@@ -3612,9 +3684,9 @@ const SPECIES = [
     statMods:{ str:4, dex:0, int:-2, con:2, wil:0, cha:-1 },
     traits:[
       { name:'Bloodfury', desc:'Hits noticeably harder once badly wounded (below ~35% HP).', apply:(p)=>{ p.lowHpDmgBonus=(p.lowHpDmgBonus||0)+0.3; } },
-      { name:'Thick Hide', desc:'Naturally tougher skin grants a small passive armor bonus.', apply:(p)=>{ p.talentArmor=(p.talentArmor||0)+1; } },
+      { name:'Thick Hide', desc:'Naturally tougher skin grants a small passive armor bonus and takes noticeably less damage from any bleeding wound.', apply:(p)=>{ p.talentArmor=(p.talentArmor||0)+1; p.bleedDmgReduction=Math.min(0.9,(p.bleedDmgReduction||0)+0.2); } },
     ],
-    heritageBoost:(p)=>{ p.lowHpDmgBonus=(p.lowHpDmgBonus||0)+0.2; p.talentArmor=(p.talentArmor||0)+1; },
+    heritageBoost:(p)=>{ p.lowHpDmgBonus=(p.lowHpDmgBonus||0)+0.2; p.talentArmor=(p.talentArmor||0)+1; p.bleedDmgReduction=Math.min(0.95,(p.bleedDmgReduction||0)+0.15); },
     kingdomTraitWeights:{ militaristic:6, lawless:5, mercantile:-2, scholarly:-3, pious:-2 },
     biomeWeights:{ mountain:3, plains:2, desert:2, swamp:2 }, flavorAffinity:['nomad','military'],
     affinity:{ elf:-1, dwarf:-1, nyxari:0.5 } },
@@ -3623,10 +3695,10 @@ const SPECIES = [
     desc:'Scaled, reptilian swamp- and desert-dwellers, tough and hard to poison, but standoffish and hard to warm up to.',
     statMods:{ str:1, dex:0, int:0, con:2, wil:2, cha:-2 },
     traits:[
-      { name:'Scaled Hide', desc:'Thick natural scales resist a large portion of poison damage and add armor.', apply:(p)=>{ p.poisonDmgReduction=Math.min(0.95,(p.poisonDmgReduction||0)+0.6); p.talentArmor=(p.talentArmor||0)+1; } },
+      { name:'Scaled Hide', desc:'Thick natural scales resist a large portion of poison damage, add armor, and make it noticeably harder for a cut to actually start bleeding.', apply:(p)=>{ p.poisonDmgReduction=Math.min(0.95,(p.poisonDmgReduction||0)+0.6); p.talentArmor=(p.talentArmor||0)+1; p.bleedResistChance=Math.min(0.9,(p.bleedResistChance||0)+0.15); } },
       { name:'Cold Blood', desc:'Steady nerves -- much less likely to be gripped by fear.', apply:(p)=>{ p.fearResistBonus=(p.fearResistBonus||0)+0.5; } },
     ],
-    heritageBoost:(p)=>{ p.poisonDmgReduction=Math.min(0.97,(p.poisonDmgReduction||0)+0.2); p.fearResistBonus=(p.fearResistBonus||0)+0.3; },
+    heritageBoost:(p)=>{ p.poisonDmgReduction=Math.min(0.97,(p.poisonDmgReduction||0)+0.2); p.fearResistBonus=(p.fearResistBonus||0)+0.3; p.bleedResistChance=Math.min(0.95,(p.bleedResistChance||0)+0.1); },
     kingdomTraitWeights:{ isolationist:4, lawless:3, scholarly:-2 },
     biomeWeights:{ swamp:8, desert:3 }, flavorAffinity:[],
     affinity:{ vulkari:-0.5 } },
@@ -3721,7 +3793,7 @@ const MONSTER_ONLY_SPECIES = [
   { id:'troll', name:'Troll', peopleLabel:'Trolls', desc:'Huge, dim, and disturbingly hard to keep down -- wounds that would fell anything else start closing almost as soon as they are made.',
     statMods:{}, kingdomTraitWeights:{}, biomeWeights:{}, flavorAffinity:[], affinity:{},
     traits:[
-      { name:'Regeneration', desc:'Slowly mends HP every turn, even mid-fight.', apply:(p)=>{ p.regen = (p.regen||0) + 2; } },
+      { name:'Regeneration', desc:'Slowly mends HP every turn, even mid-fight, and any bleeding wound clots shut much faster than usual.', apply:(p)=>{ p.regen = (p.regen||0) + 2; p.bleedClotBonus = (p.bleedClotBonus||0) + 0.15; } },
       { name:'Thick Hide', desc:'Naturally tougher skin grants a passive armor bonus.', apply:(p)=>{ p.talentArmor = (p.talentArmor||0) + 2; } },
     ] },
 ];
@@ -4364,6 +4436,14 @@ TALENTS_V2.push(
   { id:'banquet', name:'Banquet', category:'cooking', desc:'Cooking recipes yield one extra portion', tier:2, requires:{level:5}, apply:()=>{ player.cookingYieldBonus=(player.cookingYieldBonus||0)+1; } },
   { id:'efficientalchemist', name:'Efficient Alchemist', category:'alchemy', desc:'25% chance to not consume an ingredient when crafting', tier:2, requires:{level:5}, apply:()=>{ player.craftYieldChance=(player.craftYieldChance||0)+0.25; } },
   { id:'toxicologist', name:'Toxicologist', category:'alchemy', desc:'Permanently take 25% less poison damage', tier:2, requires:{level:5}, apply:()=>{ player.poisonDmgReduction=(player.poisonDmgReduction||0)+0.25; } },
+  // ---- BLEED RESISTANCE TALENT LINE (v0.43.0): the poison-resistance line (Iron Stomach/
+  // Toxicologist/etc.) has real player-facing counterplay through talents, gear, and racial
+  // traits; bleed had none at all before this pass. Mirrors that shape exactly -- a cheap early
+  // pickup, a mid-tier upgrade, and a capstone -- so the two DoTs are handled symmetrically as
+  // frameworks even though their underlying mechanics (flat tick vs. clotting) differ.
+  { id:'scartissue', name:'Scar Tissue', category:'combat', desc:'20% chance any bleeding wound simply fails to take hold', tier:1, requires:null, apply:()=>{ player.bleedResistChance=(player.bleedResistChance||0)+0.2; } },
+  { id:'clottingfactor', name:'Clotting Factor', category:'combat', desc:'Take 30% less damage from bleeding, and any bleed you do take clots shut faster', tier:2, requires:{level:5, talent:'scartissue'}, apply:()=>{ player.bleedDmgReduction=(player.bleedDmgReduction||0)+0.3; player.bleedClotBonus=(player.bleedClotBonus||0)+0.08; } },
+  { id:'ironveins', name:'Iron Veins', category:'combat', desc:'Full immunity to bleeding -- wounds still land normally, they just never draw blood', tier:3, requires:{level:10, talent:'clottingfactor'}, apply:()=>{ player.bleedResistChance=1; } },
   { id:'deepdiver', name:'Deep Diver', category:'survival', desc:'Swimming no longer drains stamina (same as Waterborn if not already taken)', tier:2, requires:{level:5}, apply:()=>{ player.freeSwim=true; } },
   { id:'cartographer', name:'Cartographer', category:'survival', desc:'Reveal a wide area around you whenever you enter a new dungeon level', tier:2, requires:{level:5}, apply:()=>{ player.autoRevealOnLevel=true; } },
   { id:'nightowl', name:'Night Owl', category:'survival', desc:'Permanent minor night vision', tier:2, requires:{level:5}, apply:()=>{ player.permaNightVision=true; } },
@@ -4747,6 +4827,7 @@ RECIPES.push(
   { id:'brew_fireres_potion', name:'Brew Fire Resistance Potion', category:'crafting', inputs:[{id:'salamander_blood',qty:1},{id:'herb',qty:1}], output:{id:'potion_fireres',qty:1} },
   { id:'brew_frostres_potion', name:'Brew Frost Resistance Potion', category:'crafting', inputs:[{id:'frost_lotus',qty:1},{id:'herb',qty:1}], output:{id:'potion_frostres',qty:1} },
   { id:'brew_poisonres_potion', name:'Brew Poison Resistance Potion', category:'crafting', inputs:[{id:'nightshade',qty:1},{id:'herb',qty:2}], output:{id:'potion_poisonres',qty:1} },
+  { id:'brew_bleedres_potion', name:'Brew Potion of Clotting', category:'crafting', inputs:[{id:'herb',qty:2},{id:'cloth',qty:1}], output:{id:'potion_bleedres',qty:1} },
   { id:'brew_luck_potion', name:'Brew Potion of Luck', category:'crafting', inputs:[{id:'moonstone',qty:1},{id:'honey',qty:1}], output:{id:'potion_luck',qty:1} },
   { id:'brew_giant_strength_potion', name:'Brew Potion of Giant Strength', category:'crafting', inputs:[{id:'troll_blood',qty:2}], output:{id:'potion_giant_strength',qty:1} },
   { id:'brew_supreme_heal_elixir', name:'Brew Elixir of Supreme Healing', category:'crafting', inputs:[{id:'phoenix_feather',qty:2},{id:'moonstone',qty:1}], output:{id:'elixir_supreme_healing',qty:1} },
@@ -4788,6 +4869,7 @@ RECIPES.push(
   { id:'craft_nanoweave_stim', name:'Synthesize Nanoweave Stim', category:'crafting', inputs:[{id:'nanite_cluster',qty:1},{id:'circuit_board',qty:1}], output:{id:'nanoweave_stim',qty:1} },
   { id:'craft_bandage', name:'Roll Bandages', category:'crafting', inputs:[{id:'cloth',qty:3},{id:'herb',qty:1}], output:{id:'bandage',qty:3} },
   { id:'craft_splint', name:'Assemble Splint', category:'crafting', inputs:[{id:'wood',qty:2},{id:'cloth',qty:3},{id:'iron_ingot',qty:1}], output:{id:'splint',qty:1} },
+  { id:'craft_coagulant_salve', name:'Brew Coagulant Salve', category:'crafting', inputs:[{id:'herb',qty:2},{id:'moonstone',qty:1},{id:'bandage',qty:1}], output:{id:'coagulant_salve',qty:1} },
   { id:'craft_hoe', name:'Assemble Hoe', category:'crafting', inputs:[{id:'wood',qty:2},{id:'ore',qty:1}], output:{id:'hoe',qty:1} },
   { id:'craft_fishing_rod', name:'Assemble Fishing Rod', category:'crafting', inputs:[{id:'wood',qty:2},{id:'cloth',qty:1}], output:{id:'fishing_rod',qty:1} },
   { id:'craft_charge_cell', name:'Assemble Charge Cell', category:'crafting', inputs:[{id:'circuit_board',qty:1},{id:'nanite_cluster',qty:1}], output:{id:'charge_cell',qty:1} },
@@ -4890,6 +4972,7 @@ ITEM_BASES.push(
   { id:'potion_fireres', name:'Potion of Fire Resistance', type:'consumable', effect:'resistfire', dur:25, glyph:'!', color:'#e0785a', value:30 },
   { id:'potion_frostres', name:'Potion of Frost Resistance', type:'consumable', effect:'resistfrost', dur:25, glyph:'!', color:'#8ad0e0', value:30 },
   { id:'potion_poisonres', name:'Potion of Poison Resistance', type:'consumable', effect:'resistpoison', dur:25, glyph:'!', color:'#5ac95a', value:30 },
+  { id:'potion_bleedres', name:'Potion of Clotting', type:'consumable', effect:'resistbleed', dur:25, glyph:'!', color:'#c9503a', value:30, desc:"Thickens the blood for a while -- fresh wounds simply won't take." },
   { id:'potion_nightvision', name:'Potion of Night Vision', type:'consumable', effect:'nightvision', dur:40, glyph:'!', color:'#a0e0a0', value:20 },
   { id:'potion_luck', name:'Potion of Luck', type:'consumable', effect:'buffcrit', power:0.1, dur:20, glyph:'!', color:'#e0c34a', value:38 },
   { id:'potion_giant_strength', name:'Potion of Giant Strength', type:'consumable', effect:'buffstr', power:5, dur:20, glyph:'!', color:'#c9503a', value:70 },
@@ -4911,7 +4994,11 @@ ITEM_BASES.push(
   // ---- bandages/medkits/utility ----
   { id:'bandage', name:'Bandage', type:'consumable', effect:'bandage', power:8, glyph:'!', color:'#e0d0c0', value:6, desc:'Clean cloth wrapping. Stanches active bleeding and closes a modest amount of the wound itself.' },
   { id:'splint', name:'Splint', type:'consumable', effect:'splint', glyph:'!', color:'#c9a56a', value:20, desc:"A rigid brace and wrapping for a broken limb. Won't undo the damage, but stabilizes a maimed limb enough to use again and let it resume healing naturally." },
-  { id:'medkit', name:'Medkit', type:'consumable', effect:'heal', power:45, glyph:'!', color:'#e05a5a', value:50 },
+  { id:'coagulant_salve', name:'Coagulant Salve', type:'consumable', effect:'coagulant', power:16, dur:20, glyph:'!', color:'#c9503a', value:34, desc:'An alchemical paste that seals a wound almost on contact, and leaves the blood thickened for a while afterward -- a Bandage that also buys you some insurance against the next cut.' },
+  // BUG FIX (v0.43.0): a Medkit is literally crafted out of 2 Bandages (see craft_medkit) but used
+  // a plain 'heal' effect that did nothing at all for bleeding -- a bandage-based item that
+  // doesn't stanch bleeding contradicted its own recipe. Dedicated 'medkit' effect below.
+  { id:'medkit', name:'Medkit', type:'consumable', effect:'medkit', power:45, glyph:'!', color:'#e05a5a', value:50, desc:'A proper field kit built around real bandaging. Heals a serious amount of HP and stanches any active bleeding.' },
   { id:'nanoweave_stim', name:'Nanoweave Stim', type:'consumable', effect:'heal', power:30, glyph:'!', color:'#4ae0d0', value:40 },
   { id:'ration_pack', name:'Trail Rations', type:'consumable', effect:'food', power:2, glyph:'%', color:'#c9a06a', value:8 },
   { id:'feast_pack', name:'Feast Pack', type:'consumable', effect:'food', power:5, glyph:'%', color:'#e0c34a', value:22 },
@@ -5121,6 +5208,11 @@ ITEM_BASES.push(
   { id:'spellward_tome', name:'Spellward Tome', type:'armor', slot:'offhand', armor:1, glyph:'(', color:'#7a5ac9', value:55, intBonus:3 },
   { id:'cyber_deflector', name:'Cyber Deflector', type:'armor', slot:'offhand', armor:4, glyph:'(', color:'#4ae0d0', value:90, dexBonus:1 },
   { id:'bone_ward', name:'Bone Ward', type:'armor', slot:'offhand', armor:2, glyph:'(', color:'#d8d0c0', value:45, poisonDmgReduction:0.1 },
+  // ---- BLEED-RESISTANCE GEAR (v0.43.0): bone_ward already proved the pattern for a dedicated
+  // resistance-stat offhand item; these are the direct bleed equivalent, plus a body-slot and
+  // amulet option so a build isn't forced to give up the same offhand slot poison resistance uses.
+  { id:'clotweave_wrap', name:'Clotweave Wrap', type:'armor', slot:'offhand', armor:1, glyph:'(', color:'#c98a8a', value:42, bleedDmgReduction:0.25, desc:'Tightly wound bandage-cloth worn like a bracer, kept pre-soaked in a clotting tincture. Blunts any bleeding wound by a quarter.' },
+  { id:'scarred_plate', name:'Scarred Plate', type:'armor', slot:'body', armor:6, glyph:'[', color:'#9a8a7a', value:95, bleedResistChance:0.2, desc:"Old battle-plate, dented and rewelded more times than its wearer can count. It doesn't stop a cut from landing, but it often stops that cut from becoming a real bleeding wound." },
   // ---- armor: head ----
   { id:'great_helm', name:'Great Helm', type:'armor', slot:'head', armor:3, glyph:'^', color:'#b6bcc4', value:55 },
   { id:'dragon_helm', name:'Dragon Helm', type:'armor', slot:'head', armor:5, glyph:'^', color:'#3ac97a', value:140 },
@@ -5147,6 +5239,7 @@ ITEM_BASES.push(
   { id:'amulet_of_protection', name:'Amulet of Protection', type:'armor', slot:'amulet', armor:1, glyph:'=', color:'#b6bcc4', value:70 },
   { id:'amulet_of_the_arcane', name:'Amulet of the Arcane', type:'armor', slot:'amulet', armor:0, glyph:'=', color:'#7a5ac9', value:85, intBonus:3 },
   { id:'amulet_of_fortitude', name:'Amulet of Fortitude', type:'armor', slot:'amulet', armor:0, glyph:'=', color:'#5ae09a', value:85, conBonus:3 },
+  { id:'amulet_of_steady_blood', name:'Amulet of Steady Blood', type:'armor', slot:'amulet', armor:0, glyph:'=', color:'#c9503a', value:80, bleedDmgReduction:0.15, bleedResistChance:0.1, desc:'A dense little charm, warm to the touch. Wounds close a little easier just for wearing it.' },
   { id:'eldritch_pendant', name:'Eldritch Pendant', type:'armor', slot:'amulet', armor:0, glyph:'=', color:'#4a2a5a', value:150, intBonus:4, eldritchDmgBonus:0.06 },
   { id:'cyber_neural_link', name:'Cyber Neural Link', type:'armor', slot:'amulet', armor:0, glyph:'=', color:'#4ae0d0', value:120, intBonus:3, critBonus:0.03 },
   // ---- armor: cloak ----
@@ -13003,6 +13096,13 @@ function weaponDamageType(weapon) {
   for (const p of WEAPON_DAMAGE_TYPE_PATTERNS) if (p.re.test(hay)) return p.type;
   return 'slashing';
 }
+// ---- BLEED CHANCE BY DAMAGE TYPE (v0.43.0): only specific kinds of attacks have a real chance to
+// open a bleeding wound at all -- a slashing edge is the classic laceration, a puncture wound
+// (piercing) is real but far less likely to bleed seriously, and blunt trauma doesn't cut anything
+// open (0, same as it's always effectively been). Centralized here rather than inlined at each of
+// doAttack's three bleed-proc call sites so a future weapon-type addition is a one-line change
+// that automatically covers all of them consistently.
+const BLEED_CHANCE_BY_TYPE = { slashing: 0.55, piercing: 0.22, blunt: 0 };
 // ---- ARMOR & LOCATIONAL PROTECTION: which equipped slot(s) actually cover a given body part,
 // and how much. Deliberately separate from getArmorOf's flat damage-reduction total (that still
 // governs how much raw damage a hit does, same as always) -- this is armor's OTHER real job:
@@ -13075,24 +13175,54 @@ function tickBodyParts(e) {
   if (changed) recalcBodyPenalties(e);
 }
 // ---- bleeding: a real DoT distinct from (and stacking with) poison, triggered by crits and by
-// torso/limb wounds (see the doAttack hook), stopped by a Bandage rather than fading on its own
-// in any reasonable time -- the entire point is that an untreated wound is genuinely dangerous,
-// not a background ticker that resolves itself if you just wait a few turns. ----
+// torso/limb wounds (see the doAttack hook). ----
+// CLOTTING REWORK (v0.43.0): v0.40.18 deliberately made bleed never fade on its own, reasoning
+// that "an untreated wound is genuinely dangerous" required a hard requirement on a Bandage. In
+// practice, combined with how easily bleed procced (see the doAttack rework), that meant nearly
+// every real fight left the player bleeding continuously -- the wound would "expire" per its
+// duration floor only to get re-applied by the next qualifying hit before it ever actually ended,
+// so it read as permanent rather than dangerous. A real wound doesn't work like poison (which
+// simply ticks down) or like the old bleed (which either was there at full severity or wasn't) --
+// it clots, unevenly, with the odds improving the longer it's had to work at it. bleedClotTurns
+// tracks how long the CURRENT bleed has been open; every tick rolls a rising chance to shave off
+// one stack, starting low (a fresh wound is unlikely to seal on the very first turn) and climbing
+// (an old, undisturbed wound is increasingly likely to finally close). Getting hit again while
+// already bleeding knocks the clock back rather than resetting it to zero, so continued punishment
+// still meaningfully delays the natural stop without making it as unrecoverable as before. A
+// Bandage (or any cureall/cure-bleed source) is still the reliable, instant answer -- this just
+// means walking away from a fight bleeding is a genuine gamble instead of a guaranteed grind.
+// Shared resist-chance reader: capped at 90% for stacked partial sources (armor + talent + racial
+// combined shouldn't round to a false sense of total safety), but a source that explicitly sets
+// full immunity (Iron Veins, bleedResistChance = 1 exactly) is allowed to actually mean it --
+// otherwise a capstone talent advertised as "full immunity" would still bleed 1 time in 20.
+function effectiveBleedResistChance(e) {
+  const v = e && e.bleedResistChance || 0;
+  return v >= 1 ? 1 : Math.min(0.9, v);
+}
 function applyBleed(e, stacks) {
-  if (!e || e.hp === undefined) return;
-  const wasBleeding = (e.bleedTurns || 0) > 0;
+  if (!e || e.hp === undefined || e.bloodless) return;
+  // bleedResistChance (armor/talents/racial hooks -- see EQUIP_FLAT_BONUS_KEYS, TALENTS_V2,
+  // SPECIES traits) lets a wound simply not take at all, same shape as poison's full-immunity gate.
+  // A temporary Potion of Clotting (resistbleed buff) grants full immunity for its duration, same
+  // pattern as resistpoison.
+  if (e === player && getBuff('resistbleed') > 0) return;
+  const resistChance = effectiveBleedResistChance(e);
+  if (resistChance > 0 && Math.random() < resistChance) {
+    if (e === player) log("The cut doesn't take -- you shrug it off before it can start bleeding.");
+    return;
+  }
+  const wasBleeding = (e.bleedStacks || 0) > 0;
   e.bleedStacks = Math.min(6, (e.bleedStacks || 0) + stacks);
-  e.bleedTurns = Math.max(e.bleedTurns || 0, 10 + stacks * 5);
-  // BUG FIX (v0.40.18): bleed deliberately never fades on its own (see stanchBleed/the Bandage
-  // item) -- a new player has no way to know that going in, and the first time it happens is
-  // exactly when they're least equipped to recognize it as a real threat rather than a flavor
-  // status. One-time, first-ever warning; never repeats once seen.
+  e.bleedTurns = (e.bleedTurns || 0) + 1; // legacy "currently bleeding" flag; every other call site
+  // only ever checks this for truthiness, so repurposing it as a rough elapsed-turn counter for
+  // display purposes is safe and keeps every existing >0 gate (doRest, autoRun, tick dispatch) working.
+  e.bleedClotTurns = wasBleeding ? Math.max(0, (e.bleedClotTurns || 0) - 3) : 0;
   if (e === player && !wasBleeding && !player.everBled) {
     player.everBled = true;
-    log("*** You're bleeding, and it won't stop on its own -- find or craft a Bandage before it adds up. ***");
+    log("*** You're bleeding! Left alone it may eventually clot on its own, but the odds are against you early -- find or craft a Bandage to be sure. ***");
   }
 }
-function stanchBleed(e) { if (!e) return false; const did = (e.bleedTurns || 0) > 0; e.bleedStacks = 0; e.bleedTurns = 0; return did; }
+function stanchBleed(e) { if (!e) return false; const did = (e.bleedStacks || 0) > 0 || (e.bleedTurns || 0) > 0; e.bleedStacks = 0; e.bleedTurns = 0; e.bleedClotTurns = 0; return did; }
 // ============================================================================
 // ---- PROCEDURAL DISEASE: every infection is assembled at the moment it's caught, not picked
 // from a fixed list of five hand-authored illnesses -- 1-2 symptoms drawn from SYMPTOM_POOL, one
@@ -13777,6 +13907,7 @@ const STATUS_LABELS = {
   resistfire: () => 'Fire Resistant',
   resistfrost: () => 'Frost Resistant',
   resistpoison: () => 'Poison Resistant',
+  resistbleed: () => 'Clotting (bleed-resistant)',
   waterbreathing: () => 'Waterbreathing',
 };
 function getActiveStatusEffects(e) {
@@ -13808,7 +13939,11 @@ function getActiveStatusEffects(e) {
   if (e.frozenSolidTurns > 0) out.push({ label: 'Frozen Solid', turns: e.frozenSolidTurns, kind: 'debuff' });
   // ---- BODY & HEALTH OVERHAUL: wounds, bleeding, and active illness, all shown the same way
   // every other status is -- see the framework block near igniteTile. ----
-  if (e.bleedTurns > 0) out.push({ label: 'Bleeding', turns: e.bleedTurns, kind: 'debuff' });
+  // bleedTurns is now just a "currently bleeding" flag/elapsed-turn counter (see the clotting
+  // rework near applyBleed), not a countdown -- showing it as "N turns left" would be actively
+  // wrong, so this reports severity (stacks) and lets the null-turns branch below correctly read
+  // as "needs treatment" (still true: clotting is a chance, not a guarantee).
+  if (e.bleedStacks > 0) out.push({ label: `Bleeding (severity ${e.bleedStacks})`, turns: null, kind: 'debuff' });
   if (e.bodyParts) {
     for (const p of BODY_PARTS) {
       const lvl = e.bodyParts[p].level;
@@ -14296,7 +14431,7 @@ function totalStatBonus(it, stat) {
 // frostDmg, poisonDmg, lifesteal, armorPierce, antiUndead) are deliberately NOT in this list --
 // those are read directly off player.equipment.* at the point of use instead, so listing them
 // here would double-apply them. This list is only for stats with no other read site. ----
-const EQUIP_FLAT_BONUS_KEYS = ['dodgeChance', 'critBonus', 'critDmgBonus', 'eldritchDmgBonus', 'poisonDmgReduction', 'lifestealBonus', 'spellDmgBonus', 'techniqueDmgBonus'];
+const EQUIP_FLAT_BONUS_KEYS = ['dodgeChance', 'critBonus', 'critDmgBonus', 'eldritchDmgBonus', 'poisonDmgReduction', 'lifestealBonus', 'spellDmgBonus', 'techniqueDmgBonus', 'bleedDmgReduction', 'bleedResistChance'];
 // Maps a mutation's `category` to the player field a specialization talent can set to boost just
 // that category's damage (see applyEffectToTarget's dmgMult). Deliberately data-driven: adding a
 // new specialization line for a category not listed here is a one-line addition, not a formula change.
@@ -18002,12 +18137,58 @@ function restAtHome(npc) {
   closeModal();
 }
 
+// ---- HEALER SKILL TIERS (v0.43.0): payForHealing always just restored HP/MP, completely ignoring
+// every status effect a visit to an actual healer should plausibly fix -- most notably bleeding,
+// which every other cure source in the game (Bandage, cureall) already treats as a real affliction.
+// Reuses the existing npc.tier (Novice/Journeyman/Master -- see NPC_TIERS/npcTierInfo, which
+// already drives price and combat stats for every NPC) rather than inventing a second skill axis:
+// a still-learning Novice can manage a fresh cut, an ordinary Journeyman handles the common stuff
+// a village healer sees every week, and a Master can do real medicine a hedge-healer can't --
+// exactly the "higher tiers cure rarer/more potent afflictions" shape that was asked for. Data-
+// driven so a future status effect is a one-line addition to whichever tier should cover it.
+const HEALER_CURE_TIERS = {
+  novice:     { bleed: true },
+  journeyman: { bleed: true, poison: true, confuse: true, fear: true },
+  master:     { bleed: true, poison: true, confuse: true, fear: true, radiation: true, disease: true },
+};
+function healerCureCapability(npc) { return HEALER_CURE_TIERS[npc.tier] || HEALER_CURE_TIERS.journeyman; }
 function payForHealing(npc) {
-  const cost = Math.round((Math.round((player.maxHp - player.hp) * 0.6) + Math.round((player.maxMp - player.mp) * 0.3) + 3) * npcTierPriceMult(npc));
-  if (player.hp >= player.maxHp && player.mp >= player.maxMp) { log('You are already at full strength.'); return; }
+  const cap = healerCureCapability(npc);
+  const hasBleed = (player.bleedStacks || 0) > 0 || (player.bleedTurns || 0) > 0;
+  const hasPoison = (player.statusPoison || 0) > 0;
+  const hasConfuse = (player.statusConfuse || 0) > 0;
+  const hasFear = (player.statusFear || 0) > 0;
+  const hasRadiation = (player.statusRadiation || 0) > 0;
+  // Deliberately excludes any disease rolled with cureId:'greaterRestoration' (permanent/chronic --
+  // see hasCurableAffliction/payForGreaterRestoration just below) -- a Master healer can talk a
+  // common illness out of you, but a chronic one still needs an actual priest's ritual.
+  const curableDiseases = cap.disease ? (player.diseases || []).filter(d => !d.permanent) : [];
+  const willCureBleed = cap.bleed && hasBleed;
+  const willCurePoison = cap.poison && hasPoison;
+  const willCureConfuse = cap.confuse && hasConfuse;
+  const willCureFear = cap.fear && hasFear;
+  const willCureRadiation = cap.radiation && hasRadiation;
+  const afflictionsCured = [willCureBleed, willCurePoison, willCureConfuse, willCureFear, willCureRadiation].filter(Boolean).length + curableDiseases.length;
+  const nothingToDo = player.hp >= player.maxHp && player.mp >= player.maxMp && afflictionsCured === 0;
+  if (nothingToDo) { log('You are already at full strength.'); return; }
+  // A healer doing more than a plain rub-down and a nap charges a little more for it -- flat per
+  // affliction actually being treated, scaled by the same settlement-tier multiplier as everything
+  // else this NPC charges.
+  const cost = Math.round((Math.round((player.maxHp - player.hp) * 0.6) + Math.round((player.maxMp - player.mp) * 0.3) + 3 + afflictionsCured * 5) * npcTierPriceMult(npc));
   if (player.gold < cost) { log(`${npc.name} says: "That'll cost ${cost} gold, dear. Come back when you can pay."`); return; }
   player.gold -= cost; player.hp = player.maxHp; player.mp = player.maxMp;
-  log(`${npc.name} heals your wounds for ${cost} gold.`);
+  const cured = [];
+  if (willCureBleed) { stanchBleed(player); cured.push('stanches the bleeding'); }
+  if (willCurePoison) { player.statusPoison = 0; cured.push('draws out the poison'); }
+  if (willCureConfuse) { player.statusConfuse = 0; cured.push('clears your head'); }
+  if (willCureFear) { player.statusFear = 0; cured.push('steadies your nerves'); }
+  if (willCureRadiation) { player.statusRadiation = 0; cured.push('treats the radiation sickness'); }
+  if (curableDiseases.length) {
+    player.diseases = player.diseases.filter(d => d.permanent);
+    cured.push(curableDiseases.length === 1 ? `cures your ${curableDiseases[0].name}` : "cures what's ailing you");
+  }
+  const extra = cured.length ? `, and ${cured.join(', ')}` : '';
+  log(`${npc.name} heals your wounds${extra} for ${cost} gold.`);
   updateSidebar();
   closeModal();
 }
@@ -21867,11 +22048,30 @@ function doAttack(att, def, skipDuplicate) {
     // character to bleed at all, converging back to the original flat 6% once max HP passes
     // roughly 50 (a few levels in) and staying exactly as it always was from then on.
     const bleedThreshold = Math.max(0.06, 3 / (def.maxHp || def.hp || 30));
-    // BUG FIX (v0.40.31): the Mother's Tide-Hook's own description -- "it pulls wounds open rather
-    // than closing them" -- is a direct, specific bleed-aggravation claim (only lifesteal was set).
-    // Adds bonus bleed stacks on top of the normal roll while equipped, on the same hit that would
-    // have applied bleed anyway rather than forcing bleed on hits that otherwise wouldn't qualify.
-    if (defCanBleed && dmgFraction > bleedThreshold) applyBleed(def, (crit ? 2 : 1) + (dmgType !== 'blunt' ? 1 : 0) + (weapon && weapon.id === 'mother_tide_hook' ? 2 : 0));
+    // PROC REWORK (v0.43.0): clearing the threshold used to be a GUARANTEE, on any non-blunt
+    // weapon, which is what made bleed feel like the default outcome of nearly every real hit
+    // rather than a specific consequence of a specific kind of wound. Two changes: (1) the weapon's
+    // own damage type now decides whether the hit even has a chance to bleed, and how good that
+    // chance is -- a slashing edge opens a real laceration far more readily than a puncture wound
+    // does, and blunt trauma bruises rather than cuts (chance 0, same as always). (2) clearing the
+    // threshold now buys a CHANCE rather than a guarantee, scaled up by how far past the threshold
+    // the hit landed (a heavier hit is more likely to also cut deep) and by a crit, and scaled down
+    // by the defender's own bleedResistChance (armor/talents/racial hooks -- see applyBleed).
+    if (defCanBleed && dmgFraction > bleedThreshold) {
+      const bleedChanceBase = BLEED_CHANCE_BY_TYPE[dmgType] ?? 0.3;
+      if (bleedChanceBase > 0) {
+        const overshoot = Math.min(1, (dmgFraction - bleedThreshold) / bleedThreshold);
+        const critMult = crit ? 1.6 : 1;
+        const resist = effectiveBleedResistChance(def);
+        const procChance = Math.min(0.95, bleedChanceBase * critMult * (1 + overshoot * 0.5)) * (1 - resist);
+        // BUG FIX (v0.40.31), preserved: the Mother's Tide-Hook's own description -- "it pulls
+        // wounds open rather than closing them" -- is a direct, specific bleed-aggravation claim
+        // (only lifesteal was set). Adds bonus bleed stacks on top of the roll while equipped, on
+        // the same hit that would have applied bleed anyway rather than forcing bleed onto a hit
+        // that otherwise wouldn't qualify at all.
+        if (Math.random() < procChance) applyBleed(def, (crit ? 2 : 1) + (dmgType !== 'blunt' ? 1 : 0) + (weapon && weapon.id === 'mother_tide_hook' ? 2 : 0));
+      }
+    }
     const part = rollHitLocation(crit);
     // Locational armor (see getPartArmorValue near recalcBodyPenalties) softens THIS specific
     // roll -- a well-armored head can shrug off a hit that would otherwise concuss it, even
@@ -21899,17 +22099,24 @@ function doAttack(att, def, skipDuplicate) {
         if (levelAfter === 3) log(`Your ${partLabel} won't heal on its own like this -- it needs a splint.`);
         if (levelAfter === 4) log(`*** Your ${partLabel} is permanently ruined -- no splint will fix this. You'll need a priest's Greater Restoration, or the rare blessing of a shrine. ***`);
       }
-      if (part === 'torso' && defCanBleed) applyBleed(def, 1);
+      // PROC REWORK (v0.43.0): a fresh torso wound used to guarantee a bleed stack regardless of
+      // weapon -- same "every hit is a bleed source" problem as above. Now gated by the same
+      // per-damage-type chance table, just rolled once more on top of a wound that actually landed.
+      if (part === 'torso' && defCanBleed) {
+        const torsoBleedChance = (BLEED_CHANCE_BY_TYPE[dmgType] ?? 0.3) * (1 - effectiveBleedResistChance(def));
+        if (torsoBleedChance > 0 && Math.random() < torsoBleedChance) applyBleed(def, 1);
+      }
       // Any wound left at Maimed for a long stretch risks going septic -- see the infection check
       // in processEntityStatus's body-part tick, which is what actually punishes ignoring it
       // rather than this moment of impact. Player-only, per the comment at the top of this block.
     }
-  } else if (defCanBleed && crit && def.hp > 0 && dmg > 0 && weaponDamageType(isPlayer ? weapon : att) !== 'blunt' && Math.random() < 0.4) {
+  } else if (defCanBleed && crit && def.hp > 0 && dmg > 0 && (BLEED_CHANCE_BY_TYPE[weaponDamageType(isPlayer ? weapon : att)] ?? 0.3) > 0 && Math.random() < 0.4 * (1 - effectiveBleedResistChance(def))) {
     // Symmetric fallback for anything with no body-part model at all (oozes, swarms, elementals,
     // rogue code) -- a crit still opens a real bleeding wound where the creature has anything
     // resembling blood to lose, which is what makes Bloodfrenzy and Hemorrhage's own flavor text
     // ("wounds bleed worse...") true instead of aspirational. Gated off blunt weapons the same
-    // way the full locational model above is -- a warhammer crit should crush, not lacerate.
+    // way the full locational model above is -- a warhammer crit should crush, not lacerate. Also
+    // respects bleedResistChance now, same as every other bleed source.
     applyBleed(def, 1);
   }
   // ---- v3 durability wear: only on crits (weapon under exceptional strain) and heavy hits
@@ -22086,13 +22293,27 @@ function processEntityStatus(e) {
   // Maimed limb. See the framework block near igniteTile (ensureBodyParts et al) for the design
   // rationale -- this is just the per-turn tick side of it, mirroring every other DoT/decay
   // pattern already established above (poison, burning, frozen). ----
-  if (e.bleedTurns > 0) {
-    const d = Math.max(1, Math.round((e.bleedStacks || 1) * 0.8));
+  if (e.bleedStacks > 0) {
+    const bleedReduction = Math.min(0.95, e.bleedDmgReduction || 0);
+    const d = Math.max(1, Math.round((e.bleedStacks || 1) * 0.8 * (1 - bleedReduction)));
     e.hp -= d;
-    e.bleedTurns--;
-    if (e.bleedTurns <= 0) e.bleedStacks = 0;
+    e.bleedClotTurns = (e.bleedClotTurns || 0) + 1;
     if (e === player) { log(`You're bleeding! (${d} damage)`); lastDamageSource = 'bleeding'; }
     else if (posVisibleToPlayer(e.x, e.y)) log(`${e.name} bleeds for ${d}.`);
+    // CLOTTING (v0.43.0): see the framework note above applyBleed -- the chance the wound seals on
+    // its own rises the longer it's stayed open, so bleed left fully alone eventually resolves like
+    // any other status effect instead of requiring a cure every single time.
+    const clotChance = Math.min(0.9, 0.04 + e.bleedClotTurns * 0.025 + (e.bleedClotBonus || 0));
+    if (Math.random() < clotChance) {
+      e.bleedStacks--;
+      if (e.bleedStacks <= 0) {
+        e.bleedStacks = 0; e.bleedTurns = 0; e.bleedClotTurns = 0;
+        if (e === player) log('The bleeding finally clots on its own.');
+        else if (posVisibleToPlayer(e.x, e.y)) log(`${e.name}'s bleeding clots.`);
+      } else if (e === player) {
+        log('The bleeding slows a little.');
+      }
+    }
     if (e.hp <= 0) onDeath(e, null);
   }
   if (e.bodyParts) {
@@ -28626,7 +28847,7 @@ const THROWN_WEAPON_IDS = new Set(['throwing_axe','javelin','dagger']);
 // generic monster buff system to hook a STR/DEX/armor/crit potion into) -- those fall through
 // to the improvised catch-all instead, which is the honest behavior: they weren't built to be
 // thrown, so throwing one just wastes it for a bit of impact damage.
-const POTION_SPLASH_EFFECTS = new Set(['heal','poison','cureposion','cureconfuse','curefear','cureall']);
+const POTION_SPLASH_EFFECTS = new Set(['heal','medkit','poison','cureposion','cureconfuse','curefear','cureall']);
 // ---- does the physical item survive being thrown? -------------------------------------------
 // The rule of thumb: things that are USED UP by the act of throwing (a grenade detonates, a
 // potion shatters, a scroll burns) disappear; things that are just PHYSICAL OBJECTS that
@@ -29108,10 +29329,17 @@ function resolveThrownPotionSplash(it, wx, wy, target) {
       else { target.statusPoison = (target.statusPoison || 0) + it.power; log(`${it.name} shatters across ${isPlayer ? 'you' : target.name} in a spray of venom!`); }
       break;
     }
+    case 'medkit': {
+      const wasBleeding = stanchBleed(target);
+      const amt = Math.round(it.power * potencyMult * playerLevelPowerMult(player.level));
+      target.hp = Math.min(target.maxHp || target.hp, target.hp + amt);
+      log(isPlayer ? `The medkit's contents douse you, stopping the bleeding and restoring ${amt} HP!` : `${it.name} douses ${target.name}, restoring ${amt} HP!${wasBleeding ? ' The bleeding stops too.' : ''}${target.kind !== 'ally' ? ' (probably not what you wanted)' : ''}`);
+      break;
+    }
     case 'cureposion': target.statusPoison = 0; log(`${isPlayer ? 'Your' : target.name + "'s"} poison is washed away.`); break;
     case 'cureconfuse': target.statusConfuse = 0; log(`${isPlayer ? 'Your mind clears' : target.name + "'s mind clears"}.`); break;
     case 'curefear': target.statusFear = 0; log(`${isPlayer ? 'Your courage steadies' : target.name + "'s courage steadies"}.`); break;
-    case 'cureall': target.statusPoison = 0; target.statusConfuse = 0; target.statusFear = 0; log(`A wave of clarity washes over ${isPlayer ? 'you' : target.name} -- all afflictions cleansed.`); break;
+    case 'cureall': target.statusPoison = 0; target.statusConfuse = 0; target.statusFear = 0; stanchBleed(target); log(`A wave of clarity washes over ${isPlayer ? 'you' : target.name} -- all afflictions cleansed.`); break;
   }
   if (target.hp !== undefined && target.hp <= 0) onDeath(target, it.effect === 'poison' ? player : null);
   if (target !== player && it.effect === 'poison' && !target.engaged) target.engaged = true;
@@ -29277,6 +29505,14 @@ function useItem(it) {
       log(wasBleeding ? `You bind the wound tight, stopping the bleeding and recovering ${amt} HP.` : `You dress your wounds and recover ${amt} HP.`);
       break;
     }
+    case 'medkit': {
+      const wasBleeding = stanchBleed(player);
+      const amt = Math.round(it.power * (1 + (player.alchemyPotencyBonus || 0)) * playerLevelPowerMult(player.level) * healMult());
+      player.hp = Math.min(player.maxHp, player.hp + amt);
+      if (it.power >= 30) grantDiseaseCureProgress('remedyItem', 1);
+      log(wasBleeding ? `You apply the medkit, stopping the bleeding and recovering ${amt} HP.` : `You apply the medkit and recover ${amt} HP.`);
+      break;
+    }
     case 'splint': {
       const parts = ensureBodyParts(player);
       // Prefer an actually-splintable Maimed (3) part; a permanently Ruined (4) part is beyond
@@ -29306,7 +29542,10 @@ function useItem(it) {
     case 'buffregen': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('regen', it.power, Math.round((it.dur||10)*durMult)); break; }
     case 'curefear': { player.statusFear = 0; log('Your courage steadies.'); break; }
     case 'cureconfuse': { player.statusConfuse = 0; log('Your mind clears.'); break; }
-    case 'cureall': { player.statusPoison = 0; player.statusFear = 0; player.statusConfuse = 0; grantDiseaseCureProgress('remedyItem', 3); log('A wave of clarity washes over you — all afflictions cleansed.'); break; }
+    // BUG FIX (v0.43.0): 'cureall' claims (in its own flavor text!) to cleanse "all afflictions",
+    // but never actually touched bleeding -- a real gap given bleed is exactly the kind of thing a
+    // panacea should fix. Now stanches it too, same as a Bandage would.
+    case 'cureall': { player.statusPoison = 0; player.statusFear = 0; player.statusConfuse = 0; stanchBleed(player); grantDiseaseCureProgress('remedyItem', 3); log('A wave of clarity washes over you — all afflictions cleansed, bleeding included.'); break; }
     case 'stamina': { const amt = Math.round(it.power * playerLevelPowerMult(player.level)); player.stamina = Math.min(player.maxStamina, player.stamina + amt); log(`You recover ${amt} Stamina.`); break; }
     case 'charge': { const amt = Math.round(it.power * playerLevelPowerMult(player.level)); player.charge = Math.min(player.maxCharge, (player.charge||0) + amt); log(`Your systems recharge ${amt} Charge.`); break; }
     case 'aoefire': case 'aoefrost': case 'aoepoison': case 'aoeconfuse': case 'throwdmg': case 'scrollfire': case 'oilsplash':
@@ -29344,6 +29583,7 @@ function useItem(it) {
     case 'resistfire': { applyBuff('resistfire', 1, it.dur || 25); log('Your skin feels warm and hardened against flame.'); break; }
     case 'resistfrost': { applyBuff('resistfrost', 1, it.dur || 25); log('A protective warmth surrounds you.'); break; }
     case 'resistpoison': { applyBuff('resistpoison', 1, it.dur || 25); log('Your blood runs strangely cool - toxins should slide off you now.'); break; }
+    case 'resistbleed': { applyBuff('resistbleed', 1, it.dur || 25); log('Your blood thickens -- fresh wounds should stop taking hold.'); break; }
     case 'waterbreathing': { applyBuff('waterbreathing', 1, it.dur || 40); log('Your lungs feel strange - you could breathe underwater now.'); break; }
     case 'reveal': { const n = revealArea(it.radius || 12); log(n > 0 ? `Your senses expand outward - ${n} nearby tiles are revealed!` : 'The area around you is already fully explored.'); break; }
     case 'nightvision': {
@@ -31510,9 +31750,11 @@ const GUIDE_SECTIONS = [
     over) — locks out movement, attacks, and spellcasting entirely until it thaws. Any hit landing on a frozen target
     shatters the ice early for real bonus damage (4-10) — a genuine choice between leaving something frozen to buy
     time, or rushing it down for the shatter.</div>
-    <div class="modal-opt" style="margin-top:6px"><b>Bleeding</b> — a separate DoT from Poison, triggered by any
-    critical hit (yours or theirs) or a torso wound (see Body &amp; Health below). Doesn't taper off on its own in any
-    reasonable time, and moving around while bleeding reopens it further — a Bandage is the real fix.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Bleeding</b> — a separate DoT from Poison, with a real chance to
+    proc off a solid hit from a slashing weapon, a smaller chance from a piercing one, and none at all from blunt
+    weapons. Left alone, the chance it clots shut on its own rises the longer it's been open — but that chance starts
+    low, and moving around or taking another wound sets it back, so a Bandage (or Coagulant Salve, Medkit, or any
+    cureall) is still the reliable fix.</div>
     <div class="modal-opt" style="margin-top:10px;border:1px solid var(--amber-dim);padding:6px"><b>Body &amp; Health:</b>
     every hit that lands on you rolls a body part (torso is the biggest target, head is rare unless it's a critical)
     and has a chance to wound it: Bruised &rarr; Wounded &rarr; Maimed, worse the bigger the hit was relative to your
