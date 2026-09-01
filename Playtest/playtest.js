@@ -7,24 +7,79 @@
 // drives a character through actual turns using the game's own input handler, and reports
 // crashes, soft-locks, and behavioral/balance anomalies it observes.
 //
-// USAGE:
-//   npm install jsdom
-//   node playtest.js [numLives] [maxActionsPerLife] [maxStuckActionsBeforeGivingUp]
-//   e.g. node playtest.js 20 8000 500     (defaults: 10 / 8000 / 600)
+// TWO WAYS TO USE THIS FILE:
+//
+//   1. STANDALONE CLI -- run a full autonomous batch of lives, exactly as before:
+//        npm install jsdom
+//        node playtest.js [numLives] [maxActionsPerLife] [maxStuckActions] [profile]
+//        e.g. node playtest.js 20 8000 500 veteran     (defaults: 10 / 8000 / 600 / casual)
+//      Writes report.json next to this script. See PROFILES (SECTION 0) for what the last
+//      argument does.
+//
+//   2. AS A LIBRARY -- require() this file from your OWN script (or have a Claude session
+//      write one) to drive/inspect a live game session directly, without running a full
+//      autonomous batch. Requiring this file has NO side effects (main() only runs when this
+//      file is executed directly, not when required) -- see `module.exports` at the very
+//      bottom of the file for the complete list of what's exposed: the low-level game-control
+//      primitives (openGame/boot, evalGame, key, keyAndWait), every individual strategy
+//      function (strat.tryFightAdjacent, strat.tryCastOffensiveSpell, ...), the debug-menu
+//      control API (debug.setFlags, debug.teleportToDimension, debug.giveItem, ...), the
+//      character-creation helpers, playOneLife itself, and the BOT_PROFILE/PROFILES/
+//      applyProfile behavior-tuning system. A short example:
+//
+//        const pt = require('./playtest.js');
+//        (async () => {
+//          const dom = await pt.boot();                    // launch the real game in jsdom
+//          const win = dom.window;
+//          await pt.createRandomCharacter(win, console.log);
+//          pt.debug.setFlags(win, { infiniteHealth: true, noclip: true }); // can't die, walk through walls
+//          pt.debug.teleportToDungeonType(win, 'crypt');    // drop straight into a specific dungeon type
+//          for (let i = 0; i < 200; i++) await pt.strat.tryFightAdjacent(win); // or drive it yourself
+//          console.log(pt.getState(win));
+//        })();
+//
+//      This is the intended way for another Claude session (or you) to inspect/steer a
+//      specific scenario -- pause after any step, read live state, call individual strategy
+//      functions or raw key presses, flip debug toggles, teleport around -- rather than only
+//      ever being able to kick off a full random autonomous run and read its report afterward.
+//      Three more patterns worth knowing about (all SECTION 7, full detail there):
+//        - pt.playOneLife(dom, maxActions, maxStuck, { onAction }) -- pass a callback to watch
+//          every single action live as it happens and optionally stop the life early (return
+//          false) once some condition you care about is met, instead of only inspecting a
+//          finished run's report afterward.
+//        - pt.runContentSweep(win) -- deterministically visits EVERY dungeon type, dimension,
+//          spell, recipe, weather type, and world event at least once under god-mode, catching
+//          real crashes -- the "did we actually test everything" answer, not a probabilistic one.
+//        - pt.simulateCombat(win, monsterId, {trials, spellId}) / pt.runComparison(configs) --
+//          isolated, repeatable balance testing: how many hits to kill X with weapon/spell Y,
+//          or is profile A actually meaningfully safer than profile B, with real numbers.
 //
 // GAME FILE LOCATION: auto-detected (see locateGameHtml() in SECTION 1 below) -- just drop
 // this script and the game's .html file (any name) in the same folder, or the game's default
-// game/game.html layout also still works. Writes report.json next to this script.
+// game/game.html layout also still works.
 //
 // ---- FILE MAP (this used to be 5 separate files; all content is preserved, just
 // concatenated in dependency order and with require()/module.exports stripped) ----
+//   SECTION 0: profiles   -- BOT_PROFILE tunable behavior knobs + named presets (novice/
+//                            casual/veteran), read live by SECTION 4's strategies
 //   SECTION 1: harness    -- boots the game in jsdom (canvas/audio stubbed, everything else real)
 //   SECTION 2: gameApi    -- low-level wrapper: eval into game scope, press keys, wait for
 //                            interval-driven commands, read common state
 //   SECTION 3: navigation -- exploration/travel logic
 //   SECTION 4: strategies -- one function per behavior (fight, heal, equip, shop, craft, talk...)
 //   SECTION 5: bot        -- main driver: composes strategies into full playthroughs, writes
-//                            report.json, and is what actually runs when you execute this file
+//                            report.json (now WITH per-life combat telemetry + a vitals growth
+//                            timeline by default, and an optional onAction live-observer hook),
+//                            and is what actually runs when you execute this file
+//   SECTION 6: debug      -- thin wrappers around the game's OWN dev/debug menu (DEBUG flags,
+//                            teleport to any dimension/dungeon type, spawn any monster, grant
+//                            items/abilities, level up, force weather/events) for directed
+//                            testing without waiting on a probability or risking a death
+//                            mid-investigation
+//   SECTION 7: telemetry & coverage -- structured combat/growth data (not just prose logs),
+//                            a deterministic full-content coverage sweep, an isolated combat
+//                            simulator for weapon/spell/monster balance testing, and a
+//                            multi-config comparison runner (e.g. "is profile A safer than B")
 //   (SECTION 5's own header comment below has the full coverage table and "adapting to a
 //   changed game" guidance -- read it before assuming something needs rewriting.)
 //
@@ -56,8 +111,73 @@ const fs = require('fs');
 const path = require('path');
 const { JSDOM } = require('jsdom');
 
-
 // ==========================================================================================
+// SECTION 0: BOT PROFILES -- tunable "how good/careful is this character's play" knobs
+// ==========================================================================================
+// IMPORTANT NUANCE: this does NOT restrict what the bot *knows* about the game state -- every
+// strategy in SECTION 4 reads real internal fields (player.hp, monster.atk, etc.) via evalGame
+// regardless of profile, because that's what makes this tool reliable for automated testing at
+// all; a bot that could only "see" what a human player's screen shows would be far too fragile
+// (mis-parsing rendered text, missing state changes) to trust for crash/regression detection.
+// What DOES change per profile is decision-making: how cautious, how proactive, how willing to
+// spend a turn on an advanced tactic (called shots, rituals) versus just doing the simple thing.
+// Every field here is read live (as default parameter values, re-evaluated on every call -- see
+// each strategy function's signature in SECTION 4) rather than baked in once, so switching
+// profiles mid-run (e.g. from a required script) takes effect on the very next strategy call,
+// no restart needed.
+const PROFILES = {
+  // Reacts late, under-prepares, and sticks to simple choices -- a first-timer's instincts.
+  novice: {
+    fleeHpFrac: 0.10,            // waits until nearly dead before disengaging a losing fight
+    avoidOverwhelmingEnabled: false, // doesn't recognize "this could nearly one-shot me" in advance
+    overwhelmThreshold: 0.6,
+    recoverHpFrac: 0.25,         // doesn't stop to heal/rest until quite hurt
+    curativeReserve: 2,          // doesn't stock up much on bandages/potions
+    supplySeekThreshold: 1,      // doesn't go restock until almost completely out
+    calledShotChance: 0,         // never bothers with the called-shot tactic
+    ritualChance: 0.8,           // high risk tolerance -- gambles on rituals readily, doesn't weigh it
+    giftChance: 0.25,
+    customCreateChance: 0.2,     // mostly picks premade "Random" archetypes over building custom
+  },
+  // The tuned baseline this toolkit shipped and was validated with -- competent, not optimal.
+  casual: {
+    fleeHpFrac: 0.18,
+    avoidOverwhelmingEnabled: true,
+    overwhelmThreshold: 0.6,
+    recoverHpFrac: 0.35,
+    curativeReserve: 4,
+    supplySeekThreshold: 2,
+    calledShotChance: 0.15,
+    ritualChance: 0.5,
+    giftChance: 0.25,
+    customCreateChance: 0.5,
+  },
+  // Cautious and deliberate -- disengages earlier, keeps deeper reserves, uses advanced tactics
+  // more, and is choosier about real-risk gambles like eldritch rituals.
+  veteran: {
+    fleeHpFrac: 0.30,
+    avoidOverwhelmingEnabled: true,
+    overwhelmThreshold: 0.45,    // retreats from smaller threats too, not just near-one-shots
+    recoverHpFrac: 0.5,
+    curativeReserve: 6,
+    supplySeekThreshold: 3,
+    calledShotChance: 0.35,
+    ritualChance: 0.3,
+    giftChance: 0.25,
+    customCreateChance: 0.8,     // prefers deliberately building a character over rolling random
+  },
+};
+// The live, mutable profile every strategy function's default parameters read from. Start on
+// 'casual' (this toolkit's original tuned baseline); call applyProfile(name) or mutate fields
+// on BOT_PROFILE directly to change behavior for anything called after that point.
+const BOT_PROFILE = { ...PROFILES.casual };
+function applyProfile(name) {
+  if (!PROFILES[name]) throw new Error(`Unknown profile "${name}". Known profiles: ${Object.keys(PROFILES).join(', ')}`);
+  Object.assign(BOT_PROFILE, PROFILES[name]);
+  return BOT_PROFILE;
+}
+
+
 // SECTION 1: HARNESS (boot the game in jsdom)
 // ==========================================================================================
 
@@ -380,6 +500,22 @@ function getInventorySummary(win) {
 }
 
 /** Are there any living monsters in the 8 tiles adjacent to the player? */
+/**
+ * Attach a real-engine-crash listener to a booted window and return a handle whose `.errors`
+ * array grows on every uncaught exception (stack trace or message, whichever's available).
+ * Factored out of playOneLife so both the standard autonomous driver AND the content-coverage
+ * sweep / any library-mode script (SECTION 7) share the exact same crash-detection mechanism
+ * rather than each reimplementing it -- an uncaught error means the real game code threw, which
+ * is exactly the "regression/crash" signal every consumer of this file cares about most.
+ */
+function attachErrorCapture(win) {
+  const handle = { errors: [] };
+  win.addEventListener('error', (ev) => {
+    handle.errors.push(ev.error ? (ev.error.stack || String(ev.error)) : ev.message);
+  });
+  return handle;
+}
+
 function nearbyMonster(win) {
   return evalGame(win, `
     (function(){
@@ -599,6 +735,7 @@ function bestRetreatStep(win) {
  * out most of what's actually left, not some fixed fraction of a full health bar.
  */
 async function tryAvoidOverwhelmingMonster(win, log) {
+  if (!BOT_PROFILE.avoidOverwhelmingEnabled) return false; // novice profile: no preemptive threat read
   const danger = evalGame(win, `
     (function(){
       const dirs8 = [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[1,-1],[-1,1],[1,1]];
@@ -615,7 +752,7 @@ async function tryAvoidOverwhelmingMonster(win, log) {
   `).value;
   if (!danger) return false;
   const hp = evalGame(win, 'player.hp').value;
-  if (typeof hp !== 'number' || danger < hp * 0.6) return false;
+  if (typeof hp !== 'number' || danger < hp * BOT_PROFILE.overwhelmThreshold) return false;
 
   const step = bestRetreatStep(win);
   if (!step) return false; // boxed in -- fall through and fight
@@ -644,10 +781,41 @@ async function tryAvoidOverwhelmingMonster(win, log) {
  * the rest of this bot only shops opportunistically (see tryShopIfTrading) when a merchant
  * happens to be adjacent, rather than ever deliberately going to find one.
  */
-const SUPPLY_SEEK_THRESHOLD = 2; // travel to restock once curatives on hand drop below this
+// SUPPLY_SEEK_THRESHOLD removed as a fixed const -- trySeekSupplies now reads BOT_PROFILE.supplySeekThreshold live (see SECTION 0).
+//
+// BUG FIX (found via runContentSweep-style batch analysis, not a single crash): the original
+// version below judged "do I need supplies?" purely off a *bundled* curative count (bandages +
+// antidotes + heal potions + elixirs, all summed together) against one threshold. That let a
+// character carrying several heal potions but ZERO bandages read as "well-supplied" and never
+// trigger a restock trip -- even though only a bandage can stanch bleeding (tryStanchBleeding
+// matches strictly on effect==='bandage'/name-regex 'bandage', see above) and only an antidote
+// can cure poison (tryCurePoison, same pattern). Across two validation batches (15 lives total,
+// casual profile) this produced an 8/10 and 3/5 bleeding-death rate: characters would stock up
+// on generic potions, satisfy the bundled threshold, then bleed out hundreds of turns later with
+// zero bandages and no way to travel home (autoTravelHome refuses to even start while bleeding --
+// see the guard below) or rest (the game's own doRest() refuses while bleeding too). One life
+// even survived 446 actions on a single early shop visit before dying this way, with the last
+// ~60 turns of its event log nothing but "Bleeding with no bandage available."
+// Fix: track bandage and antidote stock SEPARATELY from the general curative bundle, and treat
+// either specific shortage as its own trigger to seek supplies, independent of how many generic
+// heal potions/elixirs happen to be on hand.
 async function trySeekSupplies(win, log) {
-  const curatives = evalGame(win, `player.inventory.filter(it => it.type==='consumable' && (it.effect==='heal'||it.effect==='bandage'||it.healAmount||it.hpRestore||/heal|bandage|antidote|potion|elixir|medkit|tonic|salve/i.test(it.name))).length`).value;
-  if (typeof curatives !== 'number' || curatives >= SUPPLY_SEEK_THRESHOLD) return false;
+  const counts = evalGame(win, `
+    (function(){
+      const inv = player.inventory.filter(it => it.type==='consumable');
+      const bandages = inv.filter(it => it.effect==='bandage' || /bandage/i.test(it.name)).length;
+      const antidotes = inv.filter(it => it.effect==='cureposion' || it.effect==='cureall' || /antidote/i.test(it.name)).length;
+      const curatives = inv.filter(it => it.effect==='heal'||it.effect==='bandage'||it.healAmount||it.hpRestore||/heal|bandage|antidote|potion|elixir|medkit|tonic|salve/i.test(it.name)).length;
+      return JSON.stringify({ bandages, antidotes, curatives });
+    })()
+  `).value;
+  let bandages, antidotes, curatives;
+  try { ({ bandages, antidotes, curatives } = JSON.parse(counts)); } catch (e) { return false; }
+  if (typeof curatives !== 'number') return false;
+  const bandageShort = bandages < BOT_PROFILE.supplySeekThreshold;
+  const antidoteShort = antidotes < BOT_PROFILE.supplySeekThreshold;
+  const curativesShort = curatives < BOT_PROFILE.supplySeekThreshold;
+  if (!bandageShort && !antidoteShort && !curativesShort) return false;
   if (nearbyMonster(win)) return false; // let combat/flee handle immediate danger first
   const bleeding = evalGame(win, '(player.bleedTurns||0) > 0').value === true;
   if (bleeding) return false; // autoTravelHome would refuse to even start -- see runAutoLoop's guard
@@ -656,7 +824,8 @@ async function trySeekSupplies(win, log) {
   await keyAndWait(win, 'H', 8000);
   const afterTurn = evalGame(win, 'turnCount').value;
   if (afterTurn === beforeTurn) return false; // no settlement discovered yet, or already there
-  if (log) log(`Traveling to restock supplies (${curatives} curative(s) on hand).`);
+  const reason = bandageShort ? `only ${bandages} bandage(s)` : antidoteShort ? `only ${antidotes} antidote(s)` : `${curatives} curative(s)`;
+  if (log) log(`Traveling to restock supplies (${reason} on hand).`);
   return true;
 }
 
@@ -671,7 +840,7 @@ async function trySeekSupplies(win, log) {
  * (bypass armor) as the generally strongest pick, so this stays correct even if the exact wording
  * or ordering of the three options ever changes.
  */
-function tryCalledShot(win, log, chance = 0.15) {
+function tryCalledShot(win, log, chance = BOT_PROFILE.calledShotChance) {
   if (!nearbyMonster(win)) return false;
   if (Math.random() > chance) return false;
   if (evalGame(win, 'player.calledShotTarget').value) return false; // one already queued
@@ -726,7 +895,7 @@ function tryFireRanged(win, log) {
  * tile that maximizes distance from the nearest hostile; if fully boxed in with nowhere to
  * retreat, falls through and lets combat proceed (better to swing back than stand still).
  */
-async function tryFleeIfCritical(win, log, hpFrac = 0.18) {
+async function tryFleeIfCritical(win, log, hpFrac = BOT_PROFILE.fleeHpFrac) {
   const st = evalGame(win, 'JSON.stringify({hp:player.hp,maxHp:player.maxHp})').value;
   let hp, maxHp;
   try { ({ hp, maxHp } = JSON.parse(st)); } catch (e) { return false; }
@@ -860,11 +1029,35 @@ async function tryStanchBleeding(win, log) {
 }
 
 /**
+ * Same "cure it the moment it's active, don't wait for HP to drop" principle as
+ * tryStanchBleeding, for poison (player.statusPoison -- see processEntityStatus in game.html):
+ * poison ticks a flat few HP of damage every single turn regardless of current HP, so reactively
+ * waiting for tryRecoverHp's hp-fraction threshold to trip means several turns of guaranteed,
+ * avoidable damage tick by first. Matches on effect==='cureposion'/'cureall' first (what
+ * useItem's own switch statement actually dispatches on), falling back to name regex for
+ * anything not exposing that field explicitly.
+ */
+function tryCurePoison(win, log) {
+  const poisoned = evalGame(win, '(player.statusPoison||0) > 0').value === true;
+  if (!poisoned) return false;
+  const r = evalGame(win, `
+    (function(){
+      const cure = player.inventory.find(it => it.effect === 'cureposion' || it.effect === 'cureall' || /antidote/i.test(it.name));
+      if (!cure) return false;
+      try { useItem(cure); return true; } catch(e){ return 'ERR:'+e.message; }
+    })()
+  `);
+  if (r.ok && r.value === true) { if (log) log('Used an antidote to cure poison.'); return true; }
+  if (log && r.ok && r.value === false) log('Poisoned with no antidote available.');
+  return false;
+}
+
+/**
  * Below `hpFrac` of max HP and no monster adjacent: try a curative item first (anything
  * consumable matching common heal-item naming), else rest (async, interval-driven -- see
  * gameApi.waitForAutoAction). Returns true if it took *some* recovery action.
  */
-async function tryRecoverHp(win, log, hpFrac = 0.35) {
+async function tryRecoverHp(win, log, hpFrac = BOT_PROFILE.recoverHpFrac) {
   const st = evalGame(win, 'JSON.stringify({hp:player.hp,maxHp:player.maxHp})').value;
   let hp, maxHp;
   try { ({ hp, maxHp } = JSON.parse(st)); } catch (e) { return false; }
@@ -929,8 +1122,18 @@ function tryEquipUpgrades(win, log) {
       try {
         player.inventory.filter(it=>it.type==='weapon'||it.type==='armor').forEach(it=>{
           const cur = player.equipment[it.slot];
-          const itScore = (it.dmg||0)+(it.armor||0)+(it.acc||0);
-          const curScore = cur ? (cur.dmg||0)+(cur.armor||0)+(cur.acc||0) : -999;
+          // BUG FIX: weapon 'dmg' is a [min,max] array on both bases and generated instances
+          // (see makeItem in game.html), not a flat number -- naively doing (it.dmg||0) in a
+          // sum lets JS's '+' silently fall back to STRING CONCATENATION the moment it hits a
+          // truthy array operand (e.g. [3,9]+0 -> "3,90", not 12), and the result contaminates
+          // the whole sum into a string. Comparing two such strings with '>' then does
+          // lexicographic (not numeric) comparison, which happens to look plausible for
+          // single-digit damage but silently misjudges upgrades once damage reaches double
+          // digits (e.g. "10,20" sorts LOWER than "9,15" as strings). Averaging the range into
+          // a real number here is what every score computation below should have been doing.
+          const scoreOf = (x) => (Array.isArray(x.dmg) ? (x.dmg[0]+x.dmg[1])/2 : (x.dmg||0)) + (x.armor||0) + (x.acc||0);
+          const itScore = scoreOf(it);
+          const curScore = cur ? scoreOf(cur) : -999;
           if (!cur || itScore > curScore) { equipItem(it); msgs.push(it.name); }
         });
       } catch(e) { msgs.push('ERR:'+e.message); }
@@ -1080,7 +1283,7 @@ function tryInstallCybernetics(win, log) {
  * altar the instant it's found isn't how a real player engages with a "something old takes
  * notice of you" flavored system either.
  */
-function tryPerformRitual(win, log, chance = 0.5) {
+function tryPerformRitual(win, log, chance = BOT_PROFILE.ritualChance) {
   const onAltar = evalGame(win, `
     (function(){ if (curIsDungeon()) return false; const t = curTileAt(player.x, player.y); return !!(t && t.feature === 'ritual_altar'); })()
   `).value === true;
@@ -1111,7 +1314,7 @@ function tryPerformRitual(win, log, chance = 0.5) {
  * qualifies as safe-to-give -- returning false in that case lets the dialogue handler fall
  * through to its normal option picker instead.
  */
-function tryGiftIfOffered(win, log, chance = 0.25) {
+function tryGiftIfOffered(win, log, chance = BOT_PROFILE.giftChance) {
   const opts = evalGame(win, `JSON.stringify((dialogueOptions||[]).map(o=>({key:o.key,label:o.label})))`);
   let list = [];
   try { list = JSON.parse(opts.value || '[]'); } catch (e) {}
@@ -1129,7 +1332,7 @@ function tryGiftIfOffered(win, log, chance = 0.25) {
       const curativeCount = player.inventory.filter(isHealish).length;
       const safe = player.inventory.filter(it =>
         !equippedUids.has(it.uid) && it.type !== 'chest' && it.type !== 'corpse' &&
-        !(isHealish(it) && curativeCount <= ${SHOP_CURATIVE_RESERVE})
+        !(isHealish(it) && curativeCount <= ${BOT_PROFILE.curativeReserve})
       ).sort((a,b) => (a.value||0) - (b.value||0));
       return safe.length ? { uid: safe[0].uid, name: safe[0].name } : null;
     })()
@@ -1346,6 +1549,117 @@ function tryCraftUseful(win, log, wantRegex = /heal|bandage|antidote|potion/i) {
   return false;
 }
 
+/**
+ * Craft a weapon/armor recipe if a known, currently-affordable one would be a real upgrade over
+ * whatever's equipped in that slot -- the crafting-side counterpart to tryEquipUpgrades
+ * (checking loot) and tryShopIfTrading (checking the shop). Reads RECIPES/ITEM_BASES/
+ * hasIngredients live rather than a hardcoded recipe list, so any weapon/armor recipe added to
+ * the game later (the base game currently has real ones for longsword/staff/warhammer, plus
+ * tool-weapons like fishing_rod/hoe) is automatically eligible without touching this function.
+ * Uses the SAME (dmg-array-averaging) gearScore fix as tryEquipUpgrades/tryShopIfTrading -- see
+ * the comment there for why treating dmg as a plain number was silently wrong for any weapon.
+ * Only crafts a CLEAR upgrade (>15% better) so this doesn't burn materials on a lateral/minor
+ * change, and only ever crafts one recipe per call (called periodically, not every turn, same
+ * pattern as the other low-frequency character-growth checks in the main loop).
+ */
+function tryCraftGearUpgrade(win, log) {
+  const r = evalGame(win, `
+    (function(){
+      const gearScore = (x) => (Array.isArray(x.dmg) ? (x.dmg[0]+x.dmg[1])/2 : (x.dmg||0)) + (x.armor||0) + (x.acc||0);
+      let best = null, bestGain = 0;
+      for (const rid of (player.knownRecipes||[])) {
+        const rec = RECIPES.find(x => x.id === rid);
+        if (!rec) continue;
+        const outBase = ITEM_BASES.find(b => b.id === rec.output.id);
+        if (!outBase || (outBase.type !== 'weapon' && outBase.type !== 'armor')) continue;
+        if (!hasIngredients(rec)) continue;
+        const cur = player.equipment[outBase.slot];
+        const outScore = gearScore(outBase);
+        const curScore = cur ? gearScore(cur) : 0;
+        if (curScore <= 0 && outScore <= 0) continue; // both worthless, not a real upgrade signal
+        const gain = curScore > 0 ? (outScore - curScore) / curScore : Infinity;
+        if (gain > 0.15 && gain > bestGain) { bestGain = gain; best = rid; }
+      }
+      if (!best) return null;
+      craftRecipe(best);
+      // Equip immediately rather than waiting for tryEquipUpgrades' next periodic pass -- match
+      // by base item id among currently-unequipped inventory (there should only be the one just
+      // added, but picking the highest-scoring match if several exist is still correct).
+      const outBase = ITEM_BASES.find(b => b.id === RECIPES.find(x => x.id === best).output.id);
+      const equippedUids = new Set(Object.values(player.equipment).filter(Boolean).map(i => i.uid));
+      const candidates = player.inventory.filter(it => it.id === outBase.id && !equippedUids.has(it.uid));
+      if (candidates.length) {
+        candidates.sort((a,b) => gearScore(b) - gearScore(a));
+        equipItem(candidates[0]);
+      }
+      return best;
+    })()
+  `);
+  if (r.ok && r.value) { if (log) log(`Crafted gear upgrade via recipe: ${r.value}`); return true; }
+  return false;
+}
+
+/**
+ * Till/plant/harvest via the exact same "interact with this tile" menu tryPickUpHere already
+ * drives for containers/items/salvage/fishing (see pickUp() in game.html) -- till requires a
+ * Hoe equipped, plant needs a seed item already in inventory, harvest needs a matured farmplot.
+ * Checked at low priority since farming is a genuinely optional side-activity for an adventurer,
+ * not a survival necessity, and tilling requires briefly equipping a Hoe -- this only does so
+ * when it's safe to (no monster nearby, checked by the caller) and immediately swaps back to
+ * whatever was equipped before, in the SAME turn, so the character is never left weaponless
+ * mid-exploration. tryShopIfTrading buys a spare Hoe when one's on offer specifically so this
+ * has something to work with; without ever finding a Hoe, tilling simply never triggers, which
+ * is correct (a real player without one couldn't till either).
+ * Reads CROPS/isTillableGround/tillSoil/plantCrop/harvestCrop directly off the game rather than
+ * assuming which crop ids exist, so a new crop type added later works automatically as long as
+ * its seed item shares an id with its CROPS entry, exactly like the game's own menu code does.
+ */
+function tryFarm(win, log) {
+  if (nearbyMonster(win)) return false;
+  const r = evalGame(win, `
+    (function(){
+      if (curIsDungeon()) return null;
+      const t = curTileAt(player.x, player.y);
+      // ---- harvest: highest-value action here, no equipment swap needed ----
+      if (t && t.feature === 'farmplot' && t.cropId && t.growStage >= 2) {
+        const name = CROPS[t.cropId].name;
+        harvestCrop(t, player.x, player.y);
+        endTurn();
+        return { action: 'harvest', name };
+      }
+      // ---- plant: needs a seed already in inventory, no equipment swap needed ----
+      if (t && t.feature === 'farmplot' && !t.cropId) {
+        const seedId = Object.keys(CROPS).find(id => player.inventory.some(i => i.id === id));
+        if (!seedId) return null;
+        consumeMaterial(seedId, 1);
+        plantCrop(t, player.x, player.y, seedId);
+        endTurn();
+        return { action: 'plant', name: CROPS[seedId].name };
+      }
+      // ---- till: needs a Hoe, temporarily equipped then swapped back so this never leaves the
+      // character unarmed after this turn ----
+      if (isTillableGround(t)) {
+        const hoe = player.inventory.find(it => it.id === 'hoe' || /hoe/i.test(it.name));
+        if (!hoe) return null;
+        const prevHand = player.equipment.hand;
+        equipItem(hoe);
+        tillSoil(player.x, player.y);
+        wearItem(hoe, 1);
+        if (prevHand) equipItem(prevHand);
+        endTurn();
+        return { action: 'till' };
+      }
+      return null;
+    })()
+  `);
+  if (r.ok && r.value) {
+    const a = r.value.action;
+    if (log) log(a === 'harvest' ? `Harvested ${r.value.name}.` : a === 'plant' ? `Planted ${r.value.name}.` : 'Tilled soil for farming.');
+    return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------------------
 // Shopping (when gameState === 'trade')
 // ---------------------------------------------------------------------------------------
@@ -1366,7 +1680,7 @@ function tryCraftUseful(win, log, wantRegex = /heal|bandage|antidote|potion/i) {
  * Returns true unconditionally (always closes the menu when done, so the caller's turn always
  * counts as "handled" whether or not anything was actually bought/sold).
  */
-const SHOP_CURATIVE_RESERVE = 4; // keep at least this many curatives on hand when affordable
+// SHOP_CURATIVE_RESERVE removed as a fixed const -- tryShopIfTrading/tryGiftIfOffered now read BOT_PROFILE.curativeReserve live (see SECTION 0).
 function tryShopIfTrading(win, log) {
   if (evalGame(win, 'gameState').value !== 'trade') return false;
 
@@ -1377,16 +1691,50 @@ function tryShopIfTrading(win, log) {
       const repMult = repPriceMult(getKingdom(Math.floor(npc.x/CH), Math.floor(npc.y/CH)).key)
         * tradeSpeciesPriceMult(npc) * npcTierPriceMult(npc) * relationshipPriceMult(npc);
       const isCurative = (it) => /heal|bandage|antidote|potion|elixir|medkit|tonic|salve/i.test(it.name);
+      const isBandage = (it) => it.effect === 'bandage' || /bandage/i.test(it.name);
+      const isAntidote = (it) => it.effect === 'cureposion' || it.effect === 'cureall' || /antidote/i.test(it.name);
+      const gearScore = (x) => (Array.isArray(x.dmg) ? (x.dmg[0]+x.dmg[1])/2 : (x.dmg||0)) + (x.armor||0) + (x.acc||0);
       const bought = [], sold = [];
 
-      // ---- BUY PASS: top up curatives to the reserve target, cheapest first, then grab a
-      // lockpick if we don't have one. Re-reads npc.shop fresh each loop since tradeTransact()
-      // splices the bought item out (shifting later indices), rather than computing indices once
-      // against a now-stale array.
+      // ---- BUY PASS ----
+      // BUG FIX: buying used to top up ONE bundled "curatives" count (bandages + antidotes +
+      // heal potions + elixirs all lumped together), picking the globally cheapest matching item
+      // each iteration. Since heal potions/elixirs are usually cheaper than bandages, that loop
+      // would happily fill the entire reserve with potions and never buy a single bandage -- a
+      // character could visit a shop a dozen times, always "restock successfully", and still
+      // carry zero bandages the whole game (only a bandage cures bleeding -- see tryStanchBleeding
+      // -- and only an antidote cures poison -- see tryCurePoison -- heal potions do neither).
+      // Confirmed via batch analysis: 8/10 casual-profile lives ended in a bleed-out death with
+      // repeated "restocked supplies" log lines immediately beforehand, bandage count unchanged.
+      // Fix: run two small dedicated passes for bandages and antidotes specifically (up to the
+      // same reserve target) BEFORE the generic top-up, so a shop with both cheap potions and
+      // bandages in stock buys the bandages a bleeding character actually needs, not just
+      // whatever's cheapest overall.
       tradeMode = 'buy'; tradePage = 0;
+      function buySpecific(matchFn, reserve) {
+        let owned = player.inventory.filter(matchFn).length;
+        let g = 0;
+        while (owned < reserve && g++ < 30) {
+          let bestIdx = -1, bestPrice = Infinity;
+          npc.shop.forEach((it, idx) => {
+            if (!matchFn(it)) return;
+            const price = Math.round(it.value * 1.2 * repMult);
+            if (price <= player.gold && price < bestPrice) { bestPrice = price; bestIdx = idx; }
+          });
+          if (bestIdx === -1) break;
+          const name = npc.shop[bestIdx].name;
+          tradePage = Math.floor(bestIdx / PAGE_SIZE);
+          tradeTransact(String.fromCharCode(97 + (bestIdx % PAGE_SIZE)));
+          bought.push(name);
+          owned++;
+        }
+      }
+      buySpecific(isBandage, ${BOT_PROFILE.curativeReserve});
+      buySpecific(isAntidote, ${BOT_PROFILE.curativeReserve});
+
       let ownedCuratives = player.inventory.filter(isCurative).length;
       let guard = 0;
-      while (ownedCuratives < ${SHOP_CURATIVE_RESERVE} && guard++ < 30) {
+      while (ownedCuratives < ${BOT_PROFILE.curativeReserve} && guard++ < 30) {
         let bestIdx = -1, bestPrice = Infinity;
         npc.shop.forEach((it, idx) => {
           if (!isCurative(it)) return;
@@ -1411,30 +1759,59 @@ function tryShopIfTrading(win, log) {
           }
         }
       }
+      // Same "grab one if it's on offer and we don't have one" pattern as the lockpick above --
+      // this is the only way tryFarm's tilling step ever has a Hoe to work with, since farming
+      // is otherwise never forced on the character.
+      if (!player.inventory.some(it => it.id === 'hoe')) {
+        const idx = npc.shop.findIndex(it => it.id === 'hoe');
+        if (idx !== -1) {
+          const price = Math.round(npc.shop[idx].value * 1.2 * repMult);
+          if (price <= player.gold) {
+            tradePage = Math.floor(idx / PAGE_SIZE);
+            tradeTransact(String.fromCharCode(97 + (idx % PAGE_SIZE)));
+            bought.push('Hoe');
+          }
+        }
+      }
 
       // ---- SELL PASS: every weapon/armor that scores worse than what's equipped in its slot,
       // plus curatives beyond the reserve (keeps inventory from filling up with 20 bandages when
       // 4 is plenty). Re-reads the filtered sell list fresh each loop for the same
       // index-shifts-after-removal reason as the buy loop above.
+      // BUG FIX: this used to judge "surplus" off the same bundled curatives count as the old buy
+      // pass, so it could sell the character's ONLY bandage as "excess" whenever total curatives
+      // (bandages+potions+antidotes+elixirs combined) exceeded the reserve -- e.g. 1 bandage + 3
+      // heal potions with a reserve of 2 would sell 2 items, and whichever happened to come first
+      // in inventory order (including the bandage) got sold, undoing the dedicated bandage/
+      // antidote buy passes above. Fix: bandages and antidotes are only ever sold down to their
+      // OWN reserve floor, tracked separately from the generic curative bundle.
       tradeMode = 'sell'; tradePage = 0;
       guard = 0;
       while (guard++ < 40) {
         const sellList = player.inventory.filter(i => i.type !== 'misc');
         let junkIdx = -1;
-        const curativesHeld = sellList.filter(isCurative).length;
-        let curativesPassed = 0;
+        const bandagesHeld = sellList.filter(isBandage).length;
+        const antidotesHeld = sellList.filter(isAntidote).length;
+        const otherCurativesHeld = sellList.filter(it => isCurative(it) && !isBandage(it) && !isAntidote(it)).length;
+        let bandagesPassed = 0, antidotesPassed = 0, otherPassed = 0;
         for (let idx = 0; idx < sellList.length; idx++) {
           const it = sellList[idx];
           if (it.type === 'weapon' || it.type === 'armor') {
             const cur = player.equipment[it.slot];
             if (cur) {
-              const itScore = (it.dmg||0)+(it.armor||0)+(it.acc||0);
-              const curScore = (cur.dmg||0)+(cur.armor||0)+(cur.acc||0);
-              if (itScore < curScore) { junkIdx = idx; break; }
+              // Same array-vs-string pitfall as tryEquipUpgrades -- see gearScore above,
+              // shared here so buy/sell/equip all agree on what "better" means.
+              if (gearScore(it) < gearScore(cur)) { junkIdx = idx; break; }
             }
+          } else if (isBandage(it)) {
+            bandagesPassed++;
+            if (bandagesHeld - bandagesPassed >= ${BOT_PROFILE.curativeReserve}) { junkIdx = idx; break; }
+          } else if (isAntidote(it)) {
+            antidotesPassed++;
+            if (antidotesHeld - antidotesPassed >= ${BOT_PROFILE.curativeReserve}) { junkIdx = idx; break; }
           } else if (isCurative(it)) {
-            curativesPassed++;
-            if (curativesHeld - curativesPassed >= ${SHOP_CURATIVE_RESERVE} && curativesPassed <= curativesHeld - ${SHOP_CURATIVE_RESERVE}) { junkIdx = idx; break; }
+            otherPassed++;
+            if (otherCurativesHeld - otherPassed >= ${BOT_PROFILE.curativeReserve}) { junkIdx = idx; break; }
           }
         }
         if (junkIdx === -1) break;
@@ -1724,8 +2101,8 @@ function tryEscapeUnknownMenu(win) {
 const nav = { MOVE_DIRS, exploreStep };
 const strat = {
   tryFightAdjacent, tryFireRanged, tryFleeIfCritical, tryAvoidOverwhelmingMonster, tryUseHackChip,
-  tryCalledShot, tryCastOffensiveSpell, tryCastHealSpell, tryStanchBleeding, tryRecoverHp,
-  tryEquipUpgrades, tryPickUpHere, tryCraftUseful, tryShopIfTrading, tryTrainIfOffered,
+  tryCalledShot, tryCastOffensiveSpell, tryCastHealSpell, tryStanchBleeding, tryCurePoison, tryRecoverHp,
+  tryEquipUpgrades, tryPickUpHere, tryFarm, tryCraftUseful, tryCraftGearUpgrade, tryShopIfTrading, tryTrainIfOffered,
   tryGiftIfOffered, tryHandleDialogueIfOpen, tryTalkToAdjacentNpc, tryAdvanceMainQuest,
   getMainQuestNavigationTarget, tryEscapeUnknownMenu, trySpendStatPoints, trySpendTalentPoints,
   tryInstallCybernetics, tryPerformRitual, trySeekSupplies,
@@ -1951,7 +2328,7 @@ function draftCustomCharacter(win) {
 }
 
 async function createRandomCharacter(win, log) {
-  const useCustom = Math.random() < 0.5;
+  const useCustom = Math.random() < BOT_PROFILE.customCreateChance;
   const speciesSteps = [
     ['a', 'title -> species picker'],
     ['9', 'species picker -> random species'],
@@ -2000,14 +2377,21 @@ async function createRandomCharacter(win, log) {
   return { ok: true, errors };
 }
 
-async function playOneLife(dom, maxActions, maxStuckActions) {
+async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
+  const { collectTelemetry = true, vitalsInterval = 25, onAction = null } = opts;
   const win = dom.window;
   const events = [];
   const errors = [];
-  const windowErrors = [];
-  win.addEventListener('error', (ev) => {
-    windowErrors.push(ev.error ? (ev.error.stack || String(ev.error)) : ev.message);
-  });
+  const errCapture = attachErrorCapture(win);
+  const windowErrors = errCapture.errors;
+  // Structured (non-prose) data collected alongside the normal event log -- see SECTION 7's
+  // header for why this exists: a prose event log is fine for "what happened", but "how much
+  // damage did X deal on average" or "how did HP/level/gold trend over the run" needs real
+  // numbers, not scraped log lines. combatLog uses the same snapshot-diff technique as
+  // runContentSweep/simulateCombat (SECTION 7); vitalsTimeline is a lightweight periodic
+  // snapshot of the core numbers a growth-curve or balance analysis would want.
+  const combatLog = [];
+  const vitalsTimeline = [];
 
   const log = (msg) => {
     const tc = evalGame(win, 'turnCount').value;
@@ -2028,9 +2412,15 @@ async function playOneLife(dom, maxActions, maxStuckActions) {
     }
   };
 
+  const buildResult = (reason, actionsUsed, stateCounts, unrecognizedStates, extra = {}) => ({
+    events, errors, windowErrors, died: reason === 'died', reason, actionsUsed,
+    stateCounts, unrecognizedStates: [...unrecognizedStates],
+    combatLog, combatSummary: summarizeCombatLog(combatLog), vitalsTimeline, ...extra,
+  });
+
   const creation = await createRandomCharacter(win, log);
   errors.push(...creation.errors);
-  if (!creation.ok) return { events, errors, windowErrors, died: false, reason: 'failed-to-start', actionsUsed: 0, stateCounts: {}, unrecognizedStates: [] };
+  if (!creation.ok) return buildResult('failed-to-start', 0, {}, new Set());
 
   let lastTurnCount = evalGame(win, 'turnCount').value;
   let stuckCounter = 0;
@@ -2047,6 +2437,12 @@ async function playOneLife(dom, maxActions, maxStuckActions) {
     }
   };
 
+  /** Cheap: is there anything within combat-relevant range worth snapshotting for telemetry
+   * this turn? Gates the (more expensive) full snapshotCombatants() call so pure exploration
+   * turns -- the majority of any run -- don't pay for it. 10 tiles covers melee, ranged, and
+   * every spell range in the game (the widest is 7, see SPELLS in game.html). */
+  const combatRelevantNearby = () => evalGame(win, `typeof nearestHostile === 'function' && !!nearestHostile(10)`).value === true;
+
   for (let i = 0; i < maxActions; i++) {
     actionsUsed = i;
     const gs = evalGame(win, 'gameState').value;
@@ -2060,7 +2456,7 @@ async function playOneLife(dom, maxActions, maxStuckActions) {
       // exactly when it was captured relative to the death message itself).
       const cause = evalGame(win, 'player.deathCause').value;
       log(`DIED: ${cause || '(unknown cause)'}`);
-      return { events, errors, windowErrors, died: true, reason: 'died', actionsUsed, stateCounts, unrecognizedStates: [...unrecognizedStates] };
+      return buildResult('died', actionsUsed, stateCounts, unrecognizedStates);
     }
 
     if (gs === 'trade') { strat.tryShopIfTrading(win, log); continue; }
@@ -2091,6 +2487,18 @@ async function playOneLife(dom, maxActions, maxStuckActions) {
       if (stageInfo.ok) log(`Main quest stage: ${stageInfo.value}`);
     }
 
+    // --- periodic vitals snapshot: cheap, and gives a real growth-curve timeline for the
+    // report rather than just a single before/after pair ---
+    if (collectTelemetry && vitalsInterval > 0 && i % vitalsInterval === 0) {
+      const v = evalGame(win, `JSON.stringify({turn:turnCount, hp:player.hp, maxHp:player.maxHp, level:player.level, xp:player.xp, gold:player.gold, x:player.x, y:player.y, dungeon:curIsDungeon(), dimension:player.dimensionId||null})`);
+      if (v.ok) { try { vitalsTimeline.push(JSON.parse(v.value)); } catch (e) {} }
+    }
+
+    // --- combat telemetry: snapshot before, act, snapshot after, diff -- only when something
+    // combat-relevant is actually nearby (see combatRelevantNearby's comment above) ---
+    const wantTelemetry = collectTelemetry && combatRelevantNearby();
+    const combatBefore = wantTelemetry ? snapshotCombatants(win) : null;
+
     // --- priority-ordered strategies; first one that acts wins this iteration ---
     // Survival first (bleed/heal/flee), then offense (hack > spell > ranged > melee), then
     // world interaction (pickup/talk), then periodic character-growth checks (stat/talent
@@ -2098,19 +2506,23 @@ async function playOneLife(dom, maxActions, maxStuckActions) {
     // fine, but they're placed after combat/survival so a mid-fight turn never gets spent
     // opening a menu instead of acting), then quest/exploration.
     let acted = false;
-    acted = acted || await strat.tryStanchBleeding(win, log);
-    if (!acted) acted = await strat.tryRecoverHp(win, log);
-    if (!acted) acted = await strat.tryFleeIfCritical(win, log);
-    if (!acted) acted = await strat.tryAvoidOverwhelmingMonster(win, log);
-    if (!acted) acted = strat.tryUseHackChip(win, log);
-    if (!acted) acted = strat.tryCastOffensiveSpell(win, log);
-    if (!acted) acted = strat.tryFireRanged(win, log);
+    let actionLabel = 'explore';
+    acted = acted || await strat.tryStanchBleeding(win, log); if (acted) actionLabel = 'bandage';
+    if (!acted) { acted = strat.tryCurePoison(win, log); if (acted) actionLabel = 'antidote'; }
+    if (!acted) { acted = await strat.tryRecoverHp(win, log); if (acted) actionLabel = 'recover'; }
+    if (!acted) { acted = await strat.tryFleeIfCritical(win, log); if (acted) actionLabel = 'flee'; }
+    if (!acted) { acted = await strat.tryAvoidOverwhelmingMonster(win, log); if (acted) actionLabel = 'retreat'; }
+    if (!acted) { acted = strat.tryUseHackChip(win, log); if (acted) actionLabel = 'hack'; }
+    if (!acted) { acted = strat.tryCastOffensiveSpell(win, log); if (acted) actionLabel = 'spell'; }
+    if (!acted) { acted = strat.tryFireRanged(win, log); if (acted) actionLabel = 'ranged'; }
     if (!acted) strat.tryCalledShot(win, log); // never counts as "acted" on its own -- setup only
-    if (!acted) acted = await strat.tryFightAdjacent(win);
+    if (!acted) { acted = await strat.tryFightAdjacent(win); if (acted) actionLabel = 'melee'; }
     if (!acted) acted = strat.tryPickUpHere(win, log);
+    if (!acted) acted = strat.tryFarm(win, log);
     if (!acted) acted = strat.tryTalkToAdjacentNpc(win, log, talkedNpcUids);
     if (!acted && i % 40 === 0) acted = strat.tryEquipUpgrades(win, log);
     if (!acted && i % 25 === 0) acted = strat.tryCraftUseful(win, log);
+    if (!acted && i % 35 === 0) acted = strat.tryCraftGearUpgrade(win, log);
     if (!acted && i % 15 === 0) acted = strat.trySpendStatPoints(win, log);
     if (!acted && i % 15 === 0) acted = strat.trySpendTalentPoints(win, log);
     if (!acted && i % 30 === 0) acted = strat.tryInstallCybernetics(win, log);
@@ -2124,27 +2536,692 @@ async function playOneLife(dom, maxActions, maxStuckActions) {
       else stuckCounter = 0;
     }
 
+    if (combatBefore) {
+      const combatAfter = snapshotCombatants(win);
+      combatLog.push(...diffCombatSnapshots(combatBefore, combatAfter, actionLabel));
+    }
+
+    // --- optional live hook: lets a caller (e.g. another Claude session driving this via
+    // require()) observe every single action as it happens, not just read a report after the
+    // fact -- and, by returning false, stop the life early right here (e.g. "pause once level 5
+    // is reached so I can inspect/take over manually"). Never throws the life off course if the
+    // caller doesn't pass one; onAction is entirely opt-in. ---
+    if (onAction) {
+      const shouldContinue = await onAction({ i, actionLabel, acted, gameState: evalGame(win, 'gameState').value, state: getState(win) }, win);
+      if (shouldContinue === false) {
+        log('Stopped early by onAction callback.');
+        return buildResult('stopped-by-caller', actionsUsed, stateCounts, unrecognizedStates);
+      }
+    }
+
     const newTc = evalGame(win, 'turnCount').value;
     if (newTc === lastTurnCount) stuckCounter++; else { stuckCounter = 0; lastTurnCount = newTc; }
 
     if (stuckCounter > maxStuckActions) {
       const stX = evalGame(win, 'player.x').value, stY = evalGame(win, 'player.y').value;
       log(`STUCK: no turn progress for ${stuckCounter}+ actions at x=${stX} y=${stY}, dungeon=${evalGame(win, 'curIsDungeon()').value}`);
-      return { events, errors, windowErrors, died: false, reason: 'stuck', actionsUsed, stateCounts, unrecognizedStates: [...unrecognizedStates] };
+      return buildResult('stuck', actionsUsed, stateCounts, unrecognizedStates);
     }
   }
 
   const finalSt = getState(win);
   log(`Reached action budget. hp=${finalSt && finalSt.hp} level=${finalSt && finalSt.level}`);
-  return { events, errors, windowErrors, died: false, reason: 'budget-reached', actionsUsed, finalState: finalSt, stateCounts, unrecognizedStates: [...unrecognizedStates] };
+  return buildResult('budget-reached', actionsUsed, stateCounts, unrecognizedStates, { finalState: finalSt });
+}
+
+// ==========================================================================================
+// SECTION 6: DEBUG CONTROL API -- thin wrappers around the game's OWN dev/debug menu
+// ==========================================================================================
+// The game ships a real, thorough debug menu (Settings -> Debug tab, see DEBUG/renderDebugTab
+// in game.html) built for exactly this need: exploring/testing a specific area or scenario
+// without dying, without waiting on a random encounter to happen, or without needing to earn
+// or find something first. Every function below is a direct, thin wrapper that calls the
+// game's OWN debug function via evalGame() -- none of this reimplements game logic, it just
+// gives a controlling script (this file's CLI, or another Claude session driving via
+// `require('./playtest.js')`) a clean way to call it. A few of the real UI's onclick handlers
+// read their parameters (qty, rarity, weather duration) off DOM `<input>` elements that only
+// exist while the Settings modal is actually open and rendered -- those are reimplemented here
+// against the exact same underlying primitives (makeItem/addItemToList, ensureWeather, etc.)
+// but taking the parameter directly as a function argument instead, so these work whether or
+// not any menu is currently open on screen.
+//
+// These are NOT used by the autonomous strategies in SECTION 4/5 -- normal playthroughs never
+// touch DEBUG or these functions, so a standard `node playtest.js` run is completely unaffected
+// by this section existing. This is specifically for DIRECTED testing: "drop me in the Crypt
+// dungeon type with all spells and infinite health so I can watch how spellcasting behaves
+// there" is a single `debug.teleportToDungeonType()` + `debug.setFlags()` + `debug.getAllSpells()`
+// call away, instead of needing to actually earn/find that dungeon and those spells first.
+
+/** Merge flags into the game's live DEBUG object (see DEBUG in game.html for the full field
+ * list: infiniteHealth, noDamage, infiniteMana, infiniteStamina, infiniteVision, xrayVision,
+ * freezeTime, noclip, invisibleToEnemies, oneHitKill). Pass only the fields you want to change;
+ * anything omitted keeps its current value. Returns the resulting full DEBUG object. */
+function debugSetFlags(win, flags) {
+  const r = evalGame(win, `(function(){ Object.assign(DEBUG, ${JSON.stringify(flags)}); if (gameState==='settings') renderSettingsTab('debug'); return JSON.stringify(DEBUG); })()`);
+  return r.ok ? JSON.parse(r.value) : null;
+}
+/** Read the current state of every DEBUG toggle. */
+function debugGetFlags(win) {
+  const r = evalGame(win, 'JSON.stringify(DEBUG)');
+  return r.ok ? JSON.parse(r.value) : null;
+}
+/** Reset every DEBUG toggle to off -- exact wrapper of the real "Reset All Debug Toggles" button. */
+function debugResetAllFlags(win) { evalGame(win, 'debugResetAllFlags()'); }
+/** Force HP/MP/Stamina/Charge to full and clear poison/fear/confuse/buffs. */
+function debugFullRestore(win) { evalGame(win, 'debugFullRestore()'); }
+/** Turn all four survival toggles (infiniteHealth/noDamage/infiniteMana/infiniteStamina) on or off at once. */
+function debugSetVitalFlags(win, enabled) { evalGame(win, `debugSetVitalFlags(${!!enabled})`); }
+/** Reveal a ~48-tile radius of previously-unseen terrain around the player's current position. */
+function debugRevealMap(win) { evalGame(win, 'debugRevealMap()'); }
+/** Instantly kill every living monster currently in view/loaded near the player. */
+function debugKillAllNearby(win) { evalGame(win, 'debugKillAllNearby()'); }
+/** Add `amount` gold. */
+function debugAddGold(win, amount) { evalGame(win, `debugAddGold(${Number(amount) || 0})`); }
+/** Grant `times` level-ups directly (bumps level/stats without touching real XP progress). */
+function debugLevelUp(win, times = 1) { evalGame(win, `debugLevelUp(${Number(times) || 1})`); }
+/** Learn every spell/technique in the game. */
+function debugGetAllSpells(win) { evalGame(win, 'debugGetAllSpells()'); }
+function debugGetAllTechniques(win) { evalGame(win, 'debugGetAllTechniques()'); }
+/** Grant every eldritch mutation / install every cyberware in the game. */
+function debugGetAllMutations(win) { evalGame(win, 'debugGetAllMutations()'); }
+function debugGetAllCyber(win) { evalGame(win, 'debugGetAllCyber()'); }
+
+/** List every monster species id/name/tier in the game (live off MONSTER_BASES). */
+function debugListMonsters(win) {
+  const r = evalGame(win, `JSON.stringify(Object.keys(MONSTER_BASES).map(id => ({ id, name: MONSTER_BASES[id].name, dtier: MONSTER_BASES[id].dtier || null, hp: MONSTER_BASES[id].hp, boss: !!MONSTER_BASES[id].boss })))`);
+  return r.ok ? JSON.parse(r.value) : [];
+}
+/** Spawn a monster by id adjacent to (or within `radius` tiles of) the player, using the game's
+ * OWN spawn primitives (makeMonster + addMonsterToWorld + findOpenAdjacent -- see game.html) --
+ * the exact same functions the game itself uses for random encounters, so the spawned monster
+ * is placed, chunk-registered, and depth-scaled exactly as if it had spawned naturally. No
+ * hardcoded monster list: any id from debugListMonsters (or added to MONSTER_BASES later) works.
+ * `depthScale` defaults to the player's own level, matching the difficulty they'd actually meet
+ * a wild one at right now; pass a specific number to test a monster at a different power level. */
+function debugSpawnMonster(win, monsterId, opts = {}) {
+  const radius = opts.radius || 1;
+  const depthScaleExpr = opts.depthScale != null ? String(Number(opts.depthScale)) : '(player.level || 1)';
+  const r = evalGame(win, `
+    (function(){
+      if (!MONSTER_BASES[${JSON.stringify(monsterId)}]) return { ok:false, reason:'unknown monster id' };
+      const spot = findOpenAdjacent(player.x, player.y, ${radius});
+      if (!spot) return { ok:false, reason:'no open tile nearby' };
+      const m = makeMonster(${JSON.stringify(monsterId)}, spot.x, spot.y, ${depthScaleExpr}, Math.random);
+      addMonsterToWorld(m);
+      return { ok:true, uid: m.uid, name: m.name, hp: m.hp, maxHp: m.hp, x: m.x, y: m.y };
+    })()
+  `);
+  return r.ok ? r.value : { ok: false, reason: r.error };
+}
+
+/** Search every item/spell/technique/mutation/cyberware by name -- same registry the real
+ * debug search box queries. Returns an array of {kind, id, name, tag}. */
+function debugSearchRegistry(win, query) {
+  const r = evalGame(win, `JSON.stringify(debugRegistrySearch(${JSON.stringify(query)}))`);
+  return r.ok ? JSON.parse(r.value) : [];
+}
+/** Give an item/spell/technique/mutation/cyberware by its exact registry id (see
+ * debugSearchRegistry to find one by name first). `opts.qty`/`opts.rarity` only apply to
+ * kind==='item' (rarity 0=Common..4=Legendary, matching the real menu's dropdown). Re-implements
+ * the real debugGiveByKindId()'s logic directly against player state rather than calling it,
+ * since the real function reads qty/rarity off DOM <input> elements that don't exist unless the
+ * Settings modal is actually open -- this takes them as real arguments instead. */
+function debugGiveById(win, kind, id, opts = {}) {
+  const qty = Math.max(1, Math.min(99, opts.qty || 1));
+  const rarity = Math.max(0, Math.min(4, opts.rarity != null ? opts.rarity : 2));
+  const r = evalGame(win, `
+    (function(){
+      const kind = ${JSON.stringify(kind)}, id = ${JSON.stringify(id)};
+      if (kind === 'item') {
+        const base = ITEM_BASES.find(b => b.id === id);
+        if (!base) return { ok:false, reason:'unknown item id' };
+        for (let i = 0; i < ${qty}; i++) { const it = makeItem(id, ${rarity}, Math.random, 1); if (it) addItemToList(player.inventory, it); }
+        return { ok:true, name: base.name, qty: ${qty} };
+      } else if (kind === 'spell') {
+        if (!SPELLS.find(s=>s.id===id)) return { ok:false, reason:'unknown spell id' };
+        if (!player.knownSpells.includes(id)) player.knownSpells.push(id);
+        return { ok:true, name: SPELLS.find(s=>s.id===id).name };
+      } else if (kind === 'technique') {
+        if (!TECHNIQUES.find(t=>t.id===id)) return { ok:false, reason:'unknown technique id' };
+        if (!player.knownTechniques.includes(id)) player.knownTechniques.push(id);
+        return { ok:true, name: TECHNIQUES.find(t=>t.id===id).name };
+      } else if (kind === 'mutation') {
+        const granted = debugGrantMutationSilent(id);
+        return { ok:true, name: (MUTATIONS.find(m=>m.id===id)||{}).name || id, granted };
+      } else if (kind === 'cyber') {
+        const granted = debugGrantCyberSilent(id);
+        return { ok:true, name: (CYBERNETICS.find(c=>c.id===id)||{}).name || id, granted };
+      }
+      return { ok:false, reason:'unknown kind' };
+    })()
+  `);
+  if (r.ok) evalGame(win, 'updateSidebar()');
+  return r.ok ? r.value : { ok: false, reason: r.error };
+}
+/** Convenience: search by name and give the single best (first) match. Returns null if no match. */
+function debugGiveByName(win, query, opts = {}) {
+  const matches = debugSearchRegistry(win, query);
+  if (!matches.length) return null;
+  return debugGiveById(win, matches[0].kind, matches[0].id, opts);
+}
+
+/** List every dimension id/name in the game (live off DIMENSIONS). */
+function debugListDimensions(win) {
+  const r = evalGame(win, 'JSON.stringify(debugDimensionList())');
+  return r.ok ? JSON.parse(r.value) : [];
+}
+/** List every dungeon theme id/name/tier in the game (live off DUNGEON_THEMES). */
+function debugListDungeonTypes(win) {
+  const r = evalGame(win, 'JSON.stringify(debugDungeonTypeList())');
+  return r.ok ? JSON.parse(r.value) : [];
+}
+/** Teleport straight into a dimension by id (see debugListDimensions). Sets up return-path
+ * bookkeeping exactly like a real rift crossing -- debugReturnToOverworld() unwinds it.
+ * NOTE: this and the three functions below all end by calling the real game's closeSettings()
+ * (since normally you'd trigger these FROM the open Settings/Debug modal, and it needs to close
+ * behind you). closeSettings() decides where to land by reading `settingsReturnState`, a
+ * variable normally set the moment the Settings modal is actually opened -- which never happens
+ * here, since these are called directly. Its default value is 'title', so without setting it
+ * first, EVERY debug teleport would silently kick the session back to the title screen right
+ * after moving the player (confirmed by testing: 94/94 content-sweep stops hit this before the
+ * fix below was added -- see runContentSweep's notableFindings tracking, which is what caught
+ * it). Setting it to 'playing' immediately before each call makes these behave exactly as if
+ * triggered from a normal, already-in-game Settings visit. */
+function debugTeleportToDimension(win, dimId) { evalGame(win, `settingsReturnState = 'playing'; debugTeleportToDimension(${JSON.stringify(dimId)})`); }
+/** Spawn a fresh instance of a dungeon theme by id (see debugListDungeonTypes) and drop the
+ * player onto its up-stairs, exactly like walking up to a real entrance and pressing '>'. */
+function debugTeleportToDungeonType(win, themeId) { evalGame(win, `settingsReturnState = 'playing'; debugTeleportToDungeonType(${JSON.stringify(themeId)})`); }
+function debugTeleportRandomDimension(win) { evalGame(win, `settingsReturnState = 'playing'; debugTeleportRandomDimension()`); }
+function debugTeleportRandomDungeonType(win) { evalGame(win, `settingsReturnState = 'playing'; debugTeleportRandomDungeonType()`); }
+/** Unwind however many debug jumps deep (dungeon-in-dimension, chained jumps, etc.) back to
+ * the true overworld in one call. */
+function debugReturnToOverworld(win) { evalGame(win, `settingsReturnState = 'playing'; debugReturnToOverworld()`); }
+
+/** List every weather type / world event id+name in the game. */
+function debugListWeatherTypes(win) {
+  const r = evalGame(win, 'JSON.stringify(Object.keys(WEATHER_TYPES).map(id=>({id,name:WEATHER_TYPES[id].name})))');
+  return r.ok ? JSON.parse(r.value) : [];
+}
+function debugListWorldEvents(win) {
+  const r = evalGame(win, 'JSON.stringify(WORLD_EVENTS.map(e=>({id:e.id,name:e.name})))');
+  return r.ok ? JSON.parse(r.value) : [];
+}
+/** Force the current zone's weather by id for `duration` turns (default 200). No-ops
+ * underground, same as the real menu ("Weather doesn't apply underground"). Reimplements
+ * debugForceWeather()'s logic directly rather than calling it, since the real function reads
+ * duration off a DOM <input>. */
+function debugForceWeather(win, id, duration = 200) {
+  evalGame(win, `
+    (function(){
+      if (!WEATHER_TYPES[${JSON.stringify(id)}]) return;
+      if (curIsDungeon()) return;
+      const st = ensureWeather(zoneKey());
+      st.id = ${JSON.stringify(id)}; st.turnsRemaining = ${Number(duration) || 200};
+      updateSidebar();
+    })()
+  `);
+}
+function debugClearWeather(win) { evalGame(win, 'debugClearWeather()'); }
+/** Fire a world event immediately by id (same dispatcher a real organic trigger uses, skipping
+ * only the rarity/zone/day gating). */
+function debugTriggerEvent(win, id) { evalGame(win, `debugTriggerEvent(${JSON.stringify(id)})`); }
+/** Schedule a world event with its real telegraph warning (if it has one), resolving after its
+ * normal delay -- use this instead of debugTriggerEvent to test the warn-then-resolve flow. */
+function debugScheduleEvent(win, id) { evalGame(win, `debugScheduleEvent(${JSON.stringify(id)})`); }
+function debugClearActiveEvents(win) { evalGame(win, 'debugClearActiveEvents()'); }
+function debugClearPendingEvents(win) { evalGame(win, 'debugClearPendingEvents()'); }
+
+const debug = {
+  setFlags: debugSetFlags, getFlags: debugGetFlags, resetAllFlags: debugResetAllFlags,
+  fullRestore: debugFullRestore, setVitalFlags: debugSetVitalFlags,
+  revealMap: debugRevealMap, killAllNearby: debugKillAllNearby,
+  addGold: debugAddGold, levelUp: debugLevelUp,
+  getAllSpells: debugGetAllSpells, getAllTechniques: debugGetAllTechniques,
+  getAllMutations: debugGetAllMutations, getAllCyber: debugGetAllCyber,
+  listMonsters: debugListMonsters, spawnMonster: debugSpawnMonster,
+  searchRegistry: debugSearchRegistry, giveById: debugGiveById, giveByName: debugGiveByName,
+  listDimensions: debugListDimensions, listDungeonTypes: debugListDungeonTypes,
+  teleportToDimension: debugTeleportToDimension, teleportToDungeonType: debugTeleportToDungeonType,
+  teleportRandomDimension: debugTeleportRandomDimension, teleportRandomDungeonType: debugTeleportRandomDungeonType,
+  returnToOverworld: debugReturnToOverworld,
+  listWeatherTypes: debugListWeatherTypes, listWorldEvents: debugListWorldEvents,
+  forceWeather: debugForceWeather, clearWeather: debugClearWeather,
+  triggerEvent: debugTriggerEvent, scheduleEvent: debugScheduleEvent,
+  clearActiveEvents: debugClearActiveEvents, clearPendingEvents: debugClearPendingEvents,
+};
+
+// ==========================================================================================
+// SECTION 7: TELEMETRY & CONTENT COVERAGE -- balance data + deterministic "test everything"
+// ==========================================================================================
+// Two things a real playtester/balance-pass wants that pure autonomous play can't reliably
+// give you: (1) structured numeric combat data (not prose logs) to spot outliers -- "this
+// monster hits way harder than anything else at its depth", "this weapon barely scratches
+// anything" -- and (2) a GUARANTEE that every piece of content got exercised at least once,
+// rather than hoping a long enough random playthrough happens to wander into it. Both of these
+// build entirely on the primitives above (evalGame, the debug API) -- neither one modifies or
+// reimplements any game logic.
+
+// ---- combat telemetry: HP-delta snapshotting, not function-hooking --------------------------
+// Deliberately reads observable STATE (hp before/after) rather than monkey-patching a specific
+// internal function like doAttack() or castSpell(). Damage in this game is applied inline in
+// dozens of different branches (melee, ranged, ~15 different spell types, poison ticks, thorns,
+// traps, ...) with no single choke point to hook -- but every single one of them, present or
+// future, has to eventually change some entity's `hp` field, because that's what "damage" IS in
+// this engine. Snapshotting hp before/after an action and diffing is therefore automatically
+// correct for any damage source the game has now OR adds later, with zero maintenance burden,
+// which a hook on a specific function name would not be.
+/** Snapshot the player and every monster within `radius` tiles (default 12 -- generous enough
+ * to cover a whole small room/encounter) for later diffing. */
+function snapshotCombatants(win, radius = 12) {
+  const r = evalGame(win, `
+    JSON.stringify({
+      turn: turnCount, playerHp: player.hp, playerMaxHp: player.maxHp,
+      monsters: curMonsters().filter(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= ${radius})
+        .map(m => ({ uid: m.uid, monsterId: m.monsterId, name: m.name, hp: m.hp })),
+    })
+  `);
+  return r.ok ? JSON.parse(r.value) : null;
+}
+/** Diff two snapshotCombatants() results into structured events: damage dealt to each monster
+ * present in both (by uid, so it's the SAME monster instance, not just same species), damage
+ * taken by the player, and deaths (present+alive before, gone or hp<=0 after). `actionLabel` is
+ * just a caller-supplied tag (e.g. 'melee:Longsword', 'spell:Fireball') for grouping later. */
+function diffCombatSnapshots(before, after, actionLabel) {
+  if (!before || !after) return [];
+  const events = [];
+  const playerDmgTaken = Math.max(0, before.playerHp - after.playerHp);
+  if (playerDmgTaken > 0) events.push({ type: 'damageTaken', target: 'player', amount: playerDmgTaken, action: actionLabel, turn: after.turn });
+  const afterByUid = new Map(after.monsters.map(m => [m.uid, m]));
+  for (const mBefore of before.monsters) {
+    const mAfter = afterByUid.get(mBefore.uid);
+    const hpAfter = mAfter ? mAfter.hp : 0; // gone from the snapshot radius almost always means it died
+    const dmg = Math.max(0, mBefore.hp - hpAfter);
+    // uid included on every event (not just monsterId/species) so a caller tracking ONE specific
+    // spawned instance -- see simulateCombat below -- can filter to exactly that monster and
+    // never accidentally attribute damage dealt to/by some unrelated wild monster that happened
+    // to wander within snapshot radius during the same window. This is what a first version of
+    // simulateCombat got wrong: it summed ALL monsters' damage in range, inflating results
+    // whenever the real, live overworld/dungeon put another creature nearby mid-trial.
+    if (dmg > 0) events.push({ type: 'damageDealt', uid: mBefore.uid, target: mBefore.monsterId, targetName: mBefore.name, amount: dmg, action: actionLabel, turn: after.turn });
+    if (mBefore.hp > 0 && hpAfter <= 0) events.push({ type: 'kill', uid: mBefore.uid, target: mBefore.monsterId, targetName: mBefore.name, action: actionLabel, turn: after.turn });
+  }
+  return events;
+}
+/** Aggregate a flat array of diffCombatSnapshots() events (e.g. life.combatLog after a run)
+ * into per-action-label and per-monster summary stats -- total/average damage dealt and taken,
+ * kill counts, all grouped by the action tag. This is the "spot the balance outlier" view. */
+function summarizeCombatLog(events) {
+  const byAction = {}, byMonster = {};
+  const bump = (map, key, field, amount) => {
+    if (!map[key]) map[key] = { count: 0, totalDamageDealt: 0, totalDamageTaken: 0, kills: 0 };
+    map[key][field] += amount;
+    map[key].count++;
+  };
+  for (const e of events) {
+    const actionKey = e.action || 'unknown';
+    const monsterKey = e.target === 'player' ? null : (e.target || 'unknown');
+    if (e.type === 'damageDealt') { bump(byAction, actionKey, 'totalDamageDealt', e.amount); if (monsterKey) bump(byMonster, monsterKey, 'totalDamageDealt', e.amount); }
+    if (e.type === 'damageTaken') { bump(byAction, actionKey, 'totalDamageTaken', e.amount); }
+    if (e.type === 'kill') { if (!byAction[actionKey]) byAction[actionKey] = { count: 0, totalDamageDealt: 0, totalDamageTaken: 0, kills: 0 }; byAction[actionKey].kills++; if (monsterKey) { if (!byMonster[monsterKey]) byMonster[monsterKey] = { count: 0, totalDamageDealt: 0, totalDamageTaken: 0, kills: 0 }; byMonster[monsterKey].kills++; } }
+  }
+  for (const k of Object.keys(byAction)) byAction[k].avgDamagePerHit = byAction[k].count ? +(byAction[k].totalDamageDealt / byAction[k].count).toFixed(1) : 0;
+  for (const k of Object.keys(byMonster)) byMonster[k].avgDamagePerHit = byMonster[k].count ? +(byMonster[k].totalDamageDealt / byMonster[k].count).toFixed(1) : 0;
+  return { byAction, byMonster };
+}
+
+// ---- content coverage sweep: deterministically visit every piece of content -----------------
+/**
+ * Systematically exercises every dungeon theme, every dimension, every known spell/technique,
+ * every recipe, every weather type, and every world event at least once, using the debug API
+ * (god-mode on throughout, so nothing here can end the run by dying) and catching real engine
+ * crashes via attachErrorCapture. This is the deterministic complement to autonomous play: a
+ * long random playthrough MIGHT wander into the one dungeon theme or spell with a bug in it,
+ * eventually, if you're patient (or unlucky) enough for the RNG to cooperate -- this guarantees
+ * every one of them gets touched at least once in a single run, and tells you exactly which
+ * piece of content was active when anything went wrong.
+ *
+ * Entirely data-driven off the game's own registries (debug.listDungeonTypes/listDimensions
+ * read DUNGEON_THEMES/DIMENSIONS live, spells/recipes read player.knownSpells/knownRecipes
+ * after granting all of them) -- nothing here is a hardcoded content list, so new dungeon
+ * themes, dimensions, spells, recipes, weather types, or world events the game adds later are
+ * automatically included in the sweep with zero changes needed to this function.
+ *
+ * @param {object} opts
+ *   turnsPerDungeon (default 40): how many normal strategy-loop turns to spend in each dungeon
+ *     theme/dimension before moving to the next -- enough to actually fight a few monsters and
+ *     touch a few tiles, not just glance at the entrance.
+ *   include (default all true): { dungeons, dimensions, spells, recipes, weather, events } --
+ *     set any to false to skip that category (e.g. for a faster, targeted sweep).
+ *   onProgress(msg): optional callback for real-time progress output (sweeps can take a while).
+ * @returns { crashes: [{phase, contentId, error}], visited: {dungeons,dimensions,spells,...},
+ *            combatLog: [...] } -- crashes is the headline result; an empty array is a genuine
+ *            "nothing in the game crashed when every piece of content was touched" finding.
+ */
+async function runContentSweep(win, opts = {}) {
+  const {
+    turnsPerDungeon = 40,
+    include = { dungeons: true, dimensions: true, spells: true, recipes: true, weather: true, events: true },
+    onProgress = () => {},
+  } = opts;
+  const errCapture = attachErrorCapture(win);
+  const crashes = [];
+  const combatLog = [];
+  const notableFindings = [];
+  const visited = { dungeons: [], dimensions: [], spells: [], recipes: [], weather: [], events: [] };
+
+  const checkNewCrashes = (phase, contentId) => {
+    while (errCapture.errors.length > 0) {
+      crashes.push({ phase, contentId, error: errCapture.errors.shift() });
+    }
+  };
+  const safely = async (phase, contentId, fn) => {
+    try { await fn(); } catch (e) { crashes.push({ phase, contentId, error: e.stack || String(e) }); }
+    checkNewCrashes(phase, contentId);
+  };
+
+  // God mode for the whole sweep -- the point is coverage, not a fair fight. NOTE: this does
+  // NOT guarantee immortality -- see the death-recovery handling in runTurnsHere below, which
+  // is there because testing surfaced a real, worth-knowing-about finding: some death paths
+  // (environmental hazards resolved outside the normal combat-damage code path these DEBUG
+  // flags gate, e.g. a chasm fall or similar) can still end a "god mode" character. Rather than
+  // let that silently derail the whole sweep (once dead, more keypresses land on the title
+  // screen instead of gameplay, producing confusing unrelated errors), this detects it, records
+  // exactly which content phase it happened during as a real finding, and recovers by rerolling
+  // a fresh character so the sweep can continue covering everything else.
+  debugSetFlags(win, { infiniteHealth: true, infiniteMana: true, infiniteStamina: true, noDamage: true });
+
+  const recoverFromDeathIfNeeded = async (phase, contentId) => {
+    const gs = evalGame(win, 'gameState').value;
+    if (gs === 'playing') return false;
+    if (gs === 'gameover' || gs === 'title' || gs === 'start' || gs === 'create_species' || gs === 'create_archetype') {
+      notableFindings.push({
+        phase, contentId,
+        note: `Character died/reset despite god-mode flags being active (gameState was '${gs}'). This is a real finding worth investigating manually with the debug API -- likely an environmental/instant-death path that doesn't check DEBUG.infiniteHealth/noDamage.`,
+      });
+      // Reroll a fresh character and reapply god mode so the sweep can keep going.
+      if (gs !== 'title') { key(win, 'Escape'); await sleep(20); }
+      if (evalGame(win, 'gameState').value !== 'title') evalGame(win, "gameState = 'title'");
+      await createRandomCharacter(win, () => {});
+      debugSetFlags(win, { infiniteHealth: true, infiniteMana: true, infiniteStamina: true, noDamage: true });
+      return true;
+    }
+    key(win, 'Escape'); // some other stray menu -- just close it, not a death
+    return false;
+  };
+
+  const runTurnsHere = async (n, phase, contentId) => {
+    for (let i = 0; i < n; i++) {
+      if (await recoverFromDeathIfNeeded(phase, contentId)) return; // stop early this stop; move to the next one
+      const before = snapshotCombatants(win);
+      let acted = await strat.tryFightAdjacent(win);
+      if (!acted) acted = strat.tryPickUpHere(win, null);
+      if (!acted) { const { progressed } = await nav.exploreStep(win, { dir: null, stepsLeft: 0 }); acted = progressed; }
+      const after = snapshotCombatants(win);
+      combatLog.push(...diffCombatSnapshots(before, after, 'sweep'));
+      if (evalGame(win, 'gameState').value !== 'playing') await recoverFromDeathIfNeeded(phase, contentId);
+    }
+  };
+
+  if (include.dungeons) {
+    for (const dg of debugListDungeonTypes(win)) {
+      onProgress(`dungeon: ${dg.name} (${dg.id})`);
+      await safely('dungeon', dg.id, async () => {
+        debugTeleportToDungeonType(win, dg.id);
+        await runTurnsHere(turnsPerDungeon, 'dungeon', dg.id);
+        debugReturnToOverworld(win);
+      });
+      visited.dungeons.push(dg.id);
+    }
+  }
+  if (include.dimensions) {
+    for (const dim of debugListDimensions(win)) {
+      onProgress(`dimension: ${dim.name} (${dim.id})`);
+      await safely('dimension', dim.id, async () => {
+        debugTeleportToDimension(win, dim.id);
+        await runTurnsHere(turnsPerDungeon, 'dimension', dim.id);
+        debugReturnToOverworld(win);
+      });
+      visited.dimensions.push(dim.id);
+    }
+  }
+  if (include.spells) {
+    debugGetAllSpells(win); debugGetAllTechniques(win);
+    const spellIds = evalGame(win, 'JSON.stringify([...(player.knownSpells||[]), ...(player.knownTechniques||[])])');
+    for (const id of (spellIds.ok ? JSON.parse(spellIds.value) : [])) {
+      onProgress(`ability: ${id}`);
+      await safely('ability', id, async () => {
+        // Cast against whatever's nearest if one's needed; utility/buff/self spells just fire.
+        // castSpell() itself handles "no target in range" gracefully (logs and returns) for
+        // anything requiring one, so this never blocks waiting on a target that isn't there.
+        evalGame(win, `castSpell(${JSON.stringify(id)})`);
+      });
+    }
+    visited.spells = spellIds.ok ? JSON.parse(spellIds.value) : [];
+  }
+  if (include.recipes) {
+    const allRecipeIds = evalGame(win, 'JSON.stringify(RECIPES.map(r=>r.id))');
+    for (const rid of (allRecipeIds.ok ? JSON.parse(allRecipeIds.value) : [])) {
+      onProgress(`recipe: ${rid}`);
+      await safely('recipe', rid, async () => {
+        // Grant every input material directly rather than hunting for it, so this exercises
+        // craftRecipe() itself (the thing actually worth testing) instead of the drop tables.
+        evalGame(win, `
+          (function(){
+            const rec = RECIPES.find(r=>r.id===${JSON.stringify(rid)});
+            if (!rec) return;
+            player.knownRecipes = player.knownRecipes || [];
+            if (!player.knownRecipes.includes(rec.id)) player.knownRecipes.push(rec.id);
+            for (const inp of (rec.inputs||[])) {
+              const have = player.inventory.filter(i=>i.id===inp.id).reduce((s,i)=>s+(i.amount||1),0);
+              if (have < inp.qty) {
+                const it = makeItem(inp.id, 2, Math.random, inp.qty - have);
+                if (it) addItemToList(player.inventory, it);
+              }
+            }
+            craftRecipe(rec.id);
+          })()
+        `);
+      });
+    }
+    visited.recipes = allRecipeIds.ok ? JSON.parse(allRecipeIds.value) : [];
+  }
+  if (include.weather) {
+    for (const w of debugListWeatherTypes(win)) {
+      onProgress(`weather: ${w.name} (${w.id})`);
+      await safely('weather', w.id, async () => { debugForceWeather(win, w.id, 5); });
+      visited.weather.push(w.id);
+    }
+    debugClearWeather(win);
+  }
+  if (include.events) {
+    for (const ev of debugListWorldEvents(win)) {
+      onProgress(`event: ${ev.name} (${ev.id})`);
+      await safely('event', ev.id, async () => { debugTriggerEvent(win, ev.id); await runTurnsHere(3, 'event', ev.id); });
+      visited.events.push(ev.id);
+    }
+    debugClearActiveEvents(win); debugClearPendingEvents(win);
+  }
+
+  debugResetAllFlags(win); // leave the session clean for whatever the caller does next
+  return { crashes, notableFindings, visited, combatLog, combatSummary: summarizeCombatLog(combatLog) };
+}
+
+// ---- combat simulator: isolated, repeatable weapon/spell/monster balance testing -------------
+/**
+ * The tool a real balance pass actually reaches for: fight a specific monster (or cast a
+ * specific spell at it) N times in a row, in isolation, with the player fully restored between
+ * fights, and get back real numbers -- kill rate, average turns to kill, average damage taken.
+ * This is what answers "does a Longsword actually kill a Rust Sentinel faster than a Fireball
+ * does" or "is this new monster's damage output in line with others at its tier" with data
+ * instead of impressions from watching a few random encounters go by.
+ *
+ * Uses debug.spawnMonster (real spawn primitives) to summon a fresh instance of the target each
+ * trial, and either bump-attacks it (default) or casts `opts.spellId` at it every turn if given
+ * -- either way this is going through the SAME attack/cast code paths a normal playthrough uses
+ * (doAttack/castSpell), just repeated under controlled conditions, not a separate combat model.
+ *
+ * Does NOT force god-mode itself -- that's the caller's choice and changes what's being
+ * measured: leave DEBUG.infiniteHealth off to also learn how much damage the player actually
+ * takes per fight (real survivability data), or turn it on first (via debug.setFlags) to
+ * isolate pure damage-output/time-to-kill without any death risk interrupting the trial series.
+ *
+ * @param {object} opts
+ *   trials (default 10), maxTurnsPerFight (default 100, a fight that runs this long without a
+ *   kill is recorded as 'timeout' rather than looping forever), spellId (optional -- cast this
+ *   instead of bump-attacking), depthScale (optional -- passed to debug.spawnMonster), fullRestoreBetween
+ *   (default true -- calls debug.fullRestore() before each trial so trials start from a clean,
+ *   comparable baseline rather than compounding fatigue/HP loss from the previous fight).
+ * @returns { monsterId, trials: [{outcome, turns, dmgDealt, dmgTaken}], summary: {...} }
+ */
+async function simulateCombat(win, monsterId, opts = {}) {
+  const {
+    trials = 10, maxTurnsPerFight = 100, spellId = null, depthScale = null,
+    fullRestoreBetween = true,
+  } = opts;
+  const errCapture = attachErrorCapture(win);
+  const results = [];
+
+  for (let t = 0; t < trials; t++) {
+    if (fullRestoreBetween) debugFullRestore(win);
+    // Clear anything else nearby first -- this is real, live gameplay, not a sealed arena, so a
+    // wild monster can genuinely wander adjacent mid-trial. Without this, its damage dealt/taken
+    // would contaminate this trial's numbers even with the uid-filtering below (that filtering
+    // protects the DAMAGE-DEALT side precisely, but a wild monster attacking the player is still
+    // real damage taken that has nothing to do with the monster actually being tested).
+    debugKillAllNearby(win);
+    const spawn = debugSpawnMonster(win, monsterId, depthScale != null ? { depthScale } : {});
+    if (!spawn.ok) { results.push({ outcome: 'spawn-failed', reason: spawn.reason }); continue; }
+
+    const before = snapshotCombatants(win);
+    let turns = 0, outcome = 'timeout';
+    while (turns < maxTurnsPerFight) {
+      const stillThere = evalGame(win, `(function(){ const m = curMonsters().find(x=>x.uid===${JSON.stringify(spawn.uid)}); return m && m.alive; })()`).value === true;
+      if (!stillThere) { outcome = 'kill'; break; }
+      if (spellId) {
+        // castSpell() for anything requiring a target enters gameState 'tiletarget' and waits
+        // for a confirm keypress -- see tryCastOffensiveSpell's comment above for the full story
+        // of how easy this is to get silently wrong (a first version of THIS function made
+        // exactly that mistake: calling castSpell() alone and never confirming meant every
+        // spell trial recorded zero damage dealt, looking like the spell did nothing rather
+        // than like the cast was never actually completed).
+        evalGame(win, `castSpell(${JSON.stringify(spellId)})`);
+        if (evalGame(win, 'gameState').value === 'tiletarget') key(win, 'Enter');
+      } else {
+        const dir = directionToAdjacentMonster(win); if (!dir) { outcome = 'monster-unreachable'; break; } key(win, dir);
+      }
+      turns++;
+      if (evalGame(win, 'player.hp').value <= 0) { outcome = 'player-down'; break; }
+      if (errCapture.errors.length) { outcome = 'crashed'; break; }
+    }
+    const after = snapshotCombatants(win);
+    // Filter strictly to the ONE spawned instance (by uid) and to damage taken BY the player --
+    // see diffCombatSnapshots' comment on why uid-filtering matters: this is real gameplay, not
+    // a sealed arena, so another wild monster can genuinely wander within snapshot radius mid-
+    // trial, and without filtering its damage would silently inflate this trial's numbers.
+    const events = diffCombatSnapshots(before, after, spellId ? `spell:${spellId}` : 'melee')
+      .filter(e => e.target === 'player' || e.uid === spawn.uid);
+    const dmgDealt = events.filter(e => e.type === 'damageDealt').reduce((s, e) => s + e.amount, 0);
+    const dmgTaken = events.filter(e => e.type === 'damageTaken').reduce((s, e) => s + e.amount, 0);
+    results.push({ outcome, turns, dmgDealt, dmgTaken });
+    if (errCapture.errors.length) results[results.length - 1].error = errCapture.errors.shift();
+  }
+
+  const ok = results.filter(r => r.outcome !== 'spawn-failed');
+  const kills = ok.filter(r => r.outcome === 'kill');
+  const summary = {
+    trials: results.length,
+    kills: kills.length,
+    killRate: ok.length ? +(kills.length / ok.length).toFixed(2) : null,
+    avgTurnsToKill: kills.length ? +(kills.reduce((s, r) => s + r.turns, 0) / kills.length).toFixed(1) : null,
+    avgDamageDealtPerFight: ok.length ? +(ok.reduce((s, r) => s + r.dmgDealt, 0) / ok.length).toFixed(1) : null,
+    avgDamageTakenPerFight: ok.length ? +(ok.reduce((s, r) => s + r.dmgTaken, 0) / ok.length).toFixed(1) : null,
+    playerDowned: ok.filter(r => r.outcome === 'player-down').length,
+    crashed: ok.filter(r => r.outcome === 'crashed').length,
+  };
+  return { monsterId, spellId, trials: results, summary };
+}
+
+/**
+ * Convenience wrapper around simulateCombat: run it for every attack option worth comparing
+ * (the player's current melee weapon plus a list of spell ids) against the SAME monster, so the
+ * results are directly comparable -- "which of my options is actually best against this thing".
+ * `attackOptions` is an array where each entry is either `null` (meaning "bump-attack with
+ * whatever's currently equipped") or a spell id string.
+ */
+async function compareAttackOptions(win, monsterId, attackOptions, opts = {}) {
+  const table = {};
+  for (const opt of attackOptions) {
+    const label = opt == null ? `melee:${evalGame(win, "(player.equipment.hand && player.equipment.hand.name) || 'unarmed'").value}` : `spell:${opt}`;
+    const r = await simulateCombat(win, monsterId, { ...opts, spellId: opt });
+    table[label] = r.summary;
+  }
+  return table;
+}
+
+// ---- batch comparison: "is X actually meaningfully different from Y", with real numbers ------
+/**
+ * Runs several full autonomous playthroughs per named configuration (default: one config per
+ * BOT_PROFILE preset) and returns a comparison table -- survival rate, average actions/turns
+ * survived, average level/gold reached, and a death-cause breakdown -- so a question like "is
+ * the veteran profile actually meaningfully safer than novice, and by how much" gets answered
+ * with real aggregate data instead of a guess from watching a handful of runs. Each config gets
+ * its own fresh boot() per life (a completely clean game instance, no state leaking between
+ * lives OR between configs), so results are directly comparable.
+ *
+ * @param {Array<{label, profile?, livesEach?, opts?}>} configs -- opts is passed through to
+ *   playOneLife (e.g. { collectTelemetry:false } for a faster run when you only care about the
+ *   aggregate outcome stats, not per-life combat detail).
+ * @param {object} runOpts -- shared defaults: livesEach (default 10), maxActions (default 3000),
+ *   maxStuckActions (default 500), onProgress(configLabel, lifeIndex).
+ * @returns { [configLabel]: { livesRun, survivalRate, avgActionsSurvived, avgFinalLevel,
+ *   avgFinalGold, deathCauses: {cause: count}, outcomes: {died,stuck,'budget-reached',...} } }
+ */
+async function runComparison(configs, runOpts = {}) {
+  const { livesEach = 10, maxActions = 3000, maxStuckActions = 500, onProgress = () => {} } = runOpts;
+  const table = {};
+  for (const cfg of configs) {
+    if (cfg.profile) applyProfile(cfg.profile);
+    const n = cfg.livesEach || livesEach;
+    const lives = [];
+    for (let i = 0; i < n; i++) {
+      onProgress(cfg.label, i);
+      const dom = await boot();
+      const life = await playOneLife(dom, cfg.maxActions || maxActions, cfg.maxStuckActions || maxStuckActions, cfg.opts || {});
+      lives.push(life);
+    }
+    const outcomes = {};
+    const deathCauses = {};
+    for (const l of lives) {
+      outcomes[l.reason] = (outcomes[l.reason] || 0) + 1;
+      if (l.died) {
+        const last = l.events[l.events.length - 1] || '';
+        const cause = last.replace(/^\[t=\d+\] DIED: /, '') || 'unknown';
+        deathCauses[cause] = (deathCauses[cause] || 0) + 1;
+      }
+    }
+    const survived = lives.filter(l => !l.died).length;
+    const finalLevels = lives.map(l => (l.finalState && l.finalState.level) || (l.vitalsTimeline.length ? l.vitalsTimeline[l.vitalsTimeline.length - 1].level : null)).filter(v => v != null);
+    const finalGold = lives.map(l => (l.finalState && l.finalState.gold) || (l.vitalsTimeline.length ? l.vitalsTimeline[l.vitalsTimeline.length - 1].gold : null)).filter(v => v != null);
+    table[cfg.label] = {
+      livesRun: lives.length,
+      survivalRate: +(survived / lives.length).toFixed(2),
+      avgActionsSurvived: +(lives.reduce((s, l) => s + l.actionsUsed, 0) / lives.length).toFixed(1),
+      avgFinalLevel: finalLevels.length ? +(finalLevels.reduce((s, v) => s + v, 0) / finalLevels.length).toFixed(1) : null,
+      avgFinalGold: finalGold.length ? +(finalGold.reduce((s, v) => s + v, 0) / finalGold.length).toFixed(0) : null,
+      outcomes, deathCauses,
+    };
+  }
+  return table;
 }
 
 async function main() {
   const NUM_LIVES = parseInt(process.argv[2] || '10', 10);
   const MAX_ACTIONS = parseInt(process.argv[3] || '8000', 10);
   const MAX_STUCK = parseInt(process.argv[4] || '600', 10);
+  const PROFILE_NAME = process.argv[5] || 'casual';
+  applyProfile(PROFILE_NAME);
 
-  const report = { meta: { numLives: NUM_LIVES, maxActions: MAX_ACTIONS, maxStuck: MAX_STUCK, startedAt: new Date().toISOString() }, lives: [] };
+  const report = { meta: { numLives: NUM_LIVES, maxActions: MAX_ACTIONS, maxStuck: MAX_STUCK, profile: PROFILE_NAME, startedAt: new Date().toISOString() }, lives: [] };
 
   for (let i = 0; i < NUM_LIVES; i++) {
     process.stderr.write(`\n=== Life ${i + 1}/${NUM_LIVES} ===\n`);
@@ -2205,4 +3282,33 @@ async function main() {
   console.log(`\nFull report written to ${outPath}`);
 }
 
-main().catch((e) => { console.error('FATAL:', e); process.exit(1); });
+// ==========================================================================================
+// EXPORTS -- everything needed to drive/inspect a session from another script (see the file
+// header's "AS A LIBRARY" section for a usage example). Requiring this file has no side
+// effects: main() (the full autonomous CLI batch) only runs below when this file is executed
+// directly (`node playtest.js ...`), never when require()'d from elsewhere.
+// ==========================================================================================
+module.exports = {
+  // -- low-level game control (SECTION 1/2) --
+  boot, evalGame, key, keyAndWait, waitForAutoAction, attachErrorCapture,
+  getState, getInventorySummary, nearbyMonster, directionToAdjacentMonster,
+  readPendingChoiceLabels, resolveChoiceMenu, bestRetreatStep,
+  // -- character creation (SECTION 4) --
+  createRandomCharacter, draftCustomCharacter,
+  // -- every individual strategy function, callable one at a time (SECTION 4) --
+  strat,
+  // -- full autonomous life driver + CLI entrypoint, callable programmatically too (SECTION 5) --
+  playOneLife, main,
+  GENERIC_CLOSE_STATES,
+  // -- behavior tuning ("intelligence"/play-style level, SECTION 0) --
+  BOT_PROFILE, PROFILES, applyProfile,
+  // -- debug-menu control API (SECTION 6) --
+  debug,
+  // -- telemetry + deterministic full-content coverage sweep (SECTION 7) --
+  snapshotCombatants, diffCombatSnapshots, summarizeCombatLog, runContentSweep,
+  simulateCombat, compareAttackOptions, runComparison,
+};
+
+if (require.main === module) {
+  main().catch((e) => { console.error('FATAL:', e); process.exit(1); });
+}
