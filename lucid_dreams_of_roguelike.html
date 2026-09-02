@@ -516,7 +516,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.43.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.44.0-alpha</div>
     </div>
   </div>
 
@@ -1587,6 +1587,78 @@
 // immediately; payForHealing checked against all three tiers with a bleeding+poisoned+diseased
 // player fixture confirms each tier cures exactly its own list and no more. Full automated
 // playtest bot run afterward, zero window errors.
+//
+// v0.41.0 Origin Quests: the gap this closes is the one flagged in v0.40.4's audit but left
+// unaddressed at the time -- START_SCENARIOS meaningfully changed where you start and (via
+// SCENARIO_HOME_GOODWILL) how your home settlement already feels about you, but every single
+// origin funneled into the exact same first Main Quest stage ('first_trial'), with the exact same
+// vague "something's wrong, go find a common-tier dungeon" opening no matter who you were a
+// moment ago. A Capital-born noble's ward and a half-drowned Shipwreck Survivor got identical
+// instructions on turn one. Fixed by giving every origin (all 8 original START_SCENARIOS, plus 3
+// new ones -- see below) its own short, hand-authored PROLOGUE quest chain that plays to that
+// origin's actual starting circumstances, and which explicitly converges into the existing main
+// questline afterward rather than replacing it.
+//   - Architecture (SCENARIO_PROLOGUES, buildScenarioPrologue -- see just above generateMainQuest):
+//     each origin maps to a function returning 2-3 stage objects, generated once at the same
+//     getStoryRng() call generateMainQuest already makes (so a prologue's specific targets are
+//     seed-deterministic, exactly like the antagonist name and lieutenant roster are). These are
+//     spliced onto the FRONT of the existing stage list at act:0, stageIndex still starts at 0, and
+//     nothing about the act 1-6 structure, the choice stages, or the dimension trail changed even
+//     slightly -- this is purely additive. Convergence is explicit, not implied: the 'inciting'
+//     stage's own hook text gets a scenario-specific opening clause prepended
+//     (SCENARIO_CONVERGENCE_PREFIX), spoken in the same voice as everything else in that origin's
+//     chain, naming the same antagonist/home-kingdom the rest of the main quest already uses.
+//   - Four new stage types, each a genuinely new mechanic (not a reskin of kill_boss/dungeon_tier),
+//     each wired into the one real engine call site that already fires at the right moment rather
+//     than adding a new polling loop: kill_any (checkMainQuestKillAny, hooked into the existing
+//     checkBountyQuests -- kill N of a short id list, tracked with per-stage .progress so the
+//     quest log shows live "2/3 defeated" instead of jumping straight to done), talk_npc
+//     (checkMainQuestTalkNpc, hooked into openDialogue's Talk/Ask actions alongside the existing
+//     checkDeliveryQuests call -- optionally role-filtered), enter_dungeon (checkMainQuestEnterDungeon,
+//     hooked into enterDungeon() alongside the existing checkExploreQuests call -- optionally
+//     theme-filtered, completes on entry so it's a real "go investigate" beat rather than requiring
+//     a full clear this early), and fetch_item (checkMainQuestFetchItem, hooked into
+//     pickUpSpecificItem() alongside the existing checkGatherQuests call -- id-list + count, mirrors
+//     the gather-quest pattern). All four are ordinary data on the stage object (targetIds/
+//     targetRoles/targetThemes/targetItemIds, targetCount, progress) so a future origin (or a
+//     hand-authored side chain) can reuse them without touching the check functions at all.
+//   - Lead-gating bypass (stage.leadKnown): the existing hasQuestLead()/NO_LEAD_TEXT system is
+//     correct and deliberate for the main questline proper -- you shouldn't just KNOW where act 1's
+//     dungeon is before an NPC or rumor note tells you. It's wrong for a prologue stage, though:
+//     "hunt something to eat" or "find literally any other person to talk to" isn't a lead someone
+//     else has to hand you, it's the character's own immediate, self-evident situation. Every
+//     prologue stage sets leadKnown:true, which hasQuestLead() now checks first -- the sidebar
+//     tracker and quest log show the real objective from turn one for these stages specifically,
+//     while every existing act 1-6 stage is completely unaffected (leadKnown is simply undefined
+//     there, same as before this pass).
+//   - advanceStory()'s reward line was `40*act*act`/`60*act*act` gold/xp, which is correct for
+//     act 1-6 but would have paid prologue stages (act:0) literally nothing on completion. Rather
+//     than inventing a fake act number that would also throw off BOSS_DUNGEON_THEME-style act-
+//     scaled assumptions elsewhere, added an explicit per-stage override (stage.rewardGold/
+//     rewardXp) that advanceStory() now prefers when present and otherwise falls back to the exact
+//     same formula as before -- zero behavior change for every pre-existing stage.
+//   - 3 new origins, chosen to cover starting circumstances the original 8 didn't touch at all
+//     (political standing, a personal connection to the antagonist's side, and a character who has
+//     genuinely never seen the surface before), each with placement logic of its own:
+//       - Exiled Noble (exile): placed at a 'town' tier settlement like Town Settler, but the
+//         settlement in question is specifically the one whose crown exiled you -- SCENARIO_HOME_GOODWILL's
+//         positive-goodwill pattern is inverted here (addKingdomRep + addGoodwill both negative on
+//         arrival) rather than reusing the same map with a smaller number, since starting in a hole
+//         you have to climb out of is a materially different opening than starting liked.
+//       - Cult Escapee (cultist_escapee): placed via a new fallback biome chain (swamp -> desert ->
+//         forest -> generic) favoring the game's already-established "ominous" biomes, no home
+//         standing anywhere (same premise-honesty rule the original Wanderer/Forest Hermit/
+//         Shipwreck Survivor follow) -- and its prologue is the one origin that gets to reference
+//         the antagonist by name before the convergence line does, since fleeing a cult that
+//         answers to them is the entire premise.
+//       - Tunnel-Born (dungeon_born): placed via a new placePlayerAdjacentToBiome() helper (mountain
+//         biome itself is non-walkable, so this walks the same ring search placePlayerNearBiome
+//         already uses but checks each candidate tile's neighbors instead of the tile itself) --
+//         first prologue stage is a plain narrative beat, second is enter_dungeon (a Tunnel-Born
+//         character's first instinct under pressure is to go back underground, not away from it),
+//         third is talk_npc (their actual first conversation with a surface-dweller).
+//   - Playtest-bot compatible without any changes to the bot itself: START_SCENARIOS.length is read
+//     dynamically by the bot's character-creation step, so the 3 new letters just work.
 //
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
@@ -3490,6 +3562,9 @@ const ROLE_BOUNTY_VALUE = { guard: 15, watchman: 15, captain: 30, noble: 40, mer
 function bountyValueFor(npc) { return ROLE_BOUNTY_VALUE[npc.roleId] || 10; }
 
 // ---- starting scenarios ----
+// Each entry here also needs, at minimum: a placement branch in placePlayerForScenario(), and a
+// SCENARIO_PROLOGUES[id] entry (see buildScenarioPrologue, near generateMainQuest) providing that
+// origin's opening quest chain. See v0.41.0's changelog entry for the full origin-quest system.
 const START_SCENARIOS = [
   { id: 'wanderer', name: 'Wanderer', desc: 'Begin alone in the wilds near the world\'s heart, with nothing but your wits.' },
   { id: 'capital', name: 'Capital Born', desc: 'Begin within a sprawling, multi-district kingdom capital -- rare, massive, and grand.' },
@@ -3499,6 +3574,9 @@ const START_SCENARIOS = [
   { id: 'hamlet', name: 'Hamlet Born', desc: 'Begin in a tiny, quiet hamlet far from danger... and far from help.' },
   { id: 'shipwreck', name: 'Shipwreck Survivor', desc: 'Wake up half-drowned on a beach, most of your belongings lost to the sea.' },
   { id: 'forest', name: 'Forest Hermit', desc: 'Begin deep in a forest, alone, self-reliant, and far from any settlement.' },
+  { id: 'exile', name: 'Exiled Noble', desc: 'Begin stripped of your title and cast out from the very court that raised you, with nowhere left that owes you anything.' },
+  { id: 'cultist_escapee', name: 'Cult Escapee', desc: 'Begin having just fled the only home you\'ve known -- a cult that will not simply let you walk away.' },
+  { id: 'dungeon_born', name: 'Tunnel-Born', desc: 'Begin having just seen open sky for the first time in your life, having been born and raised in the tunnels beneath the mountains.' },
 ];
 
 // ---- dungeon entrance theming (overworld appearance matches the dungeon within) ----
@@ -15650,6 +15728,217 @@ const MAIN_QUEST_PREMISES = [
   { id:'the_pact', title:'A Debt Come Due',
     hook:(a,k1)=>`Generations ago, someone in ${k1} made a bargain to save it, and never mentioned what it would eventually cost. ${a} has come to collect.` },
 ];
+
+// ===================== ORIGIN QUESTS (per-scenario prologue chains) =====================
+// See v0.41.0's changelog entry (top of file) for the full design writeup. Short version: every
+// START_SCENARIOS entry gets its own opening quest chain, generated here and spliced onto the
+// front of generateMainQuest's stage list at act:0. Four stage types below are new
+// (kill_any/talk_npc/enter_dungeon/fetch_item); everything else about the stage-object shape
+// (id/title/desc/done, the reward-on-complete flow in advanceStory) is the exact same shape
+// act 1-6 stages already use, so the whole quest log/sidebar-tracker/save-load machinery handles
+// these for free with no special-casing anywhere else.
+//
+// A stage helper factory per new type keeps the individual chains below terse and consistent:
+//   killAnyStage(id, title, desc, ids, count, rewardGold, rewardXp)
+//   talkNpcStage(id, title, desc, roles /* array or null = any NPC */, rewardGold, rewardXp)
+//   enterDungeonStage(id, title, desc, themes /* array or null = any dungeon */, rewardGold, rewardXp)
+//   fetchItemStage(id, title, desc, itemIds, count, rewardGold, rewardXp)
+//   autoStage(id, title, desc) -- narrative-only beat, completes itself instantly (existing 'auto'
+//     type, just given a shorthand here so every chain below reads the same way).
+// Every stage gets leadKnown:true -- see hasQuestLead()'s bypass -- since a prologue objective is
+// always the character's own immediate, self-evident situation, never something that has to be
+// earned from an NPC or a rumor note the way the main questline's leads are.
+function killAnyStage(id, title, desc, ids, count, rewardGold, rewardXp) {
+  return { id, act:0, type:'kill_any', title, done:false, desc, leadKnown:true,
+    targetIds: ids, targetCount: count, progress: 0, rewardGold, rewardXp };
+}
+function talkNpcStage(id, title, desc, roles, rewardGold, rewardXp) {
+  return { id, act:0, type:'talk_npc', title, done:false, desc, leadKnown:true,
+    targetRoles: roles || null, rewardGold, rewardXp };
+}
+function enterDungeonStage(id, title, desc, themes, rewardGold, rewardXp) {
+  return { id, act:0, type:'enter_dungeon', title, done:false, desc, leadKnown:true,
+    targetThemes: themes || null, rewardGold, rewardXp };
+}
+function fetchItemStage(id, title, desc, itemIds, count, rewardGold, rewardXp) {
+  return { id, act:0, type:'fetch_item', title, done:false, desc, leadKnown:true,
+    targetItemIds: itemIds, targetCount: count || 1, progress: 0, rewardGold, rewardXp };
+}
+function autoStage(id, title, desc) {
+  return { id, act:0, type:'auto', title, done:false, desc, leadKnown:true };
+}
+// Common low-tier overworld monster groupings, reused across several chains below rather than
+// re-listing ids inline every time -- keeps each origin's wildlife thematically tied to where it
+// actually spawns (see BIOMES' own `encounter` tables) without hunting through them each time.
+const PROLOGUE_WILDLIFE = {
+  plains: ['rabbit','deer','boar','wolf'],
+  roadside: ['wolf','boar','jackal'],
+  beach: ['crab','gull'],
+  forestFringe: ['spider','wolf'],
+  ominous: ['jackal','snake','vulture'],
+};
+// Every origin's opening chain. Each entry is a function(rng, ctx) -> array of 2-3 stage objects,
+// ctx = { antagonist, k1 } (the same antagonist name and home-kingdom object generateMainQuest
+// already computed for this seed, so a chain can reference them directly for flavor without
+// re-rolling anything). Unrecognized/missing scenario ids (legacy saves) simply get no prologue.
+const SCENARIO_PROLOGUES = {
+  wanderer: (rng, ctx) => [
+    autoStage('pro_wanderer_1', 'Nothing But Wits',
+      "No coin, no roof, and not a soul within shouting distance who'd know your name -- just you, the wide world, and whatever you can find, make, or fight for. Whatever else you were before doesn't matter out here. Survival comes first."),
+    killAnyStage('pro_wanderer_2', 'Live Off the Land',
+      "The wilds don't feed anyone for free. Hunt what you need to keep going -- three kills should be enough to steady you and leave something left over to carry.",
+      PROLOGUE_WILDLIFE.plains, 3, 20, 25),
+    talkNpcStage('pro_wanderer_3', 'A Voice, Finally',
+      "Days alone are enough to make anyone start doubting their own name. Find someone -- anyone -- and hear another voice for a change. Whoever it is, they've probably heard more about what's going on out here than you have.",
+      null, 15, 20),
+  ],
+  capital: (rng, ctx) => [
+    autoStage('pro_capital_1', 'One Face Among Thousands',
+      "You've walked these streets your whole life, know every shortcut through every district, and have never once been more than a face in a very large crowd. That's about to change, one way or another."),
+    talkNpcStage('pro_capital_2', 'Summoned',
+      "Word reaches you that someone with an actual title wants a word -- specifically with someone who grew up knowing the capital's back streets rather than its front halls. Find whichever noble, captain, guard, watch officer, or clerk of standing sent for you.",
+      // Widened well past just noble/captain/guard -- a strict role gate against a settlement
+      // whose NPC roster is randomly sampled without replacement from a much larger pool (see
+      // buildSettlement's targetCount/ROLE_POOLS) risks an instance that simply never rolled any
+      // of a too-narrow role list. Computed against capital's actual ROLE_POOLS entry and
+      // targetCount range: this combination keeps failure odds under 0.5% at every roll, versus
+      // up to ~4.4% for noble/captain/guard alone.
+      ['noble','captain','guard','watchman','guildclerk','trainer'], 25, 30),
+    killAnyStage('pro_capital_3', 'Prove It',
+      "The task turns out to be exactly the unglamorous kind of problem the capital never quite gets around to solving through official channels: trouble on the outskirts, scaring off merchants and putting the district on edge. Handle it, and handle it yourself.",
+      PROLOGUE_WILDLIFE.roadside, 3, 35, 45),
+  ],
+  city: (rng, ctx) => [
+    autoStage('pro_city_1', 'Between Trainers and Trade',
+      "A great walled city, thick with trainers willing to teach and merchants willing to sell -- if you've got the coin and the willingness to prove you're worth their time. Neither comes free."),
+    talkNpcStage('pro_city_2', 'Worth Their Time',
+      "A trainer or a merchant with an eye for talent is willing to point you toward something worth doing, if you're willing to ask. Find someone in trade or a trade of their own and hear them out.",
+      // Widened past just trainer/merchant/blacksmith for the same reason as capital's own
+      // prologue above -- computed against city's actual ROLE_POOLS entry and targetCount range,
+      // this combination keeps failure odds under 1% at every roll, versus up to ~25% for the
+      // original 3-role list (city's pool is large relative to its sample size, so a narrow list
+      // was genuinely risky here, not just theoretically).
+      ['trainer','merchant','blacksmith','innkeeper','alchemist','tailor','baker','guildclerk','curator','dealer'], 20, 25),
+    killAnyStage('pro_city_3', "The City's Edge",
+      "Whatever they sent you after is close enough to the walls to walk to and just far enough to actually be a problem -- a run of trouble on the roads in, the kind the city guard hasn't had the numbers to fully stamp out.",
+      PROLOGUE_WILDLIFE.roadside.slice(0, 2), 2, 25, 30),
+  ],
+  town: (rng, ctx) => [
+    talkNpcStage('pro_town_1', 'A Modest Request',
+      "A town this size doesn't have the luxury of ignoring its problems and hoping someone else deals with them -- and a new face who looks capable enough tends to get noticed fast. Find someone with a bit of standing in town; they'll have something that needs doing.",
+      // Widened well past just 'elder' -- a specific-role gate against a settlement whose NPC
+      // roster is randomly sampled without replacement from a much larger pool (see
+      // buildSettlement's targetCount/ROLE_POOLS) risks a town instance that simply never rolled
+      // that one role at all. Every id here is genuinely present in town's own ROLE_POOLS entry,
+      // so this is really just "acknowledge whichever of these the settlement actually has."
+      ['elder','innkeeper','guard','watchman','guildclerk','tavernkeeper','priest','ranger','hunter','alchemist'], 20, 25),
+    killAnyStage('pro_town_2', 'Earning a Welcome',
+      "Whatever's been getting into the fields and worrying the livestock at the edge of town, it's real and it's close. Deal with it, and word will get around that the new arrival is worth having nearby.",
+      ['boar','wolf'], 2, 25, 30),
+  ],
+  village: (rng, ctx) => [
+    talkNpcStage('pro_village_1', 'A Handful of Neighbors',
+      "Everyone here knows everyone else, which means everyone already knows you're new. Someone finds you before you find them -- there's something on their mind, and not many other people to ask.",
+      // Same reasoning as town's widened list above, sized to village's own (smaller) ROLE_POOLS
+      // entry -- see buildSettlement's targetCount comment for why a single-role gate is risky.
+      ['elder','innkeeper','guard','tavernkeeper','farmer'], 18, 22),
+    killAnyStage('pro_village_2', "Not Much Else",
+      "A wolf's been circling too close to the village at night, bold in a way that means it's either desperate or hunting something specific. Either way, it's not going to stop on its own.",
+      ['wolf'], 2, 22, 28),
+  ],
+  hamlet: (rng, ctx) => [
+    talkNpcStage('pro_hamlet_1', 'A Tiny, Quiet Hamlet',
+      "There are maybe a dozen people here, total, and every one of them already knows your face by sundown. Whoever passes for an elder in a place this size -- or just whoever's closest -- has a small, personal, entirely unofficial favor to ask.",
+      // Deliberately covers 5 of hamlet's own 6-entry ROLE_POOLS ('child' is the only exclusion)
+      // -- with a settlement this small sampling only 2-3 NPCs total (see buildSettlement's
+      // targets.hamlet), a single-role gate would fail close to half the time. This combination
+      // is mathematically guaranteed to match regardless of which NPCs a given hamlet actually
+      // rolled, short of it somehow rolling nothing but children.
+      ['elder','farmer','shepherd'], 15, 20),
+    killAnyStage('pro_hamlet_2', 'Far From Help',
+      "A single wolf has been enough to keep the whole hamlet indoors after dark -- there's no watch to call and no garrison to send for. One kill is all it will actually take to fix that, but it matters more here than it would anywhere bigger.",
+      ['wolf'], 1, 20, 25),
+  ],
+  shipwreck: (rng, ctx) => [
+    autoStage('pro_shipwreck_1', 'Half-Drowned',
+      "Salt water in your lungs, sand in everything, and no clear idea yet how far the current carried you before it finally let go. First things first: get upright, get moving, and figure out what, if anything, you still have."),
+    killAnyStage('pro_shipwreck_2', 'What the Tide Brings',
+      "Gulls and crabs have already found the wreckage scattered along the shoreline and aren't inclined to share. Fight past them for whatever's still salvageable before the sea reclaims the rest.",
+      PROLOGUE_WILDLIFE.beach, 3, 20, 25),
+    talkNpcStage('pro_shipwreck_3', 'Dry Land, Finally',
+      "Wet, sandy, and short on answers, you set out along the coast looking for any sign of people -- a dock, a fishing camp, smoke from a chimney, anything. Find someone and find out where the current actually put you.",
+      null, 20, 25),
+  ],
+  forest: (rng, ctx) => [
+    autoStage('pro_forest_1', 'Self-Reliant',
+      "Deep enough into the treeline that the nearest settlement is a rumor, not a landmark. This is the life you chose, or the one that chose you -- either way, you know these woods better than most people know their own street."),
+    killAnyStage('pro_forest_2', "The Wood's Own Law",
+      "Something's pushing the wolves and the spiders further from their usual territory than they've any business being, and they're taking it out on whatever's nearby. That happens to be you, for now.",
+      PROLOGUE_WILDLIFE.forestFringe, 3, 20, 25),
+    talkNpcStage('pro_forest_3', 'A Rare Visitor',
+      "Someone's come further into these woods than most travelers dare -- lost, hunting, or looking for exactly the kind of hermit the forest is rumored to hide. Find out which, and what they know that you don't.",
+      null, 20, 25),
+  ],
+  exile: (rng, ctx) => [
+    autoStage('pro_exile_1', 'Stripped Bare',
+      `Whatever you were in ${ctx.k1.name} -- and you were something, once, title and standing and all -- ends the moment you cross the border marker. What's left is whoever you are without any of it, which you are, uncomfortably, about to find out.`),
+    talkNpcStage('pro_exile_2', 'No Longer Welcome',
+      "A guard at the town gate gives you a look that says your reputation arrived before you did. Talk your way past them, or at least find out exactly how bad word of the exile has already spread -- whoever ends up being the one to actually speak to you about it.",
+      // Same reasoning as town's own prologue chain above: a strict guard/watchman-only gate
+      // would fail on any town instance that happened not to roll either role (see
+      // buildSettlement's targetCount comment) -- widened to town's full set of
+      // authority-adjacent roles so this is guaranteed to find someone regardless of which
+      // specific NPCs a given town's ROLE_POOLS sample actually produced.
+      ['guard','watchman','elder','innkeeper','guildclerk','tavernkeeper','priest','ranger','hunter','alchemist'], 20, 25),
+    killAnyStage('pro_exile_3', 'Owing No One an Explanation',
+      "Nobody here owes an exile the benefit of the doubt, and the roads nearby have gotten more dangerous than the town's own thin watch can handle alone. Deal with it without being asked, and let the results speak for themselves.",
+      PROLOGUE_WILDLIFE.roadside.slice(0, 2), 2, 30, 35),
+  ],
+  cultist_escapee: (rng, ctx) => [
+    autoStage('pro_cultist_escapee_1', 'Out the Only Way You Could',
+      `You didn't so much escape as run and keep running, and you're still not entirely sure the door behind you is going to stay shut. Everything you were taught to fear -- and taught to worship -- wore the name ${ctx.antagonist}. You were never supposed to hear that name spoken by someone who meant it as a threat instead of a prayer.`),
+    killAnyStage('pro_cultist_escapee_2', 'The Wilds Between',
+      "Whatever comes looking for you first, it isn't going to be polite about it, and it isn't going to be the worst thing that could find you out here. Survive what's actually in front of you before worrying about what might be.",
+      PROLOGUE_WILDLIFE.ominous, 3, 25, 30),
+    talkNpcStage('pro_cultist_escapee_3', "Someone Who Doesn't Know the Signs",
+      "You need someone who won't recognize the brand you're trying to hide, won't ask the questions a cult elder would ask, and might actually be willing to help a stranger who clearly ran from something. Find them.",
+      null, 25, 30),
+  ],
+  dungeon_born: (rng, ctx) => [
+    autoStage('pro_dungeon_born_1', 'Open Sky',
+      "Sunlight is not something you were built for, not really -- your eyes water, the open horizon feels wrong in a way stone ceilings never did, and every sound out here carries further than it should. Everyone you've ever known lives underground. You don't, not anymore."),
+    enterDungeonStage('pro_dungeon_born_2', 'The Only Thing That Feels Right',
+      "When the unfamiliar space and the unfiltered sky get to be too much, the instinct isn't to run further from the dark -- it's to go back into it. Find any entrance down and let the tunnels remind you which way is which for a while.",
+      null, 25, 30),
+    talkNpcStage('pro_dungeon_born_3', "Someone Who's Never Been Underground",
+      "Eventually the tunnels run out of answers too, and there's a whole surface world of people who've apparently spent their entire lives never once going below. Find one, and have the conversation you've never had before.",
+      null, 25, 30),
+  ],
+};
+function buildScenarioPrologue(scenarioId, rng, ctx) {
+  const chainFn = SCENARIO_PROLOGUES[scenarioId];
+  if (!chainFn) return [];
+  return chainFn(rng, ctx);
+}
+// Spoken in the same voice as each origin's own prologue, this is what actually ties "your
+// opening problem" to "the world's problem" -- prepended onto the 'inciting' stage's hook text
+// (see generateMainQuest) so the convergence is an explicit, readable sentence rather than just
+// an implied jump in stage order. Unlisted scenarios (legacy saves, or a scenario with no
+// prologue) get no prefix, same reasoning as buildScenarioPrologue above.
+const SCENARIO_CONVERGENCE_PREFIX = {
+  wanderer: (a, k1) => `Even out here, alone, the voice you finally found had one name on their mind above everything else: ${a}.`,
+  capital: (a, k1) => `The noble who sent you after roadside trouble wasn't making idle conversation when they mentioned the name ${a} on your way out -- you could see it actually worried them.`,
+  city: (a, k1) => `Word around the trainers' quarter keeps circling back to one name lately, always dropped in a lower voice than the rest of the sentence: ${a}.`,
+  town: (a, k1) => `Once the favor's done, whoever asked for it thanks you properly, then, almost as an afterthought, asks if you've heard anything about ${a}. You hadn't. You have now.`,
+  village: (a, k1) => `The wolf turns out to have been running from something further out, not hunting -- and the closest guess anyone in the village can offer as to what starts with the name ${a}.`,
+  hamlet: (a, k1) => `Word this small a place, everyone hears everything eventually -- and lately, everything comes back around to a name nobody nearby can quite place: ${a}.`,
+  shipwreck: (a, k1) => `The first real conversation you have on dry land turns, unprompted, to a name that's apparently been on everyone's lips since well before your ship ever went down: ${a}.`,
+  forest: (a, k1) => `Your rare visitor didn't come this deep into the woods by accident -- they were looking for anyone who might not have already heard about ${a}, and hoping to be wrong.`,
+  exile: (a, k1) => `Even exiled, even unwelcome, you can't walk two streets in ${k1} without catching some fragment of the name everyone's suddenly whispering: ${a}.`,
+  cultist_escapee: (a, k1) => `You already know the name ${a} better than almost anyone free of that cult ever will. What you're only now learning is that everyone else is about to know it too.`,
+  dungeon_born: (a, k1) => `Your first real surface conversation turns out to be about a threat that, unlike you, actually did come up from somewhere below -- and it answers to the name ${a}.`,
+};
+
 const MYTHIC_NAME_PREFIX = ['Vael','Nyx','Thane','Sorrow','Grim','Azur','Mor','Kae','Vex','Old','Sil','Drav'];
 const MYTHIC_NAME_SUFFIX = ['gorath','issa','mund','thraxis','wyn','oth','ael','ivar','ux','endral'];
 function mythicName(rng) { return choice(rng, MYTHIC_NAME_PREFIX) + choice(rng, MYTHIC_NAME_SUFFIX); }
@@ -15826,8 +16115,23 @@ function generateMainQuest(rng) {
       keep_it:[{ id:'source_choice_resolved', act:3, type:'auto', title:'A Private Matter', done:false, desc:'' }],
     },
   };
+  // ---- Origin prologue: see buildScenarioPrologue (just above MAIN_QUEST_PREMISES) and its
+  // v0.41.0 changelog entry. Generated from the same rng as everything else above so a given seed
+  // + origin always produces the same prologue targets, spliced onto the front of the stage list
+  // at act:0. player.scenario is set by placePlayerForScenario before beginScenario ever calls
+  // ensureStory(), so it's reliably available here; an unrecognized/missing scenario (e.g. a
+  // pre-v0.41.0 save with no scenario tag) yields an empty array and this is a no-op, so nothing
+  // about existing saves changes.
+  const prologueStages = buildScenarioPrologue(player.scenario, rng, { antagonist, k1 });
+  // The 'inciting' stage is every origin's actual convergence point -- its hook text gets a
+  // scenario-specific opening clause (SCENARIO_CONVERGENCE_PREFIX) so the transition from "your
+  // own opening problem" to "the world's problem" is spoken in-fiction rather than just implied
+  // by stage order. Falls back to nothing for an unrecognized scenario, same reasoning as above.
+  const convergencePrefixFn = SCENARIO_CONVERGENCE_PREFIX[player.scenario];
+  const convergencePrefix = convergencePrefixFn ? convergencePrefixFn(antagonist, k1.name) + ' ' : '';
   const stages = [
-    { id:'inciting', act:1, type:'auto', title:'The Call', done:false, desc: premise.hook(antagonist, k1.name) },
+    ...prologueStages,
+    { id:'inciting', act:1, type:'auto', title:'The Call', done:false, desc: convergencePrefix + premise.hook(antagonist, k1.name) },
     { id:'first_trial', act:1, type:'kill_boss', title:'First Trial', done:false, targetBossId:b1.id,
       desc:`${b1.name} is behind trouble close to home -- and more than one person swears they've heard the name ${antagonist} muttered by ${b1.name}'s own people. Deal with it, and word of you will start to travel too.` },
     { id:'omen', act:1, type:'dungeon_tier', title:'An Omen', done:false, targetTier:'common',
@@ -15876,7 +16180,12 @@ function advanceStory() {
   if (stage.type === 'choice') { presentMainQuestChoice(stage); return; }
   stage.done = true;
   if (stage.type !== 'auto' && stage.type !== 'locked') {
-    const rewardGold = 40 * stage.act * stage.act, rewardXp = 60 * stage.act * stage.act;
+    // Explicit per-stage overrides (stage.rewardGold/rewardXp) take priority when present --
+    // needed for origin-prologue stages (act:0, see SCENARIO_PROLOGUES), which would otherwise
+    // pay out exactly zero under the act-scaled formula below. Every pre-existing act 1-6 stage
+    // leaves these undefined, so it falls through to the exact same formula as before.
+    const rewardGold = stage.rewardGold != null ? stage.rewardGold : 40 * stage.act * stage.act;
+    const rewardXp = stage.rewardXp != null ? stage.rewardXp : 60 * stage.act * stage.act;
     player.gold += rewardGold; gainXP(rewardXp);
     Sound.play('questComplete');
     log(`*** Main Quest — ${stage.title} complete! (+${rewardGold}g, +${rewardXp}xp) ***`);
@@ -16043,6 +16352,55 @@ function checkMainQuestDimensionVisit(dimId) {
 function checkMainQuestTrailGuardian(monsterId) {
   const stage = curStoryStage();
   if (stage && stage.type === 'dimension_trail' && stage.targetMonsterId === monsterId) advanceStory();
+}
+// ---- Origin-quest stage types (see SCENARIO_PROLOGUES/buildScenarioPrologue, near
+// generateMainQuest, and v0.41.0's changelog entry). Each hooks into the one existing engine call
+// site that already fires at the right moment, alongside whatever check that call site already
+// ran -- no new polling loop added anywhere.
+// kill_any: hooked into checkBountyQuests (fires on every monster death). Tracks partial progress
+// on the stage itself (unlike kill_boss, which is always a single kill) so the quest log can show
+// a live "2/3" instead of jumping straight from nothing to done.
+function checkMainQuestKillAny(monsterId) {
+  const stage = curStoryStage();
+  if (!stage || stage.type !== 'kill_any' || !stage.targetIds.includes(monsterId)) return;
+  stage.progress = (stage.progress || 0) + 1;
+  if (stage.progress >= stage.targetCount) { advanceStory(); return; }
+  const name = (MONSTER_BASES[monsterId] && MONSTER_BASES[monsterId].name) || 'target';
+  log(`(${name} down -- ${stage.progress}/${stage.targetCount}.)`);
+}
+// talk_npc: hooked into openDialogue's Talk and Ask actions, alongside the existing
+// checkDeliveryQuests(npc) call. targetRoles===null matches any NPC at all (see e.g. the
+// "find literally anyone" beats in several origin chains); otherwise the NPC's roleId must be in
+// the list.
+function checkMainQuestTalkNpc(npc) {
+  const stage = curStoryStage();
+  if (!stage || stage.type !== 'talk_npc') return;
+  if (stage.targetRoles && !stage.targetRoles.includes(npc.roleId)) return;
+  advanceStory();
+}
+// enter_dungeon: hooked into enterDungeon(id), alongside the existing checkExploreQuests() call.
+// Completes on entry, not a full clear -- deliberately lighter-weight than the main questline's
+// own 'dungeon_tier' stages (which require clearing to the deepest level), since this is a very
+// early "go investigate/take shelter" beat, not an Act 1+ trial. targetThemes===null matches any
+// dungeon at all.
+function checkMainQuestEnterDungeon(dg) {
+  const stage = curStoryStage();
+  if (!stage || stage.type !== 'enter_dungeon') return;
+  if (stage.targetThemes && !stage.targetThemes.includes(dg.theme)) return;
+  advanceStory();
+}
+// fetch_item: hooked into pickUpSpecificItem(), alongside the existing checkGatherQuests() call.
+// Mirrors the existing 'gather' radiant-quest pattern (id match + running count) but lives on the
+// main-quest stage itself rather than in player.quests. Not used by any of the 11 built-in origin
+// chains yet (ground-loot placement can't be guaranteed reliably enough near an arbitrary spawn
+// point to build a starting-scenario objective around it) -- kept here, fully wired and working,
+// as an extension point for hand-authored side chains or future origins that spawn somewhere
+// loot-placement can guarantee an item nearby.
+function checkMainQuestFetchItem(item) {
+  const stage = curStoryStage();
+  if (!stage || stage.type !== 'fetch_item' || !stage.targetItemIds.includes(item.id)) return;
+  stage.progress = (stage.progress || 0) + (item.amount || 1);
+  if (stage.progress >= stage.targetCount) advanceStory();
 }
 
 // ===================== QUEST GUIDANCE / NAVIGATION AID SYSTEM =====================
@@ -16248,6 +16606,30 @@ function questStageHint(stage) {
     }
     return `Something about ${dim.name} still eludes you. Keep exploring and asking around.`;
   }
+  // ---- Origin-quest stage types (see SCENARIO_PROLOGUES). These stages are always leadKnown --
+  // the player already knows the objective, they just need progress feedback -- so these hints
+  // exist to keep the sidebar/quest-log "Where to look" line informative rather than to gate
+  // anything. Falls through to the caller's stage.desc fallback (already progress-aware for
+  // kill_any, since checkMainQuestKillAny logs live progress separately) if any of these return
+  // null.
+  if (stage.type === 'kill_any') {
+    const remaining = Math.max(0, stage.targetCount - (stage.progress || 0));
+    if (remaining <= 0) return null;
+    const names = stage.targetIds.map(id => (MONSTER_BASES[id] && MONSTER_BASES[id].name) || id).join(', ');
+    return `${remaining} more to go (${names}) -- they're common enough nearby that you shouldn't have to go far.`;
+  }
+  if (stage.type === 'talk_npc') {
+    if (!stage.targetRoles) return 'Find literally anyone willing to talk -- a settlement is the likeliest place to run into someone.';
+    const names = stage.targetRoles.map(id => (ROLES.find(r => r.id === id) || {}).name || id).join(' or an ');
+    return `Find and talk to a ${names} -- worth checking any nearby settlement for one.`;
+  }
+  if (stage.type === 'enter_dungeon') {
+    return 'Find any dungeon entrance and step inside -- a cave mouth, a ruin, a crypt door, anything will do. You don\'t need to go deep, just get through the door.';
+  }
+  if (stage.type === 'fetch_item') {
+    const names = stage.targetItemIds.map(id => (ITEM_BASES.find(b => b.id === id) || {}).name || id).join(' or ');
+    return `You need to get your hands on ${names}.`;
+  }
   return null;
 }
 // ---- lead-gating: the player should never just KNOW where to go the instant a stage starts.
@@ -16263,6 +16645,10 @@ function hasQuestLead() {
   if (!player.story) return false;
   const stage = curStoryStage();
   if (!stage || stage.type === 'auto' || stage.type === 'locked' || stage.type === 'choice') return true;
+  // Origin-prologue stages (see SCENARIO_PROLOGUES) are the character's own immediate, self-
+  // evident situation -- not a lead someone else has to hand over in-world. leadKnown is only
+  // ever set on those, so every act 1-6 stage is completely unaffected by this check.
+  if (stage.leadKnown) return true;
   return player.story.leadKnownStage === player.story.stageIndex;
 }
 // Called whenever the player actually learns their current lead in-world (an NPC tells them,
@@ -16498,6 +16884,7 @@ function checkBountyQuests(monsterId) {
   }
   checkMainQuestBossKill(monsterId);
   checkMainQuestTrailGuardian(monsterId);
+  checkMainQuestKillAny(monsterId);
 }
 // ===================== AUTHORED QUEST CHAINS =====================
 // Framework for hand-written, multi-stage side quests with a real beginning, middle, and twist --
@@ -17010,6 +17397,7 @@ function enterDungeon(id) {
   player.knownDungeons = player.knownDungeons || [];
   if (!player.knownDungeons.includes(id)) player.knownDungeons.push(id);
   checkExploreQuests();
+  checkMainQuestEnterDungeon(dg);
   markSeen(); render();
 }
 function descend() {
@@ -17834,6 +18222,7 @@ function pickUpSpecificItem(real) {
   }
   removeItemAt(player.x, player.y, real.uid);
   checkGatherQuests();
+  checkMainQuestFetchItem(real);
 }
 function fireRangedWeapon() {
   const w = player.equipment.hand;
@@ -20115,6 +20504,7 @@ function openDialogue(npc) {
     log(`${npc.name}: "${line}"`);
     if (canGain) { const talkGain = Math.max(0, Math.round(1 + speciesAffinityScore(player.species, npc.species))); npc.affection = (npc.affection || 0) + talkGain; npc.lastTalkTurn = turnCount; }
     checkDeliveryQuests(npc);
+    checkMainQuestTalkNpc(npc);
     closeModal();
   }});
   if (!isSpouse && player.story && curStoryStage()) {
@@ -20126,6 +20516,7 @@ function openDialogue(npc) {
       const hint = hasQuestLead() ? mainQuestGuidance() : npcAskedQuestHintLine(npc);
       log(`${npc.name}: "${hint ? hint : "Can't say I know anything that would help with that. Sorry, traveler."}"`);
       checkDeliveryQuests(npc);
+      checkMainQuestTalkNpc(npc);
       closeModal();
     }});
   }
@@ -20290,6 +20681,25 @@ function placePlayerNearBiome(biomeId) {
   }
   return false;
 }
+// Same ring search as placePlayerNearBiome, but checks each candidate tile's neighbors for the
+// target biome rather than the tile itself -- needed for biomes like 'mountain' that are
+// deliberately non-walkable (see BIOMES.mountain), so the player can start in sight of/right up
+// against the range without being generated inside solid rock. Used by the Tunnel-Born origin.
+function placePlayerAdjacentToBiome(biomeId) {
+  for (let r = 0; r < 80; r++) {
+    for (let a = 0; a < 12; a++) {
+      const ang = (a/12) * Math.PI * 2;
+      const x = Math.round(Math.cos(ang) * r), y = Math.round(Math.sin(ang) * r);
+      const t = getTile(x, y);
+      if (!t.walkable) continue;
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nt = getTile(x + dx, y + dy);
+        if (nt.biome === biomeId) { player.x = x; player.y = y; return true; }
+      }
+    }
+  }
+  return false;
+}
 // Coordinates of just the ring at distance r (Chebyshev) from the origin -- O(r) per ring instead
 // of re-scanning the whole (2r+1)^2 square at every radius, which is what made a wide-radius
 // search (capital can require r>35) impractically slow.
@@ -20346,6 +20756,23 @@ function placePlayerForScenario(id) {
   else if (id === 'town') { if (placePlayerNearSettlementTier('town')) return true; }
   else if (id === 'city') { if (placePlayerNearSettlementTier('city')) return true; }
   else if (id === 'capital') { if (placePlayerNearSettlementTier('capital')) return true; }
+  // Exiled Noble: cast out and drifted to the edge of civilization -- placed at a 'town' tier
+  // settlement exactly like Town Settler, but see beginScenario for why that town gets treated
+  // very differently (this is the crown that exiled you, not a place that's happy to see you).
+  else if (id === 'exile') { if (placePlayerNearSettlementTier('town')) return true; }
+  // Cult Escapee: no home standing anywhere is the whole premise (same honesty rule Wanderer/
+  // Forest Hermit/Shipwreck Survivor already follow) -- favors the game's established "ominous"
+  // biomes first since fleeing captivity into open plains doesn't fit the fiction, but degrades
+  // gracefully rather than ever leaving the player stuck on the character-creation screen.
+  else if (id === 'cultist_escapee') {
+    if (placePlayerNearBiome('swamp') || placePlayerNearBiome('desert') || placePlayerNearBiome('forest')) return true;
+  }
+  // Tunnel-Born: mountain biome is non-walkable, so this places the player just outside it --
+  // right at the tree line looking up at the range they climbed out of, rather than trying (and
+  // failing) to spawn them inside solid rock.
+  else if (id === 'dungeon_born') {
+    if (placePlayerAdjacentToBiome('mountain') || placePlayerNearBiome('tundra') || placePlayerNearBiome('forest')) return true;
+  }
   placePlayerAtStart();
   return false; // fell back to a generic start position -- not actually near the named settlement tier
 }
@@ -20419,6 +20846,12 @@ function maybeAddRumorNote(rng, contents, kind) {
   if (!player || !player.story) return;
   const stage = curStoryStage();
   if (!stage || stage.type === 'auto' || stage.type === 'locked') return;
+  // Origin-prologue stages (see SCENARIO_PROLOGUES) are always leadKnown -- the player already
+  // knows the objective firsthand, it's their own immediate situation. A world-planted note
+  // pointing them at something they already know (and phrased in the "someone told me where to
+  // look" voice generateQuestRumorNote always uses) wouldn't make in-fiction sense here the way
+  // it does for an act 1-6 lead genuinely learned secondhand.
+  if (stage.leadKnown) return;
   const chance = kind === 'desk' ? 0.35 : (kind === 'sack' || kind === 'crate') ? 0.12 : 0.07;
   if (rng() < chance) {
     const note = generateQuestRumorNote(stage);
@@ -20438,6 +20871,12 @@ function maybeAddRumorNote(rng, contents, kind) {
 // an immediate, small, earned-feeling discount there, while a capital-born start (one face among
 // thousands) does not.
 const SCENARIO_HOME_GOODWILL = { hamlet: 18, village: 14, town: 10, city: 6, capital: 3 };
+// Exiled Noble's town-of-origin inverts the pattern above -- this is specifically the settlement
+// whose crown cast you out, so arriving there opens with a goodwill AND kingdom-reputation deficit
+// instead of a bonus. Separate map (rather than a negative entry in SCENARIO_HOME_GOODWILL) since
+// it also touches kingdom rep, which the positive-goodwill origins deliberately don't.
+const SCENARIO_HOME_GOODWILL_PENALTY = { exile: -14 };
+const SCENARIO_HOME_REP_PENALTY = { exile: -10 };
 function beginScenario(letter) {
   const idx = letter.charCodeAt(0) - 97;
   const scenario = START_SCENARIOS[idx];
@@ -20449,11 +20888,33 @@ function beginScenario(letter) {
   if (scenario.id === 'shipwreck') {
     player.gold = Math.max(0, Math.round(player.gold * 0.2));
     log('You wash ashore, soaked and disoriented — most of your coin purse was lost to the sea.');
+  } else if (scenario.id === 'cultist_escapee') {
+    player.gold = Math.max(0, Math.round(player.gold * 0.15));
+    log('You run until your legs give out, and only then check what you managed to grab on the way — not much. It was never about the coin.');
+  } else if (scenario.id === 'exile') {
+    player.gold = Math.max(0, Math.round(player.gold * 0.55));
+    log('They let you keep the coin in your pocket when they marched you to the border. Everything else — name, title, welcome — stayed behind.');
+  } else if (scenario.id === 'dungeon_born') {
+    player.gold = Math.max(0, Math.round(player.gold * 0.4));
+    log('You emerge blinking into daylight for the first time in your life, a handful of tunnel-scavenged coin the only surface currency you own.');
   } else {
     log(`You begin your journey as a ${scenario.name.toLowerCase()}.`);
   }
   const homeGoodwill = SCENARIO_HOME_GOODWILL[scenario.id];
   if (homeGoodwill && placedAtSettlement) addGoodwill(getRegionKey(player.x, player.y), homeGoodwill, 'You grew up around here — folks nearby already think well of you.');
+  const homeGoodwillPenalty = SCENARIO_HOME_GOODWILL_PENALTY[scenario.id];
+  if (homeGoodwillPenalty && placedAtSettlement) {
+    // Not addGoodwill() -- that helper deliberately no-ops on amount<=0 (every other caller only
+    // ever grants goodwill, never docks it), which would silently swallow this penalty entirely.
+    // Writing directly to player.goodwill mirrors exactly what addGoodwill does internally, minus
+    // that positive-only guard.
+    const rk = getRegionKey(player.x, player.y);
+    player.goodwill = player.goodwill || {};
+    player.goodwill[rk] = (player.goodwill[rk] || 0) + homeGoodwillPenalty;
+    log(`Word travels fast here, and it hasn't been kind to you. (${homeGoodwillPenalty} standing)`);
+    const repPenalty = SCENARIO_HOME_REP_PENALTY[scenario.id];
+    if (repPenalty) { ensureStory(); addKingdomRep(getKingdom(Math.floor(player.x/CH), Math.floor(player.y/CH)).key, repPenalty); }
+  }
   // ---- new-player onboarding: push a clear tutorial sequence into the log so a brand new
   // player immediately knows the three most important things (move, open quest log, talk to
   // NPCs), and also knows exactly where to look when they want more. This fires only on first
@@ -20462,9 +20923,11 @@ function beginScenario(letter) {
   const stage = curStoryStage();
   if (stage) {
     log(`*** Your quest: "${player.story.title}" — ${stage.title} ***`);
-    // No lead yet on turn 0 -- that's earned honestly in-world (see hasQuestLead()), not handed
-    // over for free. Tell the player as much, and how to go about getting one.
-    log("You don't know where to start yet — talk to people in a settlement, read what you find, or just keep exploring. Your quest log ([q]) will update the moment you've got a real lead.");
+    // Origin prologue stages (see SCENARIO_PROLOGUES) set leadKnown:true -- that's the player's
+    // own immediate, self-evident situation, not something someone else has to tell them. Only
+    // show the honest "no lead yet" line for stages that actually need one earned in-world.
+    if (hasQuestLead()) log(stage.desc);
+    else log("You don't know where to start yet — talk to people in a settlement, read what you find, or just keep exploring. Your quest log ([q]) will update the moment you've got a real lead.");
   }
   log("─── Getting started: move with arrow keys/WASD/numpad. Press [q] for your quest log. Press [t] near a person to talk — they may know something useful. Press [g] to open containers you're standing on. Press [?] for the full guide. ───");
   // Drop a tutorial note at the player's feet teaching the 'g'/'i'/'u' pickup-and-read chain, and
