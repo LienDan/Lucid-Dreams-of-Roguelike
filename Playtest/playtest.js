@@ -7,14 +7,18 @@
 // drives a character through actual turns using the game's own input handler, and reports
 // crashes, soft-locks, and behavioral/balance anomalies it observes.
 //
-// TWO WAYS TO USE THIS FILE:
+// TWO WAYS TO USE THIS FILE... but really three -- see #3 below, which is the one to reach for
+// if you're a Claude session that wants to make its OWN decisions turn-by-turn instead of
+// running the canned autonomous strategies:
 //
 //   1. STANDALONE CLI -- run a full autonomous batch of lives, exactly as before:
 //        npm install jsdom
 //        node playtest.js [numLives] [maxActionsPerLife] [maxStuckActions] [profile]
 //        e.g. node playtest.js 20 8000 500 veteran     (defaults: 10 / 8000 / 600 / casual)
 //      Writes report.json next to this script. See PROFILES (SECTION 0) for what the last
-//      argument does.
+//      argument does. Good for: unattended crash/regression hunting at scale. NOT good for:
+//      testing a specific build/tactic/new mechanic on purpose -- the canned SECTION 4
+//      strategies make every decision, not you (see #3 for that).
 //
 //   2. AS A LIBRARY -- require() this file from your OWN script (or have a Claude session
 //      write one) to drive/inspect a live game session directly, without running a full
@@ -38,10 +42,6 @@
 //          console.log(pt.getState(win));
 //        })();
 //
-//      This is the intended way for another Claude session (or you) to inspect/steer a
-//      specific scenario -- pause after any step, read live state, call individual strategy
-//      functions or raw key presses, flip debug toggles, teleport around -- rather than only
-//      ever being able to kick off a full random autonomous run and read its report afterward.
 //      Three more patterns worth knowing about (all SECTION 7, full detail there):
 //        - pt.playOneLife(dom, maxActions, maxStuck, { onAction }) -- pass a callback to watch
 //          every single action live as it happens and optionally stop the life early (return
@@ -53,6 +53,29 @@
 //        - pt.simulateCombat(win, monsterId, {trials, spellId}) / pt.runComparison(configs) --
 //          isolated, repeatable balance testing: how many hits to kill X with weapon/spell Y,
 //          or is profile A actually meaningfully safer than profile B, with real numbers.
+//
+//   3. INTERACTIVE AGENT SESSION (SECTION 8) -- START HERE if you're a Claude session and want
+//      to make your OWN decisions (pursue a specific build, react to a new mechanic turn-by-
+//      turn, test a specific tactic) rather than delegate to SECTION 4's fixed heuristics:
+//        node playtest.js --serve [port]      (default 4691)
+//      boots ONE game session and keeps it running as a tiny local HTTP API. From a shell:
+//        curl localhost:4691/help             <- self-documenting: full verb list + current state
+//        curl localhost:4691/state            <- rich JSON: vitals, inventory/equipment (with
+//                                                 uids), every known spell/technique/cyber/
+//                                                 mutation ability WITH live affordability, all
+//                                                 nearby entities, any open menu's options
+//        curl -X POST -d '{"type":"castSpell","id":"firebolt"}' localhost:4691/act
+//        curl -X POST -d '{"method":"spawnMonster","args":["boar",{"radius":1}]}' localhost:4691/debug
+//      Nothing in /act decides anything for you -- it executes exactly the one action given,
+//      same as a human pressing one key, and hands back real resulting state so you can decide
+//      the next move yourself. This is a genuinely separate mode from #1/#2 above, not a
+//      replacement -- SECTION 4's autonomous strategies are still what CLI batch mode uses.
+//      NOTE: a server started this way does NOT survive past the current shell session/sandbox
+//      lifetime in most agentic coding environments -- if it's gone next turn, that's expected,
+//      just restart it. See SECTION 8's own header comment for the full verb list, targeting
+//      quirks, and design rationale before assuming something isn't possible through it -- the
+//      {type:'key', key:'...'} raw escape hatch means nothing is actually locked out, just not
+//      given a dedicated named verb yet.
 //
 // GAME FILE LOCATION: auto-detected (see locateGameHtml() in SECTION 1 below) -- just drop
 // this script and the game's .html file (any name) in the same folder, or the game's default
@@ -70,7 +93,11 @@
 //   SECTION 5: bot        -- main driver: composes strategies into full playthroughs, writes
 //                            report.json (now WITH per-life combat telemetry + a vitals growth
 //                            timeline by default, and an optional onAction live-observer hook),
-//                            and is what actually runs when you execute this file
+//                            and is what actually runs when you execute this file. ITS OWN
+//                            HEADER COMMENT BELOW IS THE AUTHORITATIVE, CONTINUOUSLY-UPDATED
+//                            COVERAGE TABLE -- read it before assuming something is or isn't
+//                            tested, rather than guessing from this summary or from memory of a
+//                            past conversation about this project.
 //   SECTION 6: debug      -- thin wrappers around the game's OWN dev/debug menu (DEBUG flags,
 //                            teleport to any dimension/dungeon type, spawn any monster, grant
 //                            items/abilities, level up, force weather/events) for directed
@@ -80,6 +107,10 @@
 //                            a deterministic full-content coverage sweep, an isolated combat
 //                            simulator for weapon/spell/monster balance testing, and a
 //                            multi-config comparison runner (e.g. "is profile A safer than B")
+//   SECTION 8: interactive agent session -- turn-by-turn HTTP control surface (usage mode #3
+//                            above) plus the rich state reader/action dispatcher it's built on;
+//                            read ITS header comment for the full verb list and design
+//                            rationale before assuming an interaction isn't possible.
 //   (SECTION 5's own header comment below has the full coverage table and "adapting to a
 //   changed game" guidance -- read it before assuming something needs rewriting.)
 //
@@ -138,6 +169,9 @@ const PROFILES = {
     ritualChance: 0.8,           // high risk tolerance -- gambles on rituals readily, doesn't weigh it
     giftChance: 0.25,
     customCreateChance: 0.2,     // mostly picks premade "Random" archetypes over building custom
+    debuffChance: 0.1,           // rarely thinks to weaken a foe first instead of just attacking
+    buffChance: 0.3,             // sometimes forgets to buff up before a fight
+    summonChance: 0.5,
   },
   // The tuned baseline this toolkit shipped and was validated with -- competent, not optimal.
   casual: {
@@ -151,6 +185,9 @@ const PROFILES = {
     ritualChance: 0.5,
     giftChance: 0.25,
     customCreateChance: 0.5,
+    debuffChance: 0.35,
+    buffChance: 0.6,
+    summonChance: 0.7,
   },
   // Cautious and deliberate -- disengages earlier, keeps deeper reserves, uses advanced tactics
   // more, and is choosier about real-risk gambles like eldritch rituals.
@@ -165,6 +202,9 @@ const PROFILES = {
     ritualChance: 0.3,
     giftChance: 0.25,
     customCreateChance: 0.8,     // prefers deliberately building a character over rolling random
+    debuffChance: 0.6,           // consistently softens up dangerous foes before committing
+    buffChance: 0.85,
+    summonChance: 0.9,
   },
 };
 // The live, mutable profile every strategy function's default parameters read from. Start on
@@ -844,8 +884,21 @@ function tryCalledShot(win, log, chance = BOT_PROFILE.calledShotChance) {
   if (!nearbyMonster(win)) return false;
   if (Math.random() > chance) return false;
   if (evalGame(win, 'player.calledShotTarget').value) return false; // one already queued
-  key(win, 'a');
-  if (evalGame(win, 'gameState').value !== 'choice') { key(win, 'Escape'); return false; }
+  // BUG FIX (found via SECTION 8 verb testing, then traced back here): pressing 'a' does NOT
+  // reach the called-shot handler. MOVE_KEYS defines a WASD scheme where a:[-1,0] (move west),
+  // and that binding is checked BEFORE key==='a''s openCalledShotMenu() in the game's own
+  // handleKey dispatch order -- so 'a' always moves the player west instead, consuming a real
+  // turn, and the called-shot key handler is unreachable dead code in the base game (a bug in
+  // the game itself, not something fixable by choosing a different key from the keyboard --
+  // there may be a mouse-only path a real player could use, but no keyboard one). This function
+  // correctly detected the resulting failure (gameState never became 'choice') and returned
+  // false -- so it never *reported* success incorrectly -- but the side effect (an extra,
+  // unlogged move west, every time the calledShotChance roll succeeded) was real and silent:
+  // roughly 15-35% of combat turns near a monster, across every batch this project has ever
+  // run, depending on profile. Confirmed via direct before/after position + turnCount check.
+  // Fixed by calling openCalledShotMenu() directly instead of going through the shadowed key.
+  evalGame(win, 'openCalledShotMenu();');
+  if (evalGame(win, 'gameState').value !== 'choice') { return false; } // no adjacent target, no key press happened, nothing to undo
   const label = resolveChoiceMenu(win, log, { prefer: [/head/i, /legs/i, /arm/i] });
   if (label && log) log(`Called shot: aimed for ${label}.`);
   return !!label;
@@ -954,53 +1007,221 @@ async function tryFleeIfCritical(win, log, hpFrac = BOT_PROFILE.fleeHpFrac) {
  * same way a human mashing "cast then confirm" would, and verify MP actually dropped before
  * reporting success.
  */
+// ---- UNIFIED ABILITY POOL -----------------------------------------------------------------
+// The game resolves spells, techniques, active cybernetics, and active mutations through one
+// shared pipeline: findAbilityById() looks across all four pools, isAbilityKnown() checks all
+// four, castSpell(id) (despite the name) casts/activates ANY of them, and each pays from its
+// own resource (ability.resource: 'mp' default, 'stamina' for techniques, 'charge' for cyber,
+// 'hp' for many mutations) via getPoolValue()/effectiveCost() -- see castSpell/paySpellCost/
+// findAbilityById in the game source. Everything in SECTION 4 before this point only ever read
+// player.knownSpells and compared against player.mp -- which meant techniques, active
+// cybernetics, and active mutations were never invoked by the autonomous bot at all (known,
+// installed, completely unused), and spell TYPES other than 'damage'/'heal' (buff/debuff/
+// summon/execute/smite/drain/raise/...) were ignored even within the one pool that WAS read.
+// Found via a direct grep audit, not a crash -- nothing here ever errored, it just silently
+// never exercised roughly half the game's ability surface. This block gives every strategy
+// below one correct, content-agnostic way to enumerate "everything I currently know across all
+// four systems and can currently afford," reusing the game's OWN cost math (effectiveCost/
+// getPoolValue) rather than reimplementing it -- the same "don't re-derive game math, ask the
+// game" rule that gearScore() etc. already follow elsewhere in this file.
+function knownAffordableAbilities(win, typeFilter) {
+  const typesJson = typeFilter ? JSON.stringify(typeFilter) : 'null';
+  return evalGame(win, `
+    (function(){
+      const ids = [...new Set([
+        ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
+        ...(player.installedCyber||[]), ...(player.mutations||[]),
+      ])];
+      const types = ${typesJson};
+      return ids.map(id => findAbilityById(id)).filter(Boolean)
+        .filter(a => !types || types.includes(a.type))
+        .filter(a => getPoolValue(a.resource||'mp') >= effectiveCost(a))
+        .map(a => ({ id: a.id, name: a.name, type: a.type, power: a.power||null, range: a.range||0, stat: a.stat||null, dur: a.dur||null, summonId: a.summonId||null }));
+    })()
+  `);
+}
+
+/** Confirms tile-targeting the same way a human pressing Enter/Space would (snap to nearest
+ * valid target) -- shared by every "cast at a foe" strategy below and by SECTION 8's
+ * castSpell action, so there's exactly one place that knows this quirk exists. */
+function confirmSpellTargetIfNeeded(win) {
+  if (evalGame(win, 'gameState').value === 'tiletarget') key(win, 'Enter');
+}
+
+/**
+ * Casts the single best offensive ability currently known and affordable, drawn from ALL FOUR
+ * ability pools (spells, techniques, active cyber, active mutations) -- not just player-spells
+ * of type 'damage' like the original version of this function. 'execute'/'smite'/'drain' are
+ * included too (they all resolve through the same manual-tile-targeting path in castSpell, see
+ * the unified pool comment above); 'debuff' is deliberately excluded here even though it shares
+ * that targeting path, because it has no power[]/damage semantics to sort by -- see
+ * tryCastDebuffAbility below for that one. Picks the highest average-power option among what's
+ * actually usable right now (affordable AND has a valid nearestHostile(range) target).
+ */
 function tryCastOffensiveSpell(win, log) {
   const r = evalGame(win, `
     (function(){
-      const known = (player.knownSpells||[]).map(id => findAbilityById(id)).filter(s => s && s.type==='damage');
-      if (!known.length) return null;
-      const usable = known.filter(s => player.mp >= s.mp && nearestHostile(s.range));
+      const ids = [...new Set([
+        ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
+        ...(player.installedCyber||[]), ...(player.mutations||[]),
+      ])];
+      const OFFENSIVE = new Set(['damage','execute','smite','drain']);
+      const known = ids.map(id => findAbilityById(id)).filter(s => s && OFFENSIVE.has(s.type) && Array.isArray(s.power));
+      const usable = known.filter(s => getPoolValue(s.resource||'mp') >= effectiveCost(s) && nearestHostile(s.range));
       if (!usable.length) return null;
       usable.sort((a,b) => ((b.power[0]+b.power[1]) - (a.power[0]+a.power[1])));
       const spell = usable[0];
-      const mpBefore = player.mp;
+      const before = getPoolValue(spell.resource||'mp');
       castSpell(spell.id);
-      return { name: spell.name, mpBefore, gsAfter: gameState };
+      return { name: spell.name, resource: spell.resource||'mp', before, gsAfter: gameState };
     })()
   `);
   if (!r.ok || !r.value) return false;
 
-  if (r.value.gsAfter === 'tiletarget') {
-    key(win, 'Enter'); // snap-confirm onto the nearest foe, same as a human pressing Enter/Space
-  }
-  const mpAfter = evalGame(win, 'player.mp').value;
-  if (mpAfter < r.value.mpBefore) {
-    if (log) log(`Cast ${r.value.name}.`);
+  confirmSpellTargetIfNeeded(win);
+  const after = evalGame(win, `getPoolValue(${JSON.stringify(r.value.resource)})`).value;
+  if (after < r.value.before) {
+    if (log) log(`Used ${r.value.name}.`);
     return true;
   }
-  // MP didn't actually drop -- the cast didn't resolve (e.g. no valid nearest-foe snap target
-  // after all, or targeting got cancelled). Don't report success; let the caller fall through
-  // to melee/other strategies instead of silently doing nothing this turn.
+  // Resource didn't actually drop -- the cast/activation didn't resolve (no valid nearest-foe
+  // snap target after all, or targeting got cancelled). Don't report success; let the caller
+  // fall through to melee/other strategies instead of silently doing nothing this turn.
   return false;
 }
 
 /**
- * If HP is low and the player knows an affordable 'heal'-type spell, cast it instead of
- * reaching for an item or resting. Checked by tryRecoverHp before its item/rest fallback.
+ * If HP is low and an affordable 'heal'/'cleanse'/'purify' ability is known -- across all four
+ * pools, same reasoning as tryCastOffensiveSpell above -- cast it instead of reaching for an
+ * item or resting. Checked by tryRecoverHp before its item/rest fallback.
  */
 function tryCastHealSpell(win, log) {
   const r = evalGame(win, `
     (function(){
-      const known = (player.knownSpells||[]).map(id => findAbilityById(id)).filter(s => s && s.type==='heal');
-      const usable = known.filter(s => player.mp >= s.mp);
+      const ids = [...new Set([
+        ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
+        ...(player.installedCyber||[]), ...(player.mutations||[]),
+      ])];
+      const HEALING = new Set(['heal','cleanse','purify']);
+      const known = ids.map(id => findAbilityById(id)).filter(s => s && HEALING.has(s.type));
+      const usable = known.filter(s => getPoolValue(s.resource||'mp') >= effectiveCost(s));
       if (!usable.length) return null;
-      usable.sort((a,b) => ((b.power[0]+b.power[1]) - (a.power[0]+a.power[1])));
+      usable.sort((a,b) => {
+        const bp = Array.isArray(b.power) ? (b.power[0]+b.power[1]) : (b.power||0);
+        const ap = Array.isArray(a.power) ? (a.power[0]+a.power[1]) : (a.power||0);
+        return bp - ap;
+      });
       const spell = usable[0];
       castSpell(spell.id);
       return spell.name;
     })()
   `);
-  if (r.ok && r.value) { if (log) log(`Cast ${r.value} to heal.`); return true; }
+  if (r.ok && r.value) { if (log) log(`Used ${r.value} to heal.`); return true; }
+  return false;
+}
+
+/**
+ * Weakens the nearest hostile with a known, affordable 'debuff' ability (slow/fear/poison/
+ * silence/etc., from any of the four ability pools) before or during a fight -- previously
+ * NEVER exercised: no strategy anywhere read type==='debuff' at all, so a build that rolled
+ * Fear or Crippling Shot carried it completely unused for the entire life. Debuffs have no
+ * power[]/damage semantics to rank by, so this doesn't try to pick the "best" one -- it just
+ * fires whichever affordable debuff has a valid target, gated by BOT_PROFILE.debuffChance so
+ * it's a real tactical choice (sometimes softening a foe first) rather than a mandatory
+ * pre-step every single fight. Doesn't check whether the target is already debuffed with the
+ * same stat (monster status-tracking field names aren't uniform enough across the roster to
+ * check generically without risking a false-negative that silently disables this strategy) --
+ * a harmless re-application in the worst case, and real exercise of the debuff-casting code
+ * path against a wide variety of monsters in the common case, which is the actual goal here.
+ */
+function tryCastDebuffAbility(win, log, chance = BOT_PROFILE.debuffChance) {
+  if (Math.random() > chance) return false;
+  const r = evalGame(win, `
+    (function(){
+      const ids = [...new Set([
+        ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
+        ...(player.installedCyber||[]), ...(player.mutations||[]),
+      ])];
+      const known = ids.map(id => findAbilityById(id)).filter(s => s && s.type==='debuff');
+      const usable = known.filter(s => getPoolValue(s.resource||'mp') >= effectiveCost(s) && nearestHostile(s.range));
+      if (!usable.length) return null;
+      const spell = choice(Math.random, usable);
+      const before = getPoolValue(spell.resource||'mp');
+      castSpell(spell.id);
+      return { name: spell.name, resource: spell.resource||'mp', before };
+    })()
+  `);
+  if (!r.ok || !r.value) return false;
+  confirmSpellTargetIfNeeded(win);
+  const after = evalGame(win, `getPoolValue(${JSON.stringify(r.value.resource)})`).value;
+  if (after < r.value.before) { if (log) log(`Used ${r.value.name} on a foe.`); return true; }
+  return false;
+}
+
+/**
+ * Self-buffs with a known, affordable 'buff' ability (any of the four pools) when a hostile is
+ * nearby and that specific buff isn't already active -- previously NEVER exercised for the
+ * same reason as debuffs above. Buffs are self-targeted (range 0) and resolve immediately via
+ * the game's own applyBuff(), no tile-targeting confirm needed. Checks player.buffs[stat]
+ * directly (the game's real buff-tracking structure -- see applyBuff in the source) rather
+ * than a separate cooldown timer, so it naturally refreshes a buff that's about to expire and
+ * never wastes a turn re-casting one that's still got most of its duration left.
+ */
+function tryCastBuffAbility(win, log, chance = BOT_PROFILE.buffChance) {
+  if (!nearbyMonster(win)) return false;
+  if (Math.random() > chance) return false;
+  const r = evalGame(win, `
+    (function(){
+      const ids = [...new Set([
+        ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
+        ...(player.installedCyber||[]), ...(player.mutations||[]),
+      ])];
+      const known = ids.map(id => findAbilityById(id)).filter(s => s && s.type==='buff');
+      const usable = known.filter(s => {
+        if (getPoolValue(s.resource||'mp') < effectiveCost(s)) return false;
+        const active = player.buffs[s.stat];
+        return !active || active.turns <= 3; // not active, or about to expire -- worth refreshing
+      });
+      if (!usable.length) return null;
+      const spell = choice(Math.random, usable);
+      castSpell(spell.id);
+      return spell.name;
+    })()
+  `);
+  if (r.ok && r.value) { if (log) log(`Buffed with ${r.value}.`); return true; }
+  return false;
+}
+
+/**
+ * Conjures a temporary ally with a known, affordable 'summon' ability (any of the four pools)
+ * when none is currently active -- previously NEVER exercised. Summons are self-targeted
+ * (range 0, resolve immediately via the game's own spawnAlly(), which pushes onto
+ * player.allies) -- checking player.allies for anything still alive is the same real state the
+ * game itself tracks summons/companions in, so a build that already has a permanent companion
+ * (spouse, hired follower, etc.) correctly won't burn resources summoning a redundant second
+ * ally either. Deliberately excludes type:'raise' (same conjure-an-ally family, but needs a
+ * corpse in range rather than being purely self-targeted) -- see the SECTION 5 header's open
+ * gaps list for that one.
+ */
+function tryCastSummonAbility(win, log, chance = BOT_PROFILE.summonChance) {
+  if (!nearbyMonster(win)) return false;
+  if (Math.random() > chance) return false;
+  if (evalGame(win, '(player.allies||[]).some(a => a.alive)').value === true) return false;
+  const r = evalGame(win, `
+    (function(){
+      const ids = [...new Set([
+        ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
+        ...(player.installedCyber||[]), ...(player.mutations||[]),
+      ])];
+      const known = ids.map(id => findAbilityById(id)).filter(s => s && s.type==='summon');
+      const usable = known.filter(s => getPoolValue(s.resource||'mp') >= effectiveCost(s));
+      if (!usable.length) return null;
+      const spell = choice(Math.random, usable);
+      castSpell(spell.id);
+      return spell.name;
+    })()
+  `);
+  if (r.ok && r.value) { if (log) log(`Summoned help with ${r.value}.`); return true; }
   return false;
 }
 
@@ -2101,7 +2322,8 @@ function tryEscapeUnknownMenu(win) {
 const nav = { MOVE_DIRS, exploreStep };
 const strat = {
   tryFightAdjacent, tryFireRanged, tryFleeIfCritical, tryAvoidOverwhelmingMonster, tryUseHackChip,
-  tryCalledShot, tryCastOffensiveSpell, tryCastHealSpell, tryStanchBleeding, tryCurePoison, tryRecoverHp,
+  tryCalledShot, tryCastOffensiveSpell, tryCastHealSpell, tryCastDebuffAbility, tryCastBuffAbility,
+  tryCastSummonAbility, tryStanchBleeding, tryCurePoison, tryRecoverHp,
   tryEquipUpgrades, tryPickUpHere, tryFarm, tryCraftUseful, tryCraftGearUpgrade, tryShopIfTrading, tryTrainIfOffered,
   tryGiftIfOffered, tryHandleDialogueIfOpen, tryTalkToAdjacentNpc, tryAdvanceMainQuest,
   getMainQuestNavigationTarget, tryEscapeUnknownMenu, trySpendStatPoints, trySpendTalentPoints,
@@ -2187,7 +2409,58 @@ const strat = {
 //     dungeon; discovered-but-not-entered -> no tracked target, same honest limitation the
 //     game's own hint text has; entered -> path to the trail Guardian's dungeon theme) AND
 //     active boss_bounty side quests (same BOSS_DUNGEON_THEME+dungeonRegistry lookup, picks
-//     whichever known target is nearest -- see getMainQuestNavigationTarget).
+//     whichever known target is nearest -- see getMainQuestNavigationTarget), and (added in a
+//     later pass, see "UNIFIED ABILITY POOL" below) offensive/heal/buff/debuff/summon use of
+//     EVERY ability pool the game has -- spells, techniques, active cybernetics, and active
+//     mutations -- not just player spells.
+//
+//   ---- UNIFIED ABILITY POOL (the single biggest coverage gap found and closed after initial
+//   shipping, via a direct code audit rather than a crash -- nothing here ever errored, entire
+//   ability systems just silently never got used) ----
+//   The game resolves spells, techniques, active cybernetics, and active mutations through ONE
+//   shared pipeline: findAbilityById() looks across all four pools, isAbilityKnown() checks all
+//   four, castSpell(id) (despite the name) casts/activates ANY of them, and each pays from its
+//   own resource (mp/stamina/charge/hp) via getPoolValue()/effectiveCost(). The strategies as
+//   first written only ever read player.knownSpells and compared against player.mp directly --
+//   which meant TECHNIQUES, ACTIVE CYBERNETICS, and ACTIVE MUTATIONS were known/installed but
+//   NEVER INVOKED by the autonomous bot at all, and even within the one pool that was read,
+//   only spell TYPES 'damage' and 'heal' were ever cast -- 'buff'/'debuff'/'summon'/'execute'/
+//   'smite'/'drain'/'cleanse'/'purify' sat on a character's knownSpells for an entire life,
+//   completely unused, regardless of build. Concretely: a caster build that happened to roll
+//   Haste, Fear, or Summon Skeleton got real, permanent variety in WHAT it knew (character
+//   creation's RNG is genuine -- see "BUILD VARIETY" below) but zero variety in what it
+//   actually DID with that build, because the strategies covered maybe half the game's ability
+//   surface. Fixed via knownAffordableAbilities()/tryCastOffensiveSpell/tryCastHealSpell/
+//   tryCastDebuffAbility (new)/tryCastBuffAbility (new)/tryCastSummonAbility (new), all pulling
+//   from the real unified pool and using the game's own effectiveCost()/getPoolValue() rather
+//   than reimplementing the cost math. Confirmed firing in real batch runs (not just unit-
+//   tested in isolation) -- see SECTION 8's header for how to check this yourself against a
+//   freshly-updated game.html. Still not covered by this fix: 'raise' (same conjure-an-ally
+//   family as 'summon', but needs a corpse in range rather than being purely self-targeted --
+//   see corpseblast's targeting pattern for the template if this is worth adding), and neither
+//     debuff nor buff selection is remotely optimal (debuff picks uniformly at random among
+//   affordable options rather than reasoning about what a specific monster is vulnerable to;
+//   buff doesn't sequence multiple buffs in any particular order) -- both get real EXERCISE now,
+//   which is what this toolkit optimizes for, but neither is a good in-game player.
+//
+//   ---- BUILD VARIETY (real, verified against the actual RNG calls, not assumed) ----
+//   Species and "Random archetype" picks both resolve via the game's own choice(Math.random,
+//   ARCHETYPES)/equivalent species roll (see archetypeChoice('9') in game.html) -- a genuine
+//   uniform pick across all 25 archetypes / every species, not a fixed favorite. The custom
+//   point-buy path (draftCustomCharacter, used ~20/50/80% of lives on novice/casual/veteran --
+//   see customCreateChance) independently randomizes: focus (melee/caster/hybrid, uniform),
+//   stat-point allocation (weighted-random by focus, not deterministic maxing of one stat),
+//   which abilities get bought (each affordable candidate in the focus's category order gets an
+//   independent 40% roll, not "buy the N cheapest" or "buy everything"), and how many starting
+//   items vs. how much gold to end up with. This is NOT pure "different flavor text, same
+//   plan" variety -- it produces genuinely different resource situations, including harsh ones
+//   (a hybrid build that spent almost its whole budget on abilities can start with as little as
+//   1 item and 0 gold, observed in real batch testing -- see the bleeding-death investigation
+//   in this project's history for how that surfaced). If you want to deliberately stress a
+//   SPECIFIC build/scenario rather than wait on RNG to produce it, that's exactly what SECTION
+//   6's debug API + SECTION 8's interactive session are for (debug.giveByName/giveById/
+//   addGold/spawnMonster/teleport* to construct the exact starting conditions you want, then
+//   drive or observe play from there).
 //   Best-effort: quest acceptance is broad (see dialogue above) but there's no pathfinding to
 //     actively pursue a quest's specific objective beyond the boss/dungeon-tier/dimension-trail
 //     navigation above -- kill-N-of-species quests (bounty/dimension_bounty/chain_kill/etc.)
@@ -2203,14 +2476,22 @@ const strat = {
 //     doesn't expose that connection generically (it's the one gate kind with no bossId to hang
 //     a lookup off), so this wasn't wired in to avoid a special-cased hardcode for one dimension.
 //   Not implemented (real extension points): crafting deliberately toward a specific gear
-//     upgrade (tryCraftUseful only crafts known/affordable curatives), farming, deliberate
-//     companion/ally direct command (allies already fight and follow fully autonomously via
-//     companionFollowAI -- see game.html -- including defensive/passive stances and disengaging
-//     from danger on their own, so this is a much smaller gap than it sounds: a companion in a
-//     bot-played game already behaves like a real one without any instruction from here; only
-//     the deliberate "send to a specific tile" command (beginCompanionGotoTargeting) goes
-//     unused, which has little value for an autonomous playtester with no strategic reason to
-//     relocate a companion away from itself).
+//     upgrade (tryCraftUseful only crafts known/affordable curatives), farming toward a
+//     specific goal (tryFarm exists but isn't goal-directed), deliberate companion/ally direct
+//     command (allies already fight and follow fully autonomously via companionFollowAI -- see
+//     game.html -- including defensive/passive stances and disengaging from danger on their own,
+//     so this is a much smaller gap than it sounds: a companion in a bot-played game already
+//     behaves like a real one without any instruction from here; only the deliberate "send to a
+//     specific tile" command (beginCompanionGotoTargeting) and the openOrdersMenu stance-setting
+//     dialogue go unused), 'raise'-type abilities (see UNIFIED ABILITY POOL above), and no claim
+//     of exhaustive coverage beyond what's listed here -- this list reflects what's been
+//     specifically audited and fixed, not a systematic walk of every gameState/function in the
+//     game. IMPORTANT FOR A NEW SESSION: if you need to test something not listed as covered
+//     above, don't assume it's untested OR assume it's fine -- check for yourself (grep this
+//     file for the relevant game.html function name, or just try it directly via SECTION 8's
+//     interactive session and see what happens), and add a real strategy function (or extend
+//     an existing one, the way tryCastOffensiveSpell was broadened above) if it's worth folding
+//     into the autonomous bot rather than only ever being reachable by hand.
 
 
 // Any gameState value we don't have a dedicated strategy for gets a generic "close it"
@@ -2392,6 +2673,8 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
   // snapshot of the core numbers a growth-curve or balance analysis would want.
   const combatLog = [];
   const vitalsTimeline = [];
+  let hasBeenPlaying = false; // tracks whether we've ever reached 'playing' -- see the
+  // implicit-death handling below, right before the main loop.
 
   const log = (msg) => {
     const tc = evalGame(win, 'turnCount').value;
@@ -2461,6 +2744,28 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
 
     if (gs === 'trade') { strat.tryShopIfTrading(win, log); continue; }
     if (gs === 'dialogue') { strat.tryHandleDialogueIfOpen(win, log); continue; }
+    if (gs === 'playing') { hasBeenPlaying = true; }
+    // BUG FIX (found via a "died: bleeding" life whose event log inexplicably restarted mid-
+    // way through, complete with a second "Pick up A Crumpled Note" at the exact same early
+    // turn number as the very first action of the life): this game does NOT always route death
+    // through 'gameover' -- at least one death path (observed after a bleed-out with the
+    // character critically low and no cure available) skips straight from 'playing' to
+    // 'start'/a creation screen with a brand-new character already rolled, no game-over screen
+    // in between. Before this fix, that fell through to the generic "unrecognized state, close
+    // it" handler below, which happened to press exactly the key needed to dismiss the new
+    // character's confirm screen -- so the SAME counted "life" silently continued playing as a
+    // completely different character, with the real death never logged and never counted. That
+    // undercounts real deaths and corrupts actionsUsed/combat-telemetry continuity for any life
+    // this happens in. Treat re-entering a creation screen AFTER having already been in
+    // 'playing' at least once as the same terminal event 'gameover' is: log it and end this
+    // life here, rather than transparently carrying on into a second character. (Landing on
+    // these screens BEFORE ever having played is normal and expected -- that's just the
+    // original character being created -- so hasBeenPlaying is the necessary guard.)
+    if (hasBeenPlaying && (gs === 'start' || gs === 'create_species' || gs === 'create_archetype' || gs === 'title')) {
+      const cause = evalGame(win, 'player.deathCause').value;
+      log(`DIED: ${cause || '(unknown cause -- game auto-rerolled a new character without a gameover screen)'}`);
+      return buildResult('died', actionsUsed, stateCounts, unrecognizedStates);
+    }
     if (gs !== 'playing') {
       if (unrecognizedStates.has(gs) && stateCounts[gs] === 1) {
         // first time we've ever seen this exact state in this life -- worth a log line so
@@ -2513,6 +2818,9 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     if (!acted) { acted = await strat.tryFleeIfCritical(win, log); if (acted) actionLabel = 'flee'; }
     if (!acted) { acted = await strat.tryAvoidOverwhelmingMonster(win, log); if (acted) actionLabel = 'retreat'; }
     if (!acted) { acted = strat.tryUseHackChip(win, log); if (acted) actionLabel = 'hack'; }
+    if (!acted) { acted = strat.tryCastBuffAbility(win, log); if (acted) actionLabel = 'buff'; }
+    if (!acted) { acted = strat.tryCastSummonAbility(win, log); if (acted) actionLabel = 'summon'; }
+    if (!acted) { acted = strat.tryCastDebuffAbility(win, log); if (acted) actionLabel = 'debuff'; }
     if (!acted) { acted = strat.tryCastOffensiveSpell(win, log); if (acted) actionLabel = 'spell'; }
     if (!acted) { acted = strat.tryFireRanged(win, log); if (acted) actionLabel = 'ranged'; }
     if (!acted) strat.tryCalledShot(win, log); // never counts as "acted" on its own -- setup only
@@ -2648,6 +2956,20 @@ function debugSpawnMonster(win, monsterId, opts = {}) {
       if (!spot) return { ok:false, reason:'no open tile nearby' };
       const m = makeMonster(${JSON.stringify(monsterId)}, spot.x, spot.y, ${depthScaleExpr}, Math.random);
       addMonsterToWorld(m);
+      // BUG FIX (found via snapshotState/restoreState testing): addMonsterToWorld() never marks
+      // the chunk it pushes into as dirty, and getSaveData() only persists dirty chunks --
+      // everything else is expected to regenerate identically from SEED on revisit, which is
+      // exactly right for NORMAL monster spawns (they came from the seeded RNG in the first
+      // place, so they'll come back the same way). A debug-spawned monster uses Math.random(),
+      // not the seeded RNG, so it is NOT reproducible from SEED -- without this, it silently
+      // vanishes on any snapshotState()/restoreState() round-trip (confirmed: spawned a boar,
+      // snapshotted, restored into a fresh session, boar was gone). Marking the chunk dirty
+      // here makes a debug-spawned monster survive a snapshot exactly like a naturally-
+      // encountered one already does -- important since "set up a specific scenario via debug,
+      // then branch multiple tactics against it via restore" is the whole point of SECTION 9.
+      if (curIsDungeon()) { /* dungeon levels are always saved in full already, nothing to flag */ }
+      else if (curIsDimension()) { const c = getDimensionChunk(player.dimensionId, Math.floor(m.x/CH), Math.floor(m.y/CH)); if (c) c.dirty = true; }
+      else { const c = getChunk(Math.floor(m.x/CH), Math.floor(m.y/CH)); if (c) c.dirty = true; }
       return { ok:true, uid: m.uid, name: m.name, hp: m.hp, maxHp: m.hp, x: m.x, y: m.y };
     })()
   `);
@@ -3283,6 +3605,1022 @@ async function main() {
 }
 
 // ==========================================================================================
+// SECTION 8: INTERACTIVE AGENT SESSION -- live, turn-by-turn control for a DECIDING agent
+// (another Claude session, or a human), as opposed to the canned SECTION 4/5 autonomous bot.
+// ==========================================================================================
+//
+// WHY THIS EXISTS: SECTIONS 4/5 are a fixed set of ~29 heuristic strategy functions with a
+// baked-in priority order (flee before heal, heal before fight, etc.) -- great for unattended
+// batch crash-hunting (that's what CLI mode and runContentSweep are for), but the DECISIONS
+// are the toolkit's, not the controlling agent's. If you (a Claude session) want to actually
+// choose a specific build, try a specific tactic, or deliberately test a new mechanic by
+// reacting to it turn-by-turn -- rather than delegating that judgment to tryFightAdjacent's
+// fixed logic -- SECTIONS 4/5 aren't the right tool. This section is: it exposes the same
+// low-level primitives SECTION 4 is built on (evalGame/key/keyAndWait, the debug API) through
+// a small, generic, content-agnostic verb set, and hands every decision to whoever is calling
+// act() one step at a time. Nothing here decides anything; it only reports state and executes
+// exactly the one action requested, the same way a human pressing one key at a time would.
+//
+// TWO WAYS TO DRIVE IT:
+//   (a) Same-process library use: `const {startInteractiveSession} = require('./playtest.js');
+//       const sess = await startInteractiveSession(); const st = sess.state();
+//       await sess.act({type:'move', dir:'n'});` -- fine when the controlling code is itself
+//       a Node script in this process.
+//   (b) Cross-process HTTP: `node playtest.js --serve [port]` boots ONE game session and keeps
+//       it alive, exposing it as a tiny local REST API (loopback only, no external deps --
+//       uses Node's built-in http module). This is the one that matters for a Claude chat
+//       session driving the game across many separate tool calls (each shell/tool call is a
+//       fresh process, so it can't hold a live jsdom window itself) -- run the server once
+//       (backgrounded/detached so it survives between tool calls), then every decision is just
+//       `curl localhost:PORT/state` to see what's happening and `curl -X POST -d '{...}'
+//       localhost:PORT/act` to act on it, read the result, and decide the next move. Call
+//       GET /help first for the full verb list and current example state -- that alone should
+//       be enough to drive a session without re-reading this file.
+//
+// CONTENT-AGNOSTIC BY THE SAME RULE AS EVERYWHERE ELSE: richState() never hardcodes spell/item/
+// monster names -- it reflects back whatever's actually live on player.knownSpells,
+// player.inventory, MONSTER_BASES, etc., the same way SECTION 4 does. Adding new spells/items/
+// monsters/mechanics to the game needs zero changes here; they just show up in the next
+// state() call. A wholly new interaction MODE (not covered by the verbs below) is still
+// reachable via the {type:'key', key} raw escape hatch, which presses any key exactly like
+// SECTION 2's key() -- nothing is ever locked out, just not given a dedicated named verb yet.
+
+/** Rich, JSON-safe snapshot of everything a controlling agent needs to decide its next move:
+ * vitals, position, full equipment+inventory (with per-item uid so actions can target a
+ * specific stack unambiguously), every known spell/technique WITH live castability (affordable
+ * + in range right now, not just known), nearby entities with distance/threat-relevant fields,
+ * the tile underfoot, and -- if a menu is currently open (choice/dialogue/trade) -- its exact
+ * selectable options so the agent can choose intelligently instead of guessing letters. */
+function richState(win) {
+  const r = evalGame(win, `
+    (function(){
+      const dirs = [['n',0,-1],['s',0,1],['w',-1,0],['e',1,0],['nw',-1,-1],['ne',1,-1],['sw',-1,1],['se',1,1]];
+      const nearby = [];
+      for (let dy=-6; dy<=6; dy++) for (let dx=-6; dx<=6; dx++) {
+        if (!dx && !dy) continue;
+        const t = entityAt(player.x+dx, player.y+dy);
+        if (t && (t.kind === 'monster' || t.kind === 'npc')) {
+          nearby.push({
+            uid: t.uid, kind: t.kind, name: t.name,
+            dx, dy, dist: Math.max(Math.abs(dx),Math.abs(dy)),
+            adjacent: Math.abs(dx)<=1 && Math.abs(dy)<=1,
+            hp: t.hp, maxHp: (t.maxHp!=null? t.maxHp : t.hp),
+            hostile: t.kind==='monster' ? !(t.tamed||t.companion) : false,
+          });
+        }
+      }
+      nearby.sort((a,b) => a.dist - b.dist);
+      const eq = {};
+      Object.keys(player.equipment||{}).forEach(slot => {
+        const it = player.equipment[slot];
+        eq[slot] = it ? { uid: it.uid, id: it.id, name: it.name, dmg: it.dmg||null, armor: it.armor||null, acc: it.acc||null } : null;
+      });
+      const inv = player.inventory.map(it => ({
+        uid: it.uid, id: it.id, name: it.name, type: it.type, slot: it.slot||null,
+        dmg: it.dmg||null, armor: it.armor||null, effect: it.effect||null, value: it.value||null,
+      }));
+      // BUG FIX: this used to hardcode player.mp for spell affordability (correct only for
+      // spells specifically) and gave techniques no real affordability check at all (just a
+      // raw cost number, resource-blind), while active cybernetics/mutations weren't surfaced
+      // here at all -- even though castSpell() can invoke any of the four pools uniformly (see
+      // the "UNIFIED ABILITY POOL" comment above tryCastOffensiveSpell). An agent reading
+      // state() had no correct way to know what it could actually afford to cast right now
+      // across techniques/cyber/mutations. Fixed by using the same effectiveCost()/
+      // getPoolValue() the game itself uses for every pool, uniformly.
+      const abilityView = (id) => {
+        const a = findAbilityById(id); if (!a) return null;
+        const resource = a.resource || 'mp';
+        return {
+          id, name: a.name, type: a.type, resource, cost: effectiveCost(a),
+          range: a.range||null, power: a.power||null,
+          affordable: getPoolValue(resource) >= effectiveCost(a),
+          hasTarget: (a.type === 'damage' || a.type === 'execute' || a.type === 'smite' || a.type === 'drain' || a.type === 'debuff') ? !!nearestHostile(a.range||1) : true,
+        };
+      };
+      const spells = (player.knownSpells||[]).map(abilityView).filter(Boolean);
+      const techniques = (player.knownTechniques||[]).map(abilityView).filter(Boolean);
+      const activeCyber = (player.installedCyber||[]).map(abilityView).filter(Boolean);
+      const activeMutations = (player.mutations||[]).map(abilityView).filter(Boolean);
+      // BUG FIX: entityAt(x,y) returns an ENTITY (player/ally/monster/npc) standing at those
+      // coordinates -- NOT the terrain tile. Since the player always occupies (player.x,
+      // player.y), a naive entityAt(player.x, player.y) here would silently just be the
+      // player object, and player.items is undefined (items live on player.INVENTORY) --
+      // meaning tileHasItems/tileGroundItems were wrong (always empty) since this file first
+      // shipped, and nothing caught it until testing dropItem() just now and noticing a
+      // freshly-dropped item never showed up underfoot. itemsAt(x,y) is the correct, already
+      // dungeon/overworld-aware helper for this (same one tryPickUpHere in SECTION 4 already
+      // uses, which is why the autonomous bot's pickup behavior was never affected by this --
+      // this bug was isolated to this newer richState() code).
+      const groundItems = itemsAt(player.x, player.y);
+      let menu = null;
+      if (gameState === 'choice' && typeof pendingChoiceOptions !== 'undefined') {
+        menu = { kind: 'choice', prompt: (typeof pendingChoicePrompt!=='undefined'?pendingChoicePrompt:null), options: pendingChoiceOptions.map((o,i)=>({index:i, label:o.label})) };
+      } else if (gameState === 'dialogue' && typeof dialogueOptions !== 'undefined') {
+        menu = { kind: 'dialogue', npc: dialogueNPC ? dialogueNPC.name : null, options: (dialogueOptions||[]).map((o,i)=>({index:i, label:o.label||o.text})) };
+      } else if (gameState === 'trade' && dialogueNPC && dialogueNPC.shop) {
+        menu = { kind: 'trade', npc: dialogueNPC.name, mode: tradeMode,
+          shop: dialogueNPC.shop.map((it,i) => ({ index: i, id: it.id, name: it.name, value: it.value })),
+          sellable: player.inventory.filter(i=>i.type!=='misc').map(it => ({ uid: it.uid, id: it.id, name: it.name })) };
+      } else if (gameState === 'tiletarget') {
+        menu = { kind: 'tiletarget', note: 'Press Enter/space to confirm on nearest valid target, or use act({type:"key",key:"Enter"}).' };
+      }
+      // ---- CHARACTER CREATION: full picker data for every step, not just enough to survive
+      // navigating it. The real game UI has NO restriction tying stat/ability choices to a
+      // "focus" or archetype -- that's purely a bot-only heuristic in draftCustomCharacter()
+      // (SECTION 5) for its own autonomous random rolls. Once you're in the '0' (Custom) path,
+      // every stat and every ability across ALL FOUR categories (spells/techniques/mutations/
+      // cyber) is freely mixable against one shared point pool -- see createStatsKey/
+      // createAbilitiesKey in the game source. This block exists so a controlling agent can
+      // build ANY combination that pool allows, deliberately, rather than being limited to
+      // picking a premade archetype or letting the bot's random weighting decide.
+      let creation = null;
+      if (gameState === 'create_species') {
+        creation = { step: 'species', options: SPECIES.map((sp,i) => ({
+          index: i, id: sp.id, name: sp.name, desc: sp.desc, statMods: sp.statMods,
+          traits: sp.traits.map(t => t.name),
+        })) };
+      } else if (gameState === 'create_archetype') {
+        creation = { step: 'archetype', species: getSpecies(pendingSpeciesId).name,
+          customAvailable: true, // pickArchetype({custom:true}) for full free-form point-buy
+          options: ARCHETYPES.map((a,i) => ({ index: i, id: a.id, name: a.name, desc: a.desc })) };
+      } else if (gameState === 'create_stats' && typeof creationDraft !== 'undefined') {
+        const d = creationDraft;
+        creation = { step: 'stats', pointsRemaining: d.points, maxPerStat: CREATION_MAX_STAT_ADD,
+          current: d.statAdds, baseStats: { str: player.str, dex: player.dex, int: player.int, con: player.con, wil: player.wil, cha: player.cha },
+          note: 'allocateStat adds ONE point per call (matches the real UI) -- call repeatedly. No un-spend once added.' };
+      } else if (gameState === 'create_abilities' && typeof creationDraft !== 'undefined') {
+        const d = creationDraft;
+        creation = { step: 'abilities', pointsRemaining: d.points, currentCategory: d.abilityCat,
+          categories: CREATION_ABILITY_CATS.map(c => c.key), selected: d.abilities,
+          note: 'toggleAbility works by id directly, from ANY category, regardless of currentCategory -- no need to switch tabs first.',
+          pool: CREATION_ABILITY_CATS.find(c => c.key === d.abilityCat).pool().map(a => ({
+            id: a.id, name: a.name, cost: CREATION_ABILITY_CATS.find(c => c.key === d.abilityCat).costFn(a),
+            selected: d.abilities.includes(a.id), type: a.type || null,
+          })) };
+      } else if (gameState === 'create_final' && typeof creationDraft !== 'undefined') {
+        const d = creationDraft;
+        creation = { step: 'final', pointsRemaining: d.points, goldPerPoint: CREATION_GOLD_PER_POINT,
+          bonusGoldSoFar: d.gold, selectedItems: d.items,
+          pool: CREATION_STARTING_ITEM_POOL.map(b => ({ id: b.id, name: b.name, cost: 3 })) };
+      } else if (gameState === 'start') {
+        creation = { step: 'scenario', options: START_SCENARIOS.map((s,i) => ({ index: i, id: s.id, name: s.name, desc: s.desc })) };
+      }
+      // ---- EVERY OTHER SCREEN: bespoke structured data where it's worth the code, and a
+      // generic DOM-text scrape fallback for everything else so nothing is ever a total blind
+      // spot (found via grepping every gameState assignment in the game source -- there are
+      // ~27 distinct screens; the ones below without bespoke handling still get readable
+      // title/body/hint text scraped straight from the real rendered modal, the same text a
+      // human player would be looking at).
+      let screen = null;
+      const modalEl = document.getElementById('modal');
+      const generic = () => ({
+        title: (document.getElementById('modal-title')||{}).textContent || null,
+        bodyText: (document.getElementById('modal-body')||{}).innerText || null,
+        hint: (document.getElementById('modal-hint')||{}).textContent || null,
+      });
+      if (gameState === 'inventory') {
+        const list = filteredInventory();
+        screen = { kind: 'inventory', filter: player.invFilter, page: player.invPage||0,
+          equipped: SLOT_ORDER.filter(s => player.equipment[s]).map(s => ({ slot: s, id: player.equipment[s].id, name: player.equipment[s].name })),
+          items: list.slice((player.invPage||0)*PAGE_SIZE, (player.invPage||0)*PAGE_SIZE+PAGE_SIZE).map(it => ({ uid: it.uid, id: it.id, name: it.name, type: it.type })),
+          note: 'selectItem {id} opens the item-action menu for it (works from any filter/page -- no need to page manually).' };
+      } else if (gameState === 'itemaction') {
+        const it = invSelected;
+        screen = { kind: 'itemaction', item: it ? { uid: it.uid, id: it.id, name: it.name, type: it.type, equipped: !!invSelectedSlot } : null,
+          canThrow: it ? canThrowItem(it) : false, canSocket: it ? canSocket(it) : false,
+          canUnsocket: it ? (it.socketedRunes||[]).length > 0 : false,
+          canReforge: it ? (canReforge(it) && !!salvageYieldFor(it)) : false,
+          canSalvage: it ? !!salvageYieldFor(it) : false };
+      } else if (gameState === 'container') {
+        const c = containerTarget;
+        screen = { kind: 'container', name: c ? c.name : null, mode: containerMode,
+          contents: c ? c.contents.map(it => ({ uid: it.uid, id: it.id, name: it.name })) : [],
+          capacity: c ? c.capacity : null };
+      } else if (gameState === 'giftpick') {
+        screen = { kind: 'giftpick', npc: dialogueNPC ? dialogueNPC.name : null,
+          options: giftList.map(it => ({ uid: it.uid, id: it.id, name: it.name })) };
+      } else if (gameState === 'socketpick' || gameState === 'unsocketpick') {
+        const runes = gameState === 'socketpick' ? openSocketableRunesFor(invSelected) : (invSelected.socketedRunes||[]);
+        screen = { kind: gameState, item: invSelected ? invSelected.name : null,
+          options: runes.map((r,i) => ({ index: i, id: r.id||null, name: r.name })) };
+      } else if (gameState === 'quickslotassign') {
+        screen = { kind: 'quickslotassign', item: invSelected ? invSelected.name : null, currentSlots: player.quickslots||[] };
+      } else if (gameState === 'character') {
+        screen = { kind: 'character', statPointsAvailable: player.statPoints||0,
+          stats: { str: player.str, dex: player.dex, int: player.int, con: player.con, wil: player.wil, cha: player.cha },
+          note: 'spendStatPoint {stat} spends ONE earned stat point (post-creation leveling, separate from character-creation allocateStat).' };
+      } else if (gameState === 'craft') {
+        screen = { kind: 'craft', page: player.craftPage||0,
+          recipes: (player.knownRecipes||[]).map(id => { const r = RECIPES.find(x=>x.id===id); return r ? { id: r.id, name: r.name } : null; }).filter(Boolean) };
+      } else if (gameState === 'talents') {
+        screen = { kind: 'talents', talentPoints: player.talentPoints||0,
+          options: (talentPurchasable||[]).map(t => ({ id: t.id, name: t.name, desc: t.desc||null })) };
+      } else if (gameState === 'train') {
+        screen = { kind: 'train', gold: player.gold,
+          options: (trainEntries||[]).map(e => ({ id: e.id, kind: e.kind, name: (e.kind==='spell' ? (SPELLS.find(s=>s.id===e.id)||{}).name : (RECIPES.find(r=>r.id===e.id)||{}).name) })) };
+      } else if (gameState === 'cyber') {
+        screen = { kind: 'cyber', slotsUsed: (player.installedCyber||[]).length, slotsTotal: player.cyberSlots||3,
+          options: (cyberListCache.entries||[]).map(e => ({ id: e.id, installed: e.kind === 'installed', name: (CYBERNETICS.find(c=>c.id===e.id)||{}).name })) };
+      } else if (gameState === 'digpick') {
+        screen = { kind: 'digpick', note: 'dig {dir} to dig in that direction (same dir values as move).' };
+      } else if (gameState === 'questlog') {
+        screen = { kind: 'questlog', quests: (player.quests||[]).filter(q=>!q.done).map(q => ({ id: q.id, stage: q.stage||null, kind: q.kind||null })), ...generic() };
+      } else if (modalEl && !modalEl.classList.contains('hidden') && gameState !== 'playing') {
+        screen = { kind: gameState, ...generic() }; // generic fallback for anything without bespoke handling above
+      }
+      return JSON.stringify({
+        gameState, turnCount, alive: player.alive,
+        hp: player.hp, maxHp: player.maxHp, mp: player.mp, maxMp: player.maxMp,
+        stamina: player.stamina, maxStamina: player.maxStamina,
+        charge: player.charge||0, maxCharge: player.maxCharge||0,
+        level: player.level, xp: player.xp, gold: player.gold,
+        x: player.x, y: player.y, isDungeon: curIsDungeon(),
+        bleedTurns: player.bleedTurns||0, statusPoison: player.statusPoison||0,
+        species: (getSpecies(player.speciesId)||{}).name, scenario: player.scenario,
+        equipment: eq, inventory: inv, spells, techniques, activeCyber, activeMutations,
+        nearby, tileHasItems: groundItems.length > 0,
+        tileGroundItems: groundItems.map(it=>({id:it.id,name:it.name})),
+        activeQuests: (player.quests||[]).filter(q=>!q.done).map(q => ({ id: q.id, stage: q.stage||null, kind: q.kind||null })),
+        menu, creation, screen,
+      });
+    })()
+  `);
+  if (!r.ok) return { error: r.error };
+  try { return JSON.parse(r.value); } catch (e) { return { error: 'parse-failed: ' + r.value }; }
+}
+
+const DIR_TO_KEY = { n: 'k', s: 'j', w: 'h', e: 'l', nw: 'y', ne: 'u', sw: 'b', se: 'n' };
+
+/** Find one inventory item matching a caller-given ref (uid exact match first, then id exact,
+ * then case-insensitive substring on name) -- same "give the agent a name/id, resolve it live
+ * against real data" pattern as debugGiveByName, so callers never need to know internal uids
+ * up front (state() gives you the uid once you've seen the item, for disambiguating duplicates
+ * afterward). Returns the JS snippet finding it (evaluated inside the caller's evalGame IIFE). */
+function itemMatchExpr(listExpr, ref) {
+  const j = JSON.stringify(String(ref));
+  return `(${listExpr}.find(it=>it.uid===${j}) || ${listExpr}.find(it=>it.id===${j}) || ${listExpr}.find(it=>it.name && it.name.toLowerCase().includes(${j}.toLowerCase())))`;
+}
+
+/** Apply exactly one caller-specified action and return { ok, message, state }. Every action
+ * type maps directly onto one real user-facing key/function -- see the big header comment
+ * above for the design rationale. Unknown/malformed actions return ok:false with a message,
+ * never throw, so a driving loop can always inspect the result and try something else. */
+async function applyAction(win, action) {
+  const type = action && action.type;
+  const fail = (message) => ({ ok: false, message, state: richState(win) });
+  const okResult = async (message, { wait = false, waitKey = null } = {}) => {
+    if (wait) await waitForAutoAction(win);
+    return { ok: true, message, state: richState(win) };
+  };
+
+  if (!type) return fail('Missing action.type. GET /help (or see SECTION 8 header) for the verb list.');
+
+  switch (type) {
+    case 'key': {
+      if (!action.key) return fail('key action needs a "key" field.');
+      const before = evalGame(win, 'turnCount').value;
+      key(win, action.key);
+      await sleep(15);
+      return okResult(`Pressed "${action.key}".`);
+    }
+    case 'move': case 'attack': {
+      const k = DIR_TO_KEY[action.dir];
+      if (!k) return fail(`Unknown dir "${action.dir}". Use one of: ${Object.keys(DIR_TO_KEY).join(', ')}.`);
+      key(win, k);
+      return okResult(`Moved/attacked ${action.dir}.`);
+    }
+    case 'wait': key(win, '.'); return okResult('Waited a turn.');
+    case 'pickup': key(win, 'g'); return okResult('Attempted pickup.');
+    case 'rest': await keyAndWait(win, 'r'); return okResult('Rested (or refused if unsafe -- check state.hp/bleedTurns).');
+    case 'explore': await keyAndWait(win, 'X'); return okResult('Auto-explored.');
+    case 'travelHome': await keyAndWait(win, 'H'); return okResult('Auto-traveled toward home settlement (no-op if none discovered).');
+    case 'travelToStairs': await keyAndWait(win, 'G'); return okResult('Auto-traveled toward known stairs.');
+    case 'descend': key(win, '>'); return okResult('Attempted to descend stairs.');
+    case 'ascend': key(win, '<'); return okResult('Attempted to ascend stairs.');
+    case 'talk': {
+      key(win, 't');
+      await sleep(15);
+      return okResult('Pressed talk. If multiple NPCs were adjacent, check state.menu (kind:"choice") and act({type:"choose",...}) to pick one.');
+    }
+    case 'calledShot': {
+      // Same fix as SECTION 4's tryCalledShot -- see its header comment for the full story:
+      // pressing 'a' is shadowed by the WASD move-west binding and never reaches the real
+      // called-shot handler, so this calls openCalledShotMenu() directly instead.
+      evalGame(win, 'openCalledShotMenu();');
+      if (evalGame(win, 'gameState').value !== 'choice') return fail('No adjacent target for a called shot right now.');
+      const label = resolveChoiceMenu(win, null, { prefer: action.bodyPart ? [new RegExp(action.bodyPart, 'i')] : [] });
+      return okResult(`Called shot aimed: ${label}.`);
+    }
+    case 'castSpell': {
+      if (!action.id) return fail('castSpell needs an "id" (see state().spells/techniques for known ids -- active cybernetics/mutations work too, just not listed there yet; use state().win or debug to inspect player.installedCyber/player.mutations directly).');
+      const r = evalGame(win, `
+        (function(){
+          const s = findAbilityById(${JSON.stringify(action.id)});
+          if (!s) return { ok:false, reason:'unknown ability id (spell/technique/cyber/mutation)' };
+          if (!isAbilityKnown(${JSON.stringify(action.id)})) return { ok:false, reason:'not known' };
+          const resource = s.resource || 'mp';
+          if (getPoolValue(resource) < effectiveCost(s)) return { ok:false, reason:'not enough ' + resource };
+          const before = getPoolValue(resource);
+          castSpell(${JSON.stringify(action.id)});
+          return { ok:true, name: s.name, resource, before, gsAfter: gameState };
+        })()
+      `);
+      if (!r.ok || !r.value || !r.value.ok) return fail((r.value && r.value.reason) || r.error || 'Cast failed.');
+      if (r.value.gsAfter === 'tiletarget') {
+        // Real player-like choice, not just "nearest": if a specific target was given, resolve
+        // it to real world coordinates and confirm there directly via confirmTileTarget(wx,wy)
+        // -- the same function a mouse click calls in the real UI. This is actually MORE
+        // freedom than a keyboard-only human has in this game: the real keyboard handler for
+        // gameState==='tiletarget' supports only Enter/Space (nearest-snap) or Escape (cancel)
+        // -- there is no keyboard cursor-steering at all, only mouse click. Falling back to
+        // Enter (nearest) when no specific target is given keeps that convenient default.
+        if (action.targetUid) {
+          const t = evalGame(win, `(function(){ const dirs=[]; for(let dy=-8;dy<=8;dy++) for(let dx=-8;dx<=8;dx++){ const e=entityAt(player.x+dx,player.y+dy); if(e && e.uid===${JSON.stringify(action.targetUid)}) return {x:player.x+dx,y:player.y+dy}; } return null; })()`);
+          if (t.ok && t.value) { evalGame(win, `confirmTileTarget(${t.value.x}, ${t.value.y})`); }
+          else {
+            evalGame(win, 'cancelTileTargeting()'); // don't leave the session stuck mid-target
+            return fail(`targetUid "${action.targetUid}" not found within 8 tiles -- check state().nearby for current uids (it may have moved, died, or fled since your last state() read).`);
+          }
+        } else if (action.targetTile) {
+          evalGame(win, `confirmTileTarget(${Number(action.targetTile.x)}, ${Number(action.targetTile.y)})`);
+        } else {
+          key(win, action.targetKey || 'Enter'); // convenience default: nearest valid target
+        }
+      }
+      const after = evalGame(win, `getPoolValue(${JSON.stringify(r.value.resource)})`).value;
+      if (after >= r.value.before) return fail(`${r.value.name} didn't resolve (no valid target at that location/range, or targeting got cancelled) -- nothing was spent, try again.`);
+      return okResult(`Cast ${r.value.name}${action.targetUid ? ' at ' + action.targetUid : ''}.`);
+    }
+    case 'useItem': {
+      if (!action.id) return fail('useItem needs an "id" (uid, item id, or name substring).');
+      const r = evalGame(win, `
+        (function(){
+          const it = ${itemMatchExpr('player.inventory', action.id)};
+          if (!it) return { ok:false, reason:'no matching item in inventory' };
+          try { useItem(it); return { ok:true, name: it.name }; } catch(e){ return { ok:false, reason: e.message }; }
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || r.error || 'useItem failed.');
+      return okResult(`Used ${r.value.name}.`);
+    }
+    case 'equip': {
+      if (!action.id) return fail('equip needs an "id" (uid, item id, or name substring).');
+      const r = evalGame(win, `
+        (function(){
+          const it = ${itemMatchExpr('player.inventory', action.id)};
+          if (!it) return { ok:false, reason:'no matching item in inventory' };
+          if (it.type !== 'weapon' && it.type !== 'armor') return { ok:false, reason:'not equippable' };
+          equipItem(it); return { ok:true, name: it.name };
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || r.error || 'equip failed.');
+      return okResult(`Equipped ${r.value.name}.`);
+    }
+    case 'unequip': {
+      if (!action.slot) return fail('unequip needs a "slot" (see state().equipment for current slot names).');
+      const r = evalGame(win, `
+        (function(){
+          if (!player.equipment[${JSON.stringify(action.slot)}]) return { ok:false, reason:'slot already empty' };
+          const name = player.equipment[${JSON.stringify(action.slot)}].name;
+          unequipSlot(${JSON.stringify(action.slot)}); return { ok:true, name };
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || r.error || 'unequip failed.');
+      return okResult(`Unequipped ${r.value.name}.`);
+    }
+    case 'choose': {
+      // Generic resolver for whatever menu is currently open (choice/dialogue/trade "talk to
+      // whom"-style option lists) -- accepts either the numeric index from state().menu.options
+      // or a label substring, so the agent can act on what state() just showed it either way.
+      const gs = evalGame(win, 'gameState').value;
+      if (gs !== 'choice' && gs !== 'dialogue') return fail(`No choice/dialogue menu open (gameState is "${gs}").`);
+      if (action.index != null) {
+        key(win, String.fromCharCode(97 + Number(action.index)));
+        return okResult(`Chose option index ${action.index}.`);
+      }
+      if (action.label) {
+        const label = resolveChoiceMenu(win, null, { prefer: [new RegExp(action.label, 'i')] });
+        return okResult(`Chose: ${label}.`);
+      }
+      return fail('choose needs "index" or "label".');
+    }
+    case 'buy': case 'sell': {
+      if (evalGame(win, 'gameState').value !== 'trade') return fail('Not currently in a trade menu.');
+      if (!action.id) return fail(`${type} needs an "id".`);
+      tradeMode_set: {
+        evalGame(win, `tradeMode = ${JSON.stringify(type === 'buy' ? 'buy' : 'sell')}; tradePage = 0;`);
+      }
+      const listExpr = type === 'buy' ? 'dialogueNPC.shop' : "player.inventory.filter(i=>i.type!=='misc')";
+      const r = evalGame(win, `
+        (function(){
+          const list = ${listExpr};
+          const it = ${itemMatchExpr('list', action.id)};
+          if (!it) return { ok:false, reason:'no matching item' };
+          const idx = list.indexOf(it);
+          tradePage = Math.floor(idx / PAGE_SIZE);
+          const goldBefore = player.gold;
+          tradeTransact(String.fromCharCode(97 + (idx % PAGE_SIZE)));
+          return { ok:true, name: it.name, goldDelta: player.gold - goldBefore };
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || r.error || `${type} failed.`);
+      return okResult(`${type === 'buy' ? 'Bought' : 'Sold'} ${r.value.name} (gold ${r.value.goldDelta >= 0 ? '+' : ''}${r.value.goldDelta}).`);
+    }
+    case 'closeMenu': key(win, 'Escape'); return okResult('Closed current menu.');
+
+    // ---- CHARACTER CREATION: free-form build verbs. See richState()'s "creation" block for
+    // the exact options/ids/costs available at whatever step you're currently on. The whole
+    // point of these is that NOTHING here is limited to a premade archetype or the bot's
+    // random-weighted picks -- pickArchetype({custom:true}) plus toggleAbility/allocateStat
+    // lets you build literally any stat/ability combination the point pool allows, mixing
+    // freely across all four ability categories with no "focus" restriction (that restriction
+    // only exists in SECTION 5's autonomous bot, never in the real game).
+    case 'pickSpecies': {
+      if (evalGame(win, 'gameState').value !== 'create_species') return fail('Not on the species screen.');
+      const ref = action.id != null ? action.id : (action.index != null ? action.index : 'random');
+      const r = evalGame(win, `
+        (function(){
+          if (${JSON.stringify(ref)} === 'random') { speciesChoice('9'); return {ok:true, name:'Random'}; }
+          let idx = (typeof ${JSON.stringify(ref)} === 'number') ? ${JSON.stringify(ref)}
+            : SPECIES.findIndex(s => s.id === ${JSON.stringify(ref)} || s.name.toLowerCase() === String(${JSON.stringify(ref)}).toLowerCase());
+          if (idx < 0 || !SPECIES[idx]) return {ok:false, reason:'species not found'};
+          speciesChoice(String.fromCharCode(97+idx));
+          return {ok:true, name: SPECIES[idx].name};
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || 'pickSpecies failed.');
+      return okResult(`Picked species: ${r.value.name}.`);
+    }
+    case 'pickArchetype': {
+      if (evalGame(win, 'gameState').value !== 'create_archetype') return fail('Not on the archetype screen.');
+      const isCustom = action.custom === true || action.id === 'custom';
+      const isRandom = action.id === 'random';
+      const ref = action.id != null ? action.id : (action.index != null ? action.index : null);
+      const r = evalGame(win, `
+        (function(){
+          if (${isCustom}) { archetypeChoice('0'); return {ok:true, name:'Custom (free-form point-buy)'}; }
+          if (${isRandom}) { archetypeChoice('9'); return {ok:true, name:'Random'}; }
+          let idx = (typeof ${JSON.stringify(ref)} === 'number') ? ${JSON.stringify(ref)}
+            : ARCHETYPES.findIndex(a => a.id === ${JSON.stringify(ref)} || a.name.toLowerCase() === String(${JSON.stringify(ref)}).toLowerCase());
+          if (idx < 0 || !ARCHETYPES[idx]) return {ok:false, reason:'archetype not found -- use {custom:true} for free-form instead'};
+          archetypeChoice(String.fromCharCode(97+idx));
+          return {ok:true, name: ARCHETYPES[idx].name};
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || 'pickArchetype failed.');
+      return okResult(`Picked path: ${r.value.name}.`);
+    }
+    case 'allocateStat': {
+      if (evalGame(win, 'gameState').value !== 'create_stats') return fail('Not on the stats screen.');
+      if (!action.stat) return fail('allocateStat needs a "stat" (str|dex|int|con|wil|cha).');
+      const idx = ['str','dex','int','con','wil','cha'].indexOf(action.stat);
+      if (idx < 0) return fail('Unknown stat -- use str, dex, int, con, wil, or cha.');
+      const before = evalGame(win, `creationDraft.statAdds[${JSON.stringify(action.stat)}]`).value;
+      key(win, String(idx + 1));
+      const after = evalGame(win, `creationDraft.statAdds[${JSON.stringify(action.stat)}]`).value;
+      if (after === before) return fail(`Could not add to ${action.stat} -- out of points, or already at the +${before} creation cap (see state().creation.maxPerStat).`);
+      return okResult(`${action.stat.toUpperCase()} now +${after}.`);
+    }
+    case 'setAbilityCategory': {
+      if (evalGame(win, 'gameState').value !== 'create_abilities') return fail('Not on the abilities screen.');
+      const idx = ['spells','techniques','mutations','cyber'].indexOf(action.category);
+      if (idx < 0) return fail('Unknown category -- use spells, techniques, mutations, or cyber.');
+      key(win, String(idx + 1));
+      return okResult(`Switched to ${action.category}.`);
+    }
+    case 'pageAbilities': case 'pageItems': {
+      const wantAbilities = type === 'pageAbilities';
+      const gs = evalGame(win, 'gameState').value;
+      if (wantAbilities && gs !== 'create_abilities') return fail('Not on the abilities screen.');
+      if (!wantAbilities && gs !== 'create_final') return fail('Not on the items screen.');
+      key(win, action.dir === 'prev' ? '[' : ']');
+      return okResult(`Paged ${action.dir === 'prev' ? 'back' : 'forward'}.`);
+    }
+    case 'toggleAbility': {
+      if (evalGame(win, 'gameState').value !== 'create_abilities') return fail('Not on the abilities screen.');
+      if (!action.id) return fail('toggleAbility needs an "id" (see state().creation.pool, or any spell/technique/mutation/cyber id).');
+      const r = evalGame(win, `
+        (function(){
+          const d = creationDraft;
+          let foundCat = null, ability = null;
+          for (const cat of CREATION_ABILITY_CATS) {
+            const found = cat.pool().find(a => a.id === ${JSON.stringify(action.id)});
+            if (found) { foundCat = cat; ability = found; break; }
+          }
+          if (!ability) return { ok:false, reason:'unknown ability id -- check state().creation.pool across categories' };
+          d.abilityCat = foundCat.key;
+          const cost = foundCat.costFn(ability);
+          if (d.abilities.includes(ability.id)) { d.abilities = d.abilities.filter(x=>x!==ability.id); d.points += cost; return {ok:true, action:'removed', name:ability.name}; }
+          if (foundCat.key === 'cyber') {
+            const chosen = d.abilities.filter(id => CYBERNETICS.some(c=>c.id===id)).length;
+            if (chosen >= CREATION_MAX_STARTING_CYBER) return { ok:false, reason:'starting cyber slots full (see CREATION_MAX_STARTING_CYBER)' };
+          }
+          if (d.points < cost) return { ok:false, reason:'not enough points' };
+          d.points -= cost; d.abilities.push(ability.id);
+          return { ok:true, action:'added', name:ability.name };
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || 'toggleAbility failed.');
+      return okResult(`${r.value.action === 'added' ? 'Learned' : 'Removed'} ${r.value.name}.`);
+    }
+    case 'toggleItem': {
+      if (evalGame(win, 'gameState').value !== 'create_final') return fail('Not on the starting-items screen.');
+      if (!action.id) return fail('toggleItem needs an "id" (see state().creation.pool).');
+      const r = evalGame(win, `
+        (function(){
+          const d = creationDraft;
+          const b = CREATION_STARTING_ITEM_POOL.find(x => x.id === ${JSON.stringify(action.id)});
+          if (!b) return { ok:false, reason:'unknown item id' };
+          if (d.points < 3) return { ok:false, reason:'not enough points (items cost 3)' };
+          d.points -= 3; d.items.push(b.id);
+          return { ok:true, name: b.name };
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || 'toggleItem failed.');
+      return okResult(`Added starting item: ${r.value.name}.`);
+    }
+    case 'convertPointToGold': {
+      if (evalGame(win, 'gameState').value !== 'create_final') return fail('Not on the starting-gold/items screen.');
+      const before = evalGame(win, 'creationDraft.points').value;
+      key(win, 'g');
+      const after = evalGame(win, 'creationDraft.points').value;
+      if (after === before) return fail('No points left to convert.');
+      return okResult(`Converted 1 point to gold.`);
+    }
+    case 'pickScenario': {
+      if (evalGame(win, 'gameState').value !== 'start') return fail('Not on the starting-scenario screen.');
+      const ref = action.id != null ? action.id : action.index;
+      const r = evalGame(win, `
+        (function(){
+          let idx = (typeof ${JSON.stringify(ref)} === 'number') ? ${JSON.stringify(ref)}
+            : START_SCENARIOS.findIndex(s => s.id === ${JSON.stringify(ref)});
+          if (idx < 0 || !START_SCENARIOS[idx]) return {ok:false, reason:'scenario not found'};
+          beginScenario(String.fromCharCode(97+idx));
+          return {ok:true, name: START_SCENARIOS[idx].name};
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || 'pickScenario failed.');
+      return okResult(`Began as: ${r.value.name}.`);
+    }
+    case 'finishStep': {
+      // Advances from create_stats -> create_abilities -> create_final -> playing, exactly
+      // like a human pressing Enter at any of those screens (createStatsKey/
+      // createAbilitiesKey/createFinalKey all bind Enter to "move on").
+      key(win, 'Enter');
+      return okResult('Advanced to the next creation step.');
+    }
+    case 'backStep': {
+      key(win, '<');
+      return okResult('Went back one creation step.');
+    }
+
+    // ---- POST-CREATION SCREENS: inventory, item actions, containers, gifts, sockets,
+    // quickslots, leveling-time stat/talent spending, crafting, training, cybernetics, digging,
+    // and simple yes/no confirmations. Most of these resolve by id/uid directly against the
+    // real underlying function (openItemAction, craftRecipe, buyTalentById, etc.) rather than
+    // replaying a letter/page-position, the same pattern used throughout SECTION 8 already --
+    // see state().screen for the exact ids/options available at whatever screen you're on.
+    case 'selectItem': {
+      if (evalGame(win, 'gameState').value !== 'inventory') return fail('Not on the inventory screen (state().screen.kind === "inventory").');
+      if (!action.id) return fail('selectItem needs an "id" (uid, item id, or name substring).');
+      const r = evalGame(win, `
+        (function(){
+          const it = ${itemMatchExpr('filteredInventory()', action.id)};
+          if (!it) return { ok:false, reason:'no matching item (check state().screen.items, or switch filter/page)' };
+          const slot = SLOT_ORDER.find(s => player.equipment[s] === it) || null;
+          openItemAction(it, slot);
+          return { ok:true, name: it.name };
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || 'selectItem failed.');
+      return okResult(`Opened item actions for ${r.value.name}.`);
+    }
+    case 'dropItem': case 'reforgeItem': case 'salvageItem': {
+      const fnMap = { dropItem: 'dropItem', reforgeItem: 'reforgeItem', salvageItem: 'salvageItem' };
+      if (evalGame(win, 'gameState').value !== 'itemaction') return fail('Not on an item-action screen -- selectItem first.');
+      const r = evalGame(win, `
+        (function(){
+          const it = invSelected, slot = invSelectedSlot;
+          if (!it) return { ok:false, reason:'no item selected' };
+          ${type === 'salvageItem' ? "if (!salvageYieldFor(it)) return { ok:false, reason:'not salvageable' };" : ''}
+          ${type === 'reforgeItem' ? "if (!(canReforge(it) && salvageYieldFor(it))) return { ok:false, reason:'not reforgeable right now' };" : ''}
+          ${fnMap[type]}(it${type === 'salvageItem' ? ', slot' : ''});
+          gameState = 'playing'; closeModal();
+          return { ok:true, name: it.name };
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || `${type} failed.`);
+      const pastTense = { dropItem: 'Dropped', reforgeItem: 'Reforged', salvageItem: 'Salvaged' }[type];
+      return okResult(`${pastTense} ${r.value.name}.`);
+    }
+    case 'throwItem': {
+      if (evalGame(win, 'gameState').value !== 'itemaction') return fail('Not on an item-action screen -- selectItem first.');
+      const r = evalGame(win, `
+        (function(){
+          const it = invSelected, slot = invSelectedSlot;
+          if (!it || !canThrowItem(it)) return { ok:false, reason:'not throwable' };
+          closeModal(); beginThrowTargeting(it, slot);
+          return { ok:true, name: it.name };
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || 'throwItem failed.');
+      // beginThrowTargeting enters gameState 'tiletarget' just like a damage spell -- resolve
+      // it the exact same way castSpell's tiletarget branch does.
+      if (evalGame(win, 'gameState').value === 'tiletarget') {
+        if (action.targetUid) {
+          const t = evalGame(win, `(function(){ for(let dy=-8;dy<=8;dy++) for(let dx=-8;dx<=8;dx++){ const e=entityAt(player.x+dx,player.y+dy); if(e && e.uid===${JSON.stringify(action.targetUid)}) return {x:player.x+dx,y:player.y+dy}; } return null; })()`);
+          if (t.ok && t.value) evalGame(win, `confirmTileTarget(${t.value.x}, ${t.value.y})`);
+          else { evalGame(win, 'cancelTileTargeting()'); return fail(`targetUid "${action.targetUid}" not found nearby.`); }
+        } else key(win, action.targetKey || 'Enter');
+      }
+      return okResult(`Threw ${r.value.name}.`);
+    }
+    case 'socketRune': case 'unsocketRune': {
+      if (evalGame(win, 'gameState').value !== 'socketpick' && evalGame(win, 'gameState').value !== 'unsocketpick') return fail('Not on a socket/unsocket screen -- selectItem then choose the socket/unsocket option first.');
+      if (!action.id && action.index == null) return fail(`${type} needs an "id" or "index" (see state().screen.options).`);
+      const r = evalGame(win, `
+        (function(){
+          if (${type === 'socketRune'}) {
+            const runes = openSocketableRunesFor(invSelected);
+            const rune = ${action.id != null ? `runes.find(r=>r.id===${JSON.stringify(action.id)})` : `runes[${Number(action.index)}]`};
+            if (!rune) return { ok:false, reason:'rune not found' };
+            socketRune(invSelected, rune); gameState='playing'; closeModal();
+            return { ok:true, name: rune.name };
+          } else {
+            const idx = ${action.index != null ? Number(action.index) : `(invSelected.socketedRunes||[]).findIndex(r=>r.id===${JSON.stringify(action.id)})`};
+            const rune = (invSelected.socketedRunes||[])[idx];
+            if (!rune) return { ok:false, reason:'rune not found' };
+            unsocketRune(invSelected, idx); gameState='playing'; closeModal();
+            return { ok:true, name: rune.name };
+          }
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || `${type} failed.`);
+      return okResult(`${type === 'socketRune' ? 'Socketed' : 'Removed'} ${r.value.name}.`);
+    }
+    case 'assignQuickslot': {
+      if (evalGame(win, 'gameState').value !== 'quickslotassign') return fail('Not on the quickslot-assign screen -- selectItem then choose the quickslot option first.');
+      if (action.slot == null) return fail('assignQuickslot needs a "slot" (1-4).');
+      const r = evalGame(win, `
+        (function(){
+          const it = invSelected;
+          assignQuickslot(${Number(action.slot) - 1}, it);
+          gameState = 'inventory'; renderInventory();
+          return { ok:true, name: it ? it.name : null };
+        })()
+      `);
+      return okResult(`Assigned ${r.value && r.value.name} to quickslot ${action.slot}.`);
+    }
+    case 'giveGift': {
+      if (evalGame(win, 'gameState').value !== 'giftpick') return fail('Not on the gift screen (state().screen.kind === "giftpick").');
+      if (!action.id) return fail('giveGift needs an "id" (see state().screen.options).');
+      const r = evalGame(win, `
+        (function(){
+          const it = ${itemMatchExpr('giftList', action.id)};
+          if (!it) return { ok:false, reason:'no matching item in gift list' };
+          giveGift(dialogueNPC, it);
+          return { ok:true, name: it.name };
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || 'giveGift failed.');
+      return okResult(`Gave ${r.value.name}.`);
+    }
+    case 'takeFromContainer': case 'storeInContainer': {
+      if (evalGame(win, 'gameState').value !== 'container') return fail('Not at a container.');
+      if (!action.id) return fail(`${type} needs an "id".`);
+      const wantTake = type === 'takeFromContainer';
+      const listExpr = wantTake ? 'containerTarget.contents' : "player.inventory.filter(i=>i.type!=='corpse')";
+      const r = evalGame(win, `
+        (function(){
+          containerMode = ${wantTake ? "'take'" : "'store'"};
+          const list = ${listExpr};
+          const it = ${itemMatchExpr('list', action.id)};
+          if (!it) return { ok:false, reason:'no matching item' };
+          const idx = list.indexOf(it);
+          containerPage = Math.floor(idx / PAGE_SIZE);
+          containerTransact(String.fromCharCode(97 + (idx % PAGE_SIZE)));
+          return { ok:true, name: it.name };
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || `${type} failed.`);
+      return okResult(`${wantTake ? 'Took' : 'Stored'} ${r.value.name}.`);
+    }
+    case 'takeAllFromContainer': {
+      if (evalGame(win, 'gameState').value !== 'container') return fail('Not at a container.');
+      evalGame(win, "containerMode='take'; containerTakeAll();");
+      return okResult('Took everything from the container.');
+    }
+    case 'craftRecipe': {
+      if (evalGame(win, 'gameState').value !== 'craft') return fail('Not on the crafting screen.');
+      if (!action.id) return fail('craftRecipe needs a recipe "id" (see state().screen.recipes).');
+      if (!evalGame(win, `(player.knownRecipes||[]).includes(${JSON.stringify(action.id)})`).value) return fail('Recipe not known.');
+      evalGame(win, `craftRecipe(${JSON.stringify(action.id)}); renderCraft();`);
+      return okResult(`Crafted (or attempted) ${action.id}.`);
+    }
+    case 'buyTalent': {
+      if (evalGame(win, 'gameState').value !== 'talents') return fail('Not on the talents screen.');
+      if (!action.id) return fail('buyTalent needs a talent "id" (see state().screen.options).');
+      // BUG FIX: player.talents is a plain object keyed by id ({toughness:true, ...}), not an
+      // array -- an earlier version of this check used (player.talents||[]).length, which is
+      // always undefined on a plain object, so it silently reported failure on every SUCCESSFUL
+      // purchase too (confirmed via direct testing: talentPoints correctly dropped and
+      // player.talents.toughness was correctly set to true, but this check still said ok:false).
+      // Checking the specific key directly is correct regardless of how many talents exist.
+      if (evalGame(win, `!!(player.talents && player.talents[${JSON.stringify(action.id)}])`).value) return fail('Already have that talent.');
+      evalGame(win, `buyTalentById(${JSON.stringify(action.id)})`);
+      const got = evalGame(win, `!!(player.talents && player.talents[${JSON.stringify(action.id)}])`).value;
+      if (!got) return fail('Talent not purchased -- check id, or not enough talent points.');
+      return okResult(`Bought talent: ${action.id}.`);
+    }
+    case 'trainSkill': {
+      if (evalGame(win, 'gameState').value !== 'train') return fail('Not on the training screen.');
+      if (!action.id) return fail('trainSkill needs an "id" (see state().screen.options).');
+      const r = evalGame(win, `
+        (function(){
+          const idx = (trainEntries||[]).findIndex(e => e.id === ${JSON.stringify(action.id)});
+          if (idx < 0) return { ok:false, reason:'unknown training option id' };
+          const goldBefore = player.gold;
+          trainLearn(String.fromCharCode(97 + idx));
+          return { ok: player.gold < goldBefore, goldSpent: goldBefore - player.gold };
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail("Couldn't afford it, or already known.");
+      return okResult(`Learned it (${r.value.goldSpent}g).`);
+    }
+    case 'toggleCyber': {
+      if (evalGame(win, 'gameState').value !== 'cyber') return fail('Not on the cybernetics screen.');
+      if (!action.id) return fail('toggleCyber needs a cybernetic "id" (see state().screen.options).');
+      const r = evalGame(win, `
+        (function(){
+          const idx = (cyberListCache.entries||[]).findIndex(e => e.id === ${JSON.stringify(action.id)});
+          if (idx < 0) return { ok:false, reason:'unknown cybernetic id' };
+          const wasInstalled = player.installedCyber.includes(${JSON.stringify(action.id)});
+          toggleCyber(String.fromCharCode(97 + idx));
+          renderCybernetics();
+          return { ok:true, action: wasInstalled ? 'removed' : 'installed' };
+        })()
+      `);
+      if (!r.ok || !r.value.ok) return fail((r.value && r.value.reason) || 'toggleCyber failed.');
+      return okResult(`Cybernetic ${r.value.action}: ${action.id}.`);
+    }
+    case 'performRitual': {
+      if (evalGame(win, 'gameState').value !== 'eldritch') return fail('Not on the eldritch/ritual screen.');
+      const hpBefore = evalGame(win, 'player.hp').value;
+      evalGame(win, 'performRitual();');
+      const hpAfter = evalGame(win, 'player.hp').value;
+      if (hpAfter >= hpBefore) return fail('Too weak to perform the ritual (costs 15 HP -- heal up first).');
+      return okResult(`Performed the ritual (${hpBefore - hpAfter} HP spent; check state for corruption/mutation changes -- outcomes are randomized, matching the real game).`);
+    }
+    case 'spendStatPoint': {
+      if (evalGame(win, 'gameState').value !== 'character') return fail('Not on the character sheet (post-creation stat spending needs an earned statPoint from leveling -- see state().screen.statPointsAvailable).');
+      const idx = ['str','dex','int','con','wil','cha'].indexOf(action.stat);
+      if (idx < 0) return fail('Unknown stat -- use str, dex, int, con, wil, or cha.');
+      const before = evalGame(win, `player.${action.stat}`).value;
+      evalGame(win, `spendStat(${idx});`);
+      const after = evalGame(win, `player.${action.stat}`).value;
+      if (after === before) return fail('No stat points available to spend.');
+      return okResult(`${action.stat.toUpperCase()} now ${after}.`);
+    }
+    case 'dig': {
+      if (evalGame(win, 'gameState').value !== 'digpick') return fail('Not in dig-targeting mode (press key "D" from playing first -- requires being in a dungeon with a pickaxe-type tool equipped).');
+      const d = { n: [0,-1], s: [0,1], w: [-1,0], e: [1,0], nw: [-1,-1], ne: [1,-1], sw: [-1,1], se: [1,1] }[action.dir];
+      if (!d) return fail(`Unknown dir "${action.dir}".`);
+      // BUG FIX: beginDig() silently no-ops (logs a reason, returns to 'playing') for several
+      // real conditions -- nothing solid there, too close to the level edge, it's a door/statue,
+      // or a monster is nearby -- and this used to report ok:true regardless, the same class of
+      // false-positive already fixed for buyTalent/performRitual above. Digging that actually
+      // starts is a multi-turn setInterval process (digState gets set, see the game source), so
+      // checking gameState immediately after the call and waiting for it to finish is the
+      // correct way to know whether it actually happened.
+      evalGame(win, `beginDig(${d[0]}, ${d[1]});`);
+      const started = evalGame(win, 'gameState === "playing" && !!digState').value;
+      if (!started) return fail("Nothing to dig there (needs a solid, non-edge, non-door/statue wall, and no monster within 6 tiles -- check state()'s recent log via state().screen on a modal, or just try a different direction).");
+      await waitForAutoAction(win);
+      return okResult(`Finished digging ${action.dir}.`);
+    }
+    case 'confirm': {
+      const gs = evalGame(win, 'gameState').value;
+      const yes = action.yes !== false;
+      if (gs === 'confirmchasm') { evalGame(win, `confirmChasmJumpChoice(${JSON.stringify(yes ? 'y' : 'n')});`); return okResult(yes ? 'Jumped.' : 'Backed away.'); }
+      if (gs === 'confirmdelete') { evalGame(win, `confirmDeleteSaveChoice(${JSON.stringify(yes ? 'y' : 'n')});`); return okResult(yes ? 'Confirmed delete.' : 'Cancelled.'); }
+      if (gs === 'salvageall') { if (yes) { evalGame(win, 'confirmSalvageAllJunk();'); return okResult('Salvaged all junk.'); } key(win, 'x'); return okResult('Cancelled.'); }
+      return fail(`No yes/no confirmation pending (gameState is "${gs}").`);
+    }
+    default:
+      return fail(`Unknown action type "${type}". Combat/world verbs: move/attack, wait, pickup, rest, explore, travelHome, travelToStairs, descend, ascend, talk, calledShot, castSpell, useItem, equip, unequip, choose, buy, sell, closeMenu, key. Creation verbs: pickSpecies, pickArchetype, allocateStat, setAbilityCategory, toggleAbility, pageAbilities, toggleItem, pageItems, convertPointToGold, pickScenario, finishStep, backStep. Menu/inventory verbs: selectItem, dropItem, throwItem, reforgeItem, salvageItem, socketRune, unsocketRune, assignQuickslot, giveGift, takeFromContainer, storeInContainer, takeAllFromContainer, craftRecipe, buyTalent, trainSkill, toggleCyber, performRitual, spendStatPoint, dig, confirm.`);
+  }
+}
+
+/** Boot a fresh session for interactive/turn-by-turn control. Returns { state, act, debug,
+ * errors, close }. `state()` and `act()` are the two functions a driving loop needs; `debug`
+ * is the same SECTION 6 object (for directed scenario setup -- spawn a specific monster, grant
+ * a specific build, teleport somewhere -- before or during a session), and `errors` is the
+ * attachErrorCapture() handle so a driving loop can check for real engine crashes at any point,
+ * exactly like the autonomous bot does. */
+async function startInteractiveSession(opts = {}) {
+  const dom = await boot(opts.gameHtmlPath);
+  const win = dom.window;
+  const errHandle = attachErrorCapture(win);
+  return {
+    state: () => richState(win),
+    act: (action) => applyAction(win, action),
+    debug,
+    errors: errHandle.errors,
+    win, // escape hatch for anything not covered above -- evalGame(win, '...') always works
+    close: () => { try { win.close(); } catch (e) {} },
+  };
+}
+
+const INTERACTIVE_HELP = {
+  overview: 'One HTTP-controlled game session. GET /state for the current situation (including '
+    + 'full character-creation picker data if you\'re still on a creation screen), POST /act '
+    + 'with a JSON action body to make exactly one move, GET /debug/list for available debug '
+    + 'setup calls, POST /debug to use one. GET /snapshot saves the EXACT current moment to a '
+    + 'file (works even mid-fight or at 1 HP); POST /restore with {"file":"..."} returns to it '
+    + 'later, in this session or a completely different one -- use this to branch multiple '
+    + 'experiments from an identical starting point instead of re-setting-up each one by hand. '
+    + 'Nothing here decides anything for you -- you choose '
+    + 'every action, including every stat/ability/item during character creation: pickArchetype '
+    + '{custom:true} plus allocateStat/toggleAbility gives you completely free-form building, '
+    + 'mixing any stats with any spells/techniques/mutations/cyber -- there is no archetype or '
+    + '"focus" restriction in the real game, only in the separate autonomous bot (SECTION 5).',
+  actions: [
+    { type: 'move', fields: 'dir: n|s|e|w|ne|nw|se|sw', note: 'also attacks if that tile has a monster' },
+    { type: 'attack', fields: 'dir: same as move', note: 'alias of move' },
+    { type: 'wait', fields: '(none)' },
+    { type: 'pickup', fields: '(none)', note: 'picks up items on the current tile' },
+    { type: 'rest', fields: '(none)', note: 'refuses if bleeding, same as the real game' },
+    { type: 'explore', fields: '(none)', note: 'auto-explore toward unseen terrain' },
+    { type: 'travelHome', fields: '(none)' },
+    { type: 'travelToStairs', fields: '(none)' },
+    { type: 'descend', fields: '(none)' }, { type: 'ascend', fields: '(none)' },
+    { type: 'talk', fields: '(none)', note: 'if multiple NPCs adjacent, follow with a choose action' },
+    { type: 'calledShot', fields: 'bodyPart?: regex string, e.g. "head"' },
+    { type: 'castSpell', fields: 'id: spell/technique/cyber/mutation id from state().spells|techniques, targetUid?: attack THIS specific entity instead of nearest, targetTile?: {x,y} for a specific ground tile' },
+    { type: 'useItem', fields: 'id: uid | item id | name substring' },
+    { type: 'equip', fields: 'id: uid | item id | name substring' },
+    { type: 'unequip', fields: 'slot: from state().equipment keys' },
+    { type: 'choose', fields: 'index? (from state().menu.options) OR label? (regex substring)' },
+    { type: 'buy', fields: 'id: shop item id/name (while state().menu.kind === "trade")' },
+    { type: 'sell', fields: 'id: your item uid/id/name' },
+    { type: 'closeMenu', fields: '(none)' },
+    { type: 'key', fields: 'key: any raw key string', note: 'escape hatch for anything not covered above' },
+  ],
+  creationActions: [
+    { type: 'pickSpecies', fields: 'id | index | "random"', note: 'on the create_species screen' },
+    { type: 'pickArchetype', fields: '{custom:true} for free-form point-buy | id | index | "random"', note: 'custom:true is the one that unlocks true build freedom -- no archetype/focus restriction' },
+    { type: 'allocateStat', fields: 'stat: str|dex|int|con|wil|cha', note: 'adds ONE point per call, up to state().creation.maxPerStat; no un-spend' },
+    { type: 'setAbilityCategory', fields: 'category: spells|techniques|mutations|cyber', note: 'just switches the browsing tab -- toggleAbility works cross-category without this' },
+    { type: 'toggleAbility', fields: 'id: any spell/technique/mutation/cyber id', note: 'works from ANY category regardless of current tab -- this is the real "any build" lever' },
+    { type: 'pageAbilities', fields: 'dir: next|prev' }, { type: 'pageItems', fields: 'dir: next|prev' },
+    { type: 'toggleItem', fields: 'id: starting item id (from state().creation.pool)', note: 'adds only -- no removal, matches the real UI' },
+    { type: 'convertPointToGold', fields: '(none)' },
+    { type: 'pickScenario', fields: 'id | index', note: 'on the "start" screen -- wanderer/capital/city/town/village/hamlet/shipwreck/forest/etc.' },
+    { type: 'finishStep', fields: '(none)', note: 'advance stats -> abilities -> items -> playing' },
+    { type: 'backStep', fields: '(none)' },
+  ],
+  menuActions: [
+    { type: 'selectItem', fields: 'id: uid|item id|name', note: 'from the inventory screen -- opens item-action menu for it' },
+    { type: 'dropItem', fields: '(none)' }, { type: 'reforgeItem', fields: '(none)' }, { type: 'salvageItem', fields: '(none)' },
+    { type: 'throwItem', fields: 'targetUid? | targetTile?', note: 'same targeting as castSpell' },
+    { type: 'socketRune', fields: 'id | index (see state().screen.options)' },
+    { type: 'unsocketRune', fields: 'id | index', note: 'real game design: INT-scaled chance the rune shatters instead of returning to inventory -- not a bug if it does' },
+    { type: 'assignQuickslot', fields: 'slot: 1-4' },
+    { type: 'giveGift', fields: 'id: uid|item id|name (while on the giftpick screen)' },
+    { type: 'takeFromContainer', fields: 'id' }, { type: 'storeInContainer', fields: 'id' }, { type: 'takeAllFromContainer', fields: '(none)' },
+    { type: 'craftRecipe', fields: 'id: recipe id from state().screen.recipes' },
+    { type: 'buyTalent', fields: 'id: talent id from state().screen.options' },
+    { type: 'trainSkill', fields: 'id: spell/recipe id from state().screen.options' },
+    { type: 'toggleCyber', fields: 'id: cybernetic id from state().screen.options', note: 'post-creation install/remove, separate from creation-time toggleAbility' },
+    { type: 'performRitual', fields: '(none)', note: 'randomized outcome, same as the real game' },
+    { type: 'spendStatPoint', fields: 'stat: str|dex|int|con|wil|cha', note: 'post-creation leveling points, separate from creation-time allocateStat' },
+    { type: 'dig', fields: 'dir: same as move' },
+    { type: 'confirm', fields: 'yes?: true (default) | false', note: 'answers whatever confirmchasm/confirmdelete/salvageall prompt is pending -- for salvageall, open the inventory screen (key "i") and press "J" from there first, "J" does nothing from playing directly' },
+  ],
+  debug: 'POST /debug with {"method":"<name>","args":[...]}. GET /debug/list for every method '
+    + '(spawnMonster, giveByName, giveById, teleportToDungeonType, addGold, levelUp, setFlags, '
+    + 'searchRegistry, etc. -- see SECTION 6 in the source for full docs on each).',
+};
+
+/** `node playtest.js --serve [port]` -- boots one session and exposes it over a tiny local
+ * HTTP API (no external deps, Node's built-in http module only) so a controlling agent can
+ * drive it across many separate process invocations (e.g. a Claude session issuing curl calls
+ * from a shell tool, one decision at a time, reading real state back before each next move). */
+async function serve(port = 4691) {
+  const http = require('http');
+  const sess = await startInteractiveSession();
+  console.error(`Interactive session booted. Listening on http://localhost:${port}`);
+  console.error(`Try: curl http://localhost:${port}/help`);
+  const server = http.createServer(async (req, res) => {
+    const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj, null, 2)); };
+    try {
+      if (req.method === 'GET' && req.url === '/help') return send(200, { ...INTERACTIVE_HELP, currentState: sess.state() });
+      if (req.method === 'GET' && req.url === '/state') return send(200, sess.state());
+      if (req.method === 'GET' && req.url === '/errors') return send(200, { errors: sess.errors });
+      if (req.method === 'GET' && req.url === '/debug/list') return send(200, { methods: Object.keys(debug) });
+      if (req.method === 'GET' && req.url === '/snapshot') {
+        // Writes to a file (not just the HTTP response) since save data can be large once a
+        // world is well-explored, and a file is trivially reusable across separate `curl`
+        // calls / later sessions without re-copying a huge JSON blob through a shell variable.
+        const p = path.join(__dirname, `snapshot-${Date.now()}.json`);
+        snapshotToFile(sess.win, p);
+        return send(200, { ok: true, file: p, note: 'POST {"file":"' + p + '"} to /restore later to return to this exact moment.' });
+      }
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', async () => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          if (req.method === 'POST' && req.url === '/act') {
+            return send(200, await sess.act(parsed));
+          }
+          if (req.method === 'POST' && req.url === '/debug') {
+            const fn = debug[parsed.method];
+            if (!fn) return send(400, { ok: false, message: `Unknown debug method "${parsed.method}". GET /debug/list for options.` });
+            const result = fn(sess.win, ...(parsed.args || []));
+            return send(200, { ok: true, result, state: sess.state() });
+          }
+          if (req.method === 'POST' && req.url === '/restore') {
+            const ok = parsed.file ? restoreFromFile(sess.win, parsed.file) : restoreState(sess.win, parsed.snapshot);
+            return send(ok ? 200 : 400, { ok, state: sess.state() });
+          }
+          send(404, { ok: false, message: `No such route: ${req.method} ${req.url}` });
+        } catch (e) {
+          send(500, { ok: false, message: String(e && e.stack || e) });
+        }
+      });
+    } catch (e) {
+      send(500, { ok: false, message: String(e && e.stack || e) });
+    }
+  });
+  server.listen(port);
+  return server;
+}
+
+// ==========================================================================================
+// SECTION 9: STATE SNAPSHOT / RESTORE -- the original open item from this project's very first
+// session, finally closed. Lets multiple experiments (e.g. "test this fight with a sword vs. a
+// staff", or "try three different builds against the exact same boss") branch from an
+// identical starting point instead of each starting a fresh random character and hoping RNG
+// lines the scenarios up close enough to compare.
+// ==========================================================================================
+//
+// Reuses the game's OWN real save-game serialization (getSaveData/saveDataReplacer/
+// applyLoadedSave -- the exact same functions the in-game Settings > Save/Load menu calls)
+// rather than reimplementing world/player serialization from scratch -- the same "ask the
+// game, don't re-derive it" rule the rest of this file follows (see gearScore, effectiveCost/
+// getPoolValue in the unified ability pool, etc.). A snapshot is a portable JSON string
+// containing the FULL real save format: player, every world/dimension chunk that's ever been
+// mutated, every dungeon entered (with every depth of it), weather, in-progress world events,
+// kingdom relations -- everything a real save file has, because it IS a real save file.
+//
+// Deliberately bypasses saveGame()'s own guards (it refuses to save a dead/gameover character)
+// -- snapshotState() calls getSaveData() directly instead, since a controlling agent may
+// deliberately want to snapshot mid-crisis on purpose (e.g. one HP from death, about to try a
+// risky spell) specifically BECAUSE a real player couldn't save there, not despite it.
+
+/** Captures the exact current game state as an opaque, portable string. Call this any time --
+ * mid-fight, mid-dialogue, at 1 HP, whenever -- there's no "safe to save" requirement here the
+ * way there is for the real player-facing Save menu. Pass the returned string to
+ * restoreState() later (same process or a completely different one -- it's plain JSON) to
+ * return to this EXACT moment. */
+function snapshotState(win) {
+  const r = evalGame(win, 'JSON.stringify(getSaveData(), saveDataReplacer)');
+  if (!r.ok) throw new Error('snapshotState failed: ' + r.error);
+  return r.value;
+}
+
+/** Restores a snapshot captured by snapshotState() into `win`. Call this on a FRESHLY BOOTED
+ * session (no need to createRandomCharacter first -- applyLoadedSave fully replaces the world
+ * and player) to branch a new experiment from that exact point. Returns true/false rather than
+ * throwing, since a caller re-loading an old/foreign snapshot may reasonably want to check
+ * compatibility (see applyLoadedSave's own version-mismatch handling in the game source)
+ * before deciding what to do next. */
+function restoreState(win, snapshot) {
+  const r = evalGame(win, `
+    (function(){
+      const data = JSON.parse(${JSON.stringify(snapshot)});
+      const before = (typeof gameState !== 'undefined') ? gameState : null;
+      applyLoadedSave(data);
+      return { ok: gameState === 'playing', gsBefore: before, gsAfter: gameState };
+    })()
+  `);
+  return r.ok && r.value && r.value.ok;
+}
+
+/** Convenience: snapshotState() + write straight to a file, for persisting an experiment's
+ * starting point across separate CLI/script invocations (not just within one live process). */
+function snapshotToFile(win, filePath) {
+  fs.writeFileSync(filePath, snapshotState(win));
+  return filePath;
+}
+
+/** Convenience: read a file written by snapshotToFile() and restoreState() it into `win`. */
+function restoreFromFile(win, filePath) {
+  return restoreState(win, fs.readFileSync(filePath, 'utf8'));
+}
+
+// ==========================================================================================
 // EXPORTS -- everything needed to drive/inspect a session from another script (see the file
 // header's "AS A LIBRARY" section for a usage example). Requiring this file has no side
 // effects: main() (the full autonomous CLI batch) only runs below when this file is executed
@@ -3307,8 +4645,17 @@ module.exports = {
   // -- telemetry + deterministic full-content coverage sweep (SECTION 7) --
   snapshotCombatants, diffCombatSnapshots, summarizeCombatLog, runContentSweep,
   simulateCombat, compareAttackOptions, runComparison,
+  // -- interactive, turn-by-turn agent-driven session (SECTION 8) --
+  richState, applyAction, startInteractiveSession, serve, INTERACTIVE_HELP,
+  // -- state snapshot/restore (SECTION 9) --
+  snapshotState, restoreState, snapshotToFile, restoreFromFile,
 };
 
 if (require.main === module) {
-  main().catch((e) => { console.error('FATAL:', e); process.exit(1); });
+  if (process.argv[2] === '--serve') {
+    const port = parseInt(process.argv[3], 10) || 4691;
+    serve(port).catch((e) => { console.error('FATAL:', e); process.exit(1); });
+  } else {
+    main().catch((e) => { console.error('FATAL:', e); process.exit(1); });
+  }
 }
