@@ -516,7 +516,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.44.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.45.0-alpha</div>
     </div>
   </div>
 
@@ -8569,6 +8569,8 @@ function trackVisitAndMaybeRepopulate() {
   if (curIsDungeon()) {
     const lvl = curDungeonLevel();
     if (!lvl) return;
+    if (curDungeon() && curDungeon().isTutorial) return; // hand-crafted, fixed on purpose -- never repopulate
+
     if (lvl.lastVisitedTurn !== undefined) {
       const elapsed = turnCount - lvl.lastVisitedTurn;
       if (elapsed >= REPOPULATE_MIN_TURNS && Math.random() < Math.min(0.5, elapsed / 4000)) {
@@ -13101,6 +13103,7 @@ function shatterFrozenEntity(e) {
   if (!isEntityFrozenSolid(e)) return 0;
   const bonus = randInt(Math.random, 4, 10);
   e.frozenSolidTurns = 0;
+  if (player.isTutorial) player._tutSawShatter = true;
   if (posVisibleToPlayer(e.x, e.y)) log(`The ice around ${e === player ? 'you' : e.name} shatters violently! (+${bonus} damage)`);
   return bonus;
 }
@@ -13414,7 +13417,16 @@ function igniteTile(x, y, turns, force) {
   }
   t.fireTurns = Math.max(t.fireTurns || 0, turns);
   trackFxTile(t, x, y);
-  if (occupant && entityIsOiled(occupant)) igniteEntity(occupant, 5);
+  if (occupant && entityIsOiled(occupant)) {
+    // This exact line IS the oil+fire combo the Emergence tutorial teaches -- flag it here, at the
+    // source, rather than having a tutorial objective try to re-detect it by polling the target's
+    // status afterward. A weak practice target can easily die in the very blast that ignites it,
+    // and a dead monster is spliced out of level.monsters immediately (see removeDeadEntity), so
+    // any post-hoc "look the target up and check its burningTurns" objective check would silently
+    // and unfixably miss exactly the common case where the combo one-shots something.
+    if (player.isTutorial) player._tutSawIgniteCombo = true;
+    igniteEntity(occupant, 5);
+  }
   return true;
 }
 // Fire meeting water doesn't just fizzle -- it flashes into a burst of scalding steam that
@@ -14245,7 +14257,7 @@ function gainXP(amount) {
 
 // ---------------- movement / turn processing ----------------
 
-function waitTurn() { endTurn(); }
+function waitTurn() { if (player.isTutorial) player._tutWaitCount = (player._tutWaitCount || 0) + 1; endTurn(); }
 
 
 // ---- terrain traversal helpers: shared between the player's own detailed movement handler
@@ -14721,6 +14733,7 @@ function confirmTileTarget(wx, wy) {
   }
   if (p.kind === 'spell') {
     if (!paySpellCost(p.spell)) { log('Not enough resource.'); return; }
+    if (player.isTutorial) player._tutSpellCasts = (player._tutSpellCasts || 0) + 1;
     pendingTarget = null; gameState = 'playing';
     resolveSpellAtTile(p.spell, wx, wy);
     endTurn(); return;
@@ -14813,6 +14826,7 @@ function useStairsUp() {
 // ---------------- dialogue / trade ----------------
 
 function openTrade(npc) {
+  if (player.isTutorial) player._tutSawShop = true;
   maybeRestockShop(npc);
   gameState = 'trade'; dialogueNPC = npc; tradeMode = 'buy'; tradePage = 0;
   Sound.play('uiOpen');
@@ -14874,6 +14888,7 @@ function tradeTransact(letter) {
     const price = Math.round(it.value * 1.2 * repMult);
     if (player.gold < price) { Sound.play('uiError'); log("You can't afford that."); return; }
     player.gold -= price; addItemToList(player.inventory, it); npc.shop.splice(idx, 1);
+    if (player.isTutorial) player._tutDidBuy = true;
     Sound.play('tradeBuy');
     log(`You buy ${it.name} for ${price}g.`);
   } else {
@@ -14883,6 +14898,7 @@ function tradeTransact(letter) {
     const price = Math.round(it.value * 0.45 * Math.max(0.15, 2 - repMult));
     player.gold += price;
     player.inventory = player.inventory.filter(i => i.uid !== it.uid);
+    if (player.isTutorial) player._tutDidSell = true;
     Sound.play('tradeSell');
     log(`You sell ${it.name} for ${price}g.`);
     // ---- WORLD MEMORY, part 3: a small, ongoing trickle of standing just for doing business
@@ -15076,6 +15092,7 @@ function containerSort() {
 function openCharacterSheet() {
   Sound.play('uiOpen');
   gameState = 'character';
+  if (player.isTutorial) player._tutSawCharSheet = true;
   renderCharacterSheet();
 }
 function renderCharacterSheet() {
@@ -15126,6 +15143,7 @@ function spendStat(idx) {
 function openSpellbook() {
   Sound.play('uiOpen');
   gameState = 'spellbook';
+  if (player.isTutorial) player._tutSawSpellbook = true;
   renderSpellbook();
 }
 
@@ -17413,6 +17431,10 @@ function descend() {
   markSeen(); render();
 }
 function ascend() {
+  // Tutorial dungeons don't chain "up" to a previous part the way real multi-depth dungeons do --
+  // part-to-part navigation goes through the Tutorial menu instead (see enterTutorialPart), so
+  // stepping onto an entrance '<' anywhere in a tutorial always just backs out to that menu.
+  if (curIsDungeon() && curDungeon() && curDungeon().isTutorial) { exitTutorialToMenu(); return; }
   clearAreaFx();
   if (player.dungeonDepth === 1) {
     const ret = player.overworldReturn || { x: 0, y: 0, mode: 'overworld', dimensionId: null };
@@ -17932,7 +17954,7 @@ function compareItem(it) {
 const INV_FILTERS = ['all','weapon','armor','consumable','material','scroll','misc'];
 const PAGE_SIZE = 20;
 let invSelectedSlot = null;
-function openInventory() { Sound.play('uiOpen'); gameState = 'inventory'; invSelected = null; invSelectedSlot = null; if (!player.invFilter) player.invFilter='all'; if (!player.invPage) player.invPage=0; renderInventory(); }
+function openInventory() { Sound.play('uiOpen'); gameState = 'inventory'; invSelected = null; invSelectedSlot = null; if (!player.invFilter) player.invFilter='all'; if (!player.invPage) player.invPage=0; if (player.isTutorial) player._tutSawInventory = true; renderInventory(); }
 // Named categories get their own tab; everything else (chests, cyberware chips, mutagen vials,
 // keys, and any future item type) falls into 'misc' by default instead of only ever appearing in
 // ALL. This is a structural guarantee, not a checklist -- a new item type added later can't
@@ -18230,6 +18252,7 @@ function fireRangedWeapon() {
   if (player.statusFear > 0) { log("You're too terrified to fight!"); endTurn(); return; }
   const t = nearestHostile(7);
   if (!t) { log('No target in range.'); return; }
+  if (player.isTutorial) player._tutRangedShots = (player._tutRangedShots || 0) + 1;
   doAttack(player, t);
   endTurn();
 }
@@ -18245,6 +18268,7 @@ function reopenMainQuestChoice() {
 function openQuestLog() {
   Sound.play('uiOpen');
   gameState = 'questlog';
+  if (player.isTutorial) player._tutSawQuestLog = true;
   ensureStory();
   let html = '';
   if ((player.worldPhase || 0) > 0) {
@@ -18425,6 +18449,7 @@ function openLibraryEntry(bookId) {
 function openCraft() {
   Sound.play('uiOpen');
   gameState = 'craft';
+  if (player.isTutorial) player._tutSawCraft = true;
   renderCraft();
 }
 function renderCraft() {
@@ -19179,7 +19204,7 @@ let spellOrder = [];
 
 // ---- talents v2: tiers + prerequisites ----
 let talentPurchasable = [];
-function openTalents() { Sound.play('uiOpen'); gameState = 'talents'; renderTalents(); }
+function openTalents() { Sound.play('uiOpen'); gameState = 'talents'; if (player.isTutorial) player._tutSawTalents = true; renderTalents(); }
 function renderTalents() {
   let html = `<div class="npcline">Talent points: ${player.talentPoints} &nbsp; <span class="dim">(Character Level ${player.level})</span></div>`;
   const byTier = {};
@@ -19649,6 +19674,7 @@ function render() {
   renderWeatherOverlay();
 
   updateSidebar();
+  if (player.isTutorial) updateTutorialBannerLive();
 }
 
 // ---- input v5: zoom keys + spellbook grouping fix ----
@@ -20352,6 +20378,7 @@ function tryForChild(npc) {
 // companionFollowAI above for how orderMode/orderPos/stance actually get acted on each turn. ----
 function openOrdersMenu(npc) {
   Sound.play('uiOpen');
+  if (player.isTutorial) player._tutSawOrders = true;
   const opts = [];
   let n = 0;
   const nextKey = () => String.fromCharCode(97 + (n++));
@@ -20407,6 +20434,9 @@ function worldPhaseReactionLine(npc) {
 // ---- dialogue v5: crime hook, spouse follow toggle, family view, married flavor ----
 function openDialogue(npc) {
   Sound.play('uiOpen');
+  // Hand-authored tutorial instructors have their own tiny, fixed script -- they never run
+  // through the real (procedurally-flavored) dialogue tree at all. See showTutorialInstructorDialogue.
+  if (npc.isTutorialInstructor) { showTutorialInstructorDialogue(npc); return; }
   gameState = 'dialogue';
   dialogueNPC = npc;
   markLocationDirty(npc.x, npc.y);
@@ -20929,7 +20959,7 @@ function beginScenario(letter) {
     if (hasQuestLead()) log(stage.desc);
     else log("You don't know where to start yet — talk to people in a settlement, read what you find, or just keep exploring. Your quest log ([q]) will update the moment you've got a real lead.");
   }
-  log("─── Getting started: move with arrow keys/WASD/numpad. Press [q] for your quest log. Press [t] near a person to talk — they may know something useful. Press [g] to open containers you're standing on. Press [?] for the full guide. ───");
+  log("─── New here? Hand-crafted Tutorials are one click below Continue on the main menu — or press [?] for the full guide. ───");
   // Drop a tutorial note at the player's feet teaching the 'g'/'i'/'u' pickup-and-read chain, and
   // plant the idea that readable notes exist in the world. (No quest-hint note here -- see
   // spawnStarterRumorNote's comment for why that would be immersion-breaking.)
@@ -21783,7 +21813,7 @@ function applyEffectToTarget(spell, t) {
       igniteTile(t.x, t.y, 4);
       // Same oiled-target-catches-fire synergy as a monster's fire-flagged melee (see doAttack) --
       // an oil flask thrown on an enemy, followed up with any fire spell, guarantees a lasting burn.
-      if (t.hp > 0 && entityIsOiled(t) && igniteEntity(t, 6)) log(`The oil on ${t.name} catches -- it's ablaze!`);
+      if (t.hp > 0 && entityIsOiled(t) && igniteEntity(t, 6)) { log(`The oil on ${t.name} catches -- it's ablaze!`); if (player.isTutorial) player._tutSawIgniteCombo = true; }
     }
     // ---- BUG FIX: frost-flagged damage (frostbolt, glacialform, frostbite_mut) previously only
     // interacted with terrain (freezing water/snuffing fire) via applyTerrainInteraction() -- the
@@ -21793,7 +21823,7 @@ function applyEffectToTarget(spell, t) {
     if (spell.frost && t.hp > 0) {
       // Wet + Frost = frozen solid, not just chilled -- the other half of the elemental triangle
       // alongside oil+fire (detonateOil) and water+shock (weatherElementMultiplier's wet bonus).
-      if (entityIsWet(t) && freezeEntitySolid(t, 3)) log(`The frost seizes the water on ${t.name} -- it freezes solid!`);
+      if (entityIsWet(t) && freezeEntitySolid(t, 3)) { log(`The frost seizes the water on ${t.name} -- it freezes solid!`); if (player.isTutorial) player._tutSawFreezeCombo = true; }
       else { t.statusSlow = Math.max(t.statusSlow || 0, 2); log(`${t.name} is chilled and slowed!`); }
     }
     return;
@@ -29142,10 +29172,11 @@ function endTurn() {
   }
   markSeen();
   render();
+  if (player.isTutorial) tutorialTurnHook();
 }
 
 // ---- cybernetics management ('Y'): install/uninstall within slot limit ----
-function openCybernetics() { Sound.play('uiOpen'); gameState = 'cyber'; renderCybernetics(); }
+function openCybernetics() { Sound.play('uiOpen'); gameState = 'cyber'; if (player.isTutorial) player._tutSawCyber = true; renderCybernetics(); }
 function renderCybernetics() {
   const slots = player.cyberSlots || 3;
   let html = `<div class="npcline">Cyber Slots: ${player.installedCyber.length}/${slots} &nbsp; Charge: ${Math.round(player.charge)}/${player.maxCharge}</div>`;
@@ -30357,7 +30388,9 @@ function updateSidebar() {
   }).join('<br>');
   let base;
   if (curIsDungeon()) {
-    base = `${curDungeon().name} - Depth ${player.dungeonDepth}/${curDungeon().maxDepth}`;
+    base = curDungeon().isTutorial
+      ? `${curDungeon().name} — Part ${player.dungeonDepth}/${curDungeon().maxDepth}`
+      : `${curDungeon().name} - Depth ${player.dungeonDepth}/${curDungeon().maxDepth}`;
   } else if (curIsDimension()) {
     const t = curTileAt(player.x, player.y);
     const dim = DIMENSIONS[player.dimensionId];
@@ -30458,6 +30491,7 @@ function getSaveData() {
 }
 function saveGame(isAuto) {
   try {
+    if (player && player.isTutorial) { if (!isAuto) log("Tutorials don't save -- just pick up wherever you like from the Tutorials menu."); return false; }
     if (typeof localStorage === 'undefined') { if (!isAuto) log('Saving is not available in this environment.'); return false; }
     // never (re)write a save for a dead character -- gameOver() already deletes the save the
     // moment the player dies, and this guard makes sure nothing (a stray autosave tick, a
@@ -30776,11 +30810,12 @@ function showTitleScreen() {
   html += save
     ? `<div class="title-menu-opt" onclick="simulateKey('b')"><b>[b]</b> Continue</div>`
     : `<div class="title-menu-opt disabled"><b>[b]</b> Continue — no save found</div>`;
-  html += `<div class="title-menu-opt" onclick="simulateKey('c')"><b>[c]</b> Settings</div>`;
-  html += `<div class="title-menu-opt" onclick="simulateKey('d')"><b>[d]</b> Guide &amp; Controls</div>`;
-  if (save) html += `<div class="title-menu-opt" onclick="simulateKey('e')"><b>[e]</b> Delete Save</div>`;
-  if (getHallOfLegends().length) html += `<div class="title-menu-opt" onclick="simulateKey('f')"><b>[f]</b> Hall of Legends</div>`;
-  html += `<div class="title-menu-opt" onclick="simulateKey('g')"><b>[g]</b> View Source (GitHub)</div>`;
+  html += `<div class="title-menu-opt" onclick="simulateKey('c')"><b>[c]</b> Tutorials</div>`;
+  html += `<div class="title-menu-opt" onclick="simulateKey('d')"><b>[d]</b> Settings</div>`;
+  html += `<div class="title-menu-opt" onclick="simulateKey('e')"><b>[e]</b> Guide &amp; Controls</div>`;
+  if (save) html += `<div class="title-menu-opt" onclick="simulateKey('f')"><b>[f]</b> Delete Save</div>`;
+  if (getHallOfLegends().length) html += `<div class="title-menu-opt" onclick="simulateKey('g')"><b>[g]</b> Hall of Legends</div>`;
+  html += `<div class="title-menu-opt" onclick="simulateKey('h')"><b>[h]</b> View Source (GitHub)</div>`;
   document.getElementById('title-menu').innerHTML = html;
   spawnTitleEmbers();
 }
@@ -30800,11 +30835,12 @@ function spawnTitleEmbers() {
 function titleScreenChoice(letter) {
   if (letter === 'a') { showSpeciesPicker(); return; }
   if (letter === 'b' && hasSaveGame()) { loadGame(); return; }
-  if (letter === 'c') { showSettings('title'); return; }
-  if (letter === 'd') { openHelp(); return; }
-  if (letter === 'e' && hasSaveGame()) { confirmDeleteSave(); return; }
-  if (letter === 'f' && getHallOfLegends().length) { showHallOfLegends(); return; }
-  if (letter === 'g') { window.open('https://github.com/LienDan/Lucid-Dreams-of-Roguelike', '_blank', 'noopener'); return; }
+  if (letter === 'c') { showTutorialMenu(); return; }
+  if (letter === 'd') { showSettings('title'); return; }
+  if (letter === 'e') { openHelp(); return; }
+  if (letter === 'f' && hasSaveGame()) { confirmDeleteSave(); return; }
+  if (letter === 'g' && getHallOfLegends().length) { showHallOfLegends(); return; }
+  if (letter === 'h') { window.open('https://github.com/LienDan/Lucid-Dreams-of-Roguelike', '_blank', 'noopener'); return; }
 }
 function showHallOfLegends() {
   gameState = 'halloflegends';
@@ -31789,6 +31825,9 @@ function finishCustomCreation() {
 
 // ---- game over v4: full death screen -- cause of death + scrollable combat log ----
 function gameOver() {
+  // Tutorials promise "dying isn't punishing" -- intercept before any of the real death machinery
+  // (save deletion, Hall of Legends, the death screen) ever runs. See tutorialDeathRespawn().
+  if (player && player.isTutorial) { tutorialDeathRespawn(); return; }
   gameState = 'gameover';
   player.alive = false;
   Sound.play('playerDeath');
@@ -32835,6 +32874,7 @@ function closeHelp() {
 // ---- save/load menu (accessible mid-game via 'P') ----
 function openSaveLoadMenu() {
   Sound.play('uiOpen');
+  if (player && player.isTutorial) { openTutorialPauseMenu(); return; }
   gameState = 'saveload';
   let html = `<div class="modal-opt" onclick="simulateKey('a')">[a] Save Game</div>`;
   html += `<div class="modal-opt" onclick="simulateKey('b')">[b] Load Game${hasSaveGame() ? '' : ' (no save found)'}</div>`;
@@ -32853,6 +32893,7 @@ function saveLoadChoice(letter) {
   else if (letter === 'f') { quitToMenu(); }
 }
 function quitToMenu() {
+  if (player && player.isTutorial) { exitTutorialToMenu(); return; }
   if (!settings.confirmQuit) { showTitleScreen(); return; }
   const msg = settings.autosaveEnabled
     ? 'Quit to the title screen? Your last autosave will still be there — anything since then is lost.'
@@ -33120,7 +33161,1402 @@ function handleKey(e) {
     if (key === 'y' || key === 'n' || key === 'Escape') { confirmChasmJumpChoice(key === 'Escape' ? 'n' : key); return; }
     return;
   }
+  // ===================== TUTORIAL SYSTEM: menu key routing =====================
+  if (gameState === 'tutorial_menu') {
+    if (key === 'Escape') { showTitleScreen(); return; }
+    if (key === '<' || /^[a-z]$/.test(key)) { tutorialMenuChoice(key); return; }
+    return;
+  }
+  if (gameState === 'tutorial_parts') {
+    if (key === 'Escape') { showTutorialMenu(); return; }
+    if (key === '<' || key === '0' || /^[a-z]$/.test(key)) { tutorialPartsChoice(key); return; }
+    return;
+  }
+  if (gameState === 'tutorial_partcomplete') {
+    // Deliberately no Escape shortcut here -- a completed lesson should always end on a real,
+    // deliberate choice (continue/replay/menu), never get silently dismissed.
+    const found = tutorialModalActions.find(o => o.key === key);
+    if (found) found.action();
+    return;
+  }
+  if (gameState === 'tutorial_pausemenu') {
+    if (key === 'Escape') { gameState = 'playing'; closeModal(); return; }
+    if (/^[a-z]$/.test(key)) { tutorialPauseMenuChoice(key); return; }
+    return;
+  }
 }
+
+
+// ============================================================================================
+// ===================== TUTORIAL SYSTEM (hand-crafted, no procedural generation) =============
+// ============================================================================================
+// Design summary (see also the Tutorials entry on the main menu, between Continue and Settings):
+//
+//   - Every tutorial "level" reuses the exact same dungeon-mode machinery the real game already
+//     has (curTileAt/curMonsters/curNPCs/render/combat/dialogue/FOV/minimap/etc.) by registering
+//     a synthetic entry in dungeonRegistry and setting player.mode='dungeon' against it. NOTHING
+//     about that machinery is duplicated or reimplemented -- a tutorial level IS a dungeon level,
+//     just one built by hand from an ASCII map instead of DUNGEON_GENERATORS. See buildTutorialLevel.
+//   - A Tutorial has an ordered list of Parts. Each Part is one hand-drawn level with its own
+//     objectives; a Part is "complete" the instant every one of its objectives checks true (no
+//     player action required beyond actually doing them -- no stairs to find, nothing to confirm).
+//     See tutorialTurnHook/checkTutorialObjectives/onTutorialPartComplete.
+//   - Dying inside a tutorial is completely consequence-free: gameOver() is intercepted (see the
+//     patch on gameOver itself) and redirected to tutorialDeathRespawn(), which fully heals the
+//     player, clears every negative status, and drops them back at the part's start point.
+//   - Tutorials never touch localStorage (saveGame() is guarded) and never persist between page
+//     loads -- tutorialCompletionMemory is a plain in-memory record used only to put checkmarks
+//     next to parts you've already cleared THIS session, so you can tell at a glance what's left.
+//   - EXTENDING THIS: to add a new tutorial, add one more entry to the TUTORIALS array below. To
+//     add a part to an existing tutorial, add one more object to that tutorial's `parts` array.
+//     Nothing else needs to change -- the menu, progress tracking, completion flow, death-safety,
+//     and part-to-part navigation are all generic and read the TUTORIALS array directly.
+// ============================================================================================
+
+// ---------------------------------------------------------------------------------------------
+// ---- Level authoring: turn a block of ASCII art + a marker legend into a real dungeon level ----
+// ---------------------------------------------------------------------------------------------
+// Terrain characters (always available, on top of whatever a part's own `markers` add):
+//   '#' or ' '  wall            '.'  floor            "'"  open door
+//   '<'         tutorial entrance/exit (stepping here and pressing '<' always returns to the
+//               Tutorial Menu -- see the isTutorial branch patched into ascend())
+//   '>'         a purely decorative "stairs down" glyph -- tutorials never actually use it to
+//               change level (parts advance automatically when their objectives are met), but a
+//               couple of parts use it as a visual landmark when teaching real dungeon navigation.
+// A part's `markers` object maps any OTHER character used in its map to a spawn descriptor. The
+// terrain under a marker defaults to floor unless the descriptor sets `terrain`.
+function tutTerrainTile(ch) {
+  if (ch === '#' || ch === ' ') return dtile2('#', false);
+  if (ch === "'") return { glyph: "'", walkable: true, feature: 'door', color: '#8a6a3a', bg: '#161310' };
+  if (ch === 'H') return { glyph: '#', walkable: false, feature: 'secretdoor', discovered: false, color: '#6a6258', bg: '#0e0c0a' };
+  if (ch === '<') return dtile2('<', true, '#e0c34a');
+  if (ch === '>') return dtile2('>', true, '#5a5248');
+  return dtile2('.', true);
+}
+function tutApplyMarker(level, marker, x, y, tile) {
+  switch (marker.type) {
+    case 'player':
+      level.tutorialStart = { x, y };
+      break;
+    case 'monster': {
+      const m = makeMonster(marker.id, x, y, marker.depthScale || 1, Math.random);
+      if (marker.name) m.name = marker.name;
+      if (marker.hp) { m.hp = marker.hp; m.maxHp = marker.hp; }
+      if (marker.atk) m.atk = marker.atk.slice();
+      if (marker.armor !== undefined) m.armor = marker.armor;
+      if (marker.dormant) { m.aiState = 'dormant'; m.sleeper = true; }
+      if (marker.wet) m.wetTurns = 60; // generous window -- this is a scripted teaching demo, not a timing puzzle; see the Emergence tutorial
+      if (marker.dummy) m.isTutorialDummy = true;
+      if (marker.tag) m.tutorialTag = marker.tag;
+      if (marker.boss) m.boss = true;
+      level.monsters.push(m);
+      break;
+    }
+    case 'npc': {
+      level.npcs.push(tutMakeInstructor(marker, x, y));
+      break;
+    }
+    case 'companion': {
+      // A pre-recruited companion, built to the same shape toggleSpouseFollow() produces for a
+      // real spouse joining you -- following:true + orderMode:'follow' hands it straight to the
+      // game's own companionFollowAI (see npcAI's `if (n.following)` branch), so it moves, fights,
+      // and reacts exactly like a real recruited companion would. Stashed on the LEVEL here (not
+      // pushed onto player.companions directly) because build() runs before the tutorial player
+      // object is even created -- see enterTutorialPart, which attaches level.pendingCompanions
+      // to the real player.companions right after building it.
+      // NOTE: the real game only exposes the Orders menu (follow/stay, stance) through a spouse's
+      // dialogue -- see the `if (isSpouse)` gate in openDialogue(). marker.asSpouse mirrors that
+      // truthfully instead of pretending a generic companion gets menu options it wouldn't in the
+      // real game; enterTutorialPart wires player.spouse up once this companion actually exists.
+      const companionUid = 'tutcompanion' + (uidCounter++);
+      if (marker.asSpouse) level.spouseCompanionUid = companionUid;
+      level.pendingCompanions = level.pendingCompanions || [];
+      level.pendingCompanions.push({
+        uid: companionUid, kind: 'npc', roleId: marker.roleId || 'guard', roleName: marker.role || 'Companion',
+        name: marker.name || 'Companion', x, y, trait: null, species: 'human', tier: 'journeyman',
+        hp: marker.hp || 40, maxHp: marker.hp || 40, str: marker.str || 11, dex: marker.dex || 11,
+        atk: marker.atk || [3, 7], armor: marker.armor || 2,
+        baseHp: marker.hp || 40, baseStr: marker.str || 11, baseDex: marker.dex || 11, baseArmor: marker.armor || 2, baseAtk: (marker.atk || [3, 7]).slice(),
+        color: marker.color || '#6ac9e0', glyph: '@', affection: 100, alive: true, home: null,
+        rumor: null, wanderCenter: { x, y }, hostile: false, healer: false, spouse: marker.asSpouse ? { uid: 'tutorial-player', name: 'You' } : null, canGiveQuest: false,
+        gender: '', appearance: '', giftCount: 0, lastTalkTurn: -9999, faction: 'settlement',
+        aiState: 'idle', homeX: x, homeY: y, patrolRadius: 0, target: null, asleep: false,
+        following: true, orderMode: 'follow', orderPos: null, stance: 'aggressive',
+      });
+      break;
+    }
+    case 'item': {
+      const it = makeItem(marker.id, 0, Math.random);
+      if (it) { if (marker.amount) it.amount = marker.amount; level.items.push({ x, y, item: it }); }
+      break;
+    }
+    case 'container': {
+      const contents = (marker.contents || []).map(c => {
+        const it = makeItem(c.id, 0, Math.random);
+        if (it && c.amount) it.amount = c.amount;
+        return it;
+      }).filter(Boolean);
+      const container = makeContainer(marker.kind || 'chest', { name: marker.name, locked: !!marker.locked, contents, desc: marker.desc });
+      level.containers.push({ x, y, container });
+      break;
+    }
+    case 'trigger': {
+      level.tutorialTriggers.push({ x, y, once: marker.once !== false, fired: false, onEnter: marker.onEnter, tag: marker.tag });
+      break;
+    }
+    case 'trap': {
+      // Mirrors exactly what real dungeon generation does to a floor tile (see placeTraps) --
+      // the existing step-on-trap detection/resolution in movePlayer/triggerTrapAt handles the
+      // rest unmodified, hidden-ness and all, so a tutorial trap behaves exactly like a real one.
+      tile.hiddenTrap = true;
+      tile.trapType = marker.trapType || 'spike';
+      if (tile.trapType === 'mine') { tile.minePower = marker.minePower || [4, 8]; tile.mineRadius = marker.mineRadius || 1; }
+      break;
+    }
+  }
+}
+// Builds one complete dungeon-level object from an ASCII map + marker legend. `mapRows` is an
+// array of equal-length strings; `markers` maps a character to a spawn descriptor (see above).
+function buildTutorialLevel(mapRows, markers) {
+  markers = markers || {};
+  const h = mapRows.length, w = Math.max(...mapRows.map(r => r.length));
+  const grid = [];
+  const level = {
+    grid: null, depth: 1, monsters: [], npcs: [], items: [], containers: [],
+    upStairs: null, downStairs: null, w, h,
+    tutorialTriggers: [], tutorialStart: { x: 1, y: 1 }, tutorialCompleted: false,
+  };
+  for (let y = 0; y < h; y++) {
+    const row = [];
+    const rowStr = mapRows[y];
+    for (let x = 0; x < w; x++) {
+      const ch = rowStr[x] || ' ';
+      const marker = markers[ch];
+      const terrainCh = marker ? (marker.terrain || '.') : ch;
+      const tile = tutTerrainTile(terrainCh);
+      row.push(tile);
+      if (terrainCh === '<') level.upStairs = { x, y };
+      if (terrainCh === '>') level.downStairs = { x, y };
+      if (marker) tutApplyMarker(level, marker, x, y, tile);
+    }
+    grid.push(row);
+  }
+  level.grid = grid;
+  return level;
+}
+function tutMakeInstructor(marker, x, y) {
+  return {
+    uid: 'tutnpc' + (uidCounter++), kind: 'npc', roleId: marker.shop ? (marker.roleId || 'merchant') : 'tutorialinstructor', roleName: marker.role || 'Instructor',
+    name: marker.name || 'Instructor', x, y, trait: null, species: 'human', tier: 'journeyman',
+    hp: 9999, maxHp: 9999, str: 1, dex: 1, atk: [0, 0], armor: 0,
+    color: marker.color || '#e0c34a', glyph: '@', affection: 0, alive: true, home: null,
+    rumor: null, wanderCenter: { x, y }, hostile: false, healer: false,
+    spouse: null, canGiveQuest: false, gender: '', appearance: '', giftCount: 0, lastTalkTurn: -9999,
+    faction: 'tutorial', aiState: 'idle', homeX: x, homeY: y, patrolRadius: 0, target: null, asleep: false,
+    isTutorialInstructor: true, tutorialDialogue: marker.dialogue,
+    // dialogueFn(npc), when given, is called FRESH every time this NPC is talked to and returns a
+    // {title, lines, extraOptions} dialogue object -- lets an instructor's conversation change
+    // based on live tutorial state (e.g. a quest-giver whose options differ before/after you've
+    // finished their errand) instead of being fixed at NPC-creation time like a plain `dialogue`.
+    tutorialDialogueFn: marker.dialogueFn || null,
+    // A real `npc.shop` array of real items -- NOT a bespoke tutorial-only shop UI. "Browse wares"
+    // below calls the game's actual openTrade()/renderTrade()/tradeTransact(), Tab-to-switch and
+    // all, so trading in a tutorial is pixel-for-pixel the same flow as trading in the real game.
+    shop: marker.shop ? marker.shop.map(id => makeItem(id, 0, Math.random)) : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// ---- Small, reusable objective-check helpers (keeps each tutorial's data terse & readable) ------
+// ---------------------------------------------------------------------------------------------
+function tutHasItem(p, id) {
+  return p.inventory.some(it => it.id === id) || Object.values(p.equipment || {}).some(it => it && it.id === id);
+}
+function tutEquipped(p, slot, id) { return !!(p.equipment[slot] && p.equipment[slot].id === id); }
+function tutKnowsRecipe(p, id) { return (p.knownRecipes || []).includes(id); }
+function tutKnowsSpell(p, id) { return (p.knownSpells || []).includes(id); }
+function tutKnowsTechnique(p, id) { return (p.knownTechniques || []).includes(id); }
+// NOTE: dead monsters are spliced out of level.monsters entirely (see removeDeadEntity in the
+// core engine), not merely flagged alive:false -- so "no matching monster is currently alive"
+// is the correct (and only) signal here, matching every tutorial that was placed with this tag.
+function tutTagDead(level, tag) { return !level.monsters.some(m => m.tutorialTag === tag && m.alive); }
+function tutTagAlive(level, tag) { return level.monsters.some(m => m.tutorialTag === tag && m.alive); }
+
+// ---------------------------------------------------------------------------------------------
+// ---- The tutorial player: a clean, capable, level-5 "generalist" every part can build on -------
+// ---------------------------------------------------------------------------------------------
+function tutBuildPlayer(setupFn) {
+  const p = newPlayer();
+  p.str = 12; p.dex = 12; p.int = 12; p.con = 12; p.wil = 12; p.cha = 12;
+  p.level = 5; p.xp = 0; p.xpNext = xpNeededForLevel(5);
+  p.gold = 50; p.species = 'human';
+  p.equipment.hand = makeItem('dagger', 0, Math.random);
+  p.equipment.body = makeItem('leather', 0, Math.random);
+  p.knownRecipes = []; p.knownSpells = []; p.knownTechniques = [];
+  player = p; // recalcVitalsFromStats reads/writes the global `player` -- see newPlayer's own caller pattern
+  recalcVitalsFromStats();
+  p.hp = p.maxHp; p.mp = p.maxMp; p.stamina = p.maxStamina; p.charge = p.maxCharge;
+  if (setupFn) setupFn(p);
+  p.isTutorial = true;
+  return p;
+}
+
+// ---------------------------------------------------------------------------------------------
+// ---- Entering / leaving a tutorial part --------------------------------------------------------
+// ---------------------------------------------------------------------------------------------
+let tutorialSavedPlayer = null;
+let tutorialModalActions = [];
+let tutorialMenuSelectedId = null;
+const tutorialCompletionMemory = {}; // { [tutorialId]: Set<partIndex> } -- session-only, see file header
+
+function enterTutorialPart(tutorialId, partIndex) {
+  const tutorial = TUTORIALS.find(t => t.id === tutorialId);
+  if (!tutorial) { showTutorialMenu(); return; }
+  const partDef = tutorial.parts[partIndex];
+  if (!partDef) { showTutorialMenu(); return; }
+  clearAreaFx();
+  if (!player || !player.isTutorial) tutorialSavedPlayer = player; // stash the real session exactly once
+  const level = partDef.build();
+  level.depth = partIndex + 1;
+  const dungeonId = 'tutorial_' + tutorial.id;
+  let dg = dungeonRegistry.get(dungeonId);
+  if (!dg) {
+    dg = {
+      id: dungeonId, theme: 'tutorial', maxDepth: tutorial.parts.length, tier: 'tutorial',
+      name: 'Tutorial: ' + tutorial.title, entranceName: null, levels: [], x: 0, y: 0,
+      variant: 'rooms', targetPower: 1, recommendedLevel: 1, depthScaleBonus: 0,
+      originMode: 'tutorial', size: 'small', isTutorial: true, tutorialId: tutorial.id,
+    };
+    dungeonRegistry.set(dungeonId, dg);
+  }
+  dg.maxDepth = tutorial.parts.length;
+  dg.levels[partIndex] = level;
+  player = tutBuildPlayer(partDef.setupPlayer);
+  player.mode = 'dungeon'; player.dungeonId = dungeonId; player.dungeonDepth = partIndex + 1;
+  player.x = level.tutorialStart.x; player.y = level.tutorialStart.y;
+  player.companions = (level.pendingCompanions || []).map(c => Object.assign({}, c)); // fresh copies each entry, so replaying a part always starts with a full-health companion
+  if (level.spouseCompanionUid) {
+    const spouseCompanion = player.companions.find(c => c.uid === level.spouseCompanionUid);
+    if (spouseCompanion) player.spouse = { uid: spouseCompanion.uid, name: spouseCompanion.name };
+  }
+  gameState = 'playing';
+  const titleScreenEl = document.getElementById('title-screen');
+  if (titleScreenEl) titleScreenEl.classList.add('hidden');
+  document.getElementById('modal').classList.add('hidden');
+  logMessages.length = 0;
+  log(`═══ ${tutorial.title} — Part ${partIndex + 1}/${tutorial.parts.length}: ${partDef.title} ═══`);
+  (partDef.introText || []).forEach(l => log(l));
+  markSeen();
+  updateSidebar();
+  render();
+  tutorialTurnHook();
+}
+function exitTutorialToMenu() {
+  clearAreaFx();
+  player = tutorialSavedPlayer || newPlayer();
+  tutorialSavedPlayer = null;
+  hideTutorialBanner();
+  logMessages.length = 0;
+  showTutorialMenu();
+}
+function tutorialDeathRespawn() {
+  const lvl = curIsDungeon() ? curDungeonLevel() : null;
+  player.alive = true;
+  player.hp = player.maxHp; player.mp = player.maxMp; player.stamina = player.maxStamina;
+  player.statusPoison = 0; player.statusFear = 0; player.statusConfuse = 0; player.bleedTurns = 0;
+  player.frozenSolidTurns = 0; player.legInjuryPenalty = 0; player.buffs = {};
+  const start = (lvl && lvl.tutorialStart) ? lvl.tutorialStart : { x: player.x, y: player.y };
+  player.x = start.x; player.y = start.y;
+  log('You catch your breath. Nothing in a tutorial is worth losing sleep over -- try again.');
+  markSeen();
+  render();
+}
+
+// ---------------------------------------------------------------------------------------------
+// ---- Per-turn hook: fire triggers, check objectives, refresh the banner -------------------------
+// ---------------------------------------------------------------------------------------------
+function tutCurrentContext() {
+  if (!player.isTutorial || !curIsDungeon()) return null;
+  const dg = curDungeon();
+  if (!dg || !dg.isTutorial) return null;
+  const tutorial = TUTORIALS.find(t => t.id === dg.tutorialId);
+  if (!tutorial) return null;
+  const partIndex = player.dungeonDepth - 1;
+  const partDef = tutorial.parts[partIndex];
+  const level = curDungeonLevel();
+  if (!partDef || !level) return null;
+  return { tutorial, partIndex, partDef, level };
+}
+function tutCheckObjectiveCompletion(ctx) {
+  const { tutorial, partIndex, partDef, level } = ctx;
+  if (level.tutorialCompleted || !(partDef.objectives || []).length) return;
+  const state = { level, player, tutorial, partDef };
+  if (partDef.objectives.every(o => o.check(state))) onTutorialPartComplete(tutorial, partIndex, level);
+}
+function tutorialTurnHook() {
+  const ctx = tutCurrentContext();
+  if (!ctx) return;
+  const { tutorial, partDef, level } = ctx;
+  for (const trig of level.tutorialTriggers) {
+    if (trig.x === player.x && trig.y === player.y) {
+      if (trig.once && trig.fired) continue;
+      trig.fired = true;
+      if (trig.onEnter) trig.onEnter({ level, tutorial, partDef, player });
+    }
+  }
+  // Generic passive status snapshotting -- cheaper than patching every place that can inflict a
+  // status just to flag "the player has now experienced X at least once this part."
+  if (player.statusPoison > 0) player._tutWasPoisoned = true;
+  // Optional per-part hook, called every turn regardless of objective state -- for anything a
+  // part needs to guarantee rather than leave to combat RNG (see the Status Effects tutorial's
+  // poison safety net: real monster poison is a real per-hit chance, not a certainty, so a part
+  // can use this to top up a lesson that got unlucky rather than risk stalling on bad rolls).
+  if (partDef.onTurn) partDef.onTurn({ level, tutorial, partDef, player });
+  tutCheckObjectiveCompletion(ctx);
+  updateTutorialBannerLive();
+}
+function onTutorialPartComplete(tutorial, partIndex, level) {
+  if (level.tutorialCompleted) return;
+  level.tutorialCompleted = true;
+  tutorialCompletionMemory[tutorial.id] = tutorialCompletionMemory[tutorial.id] || new Set();
+  tutorialCompletionMemory[tutorial.id].add(partIndex);
+  Sound.play('levelup');
+  const partDef = tutorial.parts[partIndex];
+  log(`✦ Lesson complete: ${partDef.title}`);
+  showTutorialPartCompleteModal(tutorial, partIndex);
+}
+function tutNextTutorial(tutorial) {
+  const idx = TUTORIALS.findIndex(t => t.id === tutorial.id);
+  return TUTORIALS[idx + 1] || null;
+}
+function showTutorialPartCompleteModal(tutorial, partIndex) {
+  gameState = 'tutorial_partcomplete';
+  const partDef = tutorial.parts[partIndex];
+  const isLast = partIndex === tutorial.parts.length - 1;
+  let html = `<div class="npcline">${partDef.completeText || "You've got it -- that's the idea landed."}</div>`;
+  const actions = [];
+  if (!isLast) {
+    const nextPart = tutorial.parts[partIndex + 1];
+    actions.push({ key: 'a', label: `Continue to Part ${partIndex + 2}: ${nextPart.title}`, action: () => enterTutorialPart(tutorial.id, partIndex + 1) });
+  } else {
+    const nt = tutNextTutorial(tutorial);
+    if (nt) actions.push({ key: 'a', label: `Start next tutorial: ${nt.title}`, action: () => enterTutorialPart(nt.id, 0) });
+  }
+  actions.push({ key: 'b', label: 'Replay this part', action: () => enterTutorialPart(tutorial.id, partIndex) });
+  actions.push({ key: 'c', label: 'Return to Tutorial Menu', action: () => showTutorialMenu() });
+  tutorialModalActions = actions;
+  html += actions.map(a => `<div class="modal-opt" onclick="simulateKey('${a.key}')">[${a.key}] ${a.label}</div>`).join('');
+  renderModal(isLast ? `✦ Tutorial Complete: ${tutorial.title}` : `Part Complete: ${partDef.title}`, html, 'Letter/click to choose.');
+}
+
+// ---------------------------------------------------------------------------------------------
+// ---- Objectives banner: a small floating readout of what's left this part -----------------------
+// ---------------------------------------------------------------------------------------------
+function tutEnsureBannerEl() {
+  let el = document.getElementById('tutorial-banner');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'tutorial-banner';
+  el.style.cssText = 'position:fixed; top:8px; left:50%; transform:translateX(-50%); z-index:60; ' +
+    'max-width:560px; min-width:280px; background:rgba(12,10,8,0.92); border:1px solid #6a5a3a; ' +
+    'border-radius:6px; padding:8px 16px; color:#e8dcc0; font-family:inherit; font-size:12.5px; ' +
+    'line-height:1.5; box-shadow:0 4px 18px rgba(0,0,0,0.55); pointer-events:none;';
+  document.body.appendChild(el);
+  return el;
+}
+function hideTutorialBanner() {
+  const el = document.getElementById('tutorial-banner');
+  if (el) el.remove();
+}
+function updateTutorialBannerLive() {
+  const ctx = tutCurrentContext();
+  if (!ctx) { hideTutorialBanner(); return; }
+  tutCheckObjectiveCompletion(ctx);
+  if (ctx.level.tutorialCompleted) { hideTutorialBanner(); return; } // the completion modal is now the focus
+  const { tutorial, partIndex, partDef, level } = ctx;
+  const el = tutEnsureBannerEl();
+  const state = { level, player, tutorial, partDef };
+  const objs = partDef.objectives || [];
+  const objHtml = objs.length
+    ? objs.map(o => `<div style="color:${o.check(state) ? '#7fd07f' : '#e8dcc0'}">${o.check(state) ? '✓' : '☐'} ${o.desc}</div>`).join('')
+    : `<div class="dim">${partDef.freeform || 'Explore, then back out to the Tutorial Menu whenever you like.'}</div>`;
+  el.innerHTML = `<div style="font-weight:bold;color:#e0c34a">${tutorial.title} — Part ${partIndex + 1}/${tutorial.parts.length}: ${partDef.title}</div>` +
+    `<div style="margin-top:3px">${objHtml}</div>` +
+    `<div style="margin-top:5px;color:#a89a7a;font-size:11px">Esc/P for the tutorial pause menu (restart part / return to menu).</div>`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// ---- Menu screens (title screen -> Tutorials -> a tutorial's parts) -----------------------------
+// ---------------------------------------------------------------------------------------------
+function tutorialProgressCount(tutorialId) {
+  const s = tutorialCompletionMemory[tutorialId];
+  return s ? s.size : 0;
+}
+function showTutorialMenu() {
+  gameState = 'tutorial_menu';
+  document.getElementById('title-screen').classList.add('hidden');
+  let html = `<div class="npcline">Hand-crafted lessons -- nothing procedurally generated in here. Work through a whole` +
+    ` tutorial in order, or jump straight to the one concept you want. Dying in a tutorial never costs you anything,` +
+    ` and nothing you do here touches your real save.</div>`;
+  TUTORIALS.forEach((t, i) => {
+    const letter = String.fromCharCode(97 + i);
+    const done = tutorialProgressCount(t.id);
+    const progressStr = done > 0 ? ` <span class="dim">(${done}/${t.parts.length} parts done this session)</span>` : '';
+    html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] <b>${t.title}</b>${progressStr}<br><span class="dim">${t.blurb}</span></div>`;
+  });
+  html += `<div class="modal-opt" style="margin-top:8px" onclick="simulateKey('<')">[&lt;] Back to Main Menu</div>`;
+  renderModal('Tutorials', html, 'Letter/click to open a tutorial, &lt; to go back.');
+}
+function tutorialMenuChoice(letter) {
+  if (letter === '<') { showTitleScreen(); return; }
+  const idx = letter.charCodeAt(0) - 97;
+  const t = TUTORIALS[idx];
+  if (!t) return;
+  showTutorialPartsMenu(t.id);
+}
+function showTutorialPartsMenu(tutorialId) {
+  const t = TUTORIALS.find(x => x.id === tutorialId);
+  if (!t) { showTutorialMenu(); return; }
+  gameState = 'tutorial_parts';
+  tutorialMenuSelectedId = tutorialId;
+  let html = `<div class="npcline">${t.blurb}</div>`;
+  t.parts.forEach((p, i) => {
+    const letter = String.fromCharCode(97 + i);
+    const done = tutorialCompletionMemory[t.id] && tutorialCompletionMemory[t.id].has(i);
+    html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${done ? '✓ ' : ''}<b>${p.title}</b><br><span class="dim">${p.blurb || ''}</span></div>`;
+  });
+  html += `<div class="modal-opt" style="margin-top:8px" onclick="simulateKey('0')">[0] Start from the beginning</div>`;
+  html += `<div class="modal-opt" onclick="simulateKey('<')">[&lt;] Back to Tutorials</div>`;
+  renderModal(t.title, html, 'Letter/click to jump to a part, 0 to start from the top, &lt; to go back.');
+}
+function tutorialPartsChoice(key) {
+  const t = TUTORIALS.find(x => x.id === tutorialMenuSelectedId);
+  if (!t) { showTutorialMenu(); return; }
+  if (key === '<') { showTutorialMenu(); return; }
+  if (key === '0') { enterTutorialPart(t.id, 0); return; }
+  const idx = key.charCodeAt(0) - 97;
+  if (t.parts[idx]) enterTutorialPart(t.id, idx);
+}
+function openTutorialPauseMenu() {
+  gameState = 'tutorial_pausemenu';
+  const html = `<div class="npcline">Tutorials don't save -- you can always jump back in from the main menu.</div>
+    <div class="modal-opt" onclick="simulateKey('a')">[a] Restart this part</div>
+    <div class="modal-opt" onclick="simulateKey('b')">[b] Settings</div>
+    <div class="modal-opt" style="margin-top:6px;color:#e08a7a" onclick="simulateKey('c')">[c] Return to Tutorial Menu</div>`;
+  renderModal('Tutorial Paused', html, 'Letter/click to choose. Esc to resume.');
+}
+function tutorialPauseMenuChoice(letter) {
+  if (letter === 'a') { const dg = curDungeon(); enterTutorialPart(dg.tutorialId, player.dungeonDepth - 1); return; }
+  if (letter === 'b') { showSettings('playing'); return; }
+  if (letter === 'c') { exitTutorialToMenu(); return; }
+}
+function showTutorialInstructorDialogue(npc) {
+  Sound.play('uiOpen');
+  gameState = 'dialogue';
+  dialogueNPC = npc;
+  npc._tutTalked = true;
+  const d = npc.tutorialDialogueFn ? npc.tutorialDialogueFn(npc) : (npc.tutorialDialogue || { title: npc.name, lines: ["..."] });
+  const body = (d.lines || []).map(l => `<div class="npcline">${l}</div>`).join('');
+  const opts = [{ key: 'a', label: '(Nod and continue)', action: () => { closeModal(); if (d.onClose) d.onClose(); } }];
+  (d.extraOptions || []).forEach((eo, i) => {
+    opts.push({ key: String.fromCharCode(98 + i), label: eo.label, action: () => { eo.action(); } });
+  });
+  // Real merchants use the game's own openTrade()/renderTrade()/tradeTransact() unmodified --
+  // Tab to switch buy/sell, real per-item pricing, the works. See tutMakeInstructor's `shop` field.
+  if (npc.shop) { const k = String.fromCharCode(98 + (d.extraOptions || []).length); opts.push({ key: k, label: `Browse ${npc.name}'s wares`, action: () => openTrade(npc) }); }
+  dialogueOptions = opts;
+  const optHtml = opts.map(o => `<div class="modal-opt" style="margin-top:8px" onclick="simulateKey('${o.key}')">[${o.key}] ${o.label}</div>`).join('');
+  renderModal(d.title || npc.name, body + optHtml, 'Letter/click to choose, Esc to leave.');
+}
+
+
+// =============================================================================================
+// ===================== TUTORIAL CURRICULUM ===================================================
+// =============================================================================================
+// Each tutorial: { id, title, blurb, parts: [ part, part, ... ] }
+// Each part:     {
+//   title, blurb, introText: [logline,...], completeText,
+//   build(): -> buildTutorialLevel(mapRows, markers),
+//   setupPlayer(p): mutate the fresh tutorial player with whatever kit this lesson needs,
+//   objectives: [{ desc, check(state) => bool }],   // state = {level, player, tutorial, partDef}
+// }
+//
+// A note on practice monsters: every "opponent" below is a real, ordinary weak monster (a Giant
+// Rat, a Slime) rather than an inanimate "training dummy" stand-in. The game's [x]/look flavor
+// text is keyed to the monster's real identity regardless of what a tutorial calls it, so giving
+// a rat a fake name like "Training Dummy" just produces a rat that examines as a rat while being
+// labeled something else entirely -- confusing, and it also does not explain why the "dummy"
+// moves and bites back. Better to just be honest: these are real, weak, live opponents.
+// =============================================================================================
+
+const TUTORIALS = [];
+
+// ---------------------------------------------------------------------------------------------
+// 1. CONTROLS & THE BASICS
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'controls', title: 'Controls & the Basics',
+  blurb: 'Movement, waiting, doors, containers, and your inventory. Start here if you\'re brand new.',
+  parts: [{
+    title: 'Finding Your Feet',
+    blurb: 'Move around, open a door, loot a chest, and check your inventory.',
+    introText: [
+      'Move with the arrow keys, WASD, or the numpad -- all eight directions work, including diagonals.',
+      'Press [.] or [5] to wait a turn in place. Press [x] to look around and examine what you see.',
+    ],
+    build: () => buildTutorialLevel([
+      '####################',
+      '#..................#',
+      '#..P...............#',
+      '#..................#',
+      '########\'###########',
+      '#..................#',
+      '#.............C....#',
+      '#..................#',
+      '####################',
+    ], {
+      P: { type: 'player' },
+      C: { type: 'container', kind: 'chest', name: 'Old Chest', contents: [{ id: 'torch', amount: 1 }, { id: 'potion_heal', amount: 1 }] },
+    }),
+    setupPlayer: (p) => {},
+    objectives: [
+      { desc: 'Wait in place at least once (press [.] or [5]).', check: (s) => (s.player._tutWaitCount || 0) >= 1 },
+      { desc: 'Walk through the door and open the chest beyond it.', check: (s) => (s.level.containers[0] && s.level.containers[0].container.contents.length === 0) },
+      { desc: 'Open your inventory with [i] and close it again.', check: (s) => !!s.player._tutSawInventory },
+    ],
+    completeText: 'That\'s the whole toolkit for getting around: movement, waiting, doors, containers, and your inventory. Everything else in the game builds on exactly these controls.',
+  }],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 2. COMBAT (melee, positioning, and ranged combined -- it's one continuous skill, not three)
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'combat', title: 'Combat',
+  blurb: 'Melee, positioning against numbers, and ranged kiting -- the full toolkit for a fight.',
+  parts: [
+    {
+      title: 'Bump, Hit, Repeat',
+      blurb: 'Fight a single weak rat and learn what STR, DEX, and armor actually do.',
+      introText: [
+        'Walk straight into an enemy to attack it -- no separate "attack" button.',
+        'Your Strength (STR) drives your damage, your Dexterity (DEX) drives your chance to hit and to dodge, and armor reduces damage taken.',
+        'A Giant Rat is about as weak as living things get. It will still move toward you and bite -- press [.] to rest once it\'s dead and nothing else is attacking, to recover HP.',
+      ],
+      build: () => buildTutorialLevel([
+        '##################',
+        '#................#',
+        '#..P.............#',
+        '#................#',
+        '#..........1.....#',
+        '#................#',
+        '#................#',
+        '##################',
+      ], {
+        P: { type: 'player' },
+        1: { id: 'giantrat', type: 'monster', hp: 10, atk: [1, 2], tag: 'd1' },
+      }),
+      setupPlayer: (p) => {},
+      objectives: [
+        { desc: 'Defeat the Giant Rat.', check: (s) => tutTagDead(s.level, 'd1') },
+        { desc: 'Rest (press [.]) at least once to recover HP.', check: (s) => (s.player._tutWaitCount || 0) >= 1 },
+      ],
+      completeText: 'Every melee fight in this game reduces to that loop: close the distance, trade blows, and rest up when it\'s safe. Everything from here just adds new options on top of it.',
+    },
+    {
+      title: 'Positioning & Numbers',
+      blurb: 'Fight several enemies at once -- and learn why a doorway is your best friend.',
+      introText: [
+        'Multiple enemies will surround you in the open and attack together. In a corridor or a doorway, only one of them can reach you at a time.',
+        'A better weapon changes the math: there\'s a shortsword waiting for you here. Equip it (open [i], select it, press [e]) before the real fight.',
+        'Retreating is a valid tactic. Backing into a corridor and fighting them one at a time beats getting surrounded every time.',
+      ],
+      build: () => buildTutorialLevel([
+        '#########################',
+        '#..P....................#',
+        '#.......................#',
+        '#.......................#',
+        '##########\'##############',
+        '#................C......#',
+        '#.......................#',
+        '#................1......#',
+        '#...............2..3....#',
+        '#########################',
+      ], {
+        P: { type: 'player' },
+        C: { type: 'container', kind: 'chest', name: 'Weapon Rack', contents: [{ id: 'shortsword', amount: 1 }] },
+        1: { id: 'giantrat', type: 'monster', hp: 10, atk: [1, 3], tag: 'g' },
+        2: { id: 'giantrat', type: 'monster', hp: 10, atk: [1, 3], tag: 'g' },
+        3: { id: 'giantrat', type: 'monster', hp: 10, atk: [1, 3], tag: 'g' },
+      }),
+      setupPlayer: (p) => {},
+      objectives: [
+        { desc: 'Equip the shortsword from the weapon rack.', check: (s) => s.player.equipment.hand && s.player.equipment.hand.id === 'shortsword' },
+        { desc: 'Defeat all three rats.', check: (s) => tutTagDead(s.level, 'g') },
+      ],
+      completeText: 'Gear and positioning both matter more than raw stats. A choke point turns "three enemies at once" into "one enemy, three times" -- and a sharper weapon makes every one of those fights shorter.',
+    },
+    {
+      title: 'Ranged & Kiting',
+      blurb: 'Equip a bow and whittle down two rats before they ever reach you.',
+      introText: [
+        'Ranged weapons don\'t need separate ammo -- just equip one and press [f] to fire at the nearest hostile.',
+        'A melee attacker has to close the distance first. Firing, then backing away, then firing again is called kiting -- it lets you win a fight while barely taking a hit.',
+        'Line of sight matters too: a wall between you and a target blocks the shot just like it blocks their charge toward you.',
+      ],
+      build: () => buildTutorialLevel([
+        '#############################',
+        '#...........................#',
+        '#..P........................#',
+        '#...........................#',
+        '#...........................#',
+        '#.......................1...#',
+        '#...........................#',
+        '#....................2......#',
+        '#...........................#',
+        '#############################',
+      ], {
+        P: { type: 'player' },
+        1: { id: 'giantrat', type: 'monster', hp: 8, atk: [1, 3], tag: 'r' },
+        2: { id: 'giantrat', type: 'monster', hp: 8, atk: [1, 3], tag: 'r' },
+      }),
+      setupPlayer: (p) => {
+        p.inventory.push(makeItem('bow', 0, Math.random));
+      },
+      objectives: [
+        { desc: 'Equip the bow from your inventory ([i], select it, [e]).', check: (s) => tutEquipped(s.player, 'hand', 'bow') },
+        { desc: 'Defeat both rats with ranged fire.', check: (s) => tutTagDead(s.level, 'r') && (s.player._tutRangedShots || 0) >= 1 },
+      ],
+      completeText: 'Melee, numbers, and range are really one skill: read the fight, control the distance, and pick the tool -- blade, choke point, or bowstring -- that suits it. From here it\'s the same judgment call every time, just with more options as you level up.',
+    },
+  ],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 3. MAGIC & TECHNIQUES
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'magic_techniques', title: 'Magic & Techniques',
+  blurb: 'Spells and martial techniques share one targeting system -- only the resource they spend differs.',
+  parts: [
+    {
+      title: 'Your First Spell',
+      blurb: 'Cast Magic Missile on a rat and watch your Mana bar drain.',
+      introText: [
+        'Press [z] to open your spellbook -- it lists every spell and technique you know, and what each one costs.',
+        'Selecting a damage spell starts aiming: click the tile you want to hit, or press Enter/Space to snap onto the nearest enemy. Esc cancels.',
+        'Spells cost Mana (MP), shown in your sidebar. Run dry and you\'ll need to rest or drink a mana potion before casting again.',
+      ],
+      build: () => buildTutorialLevel([
+        '#######################',
+        '#.....................#',
+        '#..P..................#',
+        '#.....................#',
+        '#..............1......#',
+        '#.....................#',
+        '#######################',
+      ], {
+        P: { type: 'player' },
+        1: { id: 'giantrat', type: 'monster', hp: 12, atk: [1, 2], tag: 'm' },
+      }),
+      setupPlayer: (p) => { p.knownSpells = ['magicmissile']; },
+      objectives: [
+        { desc: 'Open your spellbook with [z] at least once.', check: (s) => !!s.player._tutSawSpellbook },
+        { desc: 'Cast Magic Missile.', check: (s) => (s.player._tutSpellCasts || 0) >= 1 },
+        { desc: 'Defeat the rat.', check: (s) => tutTagDead(s.level, 'm') },
+      ],
+      completeText: 'That\'s the whole spellcasting loop, and it\'s the same for every spell in the game: open the book, pick one, aim, resolve. Different spells just change what happens at the target tile -- damage, a status, an area blast, a teleport.',
+    },
+    {
+      title: 'Techniques & Stamina',
+      blurb: 'Use a stamina-based martial technique -- the exact same flow, a different resource bar.',
+      introText: [
+        'Techniques live in the same [z] spellbook as spells, but they draw from your Stamina bar instead of Mana -- a warrior with zero magic can still have a full page of them.',
+        'Precise Strike is a short-range technique: aim it exactly like a spell, but you\'ll need to be adjacent to your target first.',
+        'Stamina regenerates on its own as you act, a bit like a "physical mana." Push it too far and you\'ll simply run out until it recovers.',
+      ],
+      build: () => buildTutorialLevel([
+        '#######################',
+        '#.....................#',
+        '#..P..................#',
+        '#.....................#',
+        '#..............1......#',
+        '#.....................#',
+        '#######################',
+      ], {
+        P: { type: 'player' },
+        1: { id: 'giantrat', type: 'monster', hp: 14, atk: [1, 2], tag: 't' },
+      }),
+      setupPlayer: (p) => { p.knownTechniques = ['precisestrike']; },
+      objectives: [
+        { desc: 'Use Precise Strike on the rat (walk adjacent, [z], aim, confirm).', check: (s) => (s.player._tutSpellCasts || 0) >= 1 },
+        { desc: 'Defeat the rat.', check: (s) => tutTagDead(s.level, 't') },
+      ],
+      completeText: 'Spells, techniques, and (later) other resource types like Charge all share this exact same targeting flow -- once you\'ve learned to aim one, you\'ve learned to aim all of them. The only real choice is which bar you\'d rather spend down.',
+    },
+  ],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 6. STATUS EFFECTS & SURVIVAL
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'status', title: 'Status Effects & Survival',
+  blurb: 'Poison, fear, confusion, and bleeding -- what each one actually does to you, and how to cure it.',
+  parts: [
+    {
+      title: 'Poison',
+      blurb: 'Fight a real poisonous spider, watch the poison tick, and cure it with an Antidote.',
+      introText: [
+        'A Giant Spider poisons on hit. Poison deals a little damage every turn on its own, on top of anything else that hits you -- it keeps ticking even if you back off and stop fighting.',
+        'Your Willpower (WIL) gives poison (and fear, and confusion) a chance to fade a turn early on its own.',
+        'There\'s an Antidote in your inventory already. Drink it ([i], select it, [u]) any time to clear poison instantly.',
+      ],
+      build: () => buildTutorialLevel([
+        '#####################',
+        '#...................#',
+        '#..P................#',
+        '#...................#',
+        '#..............1....#',
+        '#...................#',
+        '#####################',
+      ], {
+        P: { type: 'player' },
+        1: { id: 'spider', type: 'monster', name: 'Giant Spider', hp: 22, tag: 'spider' },
+      }),
+      setupPlayer: (p) => {
+        const antidote = makeItem('antidote', 0, Math.random);
+        p.inventory.push(antidote);
+      },
+      objectives: [
+        { desc: 'Get poisoned by the spider.', check: (s) => !!s.player._tutWasPoisoned },
+        { desc: 'Defeat the spider.', check: (s) => tutTagDead(s.level, 'spider') },
+        { desc: 'Cure poison with the Antidote (or let it run its course).', check: (s) => !!s.player._tutWasPoisoned && (s.player.statusPoison || 0) === 0 },
+      ],
+      // Safety net: the spider's poison is a genuine 40%-per-hit chance in the real combat engine,
+      // not a scripted certainty -- exactly as it should be, but that also means an unlucky (or
+      // very fast) fight could kill it without ever landing poison, stalling the lesson on bad RNG
+      // rather than anything the player did wrong. If that happens, top the player up with a
+      // trivial dose once, so the objective can still complete and the Antidote is still worth using.
+      onTurn: (s) => {
+        if (s.player._tutWasPoisoned) return;
+        if (tutTagDead(s.level, 'spider') && !s.level._tutPoisonSafetyNetUsed) {
+          s.level._tutPoisonSafetyNetUsed = true;
+          s.player.statusPoison = Math.max(s.player.statusPoison || 0, 2);
+          s.player._tutWasPoisoned = true;
+          log('A lingering trace of venom from the fight catches up with you.');
+        }
+      },
+      completeText: 'Poison is the simplest status in the game: pure damage over time, cured instantly by the right consumable, or just outlasted if you\'d rather save the item.',
+    },
+    {
+      title: 'Fear, Confusion & Bleeding',
+      blurb: 'Three guaranteed, safe demonstrations of the status effects real enemies inflict in the wild.',
+      introText: [
+        'This room has three rune circles. Step on one to trigger it -- each safely demonstrates one status effect real monsters and traps can inflict on you.',
+        'You\'re carrying a Panacea (cures everything at once) and a Bandage (cures bleeding specifically). Use them once you\'ve felt what each affliction does.',
+      ],
+      build: () => buildTutorialLevel([
+        '###########################',
+        '#.........................#',
+        '#..P......................#',
+        '#.........................#',
+        '#....F.........C.......B..#',
+        '#.........................#',
+        '###########################',
+      ], {
+        P: { type: 'player' },
+        F: {
+          type: 'trigger', tag: 'fear',
+          onEnter: (ctx) => {
+            ctx.player.statusFear = Math.max(ctx.player.statusFear || 0, 4);
+            ctx.player._tutSawFear = true;
+            log('The rune flares -- terror grips you! While Afraid, you physically cannot attack (melee, ranged, or offensive spells) until it fades or you cure it.');
+          },
+        },
+        C: {
+          type: 'trigger', tag: 'confuse',
+          onEnter: (ctx) => {
+            ctx.player.statusConfuse = Math.max(ctx.player.statusConfuse || 0, 5);
+            ctx.player._tutSawConfuse = true;
+            log('The rune flares -- your head spins! While Confused, roughly half your moves stumble in a random direction instead of the one you chose.');
+          },
+        },
+        B: {
+          type: 'trigger', tag: 'bleed',
+          onEnter: (ctx) => {
+            applyBleed(ctx.player, 2);
+            ctx.player._tutSawBleed = true;
+            log('The rune flares -- a shallow cut opens! Bleeding deals damage each turn and gets worse if you keep moving, until it clots on its own or you bandage it.');
+          },
+        },
+      }),
+      setupPlayer: (p) => {
+        p.inventory.push(makeItem('panacea', 0, Math.random));
+        p.inventory.push(makeItem('bandage', 0, Math.random));
+      },
+      objectives: [
+        { desc: 'Trigger the Fear rune.', check: (s) => !!s.player._tutSawFear },
+        { desc: 'Trigger the Confusion rune.', check: (s) => !!s.player._tutSawConfuse },
+        { desc: 'Trigger the Bleeding rune.', check: (s) => !!s.player._tutSawBleed },
+        { desc: 'Cure every active affliction before moving on.', check: (s) => !s.player.statusFear && !s.player.statusConfuse && !(s.player.bleedStacks > 0) },
+      ],
+      completeText: 'Every status effect in this game boils down to one of these patterns: damage over time, an offense lock, a movement scramble, or an escalating wound -- and every one of them has a specific cure item, or just fades if you can afford to wait it out.',
+    },
+  ],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 7. STATS, XP & LEVELING
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'stats_leveling', title: 'Stats, XP & Leveling',
+  blurb: 'What STR/DEX/INT/CON/WIL/CHA actually do, how XP works, and spending stat points on level-up.',
+  parts: [{
+    title: 'Growing Stronger',
+    blurb: 'Check your character sheet, kill a rat for XP, level up, and spend your new stat points.',
+    introText: [
+      'Press [c] to open your Character Sheet -- it lists all six stats with a one-line explanation of what each does.',
+      'STR: melee damage & carry weight. DEX: hit chance & dodge. INT: spell power & Mana. CON: max HP. WIL: resisting poison/fear/confusion. CHA: prices & NPC affection.',
+      'You\'re one kill away from leveling up. When you do, you\'ll get unspent stat points -- open the Character Sheet again and press 1-6 to spend them.',
+    ],
+    build: () => buildTutorialLevel([
+      '#####################',
+      '#...................#',
+      '#..P................#',
+      '#...................#',
+      '#..............1....#',
+      '#...................#',
+      '#####################',
+    ], {
+      P: { type: 'player' },
+      1: { id: 'giantrat', type: 'monster', hp: 10, atk: [1, 2], tag: 'x' },
+    }),
+    setupPlayer: (p) => { p.xp = Math.max(0, p.xpNext - 2); },
+    objectives: [
+      { desc: 'Open your Character Sheet with [c].', check: (s) => !!s.player._tutSawCharSheet },
+      { desc: 'Defeat the rat and level up.', check: (s) => s.player.level > 5 },
+      { desc: 'Spend all your unspent stat points.', check: (s) => (s.player.statPoints || 0) === 0 },
+    ],
+    completeText: 'Every point you just spent permanently shapes how your character plays -- there\'s no wrong answer, only trade-offs. Level-ups keep coming from XP earned in combat and quests for the rest of the game.',
+  }],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 8. TALENTS
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'talents', title: 'Talents',
+  blurb: 'Spend a Talent Point in the Talents screen -- permanent, build-defining choices beyond your six stats.',
+  parts: [{
+    title: 'Choosing a Talent',
+    blurb: 'Open the Talents screen and pick your first talent.',
+    introText: [
+      'Press [T] (capital) to open your Talents screen. Unlike stat points, talents are grouped into tiers and often unlock further choices as you invest.',
+      'You have one Talent Point to spend right now. Pick any tier-1 talent -- Toughness (+15 Max HP) is a safe, universally useful first pick if you\'re not sure.',
+      'Talent Points are earned every few levels, not every level -- they\'re rarer and meant to feel like a real decision each time.',
+    ],
+    build: () => buildTutorialLevel([
+      '#################',
+      '#...............#',
+      '#......P........#',
+      '#...............#',
+      '#################',
+    ], { P: { type: 'player' } }),
+    setupPlayer: (p) => { p.talentPoints = 1; },
+    objectives: [
+      { desc: 'Open the Talents screen with [T].', check: (s) => !!s.player._tutSawTalents },
+      { desc: 'Spend your Talent Point.', check: (s) => (s.player.talentPoints || 0) === 0 && Object.keys(s.player.talents || {}).length > 0 },
+    ],
+    completeText: 'That talent is yours for good. Later tiers build on earlier picks and often need a minimum level or a specific prior talent -- the Talents screen always shows exactly what\'s locked and why.',
+  }],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 9. CRAFTING & COOKING
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'crafting_cooking', title: 'Crafting & Cooking',
+  blurb: 'Turn raw materials into food and gear with the [K] menu -- no workbench or campfire required.',
+  parts: [
+    {
+      title: 'The Cookfire',
+      blurb: 'Cook raw meat, then combine two ingredients into a proper stew.',
+      introText: [
+        'Press [K] to open your Crafting menu -- it lists every recipe you currently know, and greys out anything you\'re missing ingredients for.',
+        'Cooking recipes are just a category of recipe like any other: pick one, and if you have the ingredients, it\'s made instantly. No fire or workbench needed.',
+        'You\'re carrying Raw Meat and a Wild Herb. Cook the meat plain first, then try the Hearty Stew recipe, which needs meat AND herb together.',
+      ],
+      build: () => buildTutorialLevel([
+        '#################',
+        '#...............#',
+        '#......P........#',
+        '#...............#',
+        '#################',
+      ], { P: { type: 'player' } }),
+      setupPlayer: (p) => {
+        p.knownRecipes = ['cook_meat', 'stew'];
+        const meat1 = makeItem('meat_raw', 0, Math.random);
+        const meat2 = makeItem('meat_raw', 0, Math.random); meat2.amount = 2;
+        const herb = makeItem('herb', 0, Math.random);
+        p.inventory.push(meat1, meat2, herb);
+      },
+      objectives: [
+        { desc: 'Open the Crafting menu with [K].', check: (s) => !!s.player._tutSawCraft },
+        { desc: 'Cook the raw meat into Cooked Meat.', check: (s) => tutHasItem(s.player, 'meat_cooked') },
+        { desc: 'Craft a Hearty Stew.', check: (s) => tutHasItem(s.player, 'stew') },
+      ],
+      completeText: 'That\'s cooking in full: gather ingredients, know the recipe, press [K]. Eating what you cook restores HP on the spot -- some fancier dishes grant temporary stat buffs too, which is worth checking recipes for before a big fight.',
+    },
+    {
+      title: 'The Forge',
+      blurb: 'Smelt ore into an ingot, then use that ingot to assemble a real piece of gear.',
+      introText: [
+        'Crafting gear usually takes more than one step: Raw Ore has to be Smelted into an Iron Ingot before it\'s useful for anything else.',
+        'Once you have an ingot, combine it with a scrap of Leather to assemble a Repair Kit -- a genuinely useful item that mends damaged equipment in the field.',
+        'Multi-step recipe chains like this exist all over the crafting system: a small number of base materials feed into intermediate goods, which feed into the finished item.',
+      ],
+      build: () => buildTutorialLevel([
+        '#################',
+        '#...............#',
+        '#......P........#',
+        '#...............#',
+        '#################',
+      ], { P: { type: 'player' } }),
+      setupPlayer: (p) => {
+        p.knownRecipes = ['smelt_iron', 'craft_repair_kit'];
+        p.inventory.push(makeItem('ore', 0, Math.random));
+        p.inventory[p.inventory.length - 1].amount = 2;
+        p.inventory.push(makeItem('leather', 0, Math.random));
+      },
+      objectives: [
+        { desc: 'Smelt an Iron Ingot from Raw Ore.', check: (s) => tutHasItem(s.player, 'iron_ingot') || tutHasItem(s.player, 'repair_kit') },
+        { desc: 'Assemble a Repair Kit from the ingot and leather.', check: (s) => tutHasItem(s.player, 'repair_kit') },
+      ],
+      completeText: 'That\'s the whole crafting economy in miniature: raw material -> refined material -> finished good. It scales all the way up to the best gear in the game, one recipe chain at a time.',
+    },
+  ],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 10. NPCS, DIALOGUE & TRADE
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'npc_trade', title: 'NPCs, Dialogue & Trade',
+  blurb: 'Talk to people with [t], and buy and sell with a merchant.',
+  parts: [{
+    title: 'A Chat and a Deal',
+    blurb: 'Talk to two different townsfolk, then buy and sell something with a merchant.',
+    introText: [
+      'Press [t] while standing next to someone to talk. If more than one person is adjacent, you\'ll be asked which one.',
+      'Merchants offer a "Browse wares" option in conversation. Inside the trade screen, press [Tab] to switch between buying from them and selling from your own inventory -- prices for each are always different, so selling something back for what you paid is never on the table.',
+    ],
+    build: () => buildTutorialLevel([
+      '#########################',
+      '#.......................#',
+      '#..P....................#',
+      '#.......................#',
+      '#............1..........#',
+      '#.......................#',
+      '#..................2....#',
+      '#.......................#',
+      '#########################',
+    ], {
+      P: { type: 'player' },
+      1: {
+        type: 'npc', name: 'Old Farmer Dell', color: '#a0c060',
+        dialogue: { title: 'Old Farmer Dell', lines: [
+          '"Ah, a new face! Not much to tell -- I mind the crops and mind my own business."',
+          '"Talking to folks is how you\'ll pick up rumors, quests, and gossip once you\'re out in the real world."',
+        ] },
+      },
+      2: {
+        type: 'npc', name: 'Merchant Yara', color: '#e0c34a',
+        dialogue: { title: 'Merchant Yara', lines: [
+          '"Welcome, welcome! Take a look at my wares, if you like -- or sell me whatever you\'re not using."',
+        ] },
+        shop: ['potion_heal', 'torch', 'bandage', 'antidote'],
+      },
+    }),
+    setupPlayer: (p) => { p.gold = 40; p.inventory.push(makeItem('dagger', 0, Math.random)); },
+    objectives: [
+      { desc: 'Talk to Old Farmer Dell.', check: (s) => !!s.level.npcs.find(n => n.name === 'Old Farmer Dell')._tutTalked },
+      { desc: 'Talk to Merchant Yara and browse her wares.', check: (s) => !!s.player._tutSawShop },
+      { desc: 'Buy something from Yara.', check: (s) => !!s.player._tutDidBuy },
+      { desc: 'Sell something to Yara.', check: (s) => !!s.player._tutDidSell },
+    ],
+    completeText: 'That\'s the whole social loop: talk for information (and quests, and companionship, out in the real game), trade for gear and gold. Prices shift with reputation and the goods a given merchant specializes in, so it pays to shop around.',
+  }],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 11. DUNGEON EXPLORATION
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'dungeon_explore', title: 'Dungeon Exploration',
+  blurb: 'Locked chests, hidden traps, and secret doors -- the hazards and rewards of exploring carefully.',
+  parts: [{
+    title: 'What the Walls Hide',
+    blurb: 'Pick a lock, survive a hidden trap in your path, and search out a secret door.',
+    introText: [
+      'A locked chest needs a Lockpick (you have one) -- stand on it and press [g] for the option to pick the lock, or force it open bare-handed if you\'d rather risk breaking the pick.',
+      'Not every hazard announces itself. A trap can be hiding anywhere underfoot, discovered only by triggering it -- or by a lucky glance if you\'re paying attention.',
+      'A suspicious dead end might just be a wall... or it might not be. Press [S] (capital) while standing next to one to search it -- it costs a turn, so it\'s a real decision, not a free action.',
+    ],
+    build: () => buildTutorialLevel([
+      '#############################',
+      '#...........................#',
+      '#..P........................#',
+      '#...........................#',
+      '#...........................#',
+      '###...#######...#######...###',
+      '###...#######...#######...###',
+      '###.T.#######...#######.C.###',
+      '###...#######...#######...###',
+      '##############H##############',
+    ], {
+      P: { type: 'player' },
+      T: { type: 'trap', trapType: 'spike' },
+      C: { type: 'container', kind: 'chest', name: 'Iron-Bound Chest', locked: true, contents: [{ id: 'potion_greaterheal', amount: 1 }, { id: 'gold', amount: 1 }] },
+    }),
+    setupPlayer: (p) => { p.inventory.push(makeItem('lockpick', 0, Math.random)); },
+    objectives: [
+      { desc: 'Unlock and loot the Iron-Bound Chest.', check: (s) => { const c = s.level.containers.find(x => x.container.name === 'Iron-Bound Chest'); return c && !c.container.locked && c.container.contents.length === 0; } },
+      { desc: 'Find the secret door with [S] (search while adjacent to a suspicious wall).', check: (s) => { for (let y = 0; y < s.level.h; y++) for (let x = 0; x < s.level.w; x++) { const t = s.level.grid[y][x]; if (t.feature === 'secretdoor') return !!t.discovered; } return true; } },
+    ],
+    completeText: 'Careless exploring gets you hurt; careful exploring gets you the good loot. Both the lock and the secret door had a real, item-and-skill-based chance to fail -- that\'s true everywhere in the game, not just here.',
+  }],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 12. BOSS ENCOUNTERS
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'boss', title: 'Boss Encounters',
+  blurb: 'A real fight against a named boss -- more HP, harder hits, and a real need to manage your resources.',
+  parts: [{
+    title: 'The Bandit Chief',
+    blurb: 'A proper boss fight: watch its health bar, use your potions, and retreat if you need to.',
+    introText: [
+      'Bosses are simply much tougher versions of the fight you already know -- more HP, harder-hitting attacks, sometimes armor. There\'s no separate "boss button": the same movement, attacks, spells, and items all still apply.',
+      'Watch the enemy\'s HP bar in your sidebar to judge how the fight is going, not just your own.',
+      'You\'re carrying healing potions -- use them ([i], select, [u]) well before you\'re in real danger, not after. Retreating a few tiles to break line of sight and reset is always an option too.',
+    ],
+    build: () => buildTutorialLevel([
+      '###############################',
+      '#.............................#',
+      '#..P..........................#',
+      '#.............................#',
+      '#.............................#',
+      '#......................B......#',
+      '#.............................#',
+      '#.............................#',
+      '###############################',
+    ], {
+      P: { type: 'player' },
+      B: { id: 'banditchief', type: 'monster', tag: 'boss' },
+    }),
+    setupPlayer: (p) => {
+      const sword = makeItem('shortsword', 0, Math.random); p.equipment.hand = sword;
+      const armor = makeItem('studded', 0, Math.random); p.equipment.body = armor;
+      p.inventory.push(makeItem('potion_heal', 0, Math.random), makeItem('potion_heal', 0, Math.random));
+    },
+    objectives: [
+      { desc: 'Defeat the Bandit Chief.', check: (s) => tutTagDead(s.level, 'boss') },
+    ],
+    completeText: 'That\'s every boss fight in this game, fundamentally: the exact same toolkit you already have, under more pressure. Bigger, later bosses add their own tricks on top of this, but the core loop -- read the fight, spend resources wisely, don\'t panic -- never changes.',
+  }],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 13. EMERGENCE — WHEN SYSTEMS COMBINE (capstone)
+// ---------------------------------------------------------------------------------------------
+// Every combo taught below is a REAL, verified interaction already built into the engine, not a
+// scripted approximation: oil + fire and wet + frost are the two halves of a genuine "elemental
+// triangle" (see igniteEntity/freezeEntitySolid and the comments beside them), and a thrown
+// flashbang really does confuse a whole area via the same aoeconfuse path a scroll or spell would
+// use. Nothing here is unique to the tutorial -- it's the exact system the real game runs on.
+TUTORIALS.push({
+  id: 'emergence', title: 'Emergence: When Systems Combine',
+  blurb: 'Oil and fire, water and frost, and crowd control -- real combos where two ordinary systems add up to more than the sum of their parts.',
+  parts: [
+    {
+      title: 'Elemental Combos',
+      blurb: 'Oil an enemy, then set them ablaze. Freeze a soaked one solid, then shatter the ice.',
+      introText: [
+        'Two ordinary systems can combine into something neither one does alone. Oil coats whatever it touches -- harmless by itself, but the very next flame turns it into a serious, lingering burn.',
+        'Throw the Oil Flask at the rat on the left: select it in your inventory ([i]), press [T] to throw, then aim (click, or Enter to snap to the nearest target). Follow up with the Firebomb the same way -- oil plus fire ignites the target directly, not just the ground under it.',
+        'The rat on the right is already soaked from the flooded cistern behind it. Frostbolt (in your spellbook, [z]) freezes a WET target solid instead of just chilling it -- solid means it cannot act at all for a few turns, and any hit lands a bonus-damage shatter while it lasts. The freeze is short, so the follow-up needs to be immediate: another spell, an arrow, anything -- it doesn\'t have to be melee.',
+      ],
+      build: () => buildTutorialLevel([
+        '###########################',
+        '#..P......................#',
+        '#.........................#',
+        '#.........................#',
+        '#.........1............2..#',
+        '#.........................#',
+        '#.........................#',
+        '#.........................#',
+        '###########################',
+      ], {
+        P: { type: 'player' },
+        1: { id: 'giantrat', type: 'monster', hp: 26, atk: [1, 3], tag: 'oiltarget' },
+        2: { id: 'giantrat', type: 'monster', hp: 26, atk: [1, 3], wet: true, tag: 'wettarget' },
+      }),
+      setupPlayer: (p) => {
+        p.inventory.push(makeItem('oil_flask', 0, Math.random), makeItem('oil_flask', 0, Math.random));
+        p.inventory.push(makeItem('firebomb', 0, Math.random), makeItem('firebomb', 0, Math.random));
+        p.knownSpells = ['frostbolt'];
+      },
+      objectives: [
+        {
+          desc: 'Oil the left-hand rat, then ignite it with the Firebomb.',
+          check: (s) => !!s.player._tutSawIgniteCombo,
+        },
+        {
+          desc: 'Freeze the wet rat solid with Frostbolt.',
+          check: (s) => !!s.player._tutSawFreezeCombo,
+        },
+        { desc: 'Shatter the frozen rat with an immediate follow-up hit.', check: (s) => !!s.player._tutSawShatter },
+        { desc: 'Finish off both rats.', check: (s) => tutTagDead(s.level, 'oiltarget') && tutTagDead(s.level, 'wettarget') },
+      ],
+      completeText: 'Neither oil nor water does anything to a target on its own -- they\'re both just setup. The payoff comes from whatever you follow them with, which is exactly why fights in this game reward carrying a mixed kit instead of just the biggest single weapon you own.',
+    },
+    {
+      title: 'Crowd Control & Terrain',
+      blurb: 'Scatter a group with a Flashbang, then use a doorway to finish them on your terms.',
+      introText: [
+        'A Flashbang confuses everything in its blast -- confused enemies wander instead of fighting, which turns "four enemies attacking together" into "four enemies not doing much of anything" for a few turns.',
+        'The rats ahead haven\'t noticed you yet. Stop just past the doorway -- close enough to throw, not so close they wake up -- and lob the Flashbang into the middle of them before the fight even starts: [i], select it, [T], aim, confirm.',
+        'The doorway behind you is still a choke point, exactly like the one you used earlier in Combat. Retreat through it and the confused stragglers can only reach you one at a time as the fog clears.',
+      ],
+      build: () => buildTutorialLevel([
+        '#############################',
+        '#..P........................#',
+        '#...........................#',
+        '#...........................#',
+        '############\'################',
+        '#...........................#',
+        '#.........3..4..5...........#',
+        '#...........................#',
+        '#.........6.................#',
+        '#...........................#',
+        '#############################',
+      ], {
+        P: { type: 'player' },
+        3: { id: 'giantrat', type: 'monster', hp: 10, atk: [1, 3], dormant: true, tag: 'crowd' },
+        4: { id: 'giantrat', type: 'monster', hp: 10, atk: [1, 3], dormant: true, tag: 'crowd' },
+        5: { id: 'giantrat', type: 'monster', hp: 10, atk: [1, 3], dormant: true, tag: 'crowd' },
+        6: { id: 'giantrat', type: 'monster', hp: 10, atk: [1, 3], dormant: true, tag: 'crowd' },
+      }),
+      setupPlayer: (p) => {
+        p.equipment.hand = makeItem('shortsword', 0, Math.random);
+        p.inventory.push(makeItem('flashbang', 0, Math.random));
+        p.inventory.push(makeItem('potion_heal', 0, Math.random));
+      },
+      objectives: [
+        {
+          desc: 'Throw the Flashbang into the group (confuse at least one).',
+          check: (s) => {
+            const n = s.level.monsters.filter(mm => mm.tutorialTag === 'crowd' && mm.alive && mm.statusConfuse > 0).length;
+            if (n >= 1) s.level._tutSawCrowdControl = true;
+            return !!s.level._tutSawCrowdControl;
+          },
+        },
+        { desc: 'Clear out all four rats.', check: (s) => tutTagDead(s.level, 'crowd') },
+      ],
+      completeText: 'That\'s the real lesson of this whole tutorial, not just this one room: nothing you\'ve learned works in isolation. Terrain shapes who can reach you, status effects buy you time or punish a mistake, and your gear decides how you spend the opening a combo like this creates. Mixing all of it, on the fly, is the actual game.',
+    },
+  ],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 14. COMPANIONS & QUESTS
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'companions_quests', title: 'Companions & Quests',
+  blurb: 'Travel with a companion who fights at your side, and run a full quest from acceptance to payout.',
+  parts: [
+    {
+      title: 'Fighting Together',
+      blurb: 'A companion follows and fights automatically. Learn to give them orders.',
+      introText: [
+        'In the real game you gain a companion by marrying an NPC (propose, then ask them to travel with you) or through certain story choices -- here, Rael is already traveling with you so you can see how it works right away.',
+        'A companion follows you, fights whatever you fight, and levels up in power right alongside you. You never control them directly turn-by-turn -- you set their orders instead.',
+        'Talk to Rael ([t]) to see the Orders menu: Follow/Stay, and a combat stance (Aggressive/Defensive/Passive).',
+      ],
+      build: () => buildTutorialLevel([
+        '#########################',
+        '#..P.R..................#',
+        '#.......................#',
+        '#.......................#',
+        '#..........1.........2..#',
+        '#.......................#',
+        '#.......................#',
+        '#########################',
+      ], {
+        P: { type: 'player' },
+        R: {
+          type: 'companion', name: 'Rael', roleId: 'guard', hp: 44, str: 12, dex: 11, atk: [4, 8], armor: 3, asSpouse: true,
+        },
+        1: { id: 'giantrat', type: 'monster', name: 'Vermin', hp: 12, atk: [1, 3], tag: 'c' },
+        2: { id: 'giantrat', type: 'monster', name: 'Vermin', hp: 12, atk: [1, 3], tag: 'c' },
+      }),
+      setupPlayer: (p) => {},
+      objectives: [
+        { desc: 'Talk to Rael and open the Orders menu.', check: (s) => !!s.player._tutSawOrders },
+        { desc: 'Clear the room together.', check: (s) => tutTagDead(s.level, 'c') },
+      ],
+      completeText: 'A companion is a second combatant you never have to micromanage in the heat of battle -- set their stance once, and they read the fight themselves from then on. Losing one is permanent, so a Defensive stance is worth considering against anything you\'re not confident about.',
+    },
+    {
+      title: 'Taking Work',
+      blurb: 'Accept a quest, complete the objective, and collect your reward.',
+      introText: [
+        'Press [q] any time to open your Quest Log -- it tracks the main story and every side quest you\'ve picked up.',
+        'Quartermaster Voss has real work. Talk to her ([t]) to hear it out and accept.',
+        'Quests always resolve the same way: accept, do the thing, return to whoever gave it to you to collect payment.',
+      ],
+      build: () => buildTutorialLevel([
+        '#########################',
+        '#..P.V..................#',
+        '#.......................#',
+        '#.......................#',
+        '#.......................#',
+        '#..........5.........6..#',
+        '#.......................#',
+        '#.......................#',
+        '#########################',
+      ], {
+        P: { type: 'player' },
+        V: {
+          type: 'npc', name: 'Quartermaster Voss', color: '#e0a05a',
+          dialogueFn: (npc) => {
+            const quest = player.quests.find(q => q.giverId === npc.uid);
+            if (!quest) {
+              return {
+                title: npc.name,
+                lines: ['"We\'ve got a vermin problem in the storeroom -- two of the little pests. Clear them out and there\'s coin in it for you."'],
+                extraOptions: [{
+                  label: 'Accept the quest',
+                  action: () => {
+                    player.quests.push({ id: 'tut_vermin', desc: 'Clear the storeroom vermin for Quartermaster Voss.', type: 'tutorial', giverId: npc.uid, progress: 0, need: 1, done: false, rewardGold: 15, rewardXp: 10 });
+                    player._tutAcceptedQuest = true;
+                    log('Quest accepted: Clear the storeroom vermin.');
+                    closeModal();
+                  },
+                }],
+              };
+            }
+            if (!quest.done && tutTagDead(curDungeonLevel(), 'vermin')) {
+              return {
+                title: npc.name,
+                lines: ['"Both of them? Good riddance -- here\'s what I owe you."'],
+                extraOptions: [{
+                  label: 'Turn in the quest',
+                  action: () => { quest.progress = 1; completeQuest(quest); closeModal(); },
+                }],
+              };
+            }
+            if (!quest.done) return { title: npc.name, lines: ['"Still waiting on those vermin, when you get a chance."'] };
+            return { title: npc.name, lines: ['"Thanks again for the help back there."'] };
+          },
+        },
+        5: { id: 'giantrat', type: 'monster', name: 'Vermin', hp: 10, atk: [1, 2], tag: 'vermin' },
+        6: { id: 'giantrat', type: 'monster', name: 'Vermin', hp: 10, atk: [1, 2], tag: 'vermin' },
+      }),
+      setupPlayer: (p) => {},
+      objectives: [
+        { desc: 'Accept the quest from Quartermaster Voss.', check: (s) => !!s.player._tutAcceptedQuest },
+        { desc: 'Clear out the vermin.', check: (s) => tutTagDead(s.level, 'vermin') },
+        { desc: 'Return to Voss and turn in the quest.', check: (s) => s.player.quests.some(q => q.id === 'tut_vermin' && q.done) },
+      ],
+      completeText: 'That loop -- accept, do it, turn it in -- is every quest in the game, from a two-minute errand like this one right up to the main story. The Quest Log always tells you exactly where you left off if you get pulled away.',
+    },
+  ],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 15. ADVANCED SYSTEMS: CYBERNETICS & DIMENSIONS
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'advanced_systems', title: 'Advanced Systems: Cybernetics & Dimensions',
+  blurb: 'Two systems you\'ll meet later in the game: installable implants, and the strange planes beyond the world map.',
+  parts: [
+    {
+      title: 'Cyberware',
+      blurb: 'Install an implant, then use an active one in combat -- same targeting as any spell.',
+      introText: [
+        'Cyberware are implants -- some found in the world, some chosen at character creation. Knowing one isn\'t the same as having it running: press [Y] to install or remove them, within your slot limit.',
+        'Passive implants (like armor plating) work automatically once installed. Active ones (like a servo-driven fist) show up in your [z] Abilities screen and are cast exactly like a spell or technique, just paid for with a fourth resource: Charge.',
+        'You know Subdermal Plating (passive) and a Kinetic Fist (active) already installed. Install the plating, then punch the rat.',
+      ],
+      build: () => buildTutorialLevel([
+        '#######################',
+        '#..P..................#',
+        '#.....................#',
+        '#.....................#',
+        '#..............1......#',
+        '#.....................#',
+        '#######################',
+      ], {
+        P: { type: 'player' },
+        1: { id: 'giantrat', type: 'monster', hp: 16, atk: [1, 2], tag: 'cy' },
+      }),
+      setupPlayer: (p) => {
+        p.knownCyberIds = ['subdermalplating', 'kineticfist'];
+        p.installedCyber = ['kineticfist'];
+        p.charge = p.maxCharge = 60;
+      },
+      objectives: [
+        { desc: 'Open Cybernetics with [Y].', check: (s) => !!s.player._tutSawCyber },
+        { desc: 'Install Subdermal Plating.', check: (s) => s.player.installedCyber.includes('subdermalplating') },
+        { desc: 'Use Kinetic Fist on the rat.', check: (s) => (s.player._tutSpellCasts || 0) >= 1 },
+        { desc: 'Defeat the rat.', check: (s) => tutTagDead(s.level, 'cy') },
+      ],
+      completeText: 'Cyberware sits alongside spells and techniques as a fourth track entirely -- a character with no magic and no martial training at all can still field a real arsenal of implants, resourced by Charge instead of Mana or Stamina.',
+    },
+    {
+      title: 'Beyond the Map',
+      blurb: 'A short briefing on Dimensions -- strange planes with their own rules, reached only by defeating specific unique bosses.',
+      introText: [
+        'Everything you\'ve done so far -- the overworld, every dungeon, even this tutorial -- shares one set of rules. Dimensions don\'t.',
+        'Each Dimension is a distinct, self-contained plane -- a corrupted digital city, a tide-locked ruin, a place where a fungal Bloom keeps rewriting the terrain -- unlocked one at a time by defeating the specific unique boss tied to it, out in the real world.',
+        'Every Dimension runs its own extra rules on top of the basics: a unique meter to manage, hazards you won\'t meet anywhere else, and rewards that don\'t exist anywhere else either. There\'s no safe way to preview that here -- it\'s built to be discovered.',
+      ],
+      build: () => buildTutorialLevel([
+        '#######################',
+        '#..P..................#',
+        '#.....................#',
+        '#......I..............#',
+        '#.....................#',
+        '#..............D......#',
+        '#.....................#',
+        '#######################',
+      ], {
+        P: { type: 'player' },
+        I: {
+          type: 'npc', name: 'Warden Cass', color: '#a05ae0',
+          dialogue: {
+            title: 'Warden Cass',
+            lines: [
+              '"That shimmer behind me? A dead end, for now -- a real Dimension gate only opens once you\'ve actually beaten what guards it."',
+              '"When you\'re ready for one, you\'ll know: the boss that unlocks it is always a unique, named threat, not a random encounter."',
+              '"Once inside, forget most of what you learned out here about pacing yourself. Read the room, watch whatever meter that plane hands you, and don\'t assume anything works the way it did back home."',
+            ],
+          },
+        },
+        D: { type: 'trigger', once: false, onEnter: (ctx) => { ctx.player._tutSawPortal = true; log('The gate shimmers -- inert, waiting on a door you haven\'t earned yet.'); } },
+      }),
+      setupPlayer: (p) => {},
+      objectives: [
+        { desc: 'Talk to Warden Cass about Dimensions.', check: (s) => !!s.level.npcs.find(n => n.name === 'Warden Cass')._tutTalked },
+        { desc: 'Take a look at the inert gate.', check: (s) => !!s.player._tutSawPortal },
+      ],
+      completeText: 'That\'s the honest version: Dimensions are a late-game system this tutorial can\'t responsibly simulate in miniature, because each one plays by its own rules on purpose. Beat a unique boss, and you\'ll be shown the rest for real.',
+    },
+  ],
+});
 
 </script>
 </body>
