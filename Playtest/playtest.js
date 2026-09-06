@@ -2079,7 +2079,20 @@ function tryShopIfTrading(win, log) {
  * which is always eventually a real UI option) still fires, so this can't loop forever.
  */
 const DIALOGUE_DECLINE_RE = /never ?mind|nothing|decline|refuse|not now|cancel/i;
-const DIALOGUE_ENDING_RE = /^(talk|chat|farewell|leave|goodbye|bye)$/i;
+// BUG FIX (found investigating a real Act-0 stall, live-verified via /mnt HTTP smoke test):
+// this used to also match "talk"/"chat", wrongly bucketing the game's PRIMARY flavor/affection/
+// quest-hook dialogue option (label is literally "Talk", or "Chat" for a spouse -- see
+// openDialogue in game.html) in with genuine conversation-enders. "Talk" is not a no-op the way
+// "Leave"/"Farewell"/"Goodbye"/"Bye" are: it raises NPC affection AND independently calls
+// checkMainQuestTalkNpc(npc), same as "Ask about your journey" does. Deprioritizing it below
+// "any other substantive option" meant the bot picked it far less than a real player would.
+// (This alone does not explain the multi-thousand-turn Act-0 talk_npc stalls also found this
+// session -- those trace to how rarely the bot initiates dialogue at all relative to how much
+// it explores, combined with role-gated stages needing a specific, often-rare NPC role; see the
+// dedicated comment further down near tryTalkToAdjacentNpc/the main loop for that finding, which
+// is left as an open, documented issue rather than papered over with a heuristic reshuffle that
+// hasn't been tested against its own side effects on shopping/supply behavior.)
+const DIALOGUE_ENDING_RE = /^(farewell|leave|goodbye|bye)$/i;
 const DIALOGUE_REWARD_OFFER_RE = /\(\+?\d+\s*g[old]*,?\s*\+?\d+\s*xp\)|\(\d+g,\s*\d+xp\)/i;
 // Dialogue options that start a fight or otherwise turn a friendly NPC hostile. These are
 // EXCLUDED from the random "any substantive option" fallback below, not just deprioritized:
@@ -2108,7 +2121,27 @@ function tryHandleDialogueIfOpen(win, log) {
   try { opts = JSON.parse(optInfo.value || '[]'); } catch (e) {}
   if (!opts.length) { key(win, 'Escape'); return true; }
 
-  const pick =
+  // FOURTH BUG FIX in the talk_npc family (see tryPathTowardQuestNpc/tryTalkToAdjacentNpc's BUG
+  // FIX comments above for the first three): even with target-locking, settlement-fallback, and
+  // role-aware skipping all fixed, a life could STILL stall for thousands of turns -- confirmed
+  // directly off a live batch: 197 "heading toward" attempts, only 2 real talks, stage still
+  // unresolved after 3400+ actions. Root cause: several accepted roles (innkeeper, tavernkeeper,
+  // merchant, etc.) are also SHOP_ROLES, so once the bot finally reaches and opens dialogue with
+  // a genuinely role-matching NPC, the unconditional `opts.find(trade)` below wins and picks
+  // Trade every time -- Ask about your journey/Talk (the only options that call
+  // checkMainQuestTalkNpc) never get chosen, so the stage never resolves even on a correct
+  // encounter. Fixed by checking whether the CURRENT dialogue partner (the `dialogueNPC` global
+  // -- see openDialogue in game.html) actually satisfies the active role gate, and if so,
+  // pre-empting the whole priority chain below to resolve the quest first; shopping with this
+  // same NPC is still one dialogue-reopen away afterward, nothing is lost, just reordered for
+  // this one turn.
+  const questNpcPick = (() => {
+    const gate = evalGame(win, `(function(){ const s = curStoryStage(); if (!s || s.type !== 'talk_npc') return undefined; return (s.targetRoles === null || (typeof dialogueNPC !== 'undefined' && dialogueNPC && s.targetRoles.includes(dialogueNPC.roleId))) ? true : false; })()`).value;
+    if (!gate) return null;
+    return opts.find((o) => /ask about your journey/i.test(o.label)) || opts.find((o) => /^(talk|chat)$/i.test(o.label.trim())) || null;
+  })();
+
+  const pick = questNpcPick ||
     opts.find((o) => /trade/i.test(o.label))
     || opts.find((o) => /quest|task|bounty|board/i.test(o.label) && !DIALOGUE_DECLINE_RE.test(o.label))
     || (() => {
@@ -2136,12 +2169,70 @@ function tryHandleDialogueIfOpen(win, log) {
  * an earlier version of this toolkit hit exactly this infinite loop. Trade is intentionally
  * exempt from the cooldown (see bot.js: gameState 'trade' is handled every turn regardless),
  * so a bot can still restock/sell on a later visit even after "talking" once.
+ *
+ * OPEN ISSUE, found and live-verified this session (not fixed -- see below for why): this only
+ * fires when the bot happens to already be ADJACENT to an NPC as an incidental side effect of
+ * movement/combat/exploration -- nothing in the priority chain ever moves TOWARD an NPC just to
+ * talk to one. Measured directly off a real 3999-action life's event log: only 8 dialogue
+ * interactions total, i.e. roughly one every 500 actions. That's fine for most purposes (shop
+ * restocking, occasional flavor text), but it makes any ROLE-GATED talk_npc origin-quest stage
+ * (see talkNpcStage/checkMainQuestTalkNpc above) a slow, luck-dependent bottleneck: the bot has
+ * to happen to end up adjacent to an NPC AND have that specific NPC's roleId be one of the
+ * (often narrow -- e.g. hamlet's is just elder/farmer/shepherd) accepted roles, out of a
+ * settlement's full role pool (up to 30+ distinct roles in a town/city). A real life was
+ * observed stuck on the exact same Act-0 talk_npc stage for ~5500 turns straight this session.
+ * The two candidate fixes -- (a) giving tryTalkToAdjacentNpc's caller a reason to path toward a
+ * *specific* nearby NPC when a role-gated stage is active, mirroring how tryAdvanceMainQuest
+ * already paths toward dungeons/dimensions for kill_boss/dungeon_tier/dimension_trail stages,
+ * or (b) simply talking to every reachable NPC more eagerly -- both change core exploration/
+ * dialogue behavior with real ripple effects (shopping cadence, turn budget spent per life,
+ * how often other systems that key off "just talked to someone" fire) that deserve their own
+ * dedicated testing pass rather than a same-session patch bolted onto an unrelated fix. Left
+ * here as a clearly documented, reproduced, understood-root-cause issue for a future session
+ * (or the discoverability metric in SECTION 7, which could be extended to cover these Act-0
+ * stage types the same way it already covers kill_boss/dungeon_tier/dimension_trail) to act on.
  */
+/**
+ * THIRD BUG FIX in this same family (see tryPathTowardQuestNpc's two BUG FIX comments above for
+ * the first two): even with target-locking and settlement-fallback pathing both fixed, a life
+ * could STILL stall on a role-gated talk_npc stage for its entire run -- confirmed directly off
+ * a live batch: 9 different NPCs talked to, spread across a 2367-action life, NONE of which
+ * resolved a stage with <1% documented failure odds for a matching role. The cause: this
+ * function fires on ANY adjacent not-yet-talked-to NPC, with no awareness of an active role
+ * gate. In a dense settlement, the bot would path toward its correctly-locked, role-matching
+ * target, but some OTHER un-talked NPC would become adjacent first along the way and get talked
+ * to instead (satisfying this function's turn), permanently "spending" that NPC's one-time
+ * novelty without ever making progress on the actual quest -- over and over, in a large
+ * settlement with many NPCs, this can consume the whole life. Fixed by making this function
+ * role-aware: when a role-gated talk_npc stage is active, only auto-talk an adjacent NPC whose
+ * OWN role matches (which, if true, immediately resolves the stage -- strictly better than
+ * before) or when there's no such stage active at all; otherwise skip and let
+ * tryPathTowardQuestNpc keep steering toward the actual locked target instead.
+ */
+// FIFTH item in this family, found the same session -- deliberately NOT fixed with more bot
+// engineering, and documented here instead as a CONTENT finding: killAnyStage prologue variants
+// (e.g. pro_wanderer_2, "Live Off the Land") require killing specific species
+// (PROLOGUE_WILDLIFE.plains = rabbit/deer/boar/wolf), but a live batch showed a life killing 7
+// giantrats -- a species used as the generic FALLBACK spawn pool in multiple places in game.html
+// (see QUEST_MONSTER_POOL and the several `['giantrat','goblin']` fallback arrays) -- without a
+// single kill counting toward the stage. This means giant rats may simply be far more common
+// than the specific prologue-required wildlife in at least some circumstances. This is exactly
+// the kind of signal this whole toolkit exists to surface (see the project's stated purpose:
+// detecting content that's too rare or a fight that's miscalibrated), NOT something to patch
+// away by teaching the bot to hunt specific species -- doing that would make the tool blind to
+// the very class of problem it's meant to catch. Left as-is and reported, not engineered around.
 function tryTalkToAdjacentNpc(win, log, talkedNpcUids) {
+  const roles = evalGame(win, `(function(){ const s = curStoryStage(); return (s && s.type === 'talk_npc') ? s.targetRoles : undefined; })()`).value;
   const r = evalGame(win, `
     (function(){
+      const roles = ${JSON.stringify(roles === undefined ? null : roles)};
+      const gateActive = ${JSON.stringify(roles !== undefined)};
       const nearby = findAdjacentNPCs();
-      for (const n of nearby) if (!(${JSON.stringify([...talkedNpcUids])}.includes(n.uid))) return { uid: n.uid, name: n.name };
+      for (const n of nearby) {
+        if (${JSON.stringify([...talkedNpcUids])}.includes(n.uid)) continue;
+        if (gateActive && roles !== null && !roles.includes(n.roleId)) continue; // skip -- see BUG FIX comment
+        return { uid: n.uid, name: n.name };
+      }
       return null;
     })()
   `);
@@ -2181,8 +2272,33 @@ function tryTalkToAdjacentNpc(win, log, talkedNpcUids) {
  * for a few dimensions, finding a specific named world structure and using a specific
  * crafted/found item there (DIMENSION_GATE_INFO's 'item_structure'/'discovery' kinds) --
  * there's no existing generic registry of named structures to path toward the way
- * dungeonRegistry covers dungeons, so this is left as a documented gap (see README) rather
- * than a fragile guess.
+ * dungeonRegistry covers dungeons (these are per-tile terrain features painted during chunk
+ * generation, not tracked in any list once the chunk unloads), so this is left as a documented
+ * gap (see README) rather than a fragile guess.
+ *
+ * QUANTIFIED this session (checked DIMENSION_GATE_INFO directly rather than leaving this vague):
+ * 9 of 12 dimensions are 'boss_kill' (fully covered organically); only 3 -- the_drift,
+ * fourth_corridor, lucid_expanse -- are the item_structure/discovery kinds this function itself
+ * can't path to a coordinate for (a boss/dungeon isn't the same thing as a specific overworld
+ * landmark). A main quest's dimension_trail picks 3-5 RANDOM dimensions out of all 12 (see
+ * generateMainQuest's `mandatoryDimensions`), so this was never a rare edge case: roughly 62%
+ * (3-dimension trail) to 84% (5-dimension trail) of seeds include AT LEAST ONE of these 3.
+ *
+ * FIXED, same session, via a DIFFERENT mechanism than this function (see
+ * tryAdvanceDimensionGateStructure and scanForDimensionGateFeatures, called from playOneLife's
+ * main loop): lucid_expanse's altar only ever spawns inside a 'dream_sanctum'-themed dungeon (a
+ * fixed engine relationship, hardcoded in the 'discovery' branch below the same way
+ * BOSS_DUNGEON_THEME hardcodes its own fixed pairs), so this function now paths toward one once
+ * registered, same as any other themed dungeon. The other two (the_drift/fourth_corridor) need a
+ * specific overworld LANDMARK dungeonRegistry-style tracking never covered -- closed by giving
+ * the bot its own persistent, honestly-scoped memory of landmarks it has actually walked past
+ * (checked via the real `.seen` fog-of-war flag on already-generated chunks only, never
+ * triggering fresh chunk generation), the same kind of recollection a human player builds up
+ * naturally. This function still won't return a coordinate for those two on its own -- that's by
+ * design, the memory-based approach lives in its own function precisely because "have I
+ * personally seen this specific landmark" isn't the same kind of query as "does a registered
+ * dungeon of this theme exist," and forcing it into this function's shape would be worse than a
+ * dedicated one.
  */
 function getMainQuestNavigationTarget(win) {
   const r = evalGame(win, `
@@ -2237,11 +2353,18 @@ function getMainQuestNavigationTarget(win) {
               if (found) return { x: found.dg.x, y: found.dg.y, why: 'dimension_trail(' + gate.kind + ') -> ' + found.dg.name };
             }
           }
-          // 'discovery'-kind gates (currently just lucid_expanse) have no bossId and no tracked
-          // structure location -- the real game's own questStageHint() doesn't give one either
-          // (it returns flavor text ending in "somewhere out there"), so faithfully falling
-          // through to normal exploration here matches the game's own designed-in mystery
-          // rather than fabricating a target the base game deliberately doesn't provide.
+          // 'discovery'-kind gates: FIXED this session. lucid_expanse is the only one, and its
+          // altar (see useSlumberingAltar/'slumbering_altar' feature in game.html) only ever
+          // spawns inside a 'dream_sanctum'-themed dungeon (see generateDungeonLevel's dedicated
+          // dream_sanctum special-case) -- a fixed, hardcoded engine relationship, not something
+          // that varies by seed, so it's safe to hardcode here the same way BOSS_DUNGEON_THEME
+          // hardcodes its own fixed boss->theme pairs. This reuses the exact same
+          // nearestRegisteredDungeonOfTheme lookup as every other case above -- once a
+          // dream_sanctum has actually been generated by real exploration, this can find it.
+          else if (gate && gate.kind === 'discovery' && dimId === 'lucid_expanse') {
+            const found = nearestRegisteredDungeonOfTheme('dream_sanctum', player.x, player.y);
+            if (found) return { x: found.dg.x, y: found.dg.y, why: 'dimension_trail(discovery) -> ' + found.dg.name };
+          }
         }
       }
       // ---- side quests: any active 'boss_bounty' quest (see makeRadiantQuest et al in
@@ -2296,6 +2419,379 @@ function tryAdvanceMainQuest(win, log) {
 
 
 /**
+ * When a role-gated talk_npc Act-0 origin-quest stage is active (see talkNpcStage/
+ * checkMainQuestTalkNpc and tryTalkToAdjacentNpc's "OPEN ISSUE" comment above for the full
+ * root-cause writeup), path toward a matching-role NPC -- but ONLY among NPCs the game has
+ * already generated into curNPCs() (the same lazy-chunk-loaded, currently-in-memory set
+ * findAdjacentNPCs() draws from). This deliberately never looks further than that: an NPC
+ * sitting in an unexplored chunk doesn't exist in memory yet, the same honesty boundary
+ * dungeonRegistry/getMainQuestNavigationTarget already respect for dungeons/dimensions --
+ * this isn't a new exception to the "no god-mode" rule, just the NPC-shaped version of it.
+ * Mirrors tryAdvanceMainQuest's own bfsFirstStep pattern one-for-one.
+ *
+ * BUG FIX (found via a live batch run this session: a life ran 5500+ turns with this function
+ * firing and logging "heading toward" constantly, yet only completed 7 real talk interactions
+ * the whole life -- and the stage never resolved). The original version picked the NEAREST
+ * matching candidate FRESH on every single call with no memory of which one it was already
+ * walking toward. As soon as chunk generation revealed a new candidate that was even slightly
+ * closer -- or the previous nearest one wandered a step -- "nearest" could flip to a different
+ * NPC mid-approach, permanently resetting progress before ever reaching anyone. This is why
+ * "heading toward" fired constantly while genuine arrivals stayed rare: it wasn't stuck, it was
+ * thrashing between targets. Fixed by locking onto a specific NPC's uid (via the `lock` state,
+ * life-scoped like talkedNpcUids/dimensionGateMemory elsewhere) and committing to reaching that
+ * SAME one -- tracking its live position each call (so a wandering NPC is still followed
+ * correctly) -- until it's actually reached, talked to, dies, or leaves memory, at which point a
+ * fresh target is picked.
+ *
+ * @param lock mutable {uid: string|null} object, create with `{uid: null}` once per life
+ */
+function tryPathTowardQuestNpc(win, log, lock) {
+  const stageR = evalGame(win, `(typeof curStoryStage === 'function') ? curStoryStage() : null`);
+  if (!stageR.ok || !stageR.value || stageR.value.type !== 'talk_npc') { lock.uid = null; return false; }
+  const roles = stageR.value.targetRoles; // null = any NPC at all satisfies this stage
+  const targetR = evalGame(win, `
+    (function(){
+      const roles = ${JSON.stringify(roles)};
+      const lockedUid = ${JSON.stringify(lock.uid)};
+      const cands = curNPCs().filter(n => n.alive && (roles === null || roles.includes(n.roleId)));
+      if (!cands.length) return null;
+      // stay committed to the previously-locked NPC if it's still a valid candidate, instead of
+      // re-picking "nearest" from scratch -- see the BUG FIX comment above for why that matters.
+      const stillThere = lockedUid ? cands.find(n => n.uid === lockedUid) : null;
+      if (stillThere) return { uid: stillThere.uid, x: stillThere.x, y: stillThere.y };
+      let best = null, bestD = Infinity;
+      for (const n of cands) { const d = chebyshev(player.x, player.y, n.x, n.y); if (d < bestD) { bestD = d; best = n; } }
+      return best ? { uid: best.uid, x: best.x, y: best.y } : null;
+    })()
+  `);
+  let target = (targetR.ok && targetR.value) ? targetR.value : null;
+  let viaSettlementFallback = false;
+  if (!target) {
+    lock.uid = null;
+    // SECOND BUG FIX, found in the same live batch as the target-thrashing one: even with
+    // locking fixed, a life could still stall for thousands of turns on a role-gated talk_npc
+    // stage simply because normal wide-frontier exploration wanders far away from any
+    // settlement at all -- curNPCs() then returns nothing to even consider, for a long stretch,
+    // since NPCs concentrate in settlements. Confirmed directly off a real run: only 10
+    // conversations total across a 3999-action life, with gaps of 2000-3000+ turns between
+    // them where the bot simply wasn't near anyone. Falls back here to heading toward the
+    // nearest ALREADY-GENERATED chunk with a `.settlement` (honest -- via worldChunks.has(),
+    // never triggers fresh generation, same rule as scanForDimensionGateFeatures) when no NPC
+    // candidate is currently loaded, so the bot has a reason to return toward civilization
+    // instead of drifting further into the wilderness while this stage is stuck.
+    if (!evalGame(win, 'curIsDungeon() || curIsDimension()').value) {
+      const settlement = evalGame(win, `
+        (function(){
+          const CHUNK = 24;
+          const pcx = Math.floor(player.x / CHUNK), pcy = Math.floor(player.y / CHUNK);
+          let best = null, bestD = Infinity;
+          for (const [key, c] of worldChunks) {
+            if (!c || !c.settlement) continue;
+            const [cx, cy] = key.split(',').map(Number);
+            const d = Math.max(Math.abs(cx - pcx), Math.abs(cy - pcy));
+            if (d < bestD && d > 0) { bestD = d; best = { x: cx * CHUNK + Math.floor(CHUNK / 2), y: cy * CHUNK + Math.floor(CHUNK / 2) }; }
+          }
+          return best;
+        })()
+      `).value;
+      if (settlement) target = settlement;
+    }
+    if (target) viaSettlementFallback = true;
+    if (!target) return false; // no NPC candidate and no known settlement to return to -- let normal explore find new chunks
+  } else {
+    lock.uid = target.uid;
+  }
+  const already = evalGame(win, `chebyshev(player.x, player.y, ${target.x}, ${target.y})`).value;
+  if (already <= 1) return false; // already adjacent -- tryTalkToAdjacentNpc handles this turn
+  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 300)`).value;
+  if (!step) { lock.uid = null; return false; } // unreachable -- drop the lock and let a fresh pick happen next time
+  const MOVE_DIRS_Q = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
+  const dirEntry = MOVE_DIRS_Q.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
+  if (!dirEntry) return false;
+  const before = evalGame(win, 'turnCount').value;
+  key(win, dirEntry[0]);
+  if (evalGame(win, 'turnCount').value === before) { lock.uid = null; return false; } // blocked -- drop the lock, let normal explore handle it
+  if (log && Math.random() < 0.1) log(viaSettlementFallback
+    ? `Heading back toward known civilization (nothing matching loaded nearby) for the current quest stage.`
+    : `Heading toward a specific ${roles ? roles.join('/') : 'any'} NPC for the current quest stage.`);
+  if (log && Math.random() < 0.03) {
+    const dAfter = evalGame(win, `chebyshev(player.x, player.y, ${target.x}, ${target.y})`).value;
+    log(`[diag] questNpc target dist now ${dAfter} (viaSettlement=${viaSettlementFallback})`);
+  }
+  return true;
+}
+
+/**
+ * When an 'enter_dungeon' Act-0 origin-quest stage is active (see enterDungeonStage/
+ * checkMainQuestEnterDungeon -- used exactly once, by the dungeon_born origin's
+ * 'pro_dungeon_born_2' stage), path toward the nearest ALREADY-REGISTERED dungeon of ANY theme
+ * (no boss/theme requirement -- this stage completes on entering literally any dungeon). Found
+ * via the same live-batch investigation that found tryPathTowardQuestNpc's target-thrashing bug:
+ * a dungeon_born-origin life ran over 8000 turns never advancing past this exact stage, because
+ * nothing paths toward a dungeon entrance during Act-0 -- tryAdvanceMainQuest only fires for
+ * kill_boss/dungeon_tier/dimension_trail stages, so this one was left to pure chance, same root
+ * cause as the talk_npc issue fixed earlier this session. Mirrors nearestRegisteredDungeonOfTheme
+ * (see getMainQuestNavigationTarget) but without a theme filter, since any dungeon qualifies.
+ */
+function tryPathTowardAnyDungeon(win, log) {
+  const stageR = evalGame(win, `(function(){ const s = curStoryStage(); return (s && s.type === 'enter_dungeon' && !curIsDungeon()) ? true : false; })()`);
+  if (!stageR.ok || !stageR.value) return false;
+  const target = evalGame(win, `
+    (function(){
+      let best = null, bestD = Infinity;
+      for (const dg of dungeonRegistry.values()) {
+        const d = chebyshev(player.x, player.y, dg.x, dg.y);
+        if (d < bestD) { bestD = d; best = dg; }
+      }
+      return best ? { x: best.x, y: best.y } : null;
+    })()
+  `).value;
+  if (!target) return false; // no dungeon registered/discovered yet -- normal exploration is what reveals one
+  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 300)`).value;
+  if (!step) return false;
+  const MOVE_DIRS_D = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
+  const dirEntry = MOVE_DIRS_D.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
+  if (!dirEntry) return false;
+  const before = evalGame(win, 'turnCount').value;
+  key(win, dirEntry[0]);
+  if (evalGame(win, 'turnCount').value === before) return false; // blocked (e.g. stepped onto the entrance itself and triggered entry, or wall) -- fine either way
+  if (log && Math.random() < 0.1) log('Heading toward a known dungeon entrance for the current quest stage.');
+  return true;
+}
+
+// Fixed pair of {feature id -> which dimension it gates}, mirroring DIMENSION_GATE_INFO's own
+// hardcoded structureName strings in game.html -- these are engine constants (a Launch Cradle
+// has only ever gated the_drift, a Folding Stone has only ever gated fourth_corridor), not
+// something that varies by seed, so hardcoding the pairing here is exactly as safe as
+// BOSS_DUNGEON_THEME hardcoding its own fixed boss->theme pairs elsewhere in this file.
+const DIMENSION_GATE_FEATURE_BY_DIMENSION = { the_drift: 'launch_cradle', fourth_corridor: 'folding_stone' };
+
+/**
+ * Scans ONLY tiles the game has already generated AND the player has already actually seen
+ * (checks `.seen`, the real game's own fog-of-war flag -- see t.seen throughout game.html) for
+ * a Launch Cradle or Folding Stone, and remembers their coordinates for the rest of this life if
+ * found. CRITICAL: this must never call curTileAt/getTile on a chunk that hasn't already been
+ * generated by real play -- getTile() lazily GENERATES a chunk on first access (see getChunk),
+ * so scanning blindly over a wide radius would silently invent real terrain the player never
+ * actually walked near, the exact god-mode-by-accident this whole file works hard to avoid
+ * everywhere else. Restricting to `worldChunks.has(...)` (already-generated) and `.seen`
+ * (already-observed) tiles keeps this scan exactly as honest as a human's own minimap: it only
+ * "remembers" what real exploration has actually revealed.
+ *
+ * Added this session to close the one real, quantified navigation gap identified while testing
+ * whether a full start-to-final-boss run is possible: the_drift and fourth_corridor need a
+ * specific overworld structure that dungeonRegistry-style tracking doesn't cover. This gives the
+ * bot the same kind of persistent, own-recollection memory a human player builds up naturally
+ * ("oh, I remember seeing weird scaffolding a while back") rather than any new god-mode lookup.
+ *
+ * @param win jsdom window
+ * @param memory mutable {launch_cradle?: {x,y}, folding_stone?: {x,y}} object, create with `{}`
+ *   once per life and reuse every call (like discoverabilityState/talkedNpcUids elsewhere)
+ */
+function scanForDimensionGateFeatures(win, memory) {
+  const isOverworld = evalGame(win, '!curIsDungeon() && !curIsDimension()').value;
+  if (!isOverworld) return; // both features are overworld-only POIs
+  const needed = Object.values(DIMENSION_GATE_FEATURE_BY_DIMENSION).filter((f) => !memory[f]);
+  if (!needed.length) return; // already have everything we could ever need this life
+  const found = evalGame(win, `
+    (function(){
+      const needed = ${JSON.stringify(needed)};
+      const CHUNK = 24; // matches CH in game.html
+      const pcx = Math.floor(player.x / CHUNK), pcy = Math.floor(player.y / CHUNK);
+      const out = {};
+      for (let cy = pcy - 1; cy <= pcy + 1; cy++) {
+        for (let cx = pcx - 1; cx <= pcx + 1; cx++) {
+          const c = worldChunks.get(cx + ',' + cy); // .get, never getChunk -- must not generate
+          if (!c || !c.tiles) continue;
+          for (let ly = 0; ly < c.tiles.length; ly++) {
+            const row = c.tiles[ly];
+            for (let lx = 0; lx < row.length; lx++) {
+              const t = row[lx];
+              if (t && t.seen && t.feature && needed.includes(t.feature) && !out[t.feature]) {
+                out[t.feature] = { x: cx * CHUNK + lx, y: cy * CHUNK + ly };
+              }
+            }
+          }
+        }
+      }
+      return out;
+    })()
+  `).value || {};
+  for (const [feature, pos] of Object.entries(found)) memory[feature] = pos;
+}
+
+/**
+ * If the current main-quest stage is a 'dimension_trail' with an 'item_structure' gate (see
+ * DIMENSION_GATE_INFO), and the required item is already held, and this life's memory (see
+ * scanForDimensionGateFeatures) already knows where the structure is, path toward it and
+ * interact with it ('>' -- the same key that triggers stairs/altars/every other "enter/use"
+ * feature in curTileAt's dispatch, see game.html). Does nothing (returns false) if the item
+ * isn't held yet -- getMainQuestNavigationTarget/tryAdvanceMainQuest already handle heading
+ * toward the gatekeeper boss's dungeon to earn the item first -- or if the structure hasn't
+ * been seen yet, in which case normal exploration is what will eventually reveal it (now with a
+ * real chance of being remembered instead of wasted, thanks to the scan above).
+ */
+function tryAdvanceDimensionGateStructure(win, log, memory) {
+  scanForDimensionGateFeatures(win, memory);
+  const stageR = evalGame(win, `(function(){ const s = curStoryStage(); return (s && s.type === 'dimension_trail') ? { dimId: s.targetDimensionId } : null; })()`);
+  if (!stageR.ok || !stageR.value) return false;
+  const dimId = stageR.value.dimId;
+
+  // lucid_expanse ('discovery' kind): once actually inside a dream_sanctum dungeon (which
+  // getMainQuestNavigationTarget now paths toward -- see its comment), find and use the
+  // slumbering_altar tile. Scoped to "already generated this dungeon level's grid AND already
+  // seen", same honesty rule as scanForDimensionGateFeatures -- a dungeon level's grid exists
+  // in full once generated, but .seen still gates what the player has actually walked past.
+  if (dimId === 'lucid_expanse') {
+    const inDreamSanctum = evalGame(win, `curIsDungeon() && curDungeon() && curDungeon().theme === 'dream_sanctum'`).value;
+    if (inDreamSanctum) {
+      const altar = evalGame(win, `
+        (function(){
+          const lvl = curDungeonLevel();
+          for (let y = 0; y < lvl.grid.length; y++) {
+            const row = lvl.grid[y];
+            for (let x = 0; x < row.length; x++) {
+              if (row[x] && row[x].seen && row[x].feature === 'slumbering_altar') return { x, y };
+            }
+          }
+          return null;
+        })()
+      `).value;
+      if (altar) {
+        const already = evalGame(win, `player.x === ${altar.x} && player.y === ${altar.y}`).value;
+        if (already) {
+          const before = evalGame(win, 'turnCount').value;
+          key(win, '>');
+          if (log && evalGame(win, 'turnCount').value !== before) log('Used the slumbering altar to open the way to the Lucid Expanse.');
+          return true;
+        }
+        const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${altar.x}, ${altar.y}, 300)`).value;
+        if (step) {
+          const MOVE_DIRS_A = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
+          const d = MOVE_DIRS_A.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
+          if (d) {
+            const before = evalGame(win, 'turnCount').value;
+            key(win, d[0]);
+            return evalGame(win, 'turnCount').value !== before;
+          }
+        }
+      }
+    }
+    return false; // not in the right dungeon, or altar not seen yet -- normal explore handles it
+  }
+
+  const feature = DIMENSION_GATE_FEATURE_BY_DIMENSION[dimId];
+  if (!feature) return false; // boss_kill / discovery / not one of the two item_structure gates
+  const gateR = evalGame(win, `(typeof DIMENSION_GATE_INFO !== 'undefined') ? DIMENSION_GATE_INFO[${JSON.stringify(dimId)}] : null`);
+  if (!gateR.ok || !gateR.value) return false;
+  const hasItem = evalGame(win, `player.inventory.some(i => i.name === ${JSON.stringify(gateR.value.itemName)})`).value;
+  if (!hasItem) return false; // don't bother seeking the structure without the key item yet
+  const pos = memory[feature];
+  if (!pos) return false; // haven't seen it yet this life -- nothing to path toward
+  const already = evalGame(win, `!curIsDungeon() && !curIsDimension() && player.x === ${pos.x} && player.y === ${pos.y}`).value;
+  if (already) {
+    const before = evalGame(win, 'turnCount').value;
+    key(win, '>');
+    if (log && evalGame(win, 'turnCount').value !== before) log(`Used the remembered ${feature.replace('_', ' ')} to work toward the current dimension trail stage.`);
+    return true;
+  }
+  const step = evalGame(win, `!curIsDungeon() && !curIsDimension() ? bfsFirstStep(player.x, player.y, ${pos.x}, ${pos.y}, 300) : null`).value;
+  if (!step) return false;
+  const MOVE_DIRS_S = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
+  const dirEntry = MOVE_DIRS_S.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
+  if (!dirEntry) return false;
+  const before = evalGame(win, 'turnCount').value;
+  key(win, dirEntry[0]);
+  return evalGame(win, 'turnCount').value !== before;
+}
+
+
+/**
+ * SIXTH finding in this session's navigation audit -- and a genuinely new category, not a
+ * variant of the talk_npc family above. Investigating why the discoverability metric (SECTION
+ * 7) never fired even in a life that reached a real Act-1 kill_boss stage revealed that
+ * getMainQuestNavigationTarget's kill_boss branch ONLY finds a target when the boss is a
+ * BOSS_DUNGEON_THEME entry -- but that table is exclusively the 9 DIMENSION GATEKEEPERS. The
+ * ordinary main-quest bosses (b1/b2a/b2b/b4/b5, i.e. every Act 1/2/3/4 kill_boss stage) are
+ * drawn from sortedBossPool and very often turn out to be OVERWORLD_BOSSES entries instead --
+ * roaming bosses tied to a BIOME, not a dungeon theme. Confirmed this is the game's OWN honest
+ * design, not a gap to be embarrassed about: questStageHint() for exactly this case says "you'll
+ * have to go looking there and hope to cross paths" (see game.html) -- there never was a
+ * dungeon-theme answer to give. But nothing steers the bot toward the right biome either, so a
+ * life can spend its entire run failing to progress past Act 1 simply by exploring in the wrong
+ * terrain. Fixed the same honest way as everywhere else this session: remembers biomes actually
+ * seen (gated on `.seen`, scanning only the current 3x3 chunk radius each call like
+ * scanForDimensionGateFeatures -- never scans the whole worldChunks history, which would be an
+ * unbounded cost over a long life) and steers toward the nearest remembered match once the
+ * current boss's required biome(s) are known, using the exact same OVERWORLD_BOSSES.biomes list
+ * questStageHint() itself reads.
+ *
+ * @param memory mutable {biomeName: {x,y}, ...} object, create with `{}` once per life
+ */
+function tryPathTowardBossBiome(win, log, memory) {
+  const info = evalGame(win, `
+    (function(){
+      const s = curStoryStage();
+      if (!s || s.type !== 'kill_boss') return null;
+      const bossId = s.targetBossId;
+      if (typeof BOSS_DUNGEON_THEME !== 'undefined' && BOSS_DUNGEON_THEME[bossId]) return null; // dungeon-theme nav already covers this
+      const owb = (typeof OVERWORLD_BOSSES !== 'undefined') ? OVERWORLD_BOSSES.find(b => b.id === bossId) : null;
+      return (owb && owb.biomes && owb.biomes.length) ? owb.biomes : null;
+    })()
+  `).value;
+  if (!info) return false;
+  if (evalGame(win, 'curIsDungeon() || curIsDimension()').value) return false; // biomes are an overworld-only concept
+  const alreadyHere = evalGame(win, `${JSON.stringify(info)}.includes((getTile(player.x, player.y)||{}).biome)`).value;
+  if (alreadyHere) return false; // in the right terrain already -- let normal explore+combat find the actual boss
+
+  // scan only the currently-loaded 3x3 chunk radius, same bounded cost as scanForDimensionGateFeatures
+  const seen = evalGame(win, `
+    (function(){
+      const biomes = ${JSON.stringify(info)};
+      const CHUNK = 24;
+      const pcx = Math.floor(player.x / CHUNK), pcy = Math.floor(player.y / CHUNK);
+      const out = {};
+      for (let cy = pcy - 1; cy <= pcy + 1; cy++) {
+        for (let cx = pcx - 1; cx <= pcx + 1; cx++) {
+          const c = worldChunks.get(cx + ',' + cy);
+          if (!c || !c.tiles) continue;
+          for (let ly = 0; ly < c.tiles.length; ly++) {
+            const row = c.tiles[ly];
+            for (let lx = 0; lx < row.length; lx++) {
+              const t = row[lx];
+              if (t && t.seen && t.biome && biomes.includes(t.biome) && !out[t.biome]) {
+                out[t.biome] = { x: cx * CHUNK + lx, y: cy * CHUNK + ly };
+              }
+            }
+          }
+        }
+      }
+      return out;
+    })()
+  `).value || {};
+  for (const [biome, pos] of Object.entries(seen)) memory[biome] = pos;
+
+  let best = null, bestD = Infinity;
+  for (const b of info) {
+    if (!memory[b]) continue;
+    const d = evalGame(win, `chebyshev(player.x, player.y, ${memory[b].x}, ${memory[b].y})`).value;
+    if (d < bestD) { bestD = d; best = memory[b]; }
+  }
+  if (!best) return false; // haven't personally seen any matching terrain yet -- normal explore will find some eventually
+
+  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${best.x}, ${best.y}, 300)`).value;
+  if (!step) return false;
+  const MOVE_DIRS_B = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
+  const dirEntry = MOVE_DIRS_B.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
+  if (!dirEntry) return false;
+  const before = evalGame(win, 'turnCount').value;
+  key(win, dirEntry[0]);
+  if (evalGame(win, 'turnCount').value === before) return false;
+  if (log && Math.random() < 0.1) log(`Heading toward remembered ${info.join('/')} terrain to look for the current quest's boss.`);
+  return true;
+}
+
+/**
  * Catch-all for any gameState that isn't one we specifically handle above. Tries Escape
  * first (closes almost every modal cleanly); if that doesn't change state, tries 'a' as a
  * fallback for presentChoice-style menus, matching the game's own convention of listing
@@ -2325,7 +2821,8 @@ const strat = {
   tryCalledShot, tryCastOffensiveSpell, tryCastHealSpell, tryCastDebuffAbility, tryCastBuffAbility,
   tryCastSummonAbility, tryStanchBleeding, tryCurePoison, tryRecoverHp,
   tryEquipUpgrades, tryPickUpHere, tryFarm, tryCraftUseful, tryCraftGearUpgrade, tryShopIfTrading, tryTrainIfOffered,
-  tryGiftIfOffered, tryHandleDialogueIfOpen, tryTalkToAdjacentNpc, tryAdvanceMainQuest,
+  tryGiftIfOffered, tryHandleDialogueIfOpen, tryTalkToAdjacentNpc, tryAdvanceMainQuest, tryPathTowardQuestNpc,
+  tryAdvanceDimensionGateStructure, tryPathTowardAnyDungeon, tryPathTowardBossBiome,
   getMainQuestNavigationTarget, tryEscapeUnknownMenu, trySpendStatPoints, trySpendTalentPoints,
   tryInstallCybernetics, tryPerformRitual, trySeekSupplies,
 };
@@ -2492,6 +2989,46 @@ const strat = {
 //     interactive session and see what happens), and add a real strategy function (or extend
 //     an existing one, the way tryCastOffensiveSpell was broadened above) if it's worth folding
 //     into the autonomous bot rather than only ever being reachable by hand.
+//
+//   ---- DISCOVERABILITY METRIC (added this session, closes the gap the previous handoff
+//   flagged as the top candidate next task) ---- Every life now tracks, for every quest with a
+//   genuinely locatable target (main-quest kill_boss/dungeon_tier/dimension_trail stages, and
+//   side-quest boss_bounty), the real turn/action gap between the target becoming ACTIVE and
+//   the target's location actually becoming FOUND via real exploration (dungeonRegistry /
+//   player.discoveredDimensions) -- see trackDiscoverability/summarizeDiscoverability in
+//   SECTION 7 for the full mechanism and exactly what is/isn't tracked and why. Each life's
+//   result now carries a `discoverability` array; `node playtest.js` prints an aggregate
+//   DISCOVERABILITY section in the run summary (median/max time-to-find per kind, plus any
+//   targets that were STILL unfound when a life ended -- the strongest "this might be too
+//   obscure" signal, since it's real players'/bots' worth of exploration that never turned it
+//   up). This measures location discoverability specifically, not full quest completion.
+//
+//   ---- DIMENSION_TRAIL NAVIGATION GAP CLOSED (added this session, was previously the single
+//   largest documented obstacle to a genuinely autonomous start-to-final-boss run) ---- Verified
+//   via a live debug-assisted full-quest run (character creation through six real boss kills,
+//   two branching main-quest choices, and two dimension_trail entries) that combat, choices, and
+//   boss-kill/dungeon-tier navigation all genuinely work end-to-end, and cross-referenced the
+//   game's own developer comment on MONSTER_BASES.god (a documented Monte Carlo balance pass
+//   tuning the true final boss to a ~87-97% win rate for a maxed, well-equipped character) as
+//   independent evidence the game is completable in principle. The one real, quantified gap
+//   found -- the_drift/fourth_corridor/lucid_expanse having no dungeonRegistry-style tracking,
+//   affecting an estimated 62-84% of seeds' dimension trails -- is now substantially closed: see
+//   tryAdvanceDimensionGateStructure and scanForDimensionGateFeatures near tryPathTowardQuestNpc.
+//   lucid_expanse routes through getMainQuestNavigationTarget's existing dungeon-theme lookup
+//   (dream_sanctum is a fixed, hardcoded theme->altar relationship); the_drift/fourth_corridor
+//   get a new, honestly-scoped memory of overworld landmarks the bot has actually walked past
+//   (gated on the real `.seen` fog-of-war flag, on already-generated chunks only -- never
+//   triggers fresh generation, so this adds recollection, not god-mode). Confirmed working
+//   end-to-end via direct unit tests (placed a real, `.seen` landmark near the player, confirmed
+//   the bot noticed it, pathed to it, and used it correctly for both the item_structure and
+//   discovery cases) before being wired into the main loop. fourth_corridor's SECOND required
+//   item (Recursive Key, from 'the_recursion') deliberately gets no bespoke navigation: checked
+//   DUNGEON_THEME_FACTIONS directly and confirmed 'the_recursion' (faction 'nonEuclid') spawns
+//   via the exact same 'folded_vault' theme already targeted for uncounted_angle/Bent Lens -- the
+//   SAME dungeon visit has a real, organic chance at both. This isn't a remaining gap; the base
+//   game itself never pins this specific rare wandering boss to one guaranteed location (unlike
+//   the gatekeepers, which DO get a fixed theme), so a human player faces identical odds --
+//   "fixing" it would mean inventing a certainty the game's own design doesn't provide.
 
 
 // Any gameState value we don't have a dedicated strategy for gets a generic "close it"
@@ -2514,7 +3051,7 @@ const strat = {
 const GENERIC_CLOSE_STATES = [
   'inventory', 'character', 'spellbook', 'questlog', 'craft', 'talents', 'library',
   'cyber', 'eldritch', 'saveload', 'dungeonmap', 'travel', 'tiletarget', 'look', 'help',
-  'container', 'train', 'giftpick', 'choice', 'itemaction', 'quickslotassign', 'bookreader',
+  'container', 'train', 'giftpick', 'itemaction', 'quickslotassign', 'bookreader',
 ];
 // States handled with dedicated logic elsewhere in playOneLife (not exhaustive of every
 // possible value -- just the ones with real strategy code, for the "did we recognize this"
@@ -2523,7 +3060,7 @@ const GENERIC_CLOSE_STATES = [
 // (driven by createRandomCharacter()/draftCustomCharacter() -- see their comments for how both
 // the "Random archetype" and "Custom point-buy" creation paths are covered), so they're not
 // re-checked here.
-const SPECIFICALLY_HANDLED_STATES = ['playing', 'trade', 'dialogue', 'gameover'];
+const SPECIFICALLY_HANDLED_STATES = ['playing', 'trade', 'dialogue', 'gameover', 'choice'];
 
 /**
  * Builds a full custom (point-buy) character via the real 'create_stats'/'create_abilities'/
@@ -2673,6 +3210,10 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
   // snapshot of the core numbers a growth-curve or balance analysis would want.
   const combatLog = [];
   const vitalsTimeline = [];
+  const discoverabilityState = {}; // see trackDiscoverability (SECTION 7) for what this holds
+  const dimensionGateMemory = {}; // see scanForDimensionGateFeatures for what this holds
+  const questNpcLock = { uid: null }; // see tryPathTowardQuestNpc's BUG FIX comment for why this exists
+  const bossBiomeMemory = {}; // see tryPathTowardBossBiome for what this holds
   let hasBeenPlaying = false; // tracks whether we've ever reached 'playing' -- see the
   // implicit-death handling below, right before the main loop.
 
@@ -2698,7 +3239,9 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
   const buildResult = (reason, actionsUsed, stateCounts, unrecognizedStates, extra = {}) => ({
     events, errors, windowErrors, died: reason === 'died', reason, actionsUsed,
     stateCounts, unrecognizedStates: [...unrecognizedStates],
-    combatLog, combatSummary: summarizeCombatLog(combatLog), vitalsTimeline, ...extra,
+    combatLog, combatSummary: summarizeCombatLog(combatLog), vitalsTimeline,
+    discoverability: summarizeDiscoverability(discoverabilityState, evalGame(win, 'turnCount').value, actionsUsed),
+    ...extra,
   });
 
   const creation = await createRandomCharacter(win, log);
@@ -2744,6 +3287,30 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
 
     if (gs === 'trade') { strat.tryShopIfTrading(win, log); continue; }
     if (gs === 'dialogue') { strat.tryHandleDialogueIfOpen(win, log); continue; }
+    // BUG FIX (found this session while checking whether a full start-to-final-boss run is
+    // actually possible): a top-level 'choice' gameState reaching here is NEVER one of
+    // tryPickUpHere's own container/loot choices -- those are fully resolved synchronously
+    // inside tryPickUpHere itself before it returns, so gameState is already back to 'playing'
+    // by the time control returns to the top of this loop. The only way 'choice' can still be
+    // open here is the game having asynchronously presented one on its own -- and the one case
+    // of that in the whole file is presentMainQuestChoice(), fired the instant a main-quest
+    // 'choice'-type stage (lieutenant_choice / betrayal_choice / source_choice -- see
+    // generateMainQuest in game.html) becomes current. Before this fix, 'choice' sat in
+    // GENERIC_CLOSE_STATES and fell through to tryEscapeUnknownMenu below, which presses Escape
+    // first -- and resolveChoiceKey's own Escape branch (see game.html) discards the pending
+    // choice WITHOUT ever calling an option's .action(), i.e. without ever advancing the stage.
+    // Nothing else re-presents it automatically (only opening the quest log menu does, which
+    // this bot never does), so every life that ever reached one of these three stages would have
+    // had its main quest silently, permanently frozen right there -- a real showstopper for
+    // "can this play start to finish to the final boss". All three of these specific choices
+    // have exactly two genuinely-narrative options with no decline/cancel entry and both sides
+    // lead forward (see their `branches`, both resolving into further stages) -- there's no
+    // wrong pick to avoid, so resolveChoiceMenu with no preference (falls back to option 0) is
+    // enough to guarantee real, permanent progress instead of a silent stall.
+    if (gs === 'choice') {
+      resolveChoiceMenu(win, log, { logPrefix: 'Main quest decision: ' });
+      continue;
+    }
     if (gs === 'playing') { hasBeenPlaying = true; }
     // BUG FIX (found via a "died: bleeding" life whose event log inexplicably restarted mid-
     // way through, complete with a second "Pick up A Crumpled Note" at the exact same early
@@ -2792,6 +3359,12 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
       if (stageInfo.ok) log(`Main quest stage: ${stageInfo.value}`);
     }
 
+    // --- discoverability tracking: cheap (a couple of evalGame calls, typically 0-2 open
+    // targets at once), so this runs every turn rather than sampled -- turn/action precision
+    // matters for a "how long did this take to find" metric the way it doesn't for the
+    // periodic diagnostics above. See trackDiscoverability's header (SECTION 7) for the design. ---
+    trackDiscoverability(win, discoverabilityState, i, log);
+
     // --- periodic vitals snapshot: cheap, and gives a real growth-curve timeline for the
     // report rather than just a single before/after pair ---
     if (collectTelemetry && vitalsInterval > 0 && i % vitalsInterval === 0) {
@@ -2836,6 +3409,10 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     if (!acted && i % 30 === 0) acted = strat.tryInstallCybernetics(win, log);
     if (!acted && i % 10 === 0) acted = strat.tryPerformRitual(win, log);
     if (!acted) acted = strat.tryAdvanceMainQuest(win, log);
+    if (!acted) acted = strat.tryPathTowardQuestNpc(win, log, questNpcLock);
+    if (!acted) acted = strat.tryPathTowardAnyDungeon(win, log);
+    if (!acted) acted = strat.tryPathTowardBossBiome(win, log, bossBiomeMemory);
+    if (!acted) acted = strat.tryAdvanceDimensionGateStructure(win, log, dimensionGateMemory);
     if (!acted) acted = await strat.trySeekSupplies(win, log);
     if (!acted) {
       const { progressed } = await nav.exploreStep(win, wanderState);
@@ -3189,6 +3766,168 @@ function summarizeCombatLog(events) {
   for (const k of Object.keys(byAction)) byAction[k].avgDamagePerHit = byAction[k].count ? +(byAction[k].totalDamageDealt / byAction[k].count).toFixed(1) : 0;
   for (const k of Object.keys(byMonster)) byMonster[k].avgDamagePerHit = byMonster[k].count ? +(byMonster[k].totalDamageDealt / byMonster[k].count).toFixed(1) : 0;
   return { byAction, byMonster };
+}
+
+// ---- discoverability tracking: "how long from quest-accepted to target-actually-found" -----
+/**
+ * Stated goal #4 from the project's handoff: is a piece of content too obscure, rare, or hard
+ * to find? The "Confirmed genuinely honest" investigation (see handoff doc / this file's
+ * navigation comments) established that dungeon/dimension locations are only known once real
+ * exploration has generated that terrain -- there's no hidden full-map lookup anywhere in this
+ * toolkit. This turns that same live signal into a first-class per-life METRIC instead of
+ * something only visible by hand-reading the prose event log: for every quest with a genuinely
+ * locatable target, it records the turn/action the target became ACTIVE (main-quest stage
+ * entered, or side quest accepted) and the turn/action it became FOUND (the target's dungeon/
+ * dimension first appears in the game's own live registries -- dungeonRegistry /
+ * player.discoveredDimensions -- via real generation, never a debug/god-mode reveal).
+ *
+ * Deliberately reuses the EXACT same registries and theme/bossId lookups as
+ * getMainQuestNavigationTarget (nearestRegisteredDungeonOfTheme, dungeonRegistry,
+ * BOSS_DUNGEON_THEME, DIMENSION_GATE_INFO, player.discoveredDimensions) rather than re-deriving
+ * "is this found yet" a second, possibly-inconsistent way. "Found" here means the LOCATION is
+ * known (the dungeon/dimension is on the map) -- it does not require actually reaching or
+ * clearing it, since discoverability is about whether a player could find their way there at
+ * all, not about combat difficulty once they do.
+ *
+ * Content-agnostic like everything else in this file: no boss/dungeon/dimension NAMES are ever
+ * hardcoded, just the (already-existing) TYPE vocabulary the main quest and radiant-quest
+ * systems use, read live.
+ *
+ * NOT tracked (no real point-location to discover, so "discoverability" doesn't apply here):
+ *   - main-quest 'discover_kingdoms'/'discover_dimension'/'choice'/'auto'/'locked' stages --
+ *     the first two really are just "keep exploring outward" (a coverage-of-exploration
+ *     question, not a discoverability one), the rest have no map target at all.
+ *   - the 'discovery'-kind dimension gate (currently just lucid_expanse) -- the game's OWN hint
+ *     text has no location for this either (see getMainQuestNavigationTarget's comment), so
+ *     there's nothing to measure time-to-find against.
+ *   - side-quest kinds whose target is a species or material rather than a place (bounty,
+ *     protect, sabotage, caravan_guard, gather) -- these resolve by "keep playing normally and
+ *     the right thing eventually turns up," not by locating something on the map.
+ *
+ * @param win jsdom window
+ * @param state mutable tracker, create with `{}` once per life and reuse every call:
+ *   { targets: Map<key, {kind, descriptor, theme?, tier?, dimensionId?,
+ *                        acceptedTurn, acceptedAction, foundTurn, foundAction}> }
+ * @param actionIndex the current playOneLife loop iteration (gives an actions-based measure
+ *   alongside the turns-based one -- turns can include multi-turn auto-actions, actions can't)
+ * @param log optional log() to emit one line the moment something is newly located
+ */
+function trackDiscoverability(win, state, actionIndex, log) {
+  if (!state.targets) state.targets = new Map();
+  const turn = evalGame(win, 'turnCount').value;
+
+  // ---- 1. register any newly-active locatable targets as of this turn ----
+  const activeR = evalGame(win, `
+    JSON.stringify((function(){
+      const out = [];
+      const stage = (typeof curStoryStage === 'function') ? curStoryStage() : null;
+      if (stage) {
+        if (stage.type === 'kill_boss' && typeof BOSS_DUNGEON_THEME !== 'undefined' && BOSS_DUNGEON_THEME[stage.targetBossId]) {
+          out.push({ key: 'main:kill_boss:'+stage.targetBossId, kind: 'main_kill_boss',
+            descriptor: stage.targetBossId, theme: BOSS_DUNGEON_THEME[stage.targetBossId].theme });
+        } else if (stage.type === 'kill_boss' && typeof OVERWORLD_BOSSES !== 'undefined') {
+          // EXTENDED this session: ordinary story bosses (b1/b2a/b2b/b4/b5) are usually NOT
+          // BOSS_DUNGEON_THEME entries (that table is only the 9 dimension gatekeepers) -- they're
+          // far more often OVERWORLD_BOSSES, tied to a biome rather than a dungeon. Without this
+          // branch, the single most common main-quest target type (every Act 1-4 kill_boss stage)
+          // was invisible to this whole metric, which is exactly backwards -- see
+          // tryPathTowardBossBiome's comment for the full story of how this was found (a batch
+          // life reached a real Act-1 stage and this metric still logged nothing at all).
+          const owb = OVERWORLD_BOSSES.find(b => b.id === stage.targetBossId);
+          if (owb && owb.biomes && owb.biomes.length) {
+            out.push({ key: 'main:kill_boss_biome:'+stage.targetBossId, kind: 'main_kill_boss_biome',
+              descriptor: stage.targetBossId, biomes: owb.biomes });
+          }
+        } else if (stage.type === 'dungeon_tier') {
+          out.push({ key: 'main:dungeon_tier:'+stage.targetTier, kind: 'main_dungeon_tier',
+            descriptor: 'tier ' + stage.targetTier, tier: stage.targetTier });
+        } else if (stage.type === 'dimension_trail' && typeof DIMENSION_GATE_INFO !== 'undefined') {
+          const gate = DIMENSION_GATE_INFO[stage.targetDimensionId];
+          if (gate && gate.kind !== 'discovery') {
+            out.push({ key: 'main:dimension_trail:'+stage.targetDimensionId, kind: 'main_dimension_trail',
+              descriptor: stage.targetDimensionId, dimensionId: stage.targetDimensionId });
+          }
+        }
+      }
+      if (player.quests) {
+        for (const q of player.quests) {
+          if (q.done || q.type !== 'boss_bounty' || !q.target) continue;
+          if (typeof BOSS_DUNGEON_THEME === 'undefined' || !BOSS_DUNGEON_THEME[q.target]) continue;
+          out.push({ key: 'side:boss_bounty:'+q.id, kind: 'side_boss_bounty',
+            descriptor: q.target, theme: BOSS_DUNGEON_THEME[q.target].theme });
+        }
+      }
+      return out;
+    })())
+  `);
+  const active = activeR.ok ? JSON.parse(activeR.value) : [];
+  for (const t of active) {
+    if (!state.targets.has(t.key)) {
+      state.targets.set(t.key, { ...t, acceptedTurn: turn, acceptedAction: actionIndex, foundTurn: null, foundAction: null });
+    }
+  }
+
+  // ---- 2. check every still-open target for "now found" ----
+  for (const rec of state.targets.values()) {
+    if (rec.foundTurn != null) continue;
+    let found = false;
+    if (rec.kind === 'main_kill_boss' || rec.kind === 'side_boss_bounty') {
+      // nearestRegisteredDungeonOfTheme filters ONLY by theme, no range cutoff (see its
+      // definition) -- a non-null result means this theme exists in dungeonRegistry at all,
+      // not merely "one happens to be near the player right now".
+      found = evalGame(win, `!!nearestRegisteredDungeonOfTheme(${JSON.stringify(rec.theme)}, player.x, player.y)`).value === true;
+    } else if (rec.kind === 'main_dungeon_tier') {
+      found = evalGame(win, `[...dungeonRegistry.values()].some(dg => dg.tier === ${JSON.stringify(rec.tier)})`).value === true;
+    } else if (rec.kind === 'main_kill_boss_biome') {
+      // "Found" here means the right TERRAIN has actually been seen (the game's own
+      // questStageHint() has no better answer than "go looking there" for these -- see
+      // tryPathTowardBossBiome's comment), not that the boss itself has been slain. Checks the
+      // real `.seen` flag on tiles in the currently-loaded 3x3 chunk radius, same honesty rule as
+      // scanForDimensionGateFeatures/tryPathTowardBossBiome -- never triggers fresh generation.
+      found = evalGame(win, `
+        (function(){
+          const biomes = ${JSON.stringify(rec.biomes)};
+          const CHUNK = 24;
+          const pcx = Math.floor(player.x / CHUNK), pcy = Math.floor(player.y / CHUNK);
+          for (let cy = pcy - 1; cy <= pcy + 1; cy++) {
+            for (let cx = pcx - 1; cx <= pcx + 1; cx++) {
+              const c = worldChunks.get(cx + ',' + cy);
+              if (!c || !c.tiles) continue;
+              for (const row of c.tiles) for (const t of row) if (t && t.seen && t.biome && biomes.includes(t.biome)) return true;
+            }
+          }
+          return false;
+        })()
+      `).value === true;
+    } else if (rec.kind === 'main_dimension_trail') {
+      found = evalGame(win, `(player.discoveredDimensions||[]).includes(${JSON.stringify(rec.dimensionId)})`).value === true;
+    }
+    if (found) {
+      rec.foundTurn = turn; rec.foundAction = actionIndex;
+      if (log) log(`Discoverability: located ${rec.kind} target "${rec.descriptor}" after ${turn - rec.acceptedTurn} turns / ${actionIndex - rec.acceptedAction} actions.`);
+    }
+  }
+}
+/** Flatten a trackDiscoverability() state's Map into a plain array for report.json, closing out
+ * any still-open targets against the life's final turn/action (right-censored -- "still hadn't
+ * been found when the life ended" is itself a meaningful data point for spotting content that's
+ * too obscure, not a value to discard). */
+function summarizeDiscoverability(state, finalTurn, finalAction) {
+  if (!state || !state.targets) return [];
+  return [...state.targets.values()].map((rec) => {
+    const found = rec.foundTurn != null;
+    return {
+      kind: rec.kind, descriptor: rec.descriptor,
+      acceptedTurn: rec.acceptedTurn, acceptedAction: rec.acceptedAction,
+      found,
+      foundTurn: rec.foundTurn, foundAction: rec.foundAction,
+      turnsToFind: found ? rec.foundTurn - rec.acceptedTurn : null,
+      actionsToFind: found ? rec.foundAction - rec.acceptedAction : null,
+      // right-censored: how long it had been open when the life ended without ever finding it
+      turnsOpenAtEnd: found ? null : finalTurn - rec.acceptedTurn,
+      actionsOpenAtEnd: found ? null : finalAction - rec.acceptedAction,
+    };
+  });
 }
 
 // ---- content coverage sweep: deterministically visit every piece of content -----------------
@@ -3571,7 +4310,37 @@ async function main() {
     Object.entries(l.stateCounts || {}).forEach(([k, v]) => { allStateCounts[k] = (allStateCounts[k] || 0) + v; });
     (l.unrecognizedStates || []).forEach((s) => allUnrecognized.add(s));
   });
-  report.summary = { allStateCounts, unrecognizedStates: [...allUnrecognized] };
+  // ---- discoverability aggregate: pool every life's per-target records by `kind`, since a
+  // single life will usually only ever see one or two of these fire (the main quest has one
+  // active stage at a time, and boss_bounty offers are relatively rare) -- the interesting
+  // signal only emerges once several lives' worth of attempts are pooled together. ----
+  const discoverabilityByKind = {};
+  report.lives.forEach((l) => {
+    (l.discoverability || []).forEach((rec) => {
+      if (!discoverabilityByKind[rec.kind]) discoverabilityByKind[rec.kind] = { found: [], unfoundAtEnd: [] };
+      if (rec.found) discoverabilityByKind[rec.kind].found.push(rec);
+      else discoverabilityByKind[rec.kind].unfoundAtEnd.push(rec);
+    });
+  });
+  const median = (nums) => { if (!nums.length) return null; const s = [...nums].sort((a, b) => a - b); const mid = Math.floor(s.length / 2); return s.length % 2 ? s[mid] : +((s[mid - 1] + s[mid]) / 2).toFixed(1); };
+  const discoverabilitySummary = {};
+  Object.entries(discoverabilityByKind).forEach(([kind, { found, unfoundAtEnd }]) => {
+    const turnsToFind = found.map((r) => r.turnsToFind);
+    discoverabilitySummary[kind] = {
+      timesSeen: found.length + unfoundAtEnd.length,
+      timesFound: found.length,
+      timesNeverFoundBeforeLifeEnded: unfoundAtEnd.length,
+      medianTurnsToFind: median(turnsToFind),
+      maxTurnsToFind: turnsToFind.length ? Math.max(...turnsToFind) : null,
+      // sampled, not exhaustive -- just enough to spot which specific targets stalled, since
+      // "descriptor" is a live boss/dimension/tier id, never a hardcoded name.
+      slowestExamples: found.slice().sort((a, b) => b.turnsToFind - a.turnsToFind).slice(0, 3)
+        .map((r) => ({ descriptor: r.descriptor, turnsToFind: r.turnsToFind })),
+      neverFoundExamples: unfoundAtEnd.slice(0, 3)
+        .map((r) => ({ descriptor: r.descriptor, turnsOpenAtEnd: r.turnsOpenAtEnd })),
+    };
+  });
+  report.summary = { allStateCounts, unrecognizedStates: [...allUnrecognized], discoverability: discoverabilitySummary };
   fs.writeFileSync(outPath, JSON.stringify(report, null, 2));
 
   // ---- human-readable summary ----
@@ -3585,6 +4354,16 @@ async function main() {
   console.log('Outcomes:', byReason);
   console.log(`Total logic errors caught: ${totalErrors}`);
   console.log(`Total uncaught window errors (real engine crashes): ${totalWindowErrors}`);
+  if (Object.keys(discoverabilitySummary).length) {
+    console.log('\n--- DISCOVERABILITY (turns from target-active to target-actually-found) ---');
+    Object.entries(discoverabilitySummary).forEach(([kind, s]) => {
+      console.log(`  ${kind}: seen ${s.timesSeen}x, found ${s.timesFound}x (median ${s.medianTurnsToFind ?? 'n/a'} turns, max ${s.maxTurnsToFind ?? 'n/a'} turns), never found before life ended: ${s.timesNeverFoundBeforeLifeEnded}x`);
+      if (s.neverFoundExamples.length) console.log(`    never-found examples: ${s.neverFoundExamples.map((e) => `${e.descriptor} (open ${e.turnsOpenAtEnd} turns)`).join(', ')}`);
+    });
+  } else {
+    console.log('\nNo discoverability-tracked quest targets (main-quest kill_boss/dungeon_tier/');
+    console.log('dimension_trail stage, or a boss_bounty side quest) were active in this batch.');
+  }
   if (allUnrecognized.size) {
     console.log('\n--- UNRECOGNIZED GAME STATES ENCOUNTERED ---');
     console.log('(no dedicated strategy exists for these -- bot only closed them generically;');
@@ -3644,6 +4423,15 @@ async function main() {
 // state() call. A wholly new interaction MODE (not covered by the verbs below) is still
 // reachable via the {type:'key', key} raw escape hatch, which presses any key exactly like
 // SECTION 2's key() -- nothing is ever locked out, just not given a dedicated named verb yet.
+//
+// BUG FIX (found via live HTTP smoke test, same session as the previous handoff): 'explore' and
+// 'travelToStairs' used to unconditionally report ok:true with a flat success message
+// regardless of whether autoExplore()/autoTravelToStairs() actually did anything -- both
+// legitimately no-op in the real game (frontier fully explored within the ~20-tile cap; no
+// discovered dungeon/stairs to path to) and just log internally when they do, same false-
+// positive-success class as the buyTalent/performRitual/dig bugs above. Fixed by checking real
+// before/after (x, y, turnCount) and reporting an honest no-op message when nothing moved.
+// 'rest'/'travelHome' were already correctly hedged this way; these two just hadn't been.
 
 /** Rich, JSON-safe snapshot of everything a controlling agent needs to decide its next move:
  * vitals, position, full equipment+inventory (with per-item uid so actions can target a
@@ -3892,9 +4680,30 @@ async function applyAction(win, action) {
     case 'wait': key(win, '.'); return okResult('Waited a turn.');
     case 'pickup': key(win, 'g'); return okResult('Attempted pickup.');
     case 'rest': await keyAndWait(win, 'r'); return okResult('Rested (or refused if unsafe -- check state.hp/bleedTurns).');
-    case 'explore': await keyAndWait(win, 'X'); return okResult('Auto-explored.');
+    case 'explore': {
+      // BUG FIX (found via live HTTP smoke test): this used to unconditionally report
+      // "Auto-explored." even when autoExplore() was a real no-op -- findNearestFrontier(20)
+      // finds nothing within the same ~20-tile frontier cap SECTION 5's coverage notes mention,
+      // and the game itself just logs "Nothing new to explore nearby." and does nothing. The
+      // old message claimed success either way, the same false-positive class as the
+      // buyTalent/performRitual/dig bugs above. Fixed by checking real before/after position.
+      const before = evalGame(win, '({x:player.x,y:player.y,turnCount})').value;
+      await keyAndWait(win, 'X');
+      const after = evalGame(win, '({x:player.x,y:player.y,turnCount})').value;
+      const moved = before.x !== after.x || before.y !== after.y || before.turnCount !== after.turnCount;
+      return okResult(moved ? 'Auto-explored.' : 'No-op: nothing new to explore within range (already fully explored nearby, or blocked).');
+    }
     case 'travelHome': await keyAndWait(win, 'H'); return okResult('Auto-traveled toward home settlement (no-op if none discovered).');
-    case 'travelToStairs': await keyAndWait(win, 'G'); return okResult('Auto-traveled toward known stairs.');
+    case 'travelToStairs': {
+      // BUG FIX, same class as 'explore' above: autoTravelToStairs() silently no-ops (and only
+      // logs internally) when no dungeon/stairs has been discovered yet, when already there, or
+      // when no path exists -- the old message claimed success regardless.
+      const before = evalGame(win, '({x:player.x,y:player.y,turnCount})').value;
+      await keyAndWait(win, 'G');
+      const after = evalGame(win, '({x:player.x,y:player.y,turnCount})').value;
+      const moved = before.x !== after.x || before.y !== after.y || before.turnCount !== after.turnCount;
+      return okResult(moved ? 'Auto-traveled toward known stairs.' : 'No-op: no known stairs/dungeon to travel to (undiscovered, already there, or no path).');
+    }
     case 'descend': key(win, '>'); return okResult('Attempted to descend stairs.');
     case 'ascend': key(win, '<'); return okResult('Attempted to ascend stairs.');
     case 'talk': {
