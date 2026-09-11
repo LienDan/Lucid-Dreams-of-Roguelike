@@ -484,6 +484,8 @@
         <b>K</b> craft &nbsp; <b>T</b> talents &nbsp; <b>q</b> quests<br>
         <b>Y</b> cyberware &nbsp; <b>U</b> eldritch<br>
         <b>V</b> fast travel &nbsp; <b>m</b> mark spot<br>
+        <b>p</b> property &amp; housing &nbsp; <b>F</b> family<br>
+        <b>O</b> professions<br>
         <b>t</b> talk &nbsp; <b>x</b> look &nbsp; <b>r</b> rest<br>
         <b>G</b> auto-travel &nbsp; <b>H</b> auto-home<br>
         <b>X</b> auto-explore &nbsp; <b>M</b> dungeon map<br>
@@ -516,7 +518,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.45.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.46.0-alpha</div>
     </div>
   </div>
 
@@ -1587,6 +1589,20 @@
 // immediately; payForHealing checked against all three tiers with a bleeding+poisoned+diseased
 // player fixture confirms each tier cures exactly its own list and no more. Full automated
 // playtest bot run afterward, zero window errors.
+//
+// v0.46.0 Life Sim overhaul (player-requested major update). Four new pillars, each built by
+// extending real existing systems rather than bolting on parallel ones: Property & Housing
+// (buyable/furnishable/nameable homes, 28 furnishings with real mechanical hooks, not just decor);
+// Family & Relationships (marriage, children who actually grow through life stages and choose
+// their own path as adults, spouse with an independent income from their own original trade);
+// Civilian Professions (14 trades -- farming through guarding -- each wrapping a genuine existing
+// mechanic, with permanent branching specializations, not reskins); and City Rank & Kingship
+// (civic office, nobility, peaceful coronation or violent usurpation, real rebellion risk, standing
+// policies, and actual diplomacy via the game's existing kingdom-relations system). Along the way,
+// fixed several pre-existing dead mechanics found during integration (the Cartographer talent set
+// a flag nothing ever read; `comfort` was tracked but never consumed; redundant tomes had no use).
+// Every piece verified with the Node playtest harness against real formulas, not just "doesn't
+// crash" -- full changelog and design rationale in-line near each system.
 //
 // v0.41.0 Origin Quests: the gap this closes is the one flagged in v0.40.4's audit but left
 // unaddressed at the time -- START_SCENARIOS meaningfully changed where you start and (via
@@ -3930,26 +3946,35 @@ function getKingdom(cx, cy) {
   const rx = Math.floor(cx / KINGDOM_REGION), ry = Math.floor(cy / KINGDOM_REGION);
   const key = rx + ',' + ry;
   let k = kingdomRegistry.get(key);
-  if (k) return k;
-  const rng = mulberry32((rx * 92821 + ry * 68917 + SEED + 55511) | 0);
-  const name = 'the ' + (rng() < 0.5 ? 'Kingdom' : 'Realm') + ' of ' + choice(rng, KINGDOM_PREFIXES) + choice(rng, KINGDOM_SUFFIXES);
-  const founded = 40 + Math.floor(rng() * 900);
-  const trait = choice(rng, KINGDOM_TRAITS);
-  const rulerIsFemale = rng() < 0.5;
-  const rulerName = choice(rng, RULER_FIRST_NAMES);
-  const rulerTitle = (rulerIsFemale ? RULER_TITLES_F : RULER_TITLES)[trait.id];
-  const figureRole = choice(rng, HISTORICAL_FIGURE_ROLES);
-  const figureName = choice(rng, RULER_FIRST_NAMES);
-  const speciesRoll = rollKingdomSpecies(rng, trait.id);
-  const primarySpecies = speciesRoll.primary, secondarySpecies = speciesRoll.secondary;
-  const speciesLine = primarySpecies === 'human'
-    ? ` ${getSpecies(primarySpecies).peopleLabel} make up most of its people, with a good number of ${getSpecies(secondarySpecies).peopleLabel} living alongside them.`
-    : ` ${getSpecies(primarySpecies).peopleLabel} make up most of its people here, with humans and ${getSpecies(secondarySpecies).peopleLabel} living alongside them.`;
-  const history = `${name}, ${choice(rng, KINGDOM_EVENTS)} some ${founded} years ago. ${choice(rng, KINGDOM_ERAS)} `
-    + `It is a ${trait.label} realm: ${trait.desc} ${rulerTitle} ${rulerName} rules from its capital today. `
-    + figureRole.line(figureName, name) + speciesLine;
-  k = { name, founded, history, key, trait: trait.id, rulerName, rulerTitle, figureName, figureRole: figureRole.role, primarySpecies, secondarySpecies };
-  kingdomRegistry.set(key, k);
+  if (!k) {
+    const rng = mulberry32((rx * 92821 + ry * 68917 + SEED + 55511) | 0);
+    const name = 'the ' + (rng() < 0.5 ? 'Kingdom' : 'Realm') + ' of ' + choice(rng, KINGDOM_PREFIXES) + choice(rng, KINGDOM_SUFFIXES);
+    const founded = 40 + Math.floor(rng() * 900);
+    const trait = choice(rng, KINGDOM_TRAITS);
+    const rulerIsFemale = rng() < 0.5;
+    const rulerName = choice(rng, RULER_FIRST_NAMES);
+    const rulerTitle = (rulerIsFemale ? RULER_TITLES_F : RULER_TITLES)[trait.id];
+    const figureRole = choice(rng, HISTORICAL_FIGURE_ROLES);
+    const figureName = choice(rng, RULER_FIRST_NAMES);
+    const speciesRoll = rollKingdomSpecies(rng, trait.id);
+    const primarySpecies = speciesRoll.primary, secondarySpecies = speciesRoll.secondary;
+    const speciesLine = primarySpecies === 'human'
+      ? ` ${getSpecies(primarySpecies).peopleLabel} make up most of its people, with a good number of ${getSpecies(secondarySpecies).peopleLabel} living alongside them.`
+      : ` ${getSpecies(primarySpecies).peopleLabel} make up most of its people here, with humans and ${getSpecies(secondarySpecies).peopleLabel} living alongside them.`;
+    const history = `${name}, ${choice(rng, KINGDOM_EVENTS)} some ${founded} years ago. ${choice(rng, KINGDOM_ERAS)} `
+      + `It is a ${trait.label} realm: ${trait.desc} ${rulerTitle} ${rulerName} rules from its capital today. `
+      + figureRole.line(figureName, name) + speciesLine;
+    k = { name, founded, history, key, trait: trait.id, rulerName, rulerTitle, figureName, figureRole: figureRole.role, primarySpecies, secondarySpecies };
+    kingdomRegistry.set(key, k);
+  }
+  // ---- Pillar 4 tie-in: kingdomRegistry is deliberately never persisted (kingdoms regenerate
+  // deterministically from world seed + coordinates -- see the comment on its declaration), so a
+  // player who claims a crown (see claimCrown) can't have that mutation live only on this cached
+  // object or it evaporates on reload. player.kingdomOverrides IS persisted (it's just plain data
+  // on player), so it's reapplied here every single time this kingdom is fetched, cache hit or not.
+  const override = (player.kingdomOverrides || {})[key];
+  if (override) { k.rulerName = override.rulerName; k.rulerTitle = override.rulerTitle; k.playerIsRuler = true; }
+  else if (k.playerIsRuler) { k.playerIsRuler = false; } // stale flag from a different save's session
   return k;
 }
 
@@ -10429,21 +10454,30 @@ function toolGatherMultiplier(weapon, gatherType) {
 function grantGatherYield(cfg) {
   if (!cfg.yield) return;
   const weapon = player.equipment.hand;
-  const mult = toolGatherMultiplier(weapon, cfg.gatherType);
+  const baseSpecMult = cfg.gatherType === 'ore' ? minerYieldMult() : cfg.gatherType === 'wood' ? woodcutterYieldMult() : 1;
+  const toolMult = toolGatherMultiplier(weapon, cfg.gatherType);
   const got = [];
+  let oreQtyGathered = 0;
+  let woodQtyGathered = 0;
   for (const y of cfg.yield) {
+    const isRareEntry = (y.chance ?? 1) < 1;
     // A rare-yield entry (chance < 1, e.g. Starmetal Ore/Ironwood/gems) is exactly the kind of
     // find a keen-eyed scavenger should be better at noticing than an ordinary gatherer -- see
     // player.rareFindBonus (Scavenger talent). Guaranteed drops (chance omitted/1) are untouched.
-    const chance = (y.chance ?? 1) < 1 ? Math.min(1, (y.chance ?? 1) + (player.rareFindBonus || 0)) : (y.chance ?? 1);
+    const chance = isRareEntry ? Math.min(1, (y.chance ?? 1) + (player.rareFindBonus || 0)) : (y.chance ?? 1);
     if (Math.random() > chance) continue;
+    const mult = toolMult * baseSpecMult * gatherSpecMult(cfg.gatherType, isRareEntry);
     const qty = Math.max(0, Math.round(randInt(Math.random, y.min, y.max) * mult));
     if (qty <= 0) continue;
     for (let i = 0; i < qty; i++) addItemToList(player.inventory, makeItem(y.id, 0, Math.random));
     const base = ITEM_BASES.find(b => b.id === y.id);
     if (base) got.push(`${qty}x ${base.name}`);
+    if (cfg.gatherType === 'ore') oreQtyGathered += qty;
+    if (cfg.gatherType === 'wood') woodQtyGathered += qty;
   }
   if (got.length) log(`You gather ${got.join(', ')}.`);
+  if (oreQtyGathered > 0) gainProfessionXp('miner', oreQtyGathered * 3);
+  if (woodQtyGathered > 0) gainProfessionXp('woodcutter', woodQtyGathered * 3);
 }
 // ============================================================================
 // ---- FARMING: a tilled plot is just another tracked tile effect, exactly like a burning or
@@ -10458,6 +10492,7 @@ const CROPS = {
   onion:  { name: 'Onion',  stageTurns: 34, yieldMin: 2, yieldMax: 4 },
   garlic: { name: 'Garlic', stageTurns: 30, yieldMin: 2, yieldMax: 3 },
   berries:{ name: 'Wild Berries', stageTurns: 46, yieldMin: 3, yieldMax: 5 },
+  herb:   { name: 'Herb', stageTurns: 28, yieldMin: 2, yieldMax: 4 },
 };
 // Land you can till: open, walkable, unclaimed ground outdoors -- deliberately not restricted to
 // a specific biome allowlist (plains-only would be an arbitrary hardcoded edge case), just "is
@@ -10483,11 +10518,19 @@ function plantCrop(t, x, y, cropId) {
 function harvestCrop(t, x, y) {
   if (t.feature !== 'farmplot' || !t.cropId || t.growStage < 2) return false;
   const crop = CROPS[t.cropId];
-  const qty = randInt(Math.random, crop.yieldMin, crop.yieldMax);
-  for (let i = 0; i < qty; i++) addItemToList(player.inventory, makeItem(t.cropId, 0, Math.random));
-  const gotSeed = Math.random() < 0.6;
+  const spec = specializationOf('farmer');
+  const homesteaderMult = (spec === 'homesteader' && isAtHomeFarmTile(x, y)) ? 1.6 : 1;
+  const qty = Math.max(1, Math.round(randInt(Math.random, crop.yieldMin, crop.yieldMax) * farmerYieldMult() * homesteaderMult));
+  const orchardistValueMult = spec === 'orchardist' ? 1.35 : 1;
+  for (let i = 0; i < qty; i++) {
+    const it = makeItem(t.cropId, 0, Math.random);
+    if (orchardistValueMult !== 1) it.value = Math.max(1, Math.round(it.value * orchardistValueMult));
+    addItemToList(player.inventory, it);
+  }
+  const gotSeed = Math.random() < (0.6 + farmerSeedBonus());
   if (gotSeed) addItemToList(player.inventory, makeItem(t.cropId, 0, Math.random));
   log(`You harvest ${qty}x ${crop.name}${gotSeed ? ' (and save a seed for next time)' : ''}.`);
+  gainProfessionXp('farmer', 5 + qty);
   t.cropId = null; t.growStage = 0; t.growTimer = 0;
   t.glyph = ':'; t.color = '#5a4028';
   return true;
@@ -10513,6 +10556,7 @@ function beginFishing(x, y) {
   const hasRod = !!(rod && /rod|fishing/i.test(rod.id || rod.name || ''));
   let quality = hasRod ? 1.6 : 0.5;
   if (rod && rod.craftedQuality && CRAFT_QUALITY_GATHER_MULT[rod.craftedQuality]) quality *= CRAFT_QUALITY_GATHER_MULT[rod.craftedQuality];
+  quality *= fishermanQualityMult();
   log(`You cast your line out into the water${hasRod ? '' : ' (bare-handed, without a rod -- worth a shot, but a Rod would help)'}...`);
   autoRunActive = true;
   let ticks = 0;
@@ -10536,10 +10580,11 @@ function beginFishing(x, y) {
           autoRunActive = false; clearInterval(interval); endTurn(); return;
         }
       }
-      const catchId = choice(Math.random, FISH_CATCH_TABLE);
+      const catchId = Math.random() < (0.03 + fishermanRareBonus()) ? 'gem' : choice(Math.random, FISH_CATCH_TABLE);
       addItemToList(player.inventory, makeItem(catchId, 0, Math.random));
       const base = ITEM_BASES.find(b => b.id === catchId);
       log(`You reel in a catch: ${base ? base.name : catchId}!`);
+      gainProfessionXp('fisherman', catchId === 'gem' ? 20 : 6);
       // One wear tick per completed cast (not per tick of the interval) -- landing a fight with
       // a real catch is the strain that matters, same "meaningful use, not busywork" spirit as
       // the crit-only wear rule combat weapons already follow.
@@ -14871,7 +14916,7 @@ function renderTrade() {
     const letter = String.fromCharCode(97 + i);
     // Match tradeTransact()'s actual charged price exactly -- this used to ignore kingdom
     // reputation and show a different number than what you were actually charged/paid.
-    const price = tradeMode === 'buy' ? Math.round(it.value * 1.2 * repMult) : Math.round(it.value * 0.45 * (2 - repMult));
+    const price = tradeMode === 'buy' ? Math.round(it.value * 1.2 * repMult * merchantBuyMult()) : Math.round(it.value * 0.45 * (2 - repMult) * merchantSellMult(npc, it));
     html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${it.name} - ${price}g</div>`;
   });
   if (!list.length) html += `<div class="npcline">(nothing)</div>`;
@@ -14885,7 +14930,7 @@ function tradeTransact(letter) {
   if (tradeMode === 'buy') {
     const it = npc.shop[idx];
     if (!it) return;
-    const price = Math.round(it.value * 1.2 * repMult);
+    const price = Math.round(it.value * 1.2 * repMult * merchantBuyMult());
     if (player.gold < price) { Sound.play('uiError'); log("You can't afford that."); return; }
     player.gold -= price; addItemToList(player.inventory, it); npc.shop.splice(idx, 1);
     if (player.isTutorial) player._tutDidBuy = true;
@@ -14895,12 +14940,13 @@ function tradeTransact(letter) {
     const list = player.inventory.filter(i => i.type !== 'misc');
     const it = list[idx];
     if (!it) return;
-    const price = Math.round(it.value * 0.45 * Math.max(0.15, 2 - repMult));
+    const price = Math.round(it.value * 0.45 * Math.max(0.15, 2 - repMult) * merchantSellMult(npc, it));
     player.gold += price;
     player.inventory = player.inventory.filter(i => i.uid !== it.uid);
     if (player.isTutorial) player._tutDidSell = true;
     Sound.play('tradeSell');
     log(`You sell ${it.name} for ${price}g.`);
+    gainProfessionXp('merchant', Math.max(1, Math.round(price / 6)));
     // ---- WORLD MEMORY, part 3: a small, ongoing trickle of standing just for doing business
     // there -- capped low per sale so it can never substitute for real work (a quest) or real
     // risk (defending the settlement), see addGoodwill near commitCrime.
@@ -14935,7 +14981,7 @@ let containerTarget = null, containerMode = 'take', containerPage = 0;
 // Difficulty is a rough 8 (a flimsy house latch) to 18 (a serious vault) scale.
 function lockPickChance(difficulty) {
   const skill = effDex(player) + (player.level || 1) * 0.5;
-  return Math.max(0.05, Math.min(0.92, 0.5 + (skill - difficulty) * 0.045));
+  return Math.max(0.05, Math.min(0.95, 0.5 + (skill - difficulty) * 0.045 + locksmithChanceBonus()));
 }
 function lockForceChance(difficulty) {
   const skill = effStr(player) * 1.2;
@@ -14949,11 +14995,12 @@ function attemptPickLock(name, difficulty, onSuccess) {
     log(`You work the lockpick and ${name}'s lock gives with a click.`);
     Sound.play('door');
     onSuccess();
+    gainProfessionXp('locksmith', 6);
   } else {
     log(`You fumble the lockpick -- ${name}'s lock doesn't budge.`);
     // A failed attempt has a real but modest chance to snap the pick -- keeps a lockpick set a
     // genuine, if durable, consumable rather than an unlimited free skeleton key.
-    if (Math.random() < 0.15) {
+    if (Math.random() < 0.15 * (1 - locksmithSnapReduction())) {
       player.inventory = player.inventory.filter(i => i.uid !== pick.uid);
       log('Your lockpick snaps in the mechanism.');
     }
@@ -16707,6 +16754,11 @@ function updateMainQuestTracker() {
 function getKingdomRep(key) { ensureStory(); return player.story.kingdomRep[key] || 0; }
 function addKingdomRep(key, amount) {
   ensureStory();
+  // ---- Royal Patronage policy (see openCourtMenu): a real, ongoing effect that applies uniformly
+  // to every source of kingdomRep gain for this kingdom -- quests, civic service, court actions,
+  // all of it -- rather than a one-off menu action, since this is the single well-understood choke
+  // point every one of those already passes through.
+  if (amount > 0 && (player.kingdomPolicy || {})[key] === 'patronage') amount = Math.round(amount * 1.25);
   player.story.kingdomRep[key] = (player.story.kingdomRep[key] || 0) + amount;
 }
 // 1.0 = neutral; higher rep nudges prices down (better buys), lower rep nudges them up.
@@ -17429,6 +17481,18 @@ function descend() {
   relocateAllies();
   log(`You descend to depth ${nd}/${dg.maxDepth}.`);
   markSeen(); render();
+  // Cartographer talent (player.autoRevealOnLevel) and the Cartographer profession
+  // (cartographerAutoReveal(), a real way to get the same benefit without spending a talent
+  // point) both grant a wide reveal on arriving at a new level -- whichever source is true wins,
+  // so taking both isn't wasted, it's just redundant insurance. XP gain is checked separately
+  // from the reveal itself (which needs level 4+) so an early Cartographer isn't stuck unable to
+  // ever progress past level 1 waiting on an effect gated behind the very level it grants.
+  if (player.autoRevealOnLevel || cartographerAutoReveal()) {
+    const hasMapStudy = (player.properties || []).some(p => p.furnishings.includes('mapstudy'));
+    const n = revealArea(hasMapStudy ? 26 : 20);
+    if (n > 0) log(`Your read of the terrain reveals the surrounding area. (${n} tiles)`);
+  }
+  if (hasProfession('cartographer')) gainProfessionXp('cartographer', 10);
 }
 function ascend() {
   // Tutorial dungeons don't chain "up" to a previous part the way real multi-depth dungeons do --
@@ -17614,14 +17678,18 @@ function craftRecipe(recipeId) {
   const r = RECIPES.find(x => x.id === recipeId);
   if (!r || !player.knownRecipes.includes(recipeId)) return;
   if (!hasIngredients(r)) { Sound.play('craftFail'); log("You don't have the ingredients for that."); return; }
+  const outputBase = r.output && ITEM_BASES.find(x => x.id === r.output.id);
+  const isSmithing = outputBase && (outputBase.type === 'weapon' || outputBase.type === 'armor');
+  const catInfo = craftingCategoryFor(r);
+  const saveChance = isSmithing ? blacksmithMaterialSaveChance(outputBase.type) : catInfo.key === 'tinkering' ? jewelerMaterialSaveChance() : 0;
   let saved = 0;
   for (const inp of r.inputs) {
-    if ((player.craftYieldChance || 0) > 0 && Math.random() < player.craftYieldChance) { saved++; continue; }
+    if (((player.craftYieldChance || 0) > 0 && Math.random() < player.craftYieldChance) || (saveChance > 0 && Math.random() < saveChance)) { saved++; continue; }
     consumeMaterial(inp.id, inp.qty);
   }
   const quality = craftQualityRoll(r);
   const material = materialPropertyFor(r);
-  const qty = (r.output.qty || 1) + (r.category === 'cooking' ? (player.cookingYieldBonus || 0) : 0);
+  const qty = (r.output.qty || 1) + (r.category === 'cooking' ? ((player.cookingYieldBonus || 0) + chefYieldBonus()) : 0);
   let out = null;
   for (let i = 0; i < qty; i++) {
     // BUG FIX (v0.40.10): crafted weapons/armor had no connection to playerLevelPowerMult at all --
@@ -17672,14 +17740,18 @@ function craftRecipe(recipeId) {
     }
     out = addItemToList(player.inventory, out);
   }
-  const catInfo = craftingCategoryFor(r);
+  const catInfo2 = craftingCategoryFor(r);
   player.craftSkill = player.craftSkill || {};
-  player.craftSkill[catInfo.key] = (player.craftSkill[catInfo.key] || 0) + 1;
+  player.craftSkill[catInfo2.key] = (player.craftSkill[catInfo2.key] || 0) + 1;
+  if (r.category === 'cooking') gainProfessionXp('chef', 6 * qty);
+  else if (catInfo2.key === 'alchemy') gainProfessionXp('alchemist', 8 * qty);
+  else if (catInfo2.key === 'tinkering') gainProfessionXp('jeweler', 7 * qty);
   Sound.play('craftSuccess');
   if (material) log(`<span style="color:${material.color}">The ${material.label.toLowerCase()} makes all the difference</span> -- you craft a ${out.name}!`);
-  else if (quality && quality.name) log(`<span style="color:${quality.color}">Your ${catInfo.key.replace(/([A-Z])/g,' $1')} skill shows</span> -- you craft a ${quality.name} ${out.name.replace(quality.name + ' ', '')}!`);
+  else if (quality && quality.name) log(`<span style="color:${quality.color}">Your ${catInfo2.key.replace(/([A-Z])/g,' $1')} skill shows</span> -- you craft a ${quality.name} ${out.name.replace(quality.name + ' ', '')}!`);
   else log(qty > 1 ? `You craft ${qty}x ${out.name}.` : `You craft ${out.name}.`);
   if (saved > 0) log('Your skill meant some ingredients were not consumed.');
+  if (isSmithing) gainProfessionXp('blacksmith', 8 * qty);
   updateSidebar();
 }
 
@@ -18308,7 +18380,25 @@ function openQuestLog() {
   const repEntries = Object.entries(player.story.kingdomRep || {}).filter(([,v]) => v !== 0);
   if (repEntries.length) {
     html += `<div class="trade-col-title">Kingdom Reputation</div>`;
-    for (const [key, v] of repEntries) { const kn = kingdomRegistry.get(key); html += `<div class="modal-opt dim">${kn ? kn.name : key}: ${v > 0 ? '+' : ''}${v}</div>`; }
+    for (const [key, v] of repEntries) {
+      const kn = kingdomRegistry.get(key);
+      const nobleLevel = nobleLevelOf(key);
+      const nobleTitle = nobleLevel ? ` -- ${nobleTitleFor(nobleLevel, false)}` : '';
+      const rulerTag = player.rulerOf === key ? ' (YOU RULE THIS KINGDOM)' : '';
+      const instability = (player.rulerOf === key && player.rebellionUnstableDays > 0) ? ` <span style="color:${player.rebellionUnstableDays >= KINGSHIP_WARNING_DAYS ? '#d07f7f' : 'var(--amber-bright)'}">[${player.rebellionUnstableDays}d unstable]</span>` : '';
+      html += `<div class="modal-opt dim">${kn ? kn.name : key}: ${v > 0 ? '+' : ''}${v}${nobleTitle}${rulerTag}${instability}</div>`;
+    }
+  }
+  // ---- Pillar 4: city rank (wherever you currently are) and any civic offices held anywhere.
+  if (!curIsDungeon() && !curIsDimension()) {
+    const region = getRegionKey(player.x, player.y);
+    const settlement = settlementAt(player.x, player.y);
+    if (settlement) html += `<div class="trade-col-title">Standing in ${settlement.name}</div><div class="modal-opt dim">${cityRankOf(region)} (${(player.goodwill || {})[region] || 0} standing)</div>`;
+  }
+  const offices = Object.entries(player.civicOffices || {});
+  if (offices.length) {
+    html += `<div class="trade-col-title">Civic Offices Held</div>`;
+    for (const [name, office] of offices) html += `<div class="modal-opt dim">${office.title} of ${name}</div>`;
   }
   renderModal('Quest Log', html, 'Esc to close.');
 }
@@ -18550,6 +18640,559 @@ function restAtHome(npc) {
   updateSidebar();
   closeModal();
 }
+
+// =====================================================================================
+// ---- LIFE SIM OVERHAUL, PILLAR 1: PROPERTY & HOUSING ----
+// Builds directly on infrastructure the game already had rather than inventing a parallel one:
+// every settlement generated via buildSettlementCore already places genuine, walled, enterable
+// "house" buildings (role:'house') beyond the ones handed out to working NPCs as a sleepArea (see
+// NPC Schedules v2 above) -- some of those houses are never claimed by any NPC at all. Those are
+// exactly "the empty house at the edge of town" a player should be able to walk into a real-estate
+// conversation about, so property ownership is layered on top of that existing building, not a
+// separate building type generated in parallel. A purchased house keeps its normal, already-
+// unlocked door (see isHouseDoorLocked -- an unclaimed house was never given a lockCapable door in
+// the first place, so nothing needs to change there), gets tagged with an ownerId so it's excluded
+// from future NPC sleepArea assignment/vacancy listings, and is tracked on the player as a
+// lightweight, fully-serializable record (player.properties) -- no new save-format plumbing needed
+// since player is already saved via a plain JSON.stringify (see getSaveData).
+const PROPERTY_TIER_INFO = {
+  hamlet:  { label: 'Cottage',         basePrice: 60,   upkeep: 1 },
+  village: { label: 'House',           basePrice: 150,  upkeep: 2 },
+  town:    { label: 'Townhouse',       basePrice: 400,  upkeep: 4 },
+  city:    { label: 'City Manor',      basePrice: 1200, upkeep: 10 },
+  capital: { label: 'Grand Residence', basePrice: 3500, upkeep: 25 },
+};
+// Furnishings are simple, stackable, one-time purchases per property -- no equipment-slot
+// complexity, just a small persistent list of upgrades that make a house read as lived-in and
+// unlock later hooks (nursery gates a Family & Relationships feature; library/strongbox are
+// deliberately left as hooks for a future Professions/Kingship pass to read from, e.g. a library
+// speeding up training, a strongbox as a second stash). `comfort` is a flat count used by
+// restAtProperty/family-facing code to scale small bonuses without hardcoding furnishing IDs.
+const FURNISHINGS = {
+  hearth:      { name: 'Hearth & Furnishings', cost: 80,  comfort: 1, desc: 'A real bed, a working hearth, and enough furniture that it stops echoing.' },
+  garden:      { name: 'Kitchen Garden',       cost: 120, comfort: 1, desc: 'A small tilled garden plot out back -- fresh food, and (once you\'ve taken up Farming) a real place to grow it.' },
+  library:     { name: 'Modest Library',       cost: 250, comfort: 1, desc: 'A shelf of real books. Studying here beats studying in a tent.' },
+  strongbox:   { name: 'Strongbox',            cost: 200, comfort: 0, desc: 'A secure, bolted-down place to keep valuables at home.' },
+  nursery:     { name: 'Nursery',              cost: 150, comfort: 1, desc: "A proper room for a child to grow up in, not a corner of the pantry." },
+  finequarters:{ name: 'Fine Quarters',        cost: 600, comfort: 2, desc: 'Fine linens and furniture befitting someone with real standing in this city.' },
+  // ---- Pillar 3 tie-in: these two are gated behind actually having learned the matching trade
+  // (see requiresProfession, checked in furnishProperty/openPropertyMenu) -- a forge or a market
+  // stall in your own home only makes sense, mechanically or narratively, once you're someone who
+  // knows what to do with one. See tickPropertyUpkeep's business-income pass for the payoff.
+  forge:       { name: 'Home Forge',           cost: 400, comfort: 0, desc: "A proper forge and anvil. Once your Blacksmithing is strong enough, and someone's minding the house, it earns steady coin from commissions while you're away.", requiresProfession: 'blacksmith' },
+  stall:       { name: 'Market Stall Rights',  cost: 350, comfort: 0, desc: "A standing stall in the market square. Once your trading reputation is strong enough, and someone's minding the house, it earns steady coin while you're away.", requiresProfession: 'merchant' },
+  larder:      { name: 'Larder & Ovens',       cost: 250, comfort: 0, desc: "A proper kitchen for selling real meals, not just cooking them. Once your cooking is strong enough, and someone's minding the house, it earns steady coin while you're away.", requiresProfession: 'chef' },
+  apothecary:  { name: 'Apothecary Nook',      cost: 300, comfort: 0, desc: "A bench of vials and mortars for selling remedies, not just brewing them. Once your brewing is strong enough, and someone's minding the house, it earns steady coin while you're away.", requiresProfession: 'alchemist' },
+  // ---- Family tie-in: a real, ongoing boost to the exact affection mechanic Pillar 2 already
+  // built (spendEveningTogether), rather than a separate parallel number.
+  parlor:      { name: 'Parlor',               cost: 200, comfort: 1, desc: "A proper sitting room for the two of you -- evenings spent together here mean noticeably more." },
+  // ---- A visitor's-eye impression of the household, paying out in the same local goodwill
+  // system Property already ties into (see buyProperty's own goodwill nudge) -- rather than a
+  // flat gold trickle like the garden, this one is about standing, not money.
+  trophycase:  { name: 'Trophy Case',          cost: 300, comfort: 1, desc: "A case for your finds -- word travels when visitors see what you've actually done. Boosts local standing whenever you rest here." },
+  // ---- Family tie-in: the one furnishing that reads a child record that's normally a quiet,
+  // bittersweet dead end (leftHome) and gives it an occasional, genuinely warm payoff instead.
+  aviary:      { name: 'Aviary',               cost: 250, comfort: 1, desc: "A message-bird roost. If a grown child ever left home to make their own way, this is how word -- and the occasional gift -- finds its way back to you." },
+  // ---- Additional business furnishings, parity with Forge/Stall/Larder/Apothecary for the rest
+  // of the profession roster that has a real trade to run a business from home in.
+  lockworkshop:{ name: 'Lock Workshop',        cost: 300, comfort: 0, desc: "A bench of tools for security commissions. Once your Locksmithing is strong enough, and someone's minding the house, it earns steady coin while you're away.", requiresProfession: 'locksmith' },
+  jewelrybench:{ name: 'Jeweler\'s Bench',     cost: 350, comfort: 0, desc: "A proper bench for cutting and setting stones. Once your Jewelcrafting is strong enough, and someone's minding the house, it earns steady coin while you're away.", requiresProfession: 'jeweler' },
+  scribedesk:  { name: "Scribe's Desk",        cost: 250, comfort: 0, desc: "A desk for copying texts to sell. Once your Scribing is strong enough, and someone's minding the house, it earns steady coin while you're away.", requiresProfession: 'scribe' },
+  // ---- A second home-grown plot alongside the Kitchen Garden -- the Farmer/Property tie-in,
+  // but for an Alchemist's own ingredients instead of a Farmer's food crops.
+  alchemygarden:{ name: 'Alchemy Garden',      cost: 200, comfort: 1, desc: "A small plot for growing your own herbs, once you've taken up Alchemy.", requiresProfession: 'alchemist' },
+  // ---- Cartographer tie-in: a study lined with maps, a real (if modest) reason to own one
+  // beyond the profession itself.
+  mapstudy:    { name: 'Map Study',            cost: 250, comfort: 1, desc: "Charts and survey notes cover every wall -- the mark of someone who's taken up Cartography.", requiresProfession: 'cartographer' },
+  // ---- Family tie-in: the Nursery/Parlor pattern, but for CHILDREN specifically rather than a
+  // spouse -- a real boost to Play Together instead of a redundant copy of Parlor's effect.
+  musicroom:   { name: 'Music Room',           cost: 200, comfort: 1, desc: "An instrument or two and space to be silly in -- time spent playing with your children here means noticeably more." },
+  // ---- Kingdom tie-in: standing with the CROWN specifically, distinct from Trophy Case's local
+  // goodwill -- a small, real trickle of kingdomRep for whichever kingdom this settlement belongs
+  // to, on rest.
+  chapel:      { name: 'Chapel',               cost: 250, comfort: 1, desc: "A quiet place to keep faith -- resting here nudges your standing with the crown itself, not just the neighbors." },
+  // ---- A slightly stronger version of the comfort/regen payoff on top of the flat comfort value,
+  // for a home you've invested seriously in comfort itself.
+  bathhouse:   { name: 'Bath House',           cost: 300, comfort: 2, desc: "A proper heated bath -- resting here is unusually restorative." },
+  // ---- A gentle, passive trickle to whichever profession you've invested the most XP in --
+  // rewards specialization generally rather than any one trade specifically.
+  observatory: { name: 'Observatory',          cost: 350, comfort: 1, desc: "A quiet room for study and reflection -- resting here gives a small boost to whichever trade you've put the most into." },
+  // ---- Straightforward comfort/flavor furnishings -- not every real piece of a lived-in home
+  // needs its own unique mechanic; these add up honestly through the comfort system above, the
+  // same way real furniture in a real house isn't all equally load-bearing to the plot.
+  weaponrack:  { name: 'Weapon Rack',          cost: 150, comfort: 1, desc: "A place to keep your gear in good order between fights." },
+  wardrobe:    { name: 'Wardrobe',             cost: 120, comfort: 1, desc: "A proper wardrobe -- small, but it stops the room from feeling like a camp." },
+  winecellar:  { name: 'Wine Cellar',          cost: 220, comfort: 1, desc: "A small cellar for aging wine -- equal parts practical and a nice thing to have." },
+  balcony:     { name: 'Balcony',              cost: 180, comfort: 2, desc: "A view worth having. Purely for the pleasure of it." },
+  stables:     { name: 'Stables',              cost: 200, comfort: 1, desc: "A proper place to keep and rest a mount, if you ever come by one." },
+  armordisplay:{ name: 'Armor Display',        cost: 200, comfort: 1, desc: "A stand for your finest armor -- more personal than the Trophy Case, less about impressing visitors." },
+};
+function propertyDisplayName(p) { return p.customName ? `"${p.customName}"` : `your ${p.tierLabel.toLowerCase()} in ${p.settlementName}`; }
+function propertyUid() { return 'prop_' + Math.random().toString(36).slice(2, 9); }
+// Shared by any menu that might realistically need more than 26 options (Property's furnish
+// sub-screen, now that FURNISHINGS has grown past two dozen entries) -- cycles a-z, then A-Z, then
+// 0-9 before giving up, rather than silently overflowing past 'z' into control characters the way
+// a bare String.fromCharCode(97+n) would. Uppercase letters are safe to reuse here even though the
+// same letters are bound to global actions (F, P, V, etc.) while gameState is 'playing' -- these
+// menus only ever check their own option list while gameState is something else entirely, so
+// there's no live collision with the global bindings.
+function makeKeyGenerator() {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let n = 0;
+  return () => chars[n++] || '?';
+}
+// Every "house" building this settlement chunk placed that (a) isn't already player-owned and (b)
+// was never handed to a working NPC as their sleepArea (see the eligible/shuffledHouses pairing in
+// buildSettlementCore) -- i.e. genuinely, permanently vacant, not just a shop-owner's home that
+// happens to look empty from outside during the day.
+function vacantHousesInChunk(chunk) {
+  if (!chunk || !chunk.settlement) return [];
+  const out = [];
+  chunk.settlement.buildings.forEach((b, idx) => {
+    if (b.role !== 'house' || b.ownerId) return;
+    const wx0 = chunk.cx * CH + b.x, wy0 = chunk.cy * CH + b.y;
+    const wx1 = wx0 + b.w - 1, wy1 = wy0 + b.h - 1;
+    const occupied = chunk.npcs.some(n => n.sleepArea && n.sleepArea.x0 === wx0 && n.sleepArea.y0 === wy0 && n.sleepArea.x1 === wx1 && n.sleepArea.y1 === wy1);
+    if (!occupied) out.push(idx);
+  });
+  return out;
+}
+// settlement.buildings doesn't itself remember which edge tile is the door (that's only tracked
+// transiently during generation, via the local houseBuildings/doorPos variables in
+// buildSettlementCore) -- rediscover it by scanning the building's own wall ring for the one tile
+// placeBuildingDoor actually carved a 'door' feature into.
+function buildingDoorLocal(chunk, buildingIdx) {
+  const b = chunk.settlement.buildings[buildingIdx];
+  if (!b) return null;
+  for (let ly = b.y; ly < b.y + b.h; ly++) {
+    for (let lx = b.x; lx < b.x + b.w; lx++) {
+      const wallEdge = ly === b.y || ly === b.y + b.h - 1 || lx === b.x || lx === b.x + b.w - 1;
+      if (!wallEdge) continue;
+      const t = chunk.tiles[ly] && chunk.tiles[ly][lx];
+      if (t && t.feature === 'door') return { lx, ly };
+    }
+  }
+  return null;
+}
+// Deterministic per-building quote: same house always costs the same amount (re-opening the
+// Property menu, or coming back next week, doesn't reroll the price), without needing to store
+// anything extra on the building itself. Seeded off (chunk, buildingIdx, SEED) exactly like the
+// game's other stable-per-object rng derivations (see isHouseDoorLocked's daily-lock roll).
+function propertyPriceFor(chunk, buildingIdx) {
+  const b = chunk.settlement.buildings[buildingIdx];
+  const tier = (chunk.settlement.type || 'Village').toLowerCase();
+  const info = PROPERTY_TIER_INFO[tier] || PROPERTY_TIER_INFO.village;
+  const sizeFactor = Math.max(1, (b.w * b.h) / 20);
+  const rng = mulberry32((hashString(`${chunk.cx},${chunk.cy},${buildingIdx}`) ^ SEED) | 0);
+  const variance = 0.85 + rng() * 0.3;
+  return {
+    price: Math.max(20, Math.round(info.basePrice * sizeFactor * variance)),
+    upkeep: Math.max(1, Math.round(info.upkeep * sizeFactor * variance)),
+    tierLabel: info.label, tier,
+  };
+}
+function buyProperty(chunk, buildingIdx) {
+  const b = chunk.settlement.buildings[buildingIdx];
+  if (!b || b.role !== 'house' || b.ownerId) { log('That property is no longer available.'); return; }
+  const quote = propertyPriceFor(chunk, buildingIdx);
+  if (player.gold < quote.price) { log(`You can't afford this ${quote.tierLabel.toLowerCase()} (${quote.price}g -- you have ${player.gold}g).`); return; }
+  player.gold -= quote.price;
+  b.ownerId = 'player';
+  chunk.dirty = true;
+  const door = buildingDoorLocal(chunk, buildingIdx);
+  const wx0 = chunk.cx * CH + b.x, wy0 = chunk.cy * CH + b.y, wx1 = wx0 + b.w - 1, wy1 = wy0 + b.h - 1;
+  const prop = {
+    id: propertyUid(), cx: chunk.cx, cy: chunk.cy, buildingIdx,
+    x0: wx0, y0: wy0, x1: wx1, y1: wy1,
+    doorLx: door ? door.lx : b.x + 1, doorLy: door ? door.ly : b.y + 1,
+    settlementName: chunk.settlement.name, kingdomName: chunk.settlement.kingdom,
+    tier: quote.tier, tierLabel: quote.tierLabel,
+    price: quote.price, dailyUpkeep: quote.upkeep, unpaidDays: 0,
+    furnishings: [], purchasedTurn: turnCount,
+  };
+  player.properties = player.properties || [];
+  player.properties.push(prop);
+  if (!player.primaryResidenceId) player.primaryResidenceId = prop.id;
+  Sound.play('discovery');
+  log(`*** You purchase the deed to a ${quote.tierLabel.toLowerCase()} in ${chunk.settlement.name} for ${quote.price} gold. ***`);
+  // Same "putting down roots" goodwill hook proposeMarriage already uses -- owning property here
+  // is at least as strong a sign you mean to stay as marrying in is.
+  addGoodwill(getRegionKey(player.x, player.y), 6, `Buying property here says you mean to stay.`);
+  updateSidebar();
+  openPropertyMenu();
+}
+function sellProperty(id) {
+  const idx = (player.properties || []).findIndex(pr => pr.id === id);
+  if (idx === -1) return;
+  const p = player.properties[idx];
+  const refund = Math.round(p.price * 0.5);
+  player.gold += refund;
+  const chunk = getChunk(p.cx, p.cy);
+  if (chunk && chunk.settlement && chunk.settlement.buildings[p.buildingIdx]) {
+    delete chunk.settlement.buildings[p.buildingIdx].ownerId;
+    chunk.dirty = true;
+  }
+  player.properties.splice(idx, 1);
+  if (player.primaryResidenceId === id) player.primaryResidenceId = (player.properties[0] || {}).id || null;
+  log(`You sell the deed to ${propertyDisplayName(p)} for ${refund}g.`);
+  updateSidebar();
+  openPropertyMenu();
+}
+// Designating a primary residence is the hook the Family & Relationships pass reads: a spouse told
+// to wait at home (see toggleSpouseFollow) currently goes to their own original NPC-generated
+// homeArea. Overwriting that here means a married player's household genuinely relocates into a
+// home the player actually chose and furnished, instead of every marriage being stuck at whatever
+// building the spouse happened to spawn in.
+function setPrimaryResidence(id) {
+  const p = (player.properties || []).find(pr => pr.id === id);
+  if (!p) return;
+  player.primaryResidenceId = id;
+  log(`You designate ${propertyDisplayName(p)} as your primary residence.`);
+  const spouseNpc = player.spouse && findNpcByUid(player.spouse.uid);
+  if (spouseNpc) {
+    spouseNpc.homeArea = { x0: p.x0, y0: p.y0, x1: p.x1, y1: p.y1 };
+    spouseNpc.home = p.settlementName;
+    if (!spouseNpc.following) {
+      const oldChunk = getChunk(Math.floor(spouseNpc.x / CH), Math.floor(spouseNpc.y / CH));
+      if (oldChunk && oldChunk.npcs) oldChunk.npcs = oldChunk.npcs.filter(n => n !== spouseNpc);
+      spouseNpc.x = p.x0 + 1; spouseNpc.y = p.y0 + 1;
+      const newChunk = getChunk(p.cx, p.cy);
+      if (newChunk) { if (!newChunk.npcs.includes(spouseNpc)) newChunk.npcs.push(spouseNpc); newChunk.dirty = true; }
+      if (oldChunk) oldChunk.dirty = true;
+    }
+    log(`${spouseNpc.name} moves into the new home with you.`);
+  }
+  updateSidebar();
+  openPropertyMenu();
+}
+// ---- Visible, real decoration: buying a furnishing places an actual, distinct tile inside your
+// house -- not just a number on a menu. Each one gets its own glyph, color, and /look flavor text
+// (see TILE_FEATURE_DESCRIPTIONS), so walking into a house you've furnished with a Home Forge
+// looks and reads nothing like one you've furnished with a Nursery. Deliberately left walkable
+// (never blocks a tile) since houses can be small enough that an impassable obstacle could wall
+// off part of a one-room cottage.
+const FURNISHING_DECOR = {
+  hearth:       { feature: 'homehearth',       glyph: String.fromCharCode(9829), color: '#e0895a' },
+  library:      { feature: 'homelibrary',      glyph: String.fromCharCode(8801), color: '#c9a86a' },
+  nursery:      { feature: 'homenursery',      glyph: String.fromCharCode(9827), color: '#f0c0d0' },
+  strongbox:    { feature: 'homestrongbox',    glyph: String.fromCharCode(9632), color: '#a0a0c0' },
+  finequarters: { feature: 'homefinequarters', glyph: String.fromCharCode(10070), color: '#d4af37' },
+  forge:        { feature: 'homeforge',        glyph: String.fromCharCode(9830), color: '#ff6a3a' },
+  stall:        { feature: 'homestall',        glyph: String.fromCharCode(8776), color: '#7fd0d0' },
+  larder:       { feature: 'homelarder',       glyph: String.fromCharCode(9679), color: '#c9915a' },
+  apothecary:   { feature: 'homeapothecary',   glyph: String.fromCharCode(8853), color: '#8ac96a' },
+  parlor:       { feature: 'homeparlor',       glyph: String.fromCharCode(9824), color: '#d08ac9' },
+  trophycase:   { feature: 'hometrophycase',   glyph: String.fromCharCode(9733), color: '#e0c34a' },
+  aviary:       { feature: 'homeaviary',       glyph: String.fromCharCode(8896), color: '#a8c9e0' },
+  lockworkshop: { feature: 'homelockworkshop', glyph: String.fromCharCode(9919), color: '#9a8a6a' },
+  jewelrybench: { feature: 'homejewelrybench', glyph: String.fromCharCode(9670), color: '#e0c34a' },
+  scribedesk:   { feature: 'homescribedesk',   glyph: String.fromCharCode(9998), color: '#8a9ac9' },
+  alchemygarden:{ feature: 'homealchemygarden',glyph: String.fromCharCode(10047), color: '#8ac96a' },
+  mapstudy:     { feature: 'homemapstudy',     glyph: String.fromCharCode(9992), color: '#4a9ac9' },
+  musicroom:    { feature: 'homemusicroom',    glyph: String.fromCharCode(9835), color: '#c98ac9' },
+  chapel:       { feature: 'homechapel',       glyph: String.fromCharCode(10013), color: '#e0e0e0' },
+  bathhouse:    { feature: 'homebathhouse',    glyph: String.fromCharCode(8776), color: '#7fc9e0' },
+  observatory:  { feature: 'homeobservatory',  glyph: String.fromCharCode(9737), color: '#c9a86a' },
+  weaponrack:   { feature: 'homeweaponrack',   glyph: String.fromCharCode(8224), color: '#a0a0a0' },
+  wardrobe:     { feature: 'homewardrobe',     glyph: String.fromCharCode(9636), color: '#8a6a4a' },
+  winecellar:   { feature: 'homewinecellar',   glyph: String.fromCharCode(9679), color: '#7a1a3a' },
+  balcony:      { feature: 'homebalcony',      glyph: String.fromCharCode(8801), color: '#a8d0e0' },
+  stables:      { feature: 'homestables',      glyph: String.fromCharCode(9822), color: '#9a7a4a' },
+  armordisplay: { feature: 'homearmordisplay', glyph: String.fromCharCode(9787), color: '#909090' },
+};
+function placeHomeDecor(p, furnishingKey) {
+  const decor = FURNISHING_DECOR[furnishingKey];
+  if (!decor) return;
+  const chunk = getChunk(p.cx, p.cy);
+  if (!chunk) return;
+  const doorWx = chunk.cx * CH + p.doorLx, doorWy = chunk.cy * CH + p.doorLy;
+  p.decorTiles = p.decorTiles || [];
+  const used = new Set(p.decorTiles.map(d => `${d.x},${d.y}`));
+  let placed = false;
+  for (let wy = p.y0; wy <= p.y1 && !placed; wy++) {
+    for (let wx = p.x0; wx <= p.x1; wx++) {
+      if (wx === doorWx && wy === doorWy) continue;
+      if (used.has(`${wx},${wy}`)) continue;
+      const lx = ((wx % CH) + CH) % CH, ly = ((wy % CH) + CH) % CH;
+      const t = chunk.tiles[ly] && chunk.tiles[ly][lx];
+      if (!t || !t.walkable) continue;
+      t.feature = decor.feature; t.glyph = decor.glyph; t.color = decor.color; t.walkable = true;
+      p.decorTiles.push({ x: wx, y: wy, furnishingKey });
+      placed = true;
+      break;
+    }
+  }
+  chunk.dirty = true;
+}
+function renamePropertyPrompt(id) {
+  const p = (player.properties || []).find(pr => pr.id === id);
+  if (!p) return;
+  try {
+    if (typeof window !== 'undefined' && window.prompt) {
+      const input = window.prompt('Name this home:', p.customName || '');
+      if (input !== null) p.customName = input.trim().slice(0, 30) || null;
+    }
+  } catch (e) { /* prompt unavailable */ }
+  openPropertyMenu();
+}
+function furnishProperty(id, furnishingKey) {
+  const p = (player.properties || []).find(pr => pr.id === id);
+  const f = FURNISHINGS[furnishingKey];
+  if (!p || !f) return;
+  if (p.furnishings.includes(furnishingKey)) { log('Already furnished with that.'); return; }
+  if (f.requiresProfession && !(player.professionsLearned || {})[f.requiresProfession]) { log(`You'll need to learn ${PROFESSIONS[f.requiresProfession].name}ing first -- ask around town.`); return; }
+  if (player.gold < f.cost) { log(`You need ${f.cost}g for ${f.name.toLowerCase()}.`); return; }
+  player.gold -= f.cost;
+  p.furnishings.push(furnishingKey);
+  log(`You furnish ${propertyDisplayName(p)} with ${f.name.toLowerCase()}.`);
+  placeHomeDecor(p, furnishingKey);
+  // A Kitchen Garden (or Alchemy Garden) isn't just flavor text -- it's a real, tillable plot
+  // right at home, so a player who's taken up Farming or Alchemy doesn't have to go hunting
+  // through town for open ground.
+  const GARDEN_TILE_FIELD = { garden: 'homeFarmTile', alchemygarden: 'homeHerbTile' };
+  if (GARDEN_TILE_FIELD[furnishingKey] && !p[GARDEN_TILE_FIELD[furnishingKey]]) {
+    const chunk = getChunk(p.cx, p.cy);
+    if (chunk) {
+      const candidates = [];
+      for (let x = p.x0 - 1; x <= p.x1 + 1; x++) for (let y = p.y0 - 1; y <= p.y1 + 1; y++) {
+        if (x >= p.x0 && x <= p.x1 && y >= p.y0 && y <= p.y1) continue; // inside the house itself
+        candidates.push({ x, y });
+      }
+      for (const c of candidates) {
+        const lx = ((c.x % CH) + CH) % CH, ly = ((c.y % CH) + CH) % CH;
+        const t = chunk.tiles[ly] && chunk.tiles[ly][lx];
+        if (t && isTillableGround(t)) {
+          tillSoil(c.x, c.y);
+          p[GARDEN_TILE_FIELD[furnishingKey]] = { x: c.x, y: c.y };
+          chunk.dirty = true;
+          log(`You till a small plot just outside -- plant something whenever you're ready.`);
+          break;
+        }
+      }
+    }
+  }
+  updateSidebar();
+}
+function restAtProperty(id) {
+  const p = (player.properties || []).find(pr => pr.id === id);
+  if (!p) return;
+  player.hp = player.maxHp; player.mp = player.maxMp;
+  advanceTimeToMorning();
+  log(`You rest at ${propertyDisplayName(p)} and feel fully restored. It's now ${formatTimeInfo()}.`);
+  // Comfort (see FURNISHINGS) previously did nothing at all -- every furnishing that carries a
+  // comfort value, even the purely decorative ones, now adds up into a real, if modest, regen
+  // buff on rest. A single furnishing barely moves it; a genuinely well-furnished home is a
+  // small, honest reward for having invested in more than the bare minimum. Computed as ONE
+  // combined value with Bath House's own bonus below (applyBuffQuiet replaces power rather than
+  // adding it, so two separate calls would have the second silently clobber the first instead of
+  // stacking -- this keeps it correctly additive).
+  const comfort = (p.furnishings || []).reduce((s, f) => s + ((FURNISHINGS[f] && FURNISHINGS[f].comfort) || 0), 0);
+  const comfortPower = comfort > 0 ? Math.min(4, Math.ceil(comfort / 3)) : 0;
+  const bathhousePower = p.furnishings.includes('bathhouse') ? 2 : 0;
+  const totalRegenPower = comfortPower + bathhousePower;
+  if (totalRegenPower > 0) {
+    applyBuffQuiet('regen', totalRegenPower, 400);
+    if (comfort >= 6) log(`This well-kept home leaves you feeling especially restored.`);
+  }
+  if (p.furnishings.includes('garden') && Math.random() < 0.5) {
+    const g = randInt(Math.random, 3, 8);
+    player.gold += g;
+    log(`Your kitchen garden yields a bit extra -- you sell the surplus for ${g}g.`);
+  }
+  // Trophy Case: standing, not money -- a real, ongoing tie into the same local goodwill system
+  // Property already touches (see buyProperty's own goodwill nudge), rather than a second gold
+  // trickle competing with the garden's.
+  if (p.furnishings.includes('trophycase')) {
+    addGoodwill(getRegionKey(p.x0, p.y0), 2, null);
+    log(`Word gets around about the case of finds in your home. (+2 local standing)`);
+  }
+  // Chapel: standing with the CROWN specifically, distinct from Trophy Case's local flavor --
+  // a small, real trickle into the same kingdomRep every quest/office/decree already feeds.
+  if (p.furnishings.includes('chapel')) {
+    const kingdomKey = kingdomKeyAt(p.x0, p.y0);
+    addKingdomRep(kingdomKey, 3);
+  }
+  // Observatory: a gentle trickle to whichever profession you've actually put the most into --
+  // rewards specialization generally, not any one trade in particular.
+  if (p.furnishings.includes('observatory')) {
+    const xpMap = player.professionXp || {};
+    const topId = Object.keys(xpMap).filter(id => hasProfession(id)).sort((a, b) => (xpMap[b] || 0) - (xpMap[a] || 0))[0];
+    if (topId) gainProfessionXp(topId, 15);
+  }
+  Sound.play('restComplete');
+  updateSidebar();
+  openPropertyMenu();
+}
+// Lazy, day-boundary-gated upkeep -- same pattern as applyAffectionDecay: cheap to call every turn
+// (a single integer comparison in the common case) instead of a real per-turn tick over every
+// property. Debt is soft for a while (a warning, not an eviction) so a long dungeon crawl doesn't
+// silently cost you your house the moment you resurface; only genuinely long neglect (15 unpaid
+// days) results in repossession, and even then only the most convenient single property is taken,
+// with its own share of the debt written off with it.
+function tickPropertyUpkeep() {
+  if (!player.properties || !player.properties.length) { player.lastUpkeepDay = Math.floor(turnCount / DAY_LENGTH); return; }
+  const day = Math.floor(turnCount / DAY_LENGTH);
+  if (player.lastUpkeepDay === undefined || player.lastUpkeepDay === null) { player.lastUpkeepDay = day; return; }
+  if (day <= player.lastUpkeepDay) return;
+  const daysPassed = day - player.lastUpkeepDay;
+  player.lastUpkeepDay = day;
+  // ---- Pillar 3 tie-in: passive business income from a Home Forge/Market Stall furnishing (see
+  // FURNISHINGS), but only if someone is actually there to mind the place while you're off
+  // adventuring -- your spouse waiting at that exact home (Pillar 2), or a grown child who settled
+  // down in the same settlement (also Pillar 2). Ownership plus the furnishing plus the profession
+  // level alone isn't enough on its own; an empty shop doesn't run itself.
+  let businessTotal = 0;
+  const businessLines = [];
+  const BUSINESS_FURNISHINGS = {
+    forge: { profId: 'blacksmith', base: 6, label: 'forge' },
+    stall: { profId: 'merchant', base: 5, label: 'stall' },
+    larder: { profId: 'chef', base: 5, label: 'larder' },
+    apothecary: { profId: 'alchemist', base: 6, label: 'apothecary' },
+    lockworkshop: { profId: 'locksmith', base: 5, label: 'lock workshop' },
+    jewelrybench: { profId: 'jeweler', base: 6, label: "jeweler's bench" },
+    scribedesk: { profId: 'scribe', base: 5, label: "scribe's desk" },
+  };
+  player.properties.forEach(p => {
+    const furnKeys = Object.keys(BUSINESS_FURNISHINGS).filter(f => p.furnishings.includes(f));
+    if (!furnKeys.length) return;
+    const spouseNpc = player.spouse && findNPCByUid(player.spouse.uid);
+    const spouseTending = !!(spouseNpc && !spouseNpc.following && spouseNpc.homeArea && spouseNpc.homeArea.x0 === p.x0 && spouseNpc.homeArea.y0 === p.y0);
+    const childTending = (player.children || []).some(c => c.settledDown && !c.leftHome && !c.recruited && !c.deceased && c.settlementName === p.settlementName);
+    if (!spouseTending && !childTending) return;
+    // A house can run more than one business at once (e.g. both a Home Forge and a Larder) as
+    // long as it's actually staffed -- each furnishing earns its own income independently, same
+    // "someone has to be minding it" gate applying to the whole house rather than per-furnishing.
+    furnKeys.forEach(furnKey => {
+      const biz = BUSINESS_FURNISHINGS[furnKey];
+      if (!hasProfession(biz.profId)) return;
+      const level = professionLevelOf(biz.profId);
+      if (level < 3) return;
+      const income = Math.round(biz.base * (1 + level * 0.12) * daysPassed);
+      businessTotal += income;
+      businessLines.push(`${income}g from the ${biz.label} in ${p.settlementName}${spouseTending ? ` (minded by ${player.spouse.name})` : ' (minded by family)'}`);
+    });
+  });
+  if (businessTotal > 0) {
+    player.gold += businessTotal;
+    log(`Business income while you were away: ${businessLines.join('; ')}.`);
+  }
+  const totalDue = player.properties.reduce((s, p) => s + p.dailyUpkeep * daysPassed, 0);
+  if (player.gold >= totalDue) {
+    player.gold -= totalDue;
+    if (player.propertyDebt) { log(`You settle up ${player.propertyDebt}g in overdue property upkeep.`); player.propertyDebt = 0; }
+    player.properties.forEach(p => p.unpaidDays = 0);
+  } else {
+    const shortfall = totalDue - Math.max(0, player.gold);
+    player.gold = Math.max(0, player.gold - totalDue);
+    player.propertyDebt = (player.propertyDebt || 0) + shortfall;
+    player.properties.forEach(p => p.unpaidDays = (p.unpaidDays || 0) + daysPassed);
+    log(`You can't cover the upkeep on your properties (${player.propertyDebt}g now owed).`);
+    const warned = player.properties.find(p => p.unpaidDays >= 10 && p.unpaidDays - daysPassed < 10);
+    if (warned) log(`Final notice: your ${warned.tierLabel.toLowerCase()} in ${warned.settlementName} will be repossessed if the debt isn't paid soon.`);
+    const repo = player.properties.find(p => p.unpaidDays >= 15);
+    if (repo) {
+      const chunk = getChunk(repo.cx, repo.cy);
+      if (chunk && chunk.settlement && chunk.settlement.buildings[repo.buildingIdx]) { delete chunk.settlement.buildings[repo.buildingIdx].ownerId; chunk.dirty = true; }
+      player.properties = player.properties.filter(p => p.id !== repo.id);
+      if (player.primaryResidenceId === repo.id) player.primaryResidenceId = (player.properties[0] || {}).id || null;
+      player.propertyDebt = Math.max(0, player.propertyDebt - repo.dailyUpkeep * 15);
+      log(`*** Your unpaid debts catch up with you -- the ${repo.tierLabel.toLowerCase()} in ${repo.settlementName} is repossessed. ***`);
+    }
+  }
+  updateSidebar();
+}
+let propertyMenuOptions = [];
+let furnishMenuOptions = [];
+function openFurnishMenu(propertyId) {
+  const p = (player.properties || []).find(pr => pr.id === propertyId);
+  if (!p) return;
+  Sound.play('uiOpen');
+  gameState = 'furnish';
+  const opts = [];
+  const nextKey = makeKeyGenerator();
+  let html = `<div class="npcline">Furnishing ${propertyDisplayName(p)} <span class="dim">(${p.furnishings.length} owned)</span></div>`;
+  const available = Object.keys(FURNISHINGS).filter(fid => !p.furnishings.includes(fid) && !(FURNISHINGS[fid].requiresProfession && !hasProfession(FURNISHINGS[fid].requiresProfession)));
+  if (!available.length) {
+    html += `<div class="npcline dim">Nothing left to add here right now -- either you own it all, or the rest needs a trade you haven't learned yet.</div>`;
+  }
+  available.forEach(fid => {
+    const f = FURNISHINGS[fid];
+    const k = nextKey();
+    opts.push({ key: k, label: `Furnish: ${f.name}`, action: () => { furnishProperty(p.id, fid); openFurnishMenu(p.id); } });
+    html += `<div class="modal-opt" onclick="simulateKey('${k}')">[${k}] Add ${f.name} (${f.cost}g, comfort +${f.comfort}) -- ${f.desc}</div>`;
+  });
+  const backKey = nextKey();
+  opts.push({ key: backKey, label: 'Back', action: () => openPropertyMenu() });
+  html += `<div class="modal-opt" onclick="simulateKey('${backKey}')" style="margin-top:6px">[${backKey}] Back</div>`;
+  furnishMenuOptions = opts;
+  renderModal('Furnish Home', html, 'Letter/click to choose, Esc to close.');
+}
+function openPropertyMenu() {
+  if (curIsDungeon() || curIsDimension()) { log("Property is bought, sold, and lived in out in the settled world, not here."); return; }
+  Sound.play('uiOpen');
+  gameState = 'property';
+  const opts = [];
+  const nextKey = makeKeyGenerator();
+  const chunk = getChunk(Math.floor(player.x / CH), Math.floor(player.y / CH));
+  let html = '';
+  if (chunk && chunk.settlement) {
+    const vacant = vacantHousesInChunk(chunk);
+    if (vacant.length) {
+      html += `<div class="npcline"><b>${chunk.settlement.name}</b> -- unclaimed houses here:</div>`;
+      vacant.forEach(idx => {
+        const q = propertyPriceFor(chunk, idx);
+        const k = nextKey();
+        opts.push({ key: k, label: `Buy ${q.tierLabel}`, action: () => buyProperty(chunk, idx) });
+        html += `<div class="modal-opt" onclick="simulateKey('${k}')">[${k}] Buy this ${q.tierLabel} -- ${q.price}g <span class="dim">(upkeep ~${q.upkeep}g/day)</span></div>`;
+      });
+    } else {
+      html += `<div class="npcline dim">No unclaimed houses for sale in ${chunk.settlement.name} right now.</div>`;
+    }
+  } else {
+    html += `<div class="npcline dim">You'll need to be inside a settlement to buy property here.</div>`;
+  }
+  const props = player.properties || [];
+  if (props.length) {
+    const totalUpkeep = props.reduce((s, p) => s + p.dailyUpkeep, 0);
+    html += `<div class="npcline" style="margin-top:8px"><b>Your Properties</b> <span class="dim">(${totalUpkeep}g/day upkeep${player.propertyDebt ? `, ${player.propertyDebt}g owed` : ''})</span></div>`;
+    props.forEach(p => {
+      const isPrimary = player.primaryResidenceId === p.id;
+      const standingHere = chunk && chunk.cx === p.cx && chunk.cy === p.cy;
+      const displayName = p.customName ? `"${p.customName}"` : `${p.tierLabel} in ${p.settlementName}`;
+      html += `<div class="modal-opt" style="opacity:0.9;cursor:default"><b>${displayName}</b>${p.customName ? ` <span class="dim">(${p.tierLabel}, ${p.settlementName})</span>` : ''}${isPrimary ? ' <span style="color:var(--amber-bright)">(Primary Residence)</span>' : ''}<br><span class="dim">Furnishings: ${p.furnishings.length ? p.furnishings.map(f => FURNISHINGS[f].name).join(', ') : 'none yet'}</span></div>`;
+      const kn = nextKey();
+      opts.push({ key: kn, label: 'Name this home', action: () => renamePropertyPrompt(p.id) });
+      html += `<div class="modal-opt" onclick="simulateKey('${kn}')">&nbsp;&nbsp;[${kn}] Name this home</div>`;
+      if (!isPrimary) {
+        const k = nextKey();
+        opts.push({ key: k, label: 'Set primary', action: () => setPrimaryResidence(p.id) });
+        html += `<div class="modal-opt" onclick="simulateKey('${k}')">&nbsp;&nbsp;[${k}] Set as primary residence</div>`;
+      }
+      Object.keys(FURNISHINGS).forEach(fid => {
+        if (p.furnishings.includes(fid)) return;
+        if (FURNISHINGS[fid].requiresProfession && !hasProfession(FURNISHINGS[fid].requiresProfession)) return;
+      });
+      const furnishKey = nextKey();
+      const availableCount = Object.keys(FURNISHINGS).filter(fid => !p.furnishings.includes(fid) && !(FURNISHINGS[fid].requiresProfession && !hasProfession(FURNISHINGS[fid].requiresProfession))).length;
+      opts.push({ key: furnishKey, label: 'Furnish this home...', action: () => openFurnishMenu(p.id) });
+      html += `<div class="modal-opt" onclick="simulateKey('${furnishKey}')">&nbsp;&nbsp;[${furnishKey}] Furnish this home... <span class="dim">(${availableCount} available)</span></div>`;
+      if (standingHere) {
+        const k = nextKey();
+        opts.push({ key: k, label: 'Rest here', action: () => restAtProperty(p.id) });
+        html += `<div class="modal-opt" onclick="simulateKey('${k}')">&nbsp;&nbsp;[${k}] Rest here</div>`;
+      }
+      const ks = nextKey();
+      opts.push({ key: ks, label: 'Sell', action: () => sellProperty(p.id) });
+      html += `<div class="modal-opt" onclick="simulateKey('${ks}')">&nbsp;&nbsp;[${ks}] Sell this property (refund ${Math.round(p.price * 0.5)}g)</div>`;
+    });
+  }
+  const kc = nextKey();
+  opts.push({ key: kc, label: 'Close', action: () => { gameState = 'playing'; closeModal(); } });
+  html += `<div class="modal-opt" onclick="simulateKey('${kc}')" style="margin-top:6px">[${kc}] Close</div>`;
+  propertyMenuOptions = opts;
+  renderModal('Property & Housing', html, 'Letter/click to choose, Esc to close.');
+}
+// =====================================================================================
 
 // ---- HEALER SKILL TIERS (v0.43.0): payForHealing always just restored HP/MP, completely ignoring
 // every status effect a visit to an actual healer should plausibly fix -- most notably bleeding,
@@ -19873,6 +20516,18 @@ function dropLoot(def) {
     const base = MONSTER_BASES[def.monsterId];
     const pTier = monsterPowerTier(def);
     if (base && base.loot) rollLoot(base.loot, Math.random).forEach(it => addItemToList(items, it));
+    // Hunter profession: rather than a separate skinning verb, it enhances the loot table any
+    // beast-type monster already rolls from -- identified honestly by the loot table itself
+    // actually containing pelt/meat/fang, not a guessed species list.
+    if (base && base.loot && base.loot.some(l => HUNTER_LOOT_IDS.includes(l.id)) && hasProfession('hunter')) {
+      if (Math.random() < hunterBonusChance()) {
+        const huntable = base.loot.filter(l => HUNTER_LOOT_IDS.includes(l.id)).map(l => l.id);
+        const pool = hunterLootPool(huntable);
+        const bonusId = choice(Math.random, pool);
+        addItemToList(items, makeItem(bonusId, 0, Math.random));
+      }
+      gainProfessionXp('hunter', 5);
+    }
     // World Phase: infernal-empowered kills always leave a little of what made them that way.
     if (def.infernalLootBonus) {
       const ash = makeItem('infernal_ash', 0, Math.random);
@@ -20019,6 +20674,36 @@ function onDeath(def, killer) {
   }
   def.alive = false; def.hp = 0;
   Sound.play(def.kind === 'npc' ? 'npcDeath' : 'monsterDeath');
+  // ---- Life Sim overhaul tie-in: losing a spouse or child to death shouldn't be a silent stat
+  // cleanup the player only notices later in the Family menu -- it gets acknowledged here,
+  // unconditionally (not gated by posVisibleToPlayer below), since it's always something the
+  // player would want to know about their own family regardless of what's on screen. A dead
+  // spouse clears player.spouse outright (remarriage is possible afterward, same as if they'd
+  // never married); a dead child is marked deceased in place rather than removed, so the record
+  // (and the memory of them) persists in the Family menu instead of just vanishing.
+  if (def.kind === 'npc' && def.uid) {
+    if (player.spouse && player.spouse.uid === def.uid) {
+      realLog(`*** ${def.name} has died. Grief settles in -- but the world, and any family you still have, still needs you. ***`);
+      player.spouse = null;
+      player.consortAppointed = false;
+    }
+    const childRec = (player.children || []).find(c => c.uid === def.uid && !c.deceased);
+    if (childRec) {
+      childRec.deceased = true;
+      realLog(`*** ${childRec.name} has died. ***`);
+      if (childRec.recruited) player.companions = player.companions.filter(c => c.uid !== def.uid);
+    }
+    // ---- Usurpation: a violent, immediate alternative to the whole petition-office/earn-
+    // nobility/save-for-a-coronation climb -- available only against a kingdom that has actually
+    // become your enemy (deeply negative reputation, not just "haven't done much there yet"), and
+    // only to a genuinely capable character. A seized throne starts dangerously close to losing it
+    // again (see tickKingshipStability) rather than stable from day one -- conquest is real power,
+    // gained fast, but never as secure as service earned the slow way.
+    if (def.roleId === 'noble' && killer === player) {
+      const kingdomKey = kingdomKeyAt(def.x, def.y);
+      if (canUsurpCrown(kingdomKey)) offerUsurpation(kingdomKey, def.name);
+    }
+  }
   // Message Log Overhaul: the player's own death is handled above (always shown, obviously) --
   // this is specifically the "every death in the world" complaint: an NPC or monster dying
   // somewhere the player couldn't see or hear it happen used to get logged unconditionally too.
@@ -20059,7 +20744,27 @@ function onDeath(def, killer) {
     // already get for the same act.
     else if (def.kind === 'npc' && !curIsDungeon() && isInActiveWar(def)) {
       const settlement = settlementAt(def.x, def.y);
-      if (settlement) { addGoodwill(getRegionKey(def.x, def.y), 15, `${settlement.name} won't forget this.`); recordPlayerDefense(settlement.name, def); }
+      if (settlement) {
+        // Guard profession: a real, scaling bonus to the exact reward this act already paid out,
+        // rather than a separate combat-formula hook -- defending a settlement is worth more,
+        // concretely, to someone who's actually taken up guarding as a trade. Watch Captain leans
+        // further into this specifically; Sellsword leans into wages and the post-fight edge below.
+        let goodwillGain = 15;
+        if (hasProfession('guard')) {
+          goodwillGain = Math.round(15 * (1 + professionLevelOf('guard') * 0.05));
+          if (specializationOf('guard') === 'watchcaptain') goodwillGain = Math.round(goodwillGain * 1.4);
+        }
+        addGoodwill(getRegionKey(def.x, def.y), goodwillGain, `${settlement.name} won't forget this.`);
+        recordPlayerDefense(settlement.name, def);
+        if (hasProfession('guard')) {
+          gainProfessionXp('guard', 15);
+          // A real, if temporary, edge right after a fight -- adrenaline and training, not a
+          // permanent stat. Watch Captains lean into standing (see goodwillGain above); Sellswords
+          // lean into this instead.
+          const armorPower = specializationOf('guard') === 'sellsword' ? 3 : 2;
+          applyBuffQuiet('armor', armorPower, 200);
+        }
+      }
     }
   } else if (killer && killer.kind === 'npc' && def.kind === 'monster' && (NPC_DEFENDER_ROLES.has(killer.roleId) || NPC_HUNTER_ROLES.has(killer.roleId))) {
     // the town defended itself while you weren't the one swinging the sword -- see the settlement
@@ -20341,14 +21046,44 @@ function toggleSpouseFollow(npc) {
   }
   closeModal();
 }
-function openFamily() {
+function openFamilyMenu() {
   Sound.play('uiOpen');
-  gameState = 'look';
-  let html = `<div class="npcline">Spouse: ${player.spouse ? player.spouse.name + (findNPCByUid(player.spouse.uid) && findNPCByUid(player.spouse.uid).following ? ' (traveling with you)' : ' (at home)') : 'none'}</div>`;
-  html += `<div class="npcline">Children: ${player.kids}</div>`;
-  if (player.children.length) player.children.forEach(c => { html += `<div class="modal-opt">${c.name}</div>`; });
-  renderModal('Family', html, 'Esc to close.');
+  gameState = 'family';
+  const opts = [];
+  let n = 0;
+  const nextKey = () => String.fromCharCode(97 + (n++));
+  let html = '';
+  if (player.spouse) {
+    const spouseNpc = findNPCByUid(player.spouse.uid);
+    html += `<div class="npcline"><b>Spouse:</b> ${player.spouse.name}${spouseNpc && spouseNpc.following ? ' (traveling with you)' : ' (at home)'}</div>`;
+  } else {
+    html += `<div class="npcline dim">Spouse: none</div>`;
+  }
+  html += `<div class="npcline"><b>Children:</b> ${player.kids || 0}</div>`;
+  (player.children || []).forEach(rec => {
+    if (rec.deceased) { html += `<div class="modal-opt" style="cursor:default;opacity:0.7">${rec.name} -- passed away</div>`; return; }
+    const stage = childStageFor(rec.birthTurn == null ? turnCount : rec.birthTurn);
+    let status = stage.label;
+    if (rec.leftHome) status = 'left home to find their own way';
+    else if (rec.recruited) status = `${stage.label}, traveling with you`;
+    else if (rec.settledDown) status = `${stage.label}, settled down nearby`;
+    html += `<div class="modal-opt" style="cursor:default">${rec.name} -- ${status}${rec.trait ? ` <span class="dim">(${rec.trait})</span>` : ''}</div>`;
+    if (stage.id === 'adult' && !rec.lifePathChosen) {
+      const npc = findNPCByUid(rec.uid);
+      if (npc) {
+        const k = nextKey();
+        opts.push({ key: k, label: `Discuss ${rec.name}'s path`, action: () => { closeModal(); openChildLifePathMenu(npc, rec); } });
+        html += `<div class="modal-opt" onclick="simulateKey('${k}')">&nbsp;&nbsp;[${k}] Discuss their path in life</div>`;
+      }
+    }
+  });
+  const kc = nextKey();
+  opts.push({ key: kc, label: 'Close', action: () => closeModal() });
+  html += `<div class="modal-opt" onclick="simulateKey('${kc}')" style="margin-top:6px">[${kc}] Close</div>`;
+  familyMenuOptions = opts;
+  renderModal('Family', html, 'Letter/click to choose, Esc to close.');
 }
+let familyMenuOptions = [];
 
 // ---- married flavor lines ----
 const MARRIED_LINES = [
@@ -20356,17 +21091,1035 @@ const MARRIED_LINES = [
   "I was just thinking about the day we met.", "Don't forget you always have a place here with me.",
   "The kingdom's been quiet lately... a nice change.", "Tell me about your latest adventure sometime.",
 ];
+// ---- spouse activities beyond Chat/Rest -- a bonding evening (once per in-game day) and a quick
+// status check on the kids without having to open the full Family menu.
+function spendEveningTogether(npc) {
+  const last = player.lastEveningTurn === undefined ? -9999 : player.lastEveningTurn;
+  if (turnCount - last < DAY_LENGTH) { log(`You already spent a proper evening with ${npc.name} today.`); closeModal(); return; }
+  player.lastEveningTurn = turnCount;
+  // Parlor furnishing (see FURNISHINGS): a real, ongoing boost to this exact interaction rather
+  // than a separate number -- checked against the primary residence specifically, since that's
+  // where an evening at home actually happens.
+  const primary = (player.properties || []).find(p => p.id === player.primaryResidenceId);
+  const hasParlor = !!(primary && primary.furnishings.includes('parlor'));
+  const gain = hasParlor ? 22 : 15;
+  npc.affection = (npc.affection || 0) + gain;
+  applyBuffQuiet('regen', 2, 300);
+  const lines = hasParlor ? [
+    `You and ${npc.name} settle into the parlor for a proper evening, and it's easily the best part of your week.`,
+    `${npc.name} tells you a story from before you met, curled up together in the parlor, and for a while the rest of the world doesn't exist.`,
+  ] : [
+    `You and ${npc.name} share a quiet meal and talk long after the plates are empty.`,
+    `${npc.name} tells you a story from before you met, and for a while the rest of the world doesn't exist.`,
+    `You spend the evening doing nothing in particular with ${npc.name}, which turns out to be exactly what you needed.`,
+  ];
+  log(`${choice(Math.random, lines)} (+${gain} affection, feeling loved and rested)`);
+  updateSidebar();
+  closeModal();
+}
+function askAboutChildren(npc) {
+  const kids = (player.children || []).filter(c => !c.leftHome && !c.deceased);
+  if (!kids.length) { log(`${npc.name}: "No little feet running around here yet. Maybe someday."`); closeModal(); return; }
+  const parts = kids.map(c => {
+    const stage = childStageFor(c.birthTurn == null ? turnCount : c.birthTurn);
+    return `${c.name} (${stage.label}${c.recruited ? ', traveling with you' : ''})`;
+  });
+  log(`${npc.name}: "${parts.join(', ')} -- keeping me busy, that's for sure."`);
+  npc.affection = (npc.affection || 0) + 3;
+  closeModal();
+}
+
+// ---- family: child life-stage growth ----
+// Deliberately compressed to a roguelike's timescale rather than literal years -- a long,
+// committed playthrough (tens of thousands of turns) can plausibly see a child born, grown, and
+// out in the world with their own life, which is the payoff this whole system is for. Growth is
+// lazy/day-gated (see tickFamilyGrowth) exactly like tickPropertyUpkeep, so it costs nothing on
+// turns where nothing changed.
+const CHILD_STAGES = [
+  { id: 'infant',  minDays: 0,  label: 'Infant',      article: 'an', wanderRadius: 0 },
+  { id: 'toddler', minDays: 3,  label: 'Toddler',     article: 'a',  wanderRadius: 1 },
+  { id: 'child',   minDays: 8,  label: 'Child',       article: 'a',  wanderRadius: 5 },
+  { id: 'teen',    minDays: 20, label: 'Teenager',    article: 'a',  wanderRadius: 9 },
+  { id: 'adult',   minDays: 40, label: 'Young Adult', article: 'a',  wanderRadius: 9 },
+];
+function childStageFor(birthTurn) {
+  const days = Math.max(0, Math.floor((turnCount - birthTurn) / DAY_LENGTH));
+  let s = CHILD_STAGES[0];
+  for (const st of CHILD_STAGES) if (days >= st.minDays) s = st;
+  return s;
+}
+function childRecordFor(npc) { return npc ? (player.children || []).find(c => c.uid === npc.uid) || null : null; }
+function isMyChild(npc) { return !!childRecordFor(npc); }
+// A child NPC otherwise behaves exactly like any other settlement civilian (see makeNPC's
+// faction:'settlement'/aiState:'patrol' default) -- growth just widens the same patrolRadius the
+// standard settlement AI already wanders within, so an infant stays essentially in one room, a
+// toddler potters around just outside the door, and a child/teen/adult roams the settlement like
+// any other resident, with zero new movement code needed.
+function applyChildStageToNpc(npc, stage) { npc.patrolRadius = stage.wanderRadius; }
+function tickFamilyGrowth() {
+  const day = Math.floor(turnCount / DAY_LENGTH);
+  const isFirstCheck = player.lastGrowthDay === null || player.lastGrowthDay === undefined;
+  const daysPassed = isFirstCheck ? 0 : Math.max(0, day - player.lastGrowthDay);
+  if (!isFirstCheck && daysPassed <= 0) return;
+  player.lastGrowthDay = day;
+  // ---- A spouse waiting at home isn't just idle set-dressing -- if the trade they already had
+  // when you married them (their original roleId) happens to be one of the real Professions, they
+  // keep working it while you're away, same wage-work formula the player themselves would earn,
+  // at a reduced rate since they're doing it unsupervised and part-time around the house. This
+  // needs no new per-spouse leveling state: it's just their existing role talking to a system
+  // that already exists.
+  if (player.spouse && daysPassed > 0) {
+    const spouseNpc = findNPCByUid(player.spouse.uid);
+    if (spouseNpc && !spouseNpc.following && PROFESSIONS[spouseNpc.roleId]) {
+      const prof = PROFESSIONS[spouseNpc.roleId];
+      const region = getRegionKey(spouseNpc.x, spouseNpc.y);
+      const goodwillMult = 1 + Math.min(0.25, ((player.goodwill || {})[region] || 0) * 0.005);
+      const income = Math.round(prof.wageBase * 0.6 * goodwillMult * daysPassed);
+      if (income > 0) { player.gold += income; log(`${spouseNpc.name} brings home ${income}g from ${prof.verb} while you were away.`); updateSidebar(); }
+    }
+  }
+  if (!player.children || !player.children.length) return;
+  // Aviary furnishing (see FURNISHINGS): the one payoff for a child who left home (rec.leftHome)
+  // -- normally a quiet, permanent dead end in the family record -- giving it an occasional, real
+  // moment back. Gated on actually owning the furnishing so it's a real purchase decision, not a
+  // background freebie.
+  const aviaryProp = (player.properties || []).find(p => p.furnishings.includes('aviary'));
+  if (aviaryProp && daysPassed > 0) {
+    const wanderers = player.children.filter(c => c.leftHome && !c.deceased);
+    wanderers.forEach(rec => {
+      if (Math.random() < 0.04 * daysPassed) {
+        const gift = randInt(Math.random, 15, 40);
+        player.gold += gift;
+        const lines = [
+          `A letter arrives from ${rec.name}, tucked with a little gold "for whatever you need." They sound happy.`,
+          `${rec.name} sends word -- and a small gift -- with a message-bird. They say they think of home often.`,
+          `A short, cheerful letter from ${rec.name} arrives, along with some coin they insist you take anyway.`,
+        ];
+        log(`${choice(Math.random, lines)} (+${gift}g)`);
+      }
+    });
+  }
+  player.children.forEach(rec => {
+    if (rec.leftHome || rec.recruited || rec.deceased) return;
+    if (rec.birthTurn === undefined || rec.birthTurn === null) rec.birthTurn = turnCount; // legacy-save safety
+    const stage = childStageFor(rec.birthTurn);
+    if (rec.stage !== stage.id) {
+      const prevStage = rec.stage;
+      rec.stage = stage.id;
+      const npc = findNPCByUid(rec.uid);
+      if (npc) applyChildStageToNpc(npc, stage);
+      if (prevStage) {
+        log(`*** ${rec.name} has grown into ${stage.article} ${stage.label.toLowerCase()}. ***`);
+        if (stage.id === 'adult') log(`${rec.name} is old enough now to choose their own path. Talk to them, or check the Family menu (F).`);
+      }
+    }
+  });
+}
+// ---- family: age-appropriate dialogue flavor ----
+const CHILD_STAGE_LINES = {
+  toddler: ['*giggles and hides behind your leg*', "*points at your gear, wide-eyed, and babbles*", '*tugs your sleeve and refuses to let go*'],
+  child: [
+    'Can we play a game? Please?', 'I drew a picture of you fighting a dragon. Wanna see?',
+    'Everyone says you\'re really strong. Is that true?', 'When I grow up I want to be just like you.',
+    'Did you bring me anything from outside?', 'I lost a tooth! Look!',
+  ],
+  teen: [
+    "I've been thinking about what I want to do when I'm older.", 'Everyone at the market talks about you, you know.',
+    'Can you teach me something sometime? Anything, really.', "I'm not a little kid anymore, you don't have to worry so much.",
+  ],
+  adult: [
+    "It's good to see you. Things are going well.", 'I still think about the stories you used to tell me.',
+    'I mean it when I say I owe everything to how you raised me.',
+  ],
+};
+const CHILD_TRAIT_LINES = {
+  brave: [
+    "I'm not scared of anything. Well... almost anything.",
+    'I want to see a real monster someday. Not to fight it! Just to see one.',
+    "I told the other kids I'd go into the dark cellar first. I did it too.",
+  ],
+  greedy: [
+    "If I found a treasure chest, I'd keep every last coin. Don't tell anyone I said that.",
+    "I've been saving every copper I find. I'm not telling you how much I have.",
+    'Do you think I could have an allowance? A big one?',
+  ],
+  wise: [
+    "I've been reading every book in the house. I'm almost out.",
+    'Did you know spiders have blue blood? I read that. I read a lot of things.',
+    "I have a theory about why the stars move. Want to hear it? It's a long theory.",
+  ],
+  grumpy: [
+    "Everyone keeps telling me to smile. I don't feel like it today.",
+    "I'm not in a mood. This is just my face.",
+    'Why does everyone ask so many questions. I have questions too, you know.',
+  ],
+  kind: [
+    "I gave my lunch to a kid who didn't have one. Was that okay?",
+    'I found a hurt bird and I made it a little nest. I named it something.',
+    'I saved you some of my food. It might be a little squished.',
+  ],
+  suspicious: [
+    "Who was that person you were talking to? I don't trust them.",
+    "I've been keeping an eye on the new neighbors. Something's off about them.",
+    "I hid my favorite things somewhere you'll never find them. Just in case.",
+  ],
+  cheerful: [
+    'Today is a GREAT day. Every day is a great day, honestly.',
+    "I made up a song! Do you want to hear it? I'm going to sing it anyway.",
+    'I decided today that everything is my favorite thing.',
+  ],
+  weary: [
+    "I'm tired. I don't know why. I just am.",
+    "Can we just sit for a while? Not do anything. Just sit.",
+    'Everything feels like a lot today. I don\'t really know how to explain it better than that.',
+  ],
+  proud: [
+    'I beat everyone at tag today. Everyone. I want a medal.',
+    'I did my chores without being asked. You can say thank you now.',
+    "I'm the best at at least three things. I've been counting.",
+  ],
+  timid: [
+    'Can you stay a little longer? Just a little.',
+    "I didn't want to go outside today. Too many people. Too loud.",
+    'Is it okay if I just stand near you for a while?',
+  ],
+};
+// ---- family: activities and the grown-up life-path decision ----
+function playWithChild(npc) {
+  const last = npc.lastPlayTurn === undefined ? -9999 : npc.lastPlayTurn;
+  if (turnCount - last < 200) { log(`${npc.name} is still happily tired out from last time. Maybe later.`); closeModal(); return; }
+  npc.lastPlayTurn = turnCount;
+  // Music Room furnishing (see FURNISHINGS): the Nursery/Parlor pattern, but for children rather
+  // than a spouse -- checked against the primary residence specifically.
+  const primary = (player.properties || []).find(p => p.id === player.primaryResidenceId);
+  const hasMusicRoom = !!(primary && primary.furnishings.includes('musicroom'));
+  const gain = hasMusicRoom ? 12 : 8;
+  npc.affection = (npc.affection || 0) + gain;
+  const lines = hasMusicRoom ? [
+    `You and ${npc.name} bang around on instruments in the music room until it turns into an actual, if terrible, song.`,
+    `${npc.name} insists on performing a whole show in the music room, and you're the entire audience.`,
+  ] : [
+    `You and ${npc.name} play a made-up game until you're both laughing too hard to keep the rules straight.`,
+    `${npc.name} insists on being the hero of the story this time, and you happily play the monster.`,
+    `You spend a while tossing a ball back and forth with ${npc.name}, who never seems to tire of it.`,
+  ];
+  log(choice(Math.random, lines));
+  closeModal();
+}
+function askChildFuture(npc, rec) {
+  const lines = {
+    brave: '"I want to do something that matters. Maybe fight, like you. Maybe something else brave."',
+    greedy: '"I want to be rich enough that I never have to worry again."',
+    wise: '"I think I want to study. There\'s so much I don\'t know yet."',
+    grumpy: '"I don\'t know. Everyone keeps asking. Can I just figure it out?"',
+    kind: '"I want to help people. However that ends up looking."',
+    suspicious: '"I want to be someone nobody can fool. Ever."',
+    cheerful: '"Everything sounds fun! I can\'t pick just one thing!"',
+    weary: '"Honestly? I just want somewhere quiet to call my own."',
+    proud: '"I want to be the best at whatever I choose. Obviously."',
+    timid: '"I don\'t know if I\'m brave enough for... anything, really. But I want to try."',
+  };
+  log(`${npc.name}: ${lines[rec.trait] || '"I haven\'t decided yet. There\'s still time, right?"'}`);
+  npc.affection = (npc.affection || 0) + 4;
+  closeModal();
+}
+function pickAdultCivilianRole(chunk) {
+  const flavor = (chunk && chunk.settlement && SETTLEMENT_FLAVORS[chunk.settlement.flavor]) || SETTLEMENT_FLAVORS.standard;
+  const pool = (flavor.rolePool || ['farmer', 'merchant', 'guard']).filter(r => r !== 'child' && r !== 'elder');
+  return pool.length ? choice(Math.random, pool) : 'farmer';
+}
+// Reuses makeNPC wholesale to build a proper adult (real combat stats, and -- for shop/trainer/
+// craftsperson roles -- a real shop or teachable roster) rather than hand-rolling a second,
+// parallel "grown-up NPC" construction path, then splices the game-facing identity (uid, name,
+// trait, affection, appearance) back over it so the transition reads as the same person, not a
+// stranger who happens to share a name.
+function promoteChildToAdultRole(npc, rec, roleId, chunk) {
+  const fresh = makeNPC(roleId, npc.x, npc.y, Math.random, npc.home, npc.species);
+  fresh.uid = npc.uid;
+  fresh.name = npc.name;
+  fresh.trait = rec.trait || fresh.trait;
+  fresh.affection = npc.affection || 0;
+  fresh.gender = npc.gender || fresh.gender;
+  fresh.appearance = npc.appearance || fresh.appearance;
+  fresh.faction = 'settlement'; fresh.aiState = 'patrol';
+  fresh.homeX = npc.homeX; fresh.homeY = npc.homeY; fresh.patrolRadius = 8;
+  fresh.isGrownChild = true;
+  const idx = chunk.npcs.indexOf(npc);
+  if (idx !== -1) chunk.npcs[idx] = fresh; else chunk.npcs.push(fresh);
+  chunk.dirty = true;
+  return fresh;
+}
+function openChildLifePathMenu(npc, rec) {
+  const opts = [
+    { key: 'a', label: 'Encourage them to settle down here', action: () => childChoosePathSettle(npc, rec) },
+    { key: 'b', label: 'Wish them well as they leave to find their own way', action: () => childChoosePathLeave(npc, rec) },
+    { key: 'c', label: 'Invite them to adventure alongside you', action: () => childChoosePathAdventure(npc, rec) },
+    { key: 'd', label: 'Not yet -- give them more time', action: () => closeModal() },
+  ];
+  dialogueOptions = opts; gameState = 'dialogue'; dialogueNPC = npc;
+  renderModal(`${npc.name}'s Path`,
+    `<div class="npcline">${npc.name} is grown now, and it's time to talk about what comes next. What do you say to them?</div>` +
+    opts.map(o => `<div class="modal-opt" onclick="simulateKey('${o.key}')">[${o.key}] ${o.label}</div>`).join(''),
+    'Letter/click to decide.');
+}
+function childChoosePathSettle(npc, rec) {
+  rec.lifePathChosen = true; rec.settledDown = true;
+  const chunk = getChunk(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
+  const roleId = pickAdultCivilianRole(chunk);
+  const fresh = promoteChildToAdultRole(npc, rec, roleId, chunk);
+  rec.settlementName = fresh.home;
+  log(`*** ${rec.name} decides to stay and puts down roots as ${fresh.roleName ? 'a ' + fresh.roleName : 'a local'} in ${fresh.home}. You couldn't be prouder. ***`);
+  Sound.play('discovery');
+  closeModal();
+}
+function childChoosePathLeave(npc, rec) {
+  rec.lifePathChosen = true; rec.leftHome = true;
+  const chunk = getChunk(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
+  chunk.npcs = chunk.npcs.filter(n => n !== npc);
+  chunk.dirty = true;
+  log(`*** ${rec.name} packs up and sets off to find their own way in the world. "I'll write," they promise. You believe them, mostly. ***`);
+  closeModal();
+}
+function childChoosePathAdventure(npc, rec) {
+  rec.lifePathChosen = true; rec.recruited = true;
+  const chunk = getChunk(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
+  const fresh = promoteChildToAdultRole(npc, rec, 'ranger', chunk);
+  chunk.npcs = chunk.npcs.filter(n => n !== fresh);
+  fresh.following = true; fresh.stance = 'aggressive'; fresh.orderMode = 'follow'; fresh.orderPos = null;
+  fresh.x = player.x; fresh.y = player.y;
+  scaleCompanionToPlayer(fresh);
+  player.companions.push(fresh);
+  relocateAllies();
+  log(`*** ${rec.name} grabs a pack and says they're coming with you. "Someone's got to watch your back." ***`);
+  Sound.play('discovery');
+  closeModal();
+}
+
+// =====================================================================================
+// ---- LIFE SIM OVERHAUL, PILLAR 3: CIVILIAN PROFESSIONS ----
+// Deliberately does NOT reinvent the game's existing gathering/crafting/trading loops --
+// farming (tillSoil/plantCrop/harvestCrop), mining (grantGatherYield's ore-type destructibles),
+// blacksmithing (craftRecipe + the existing player.craftSkill quality-practice system), and
+// trading (tradeTransact) were all already real, working systems before this pass. What was
+// missing was an actual professional IDENTITY layered on top: a name, a rank, a reason to pick a
+// trade and stick with it, and a few mechanics (wage work, a real trade-arbitrage market, home
+// businesses) that only make sense once "Farmer" or "Merchant" is something the player has
+// actually become, not just an action they took once. Hooked into all three earlier pillars: a
+// farmer's home garden (Property) is a real farmplot, a settled-down adult child (Family) can
+// mind the family forge, and reputation (goodwill/kingdomRep -- already-existing systems) sets
+// wages and market swings, same as it already sets every other price in the game.
+const PROFESSIONS = {
+  farmer:     { name: 'Farmer',     trainerRoles: ['farmer'],     verb: 'farming',       wageBase: 10 },
+  miner:      { name: 'Miner',      trainerRoles: ['miner'],      verb: 'mining',        wageBase: 14 },
+  blacksmith: { name: 'Blacksmith', trainerRoles: ['blacksmith'], verb: 'blacksmithing', wageBase: 16 },
+  merchant:   { name: 'Merchant',   trainerRoles: ['merchant'],   verb: 'trading',       wageBase: 12 },
+  fisherman:  { name: 'Fisherman',  trainerRoles: ['fisherman'],  verb: 'fishing',       wageBase: 11 },
+  chef:       { name: 'Chef',       trainerRoles: ['chef'],       verb: 'cooking',       wageBase: 11 },
+  alchemist:  { name: 'Alchemist',  trainerRoles: ['alchemist'],  verb: 'brewing',       wageBase: 13 },
+  woodcutter: { name: 'Woodcutter', trainerRoles: ['lumberjack'], verb: 'woodcutting',   wageBase: 10 },
+  hunter:     { name: 'Hunter',     trainerRoles: ['hunter'],     verb: 'hunting',       wageBase: 13 },
+  locksmith:  { name: 'Locksmith',  trainerRoles: ['locksmith'],  verb: 'locksmithing',  wageBase: 12 },
+  jeweler:    { name: 'Jeweler',    trainerRoles: ['jeweler'],    verb: 'jewelcrafting', wageBase: 14 },
+  cartographer: { name: 'Cartographer', trainerRoles: ['cartographer'], verb: 'cartography', wageBase: 12 },
+  scribe:     { name: 'Scribe',     trainerRoles: ['scribe'],     verb: 'scribing',      wageBase: 11 },
+  guard:      { name: 'Guard',      trainerRoles: ['guard'],      verb: 'guarding',      wageBase: 15 },
+};
+const PROFESSION_RANKS = [
+  { level: 1,  title: 'Novice' }, { level: 3,  title: 'Apprentice' }, { level: 6,  title: 'Journeyman' },
+  { level: 10, title: 'Adept' },  { level: 15, title: 'Master' },     { level: 20, title: 'Renowned' },
+];
+function professionRankTitle(level) {
+  let title = PROFESSION_RANKS[0].title;
+  for (const r of PROFESSION_RANKS) if (level >= r.level) title = r.title;
+  return title;
+}
+// A gentle quadratic curve (level 5 costs 1000 total xp, level 10 costs 4000, level 20 costs
+// 16000) -- reachable through ordinary play across a long campaign without turning into a second
+// grind on top of adventuring.
+function professionXpForLevel(lvl) { return 40 * lvl * lvl; }
+function professionLevel(xp) {
+  let lvl = 1;
+  while (professionXpForLevel(lvl + 1) <= (xp || 0)) lvl++;
+  return lvl;
+}
+function professionLevelOf(id) { return professionLevel((player.professionXp || {})[id] || 0); }
+function hasProfession(id) { return !!((player.professionsLearned || {})[id]); }
+// ---- Specializations: at real skill (level 5+), Blacksmith and Merchant each offer a genuine,
+// mutually-exclusive branch rather than just a bigger number -- picking one makes you meaningfully
+// better at one half of the trade and meaningfully worse at the other, a real build decision
+// instead of a strictly-additive unlock. Offered once via dialogue (see openDialogue's PROFESSIONS
+// block) and permanent once chosen, same weight as choosing a talent.
+const PROFESSION_SPECIALIZATIONS = {
+  blacksmith: [
+    { id: 'weaponsmith', label: 'Weaponsmith', desc: 'Far better at forging weapons; noticeably worse with armor.' },
+    { id: 'armorsmith', label: 'Armorsmith', desc: 'Far better at forging armor; noticeably worse with weapons.' },
+  ],
+  merchant: [
+    { id: 'tradebaron', label: 'Trade Baron', desc: "A sharper sell -- everything you sell fetches more, but you pay full price buying." },
+    { id: 'importbroker', label: 'Import Broker', desc: "A sharper buy -- real discounts shopping, but you sell for the ordinary rate." },
+  ],
+  farmer: [
+    { id: 'orchardist', label: 'Orchardist', desc: 'Every crop you harvest is worth noticeably more -- quality over quantity.' },
+    { id: 'homesteader', label: 'Homesteader', desc: 'A real yield boost, but only at your own home farm plot -- quantity where it counts.' },
+  ],
+  miner: [
+    { id: 'gembound', label: 'Gembound', desc: 'A real edge on rare finds (gems, starmetal); noticeably less plain ore.' },
+    { id: 'deepdelver', label: 'Deep Delver', desc: 'Real bulk on plain ore; noticeably worse odds on rare finds.' },
+  ],
+  woodcutter: [
+    { id: 'carpenter', label: 'Master Carpenter', desc: 'A real edge finding Ironwood; noticeably less plain timber.' },
+    { id: 'timberbaron', label: 'Timber Baron', desc: 'Real bulk on plain timber; noticeably worse odds on Ironwood.' },
+  ],
+  hunter: [
+    { id: 'trophyhunter', label: 'Trophy Hunter', desc: 'Far better odds at fangs and trophies; less interested in pelts and meat.' },
+    { id: 'provisioner', label: 'Provisioner', desc: 'Far better odds at pelts and meat in bulk; rarely bothers with trophies.' },
+  ],
+  fisherman: [
+    { id: 'deepsea', label: 'Deep Sea Angler', desc: 'A real edge on rare catches -- worth the wait.' },
+    { id: 'riverside', label: 'Riverside Regular', desc: 'A real edge on bite chance itself -- more casts land, plainer catches.' },
+  ],
+  chef: [
+    { id: 'banquet', label: 'Banquet Chef', desc: 'Cooks in real bulk -- extra portions on top of your existing yield bonus.' },
+    { id: 'battlecook', label: 'Battle Cook', desc: 'What you cook heals meaningfully more -- quality over quantity.' },
+  ],
+  alchemist: [
+    { id: 'potionmaster', label: 'Potion Master', desc: 'Real extra potency on top of your existing bonus -- your potions hit harder.' },
+    { id: 'bombspecialist', label: 'Bomb Specialist', desc: 'Real bonus damage on thrown bombs -- a offense-minded alchemist.' },
+  ],
+  // ---- Guard: the axis is standing vs. coin, same shape as several trade professions, but
+  // earned in combat defending a real settlement instead of at a bench or a stall.
+  guard: [
+    { id: 'watchcaptain', label: 'Watch Captain', desc: 'A real boost to the standing gained from defending a settlement -- respected, not rich.' },
+    { id: 'sellsword', label: 'Sellsword', desc: 'A real boost to wages from a shift and a stronger post-fight edge -- paid, not beloved.' },
+  ],
+};
+function specializationOf(id) { return ((player.professionSpecialization || {})[id]) || null; }
+function canSpecialize(id) { return PROFESSION_SPECIALIZATIONS[id] && hasProfession(id) && professionLevelOf(id) >= 5 && !specializationOf(id); }
+function chooseSpecialization(npc, profId, specId) {
+  player.professionSpecialization = player.professionSpecialization || {};
+  player.professionSpecialization[profId] = specId;
+  const spec = PROFESSION_SPECIALIZATIONS[profId].find(s => s.id === specId);
+  log(`*** ${npc.name} nods -- you've committed to becoming a ${spec.label}. ${spec.desc} ***`);
+  Sound.play('levelup');
+  closeModal();
+}
+function openSpecializationChoice(npc, profId) {
+  const specs = PROFESSION_SPECIALIZATIONS[profId];
+  const opts = specs.map((s, i) => ({ key: String.fromCharCode(97 + i), label: s.label, action: () => chooseSpecialization(npc, profId, s.id) }));
+  opts.push({ key: String.fromCharCode(97 + specs.length), label: 'Not yet', action: () => closeModal() });
+  const html = specs.map((s, i) => `<div class="modal-opt" onclick="simulateKey('${String.fromCharCode(97+i)}')">[${String.fromCharCode(97+i)}] <b>${s.label}</b> -- ${s.desc}</div>`).join('')
+    + `<div class="modal-opt" onclick="simulateKey('${String.fromCharCode(97+specs.length)}')" style="margin-top:6px">[${String.fromCharCode(97+specs.length)}] Not yet -- decide later</div>`;
+  dialogueOptions = opts; gameState = 'dialogue'; dialogueNPC = npc;
+  renderModal(`${PROFESSIONS[profId].name} Specialization`, `<div class="npcline">You've grown skilled enough to specialize. This choice sticks -- pick with intent.</div>${html}`, 'Letter/click to choose.');
+}
+function gainProfessionXp(id, amount) {
+  if (!hasProfession(id) || amount <= 0) return;
+  player.professionXp = player.professionXp || {};
+  const before = professionLevelOf(id);
+  player.professionXp[id] = (player.professionXp[id] || 0) + amount;
+  const after = professionLevelOf(id);
+  if (after > before) {
+    log(`*** Your ${PROFESSIONS[id].verb} improves -- you're now a level ${after} ${professionRankTitle(after)} ${PROFESSIONS[id].name}. ***`);
+    Sound.play('levelup');
+    // Alchemist potency has real demand across half a dozen read sites throughout the game
+    // (healing/mana/damage potions, thrown bombs) -- rather than touching every one of them to
+    // add a second multiplier, the profession tops up the EXACT SAME player.alchemyPotencyBonus
+    // stat the Herbalist talent line already uses, tracking exactly how much it has granted so
+    // far so a level-up only ever adds the fresh increment, never double-counts. Same approach for
+    // Battle Cook (player.cookingHealBonus) and Bomb Specialist (player.throwDmgBonus) below --
+    // both stats already have several existing read sites of their own from talents.
+    if (id === 'alchemist') {
+      const spec = specializationOf('alchemist');
+      const rate = spec === 'potionmaster' ? 0.06 : 0.04;
+      const cap = spec === 'potionmaster' ? 0.7 : 0.5;
+      const target = Math.min(cap, after * rate);
+      const delta = target - (player._alchemistPotencyGranted || 0);
+      if (delta > 0) { player.alchemyPotencyBonus = (player.alchemyPotencyBonus || 0) + delta; player._alchemistPotencyGranted = target; }
+      if (spec === 'bombspecialist') {
+        const bombTarget = Math.min(0.4, after * 0.03);
+        const bombDelta = bombTarget - (player._alchemistBombGranted || 0);
+        if (bombDelta > 0) { player.throwDmgBonus = (player.throwDmgBonus || 0) + bombDelta; player._alchemistBombGranted = bombTarget; }
+      }
+    }
+    if (id === 'chef' && specializationOf('chef') === 'battlecook') {
+      const target = Math.min(0.4, after * 0.035);
+      const delta = target - (player._chefHealGranted || 0);
+      if (delta > 0) { player.cookingHealBonus = (player.cookingHealBonus || 0) + delta; player._chefHealGranted = target; }
+    }
+  }
+}
+function learnProfession(npc, id) {
+  const prof = PROFESSIONS[id];
+  if (!prof) return;
+  if (hasProfession(id)) { log(`You already know the basics of ${prof.verb}.`); closeModal(); return; }
+  const cost = 20;
+  if (player.gold < cost) { log(`${npc.name} would teach you for ${cost}g -- you don't have it right now.`); closeModal(); return; }
+  player.gold -= cost;
+  player.professionsLearned = player.professionsLearned || {};
+  player.professionsLearned[id] = true;
+  player.professionXp = player.professionXp || {};
+  player.professionXp[id] = player.professionXp[id] || 0;
+  log(`*** ${npc.name} spends an afternoon showing you the basics of ${prof.verb}. You've taken up ${prof.name}ing! ***`);
+  npc.affection = (npc.affection || 0) + 5;
+  Sound.play('discovery');
+  updateSidebar();
+  closeModal();
+}
+// ---- Wage work: a straightforward, honest shift for anyone who's learned the trade -- the literal
+// "job that isn't combat" this whole pillar is for. Costs real time (advances the clock, same as
+// resting), so it competes with adventuring for your hours rather than being free money.
+function workShift(npc, id) {
+  const day = Math.floor(turnCount / DAY_LENGTH);
+  const lastDay = npc.lastShiftDay === undefined ? -1 : npc.lastShiftDay;
+  if (day <= lastDay) { log(`${npc.name} already has enough hands for today. Come back tomorrow.`); closeModal(); return; }
+  npc.lastShiftDay = day;
+  const prof = PROFESSIONS[id];
+  const level = professionLevelOf(id);
+  const region = getRegionKey(npc.x, npc.y);
+  const goodwillMult = 1 + Math.min(0.25, ((player.goodwill || {})[region] || 0) * 0.005);
+  // Sellsword specialization (Guard only): a real wage bonus, the coin half of the standing/coin
+  // trade-off Watch Captain takes the other side of (see the defense-kill goodwill hook).
+  const specMult = (id === 'guard' && specializationOf('guard') === 'sellsword') ? 1.35 : 1;
+  const wage = Math.round(prof.wageBase * (1 + level * 0.1) * goodwillMult * specMult);
+  player.gold += wage;
+  gainProfessionXp(id, 12);
+  const shiftLines = [
+    `You spend the day working alongside ${npc.name}, hands busy and mind quiet for once.`,
+    `A long, honest day's work with ${npc.name} -- the kind that actually feels good to finish.`,
+    `${npc.name} puts you to work for the day. It's not glamorous, but it pays.`,
+  ];
+  log(`${choice(Math.random, shiftLines)} You earn ${wage}g. (+${prof.name} experience)`);
+  advanceTimeToMorning();
+  updateSidebar();
+  closeModal();
+}
+// ---- Merchant profession: a real, deterministic per-settlement commodity index (no separate
+// state to save -- reseeded from the settlement's own name + the item + the current day, so
+// "today's onion prices in Millhaven" are stable all day but genuinely different tomorrow, and
+// need zero extra persistence). Gated behind having actually learned Trading, so "knowing the
+// market" is a mechanical payoff for the profession, not just flavor text.
+const MERCHANT_LEDGER_GOODS = ['ore', 'herb', 'pelt', 'potato', 'onion', 'garlic', 'berries', 'gem', 'iron_ingot', 'fish_raw'];
+function settlementMarketMult(settlementName, itemId) {
+  if (!settlementName) return 1;
+  const day = Math.floor(turnCount / DAY_LENGTH);
+  const rng = mulberry32((hashString(`${settlementName}|${itemId}|${day}`) ^ SEED) | 0);
+  return 0.7 + rng() * 0.8; // 0.70x .. 1.50x
+}
+function merchantSellMult(npc, it) {
+  let mult = jewelerGemValueMult(it);
+  if (!hasProfession('merchant')) return mult;
+  mult *= 1 + Math.min(0.15, professionLevelOf('merchant') * 0.015);
+  if (specializationOf('merchant') === 'tradebaron') mult *= 1.25;
+  const settlement = settlementAt(npc.x, npc.y);
+  if (settlement && it.type === 'material') mult *= settlementMarketMult(settlement.name, it.id);
+  return mult;
+}
+// Import Broker's counterpart to merchantSellMult -- the Merchant profession previously only ever
+// touched what you sell for; this is the first thing in the whole overhaul that gives it a real
+// reason to affect what you pay, too.
+function merchantBuyMult() {
+  if (!hasProfession('merchant')) return 1;
+  return specializationOf('merchant') === 'importbroker' ? 0.8 : 1;
+}
+function openMerchantLedger(npc) {
+  const here = settlementAt(npc.x, npc.y);
+  let html = `<div class="npcline">Reading the market takes a trader's eye -- here's what you make of it:</div>`;
+  const renderRow = (name) => {
+    const cells = MERCHANT_LEDGER_GOODS.map(id => {
+      const base = ITEM_BASES.find(b => b.id === id);
+      const mult = settlementMarketMult(name, id);
+      const color = mult >= 1.2 ? '#7fd07f' : mult <= 0.85 ? '#d07f7f' : '#c9bfa8';
+      return `<span style="color:${color}" title="${base ? base.name : id}">${base ? base.name : id} x${mult.toFixed(2)}</span>`;
+    }).join(' &nbsp; ');
+    return `<div class="modal-opt" style="cursor:default"><b>${name}</b><br><span class="dim">${cells}</span></div>`;
+  };
+  if (here) html += renderRow(here.name);
+  const others = (player.knownSettlements || []).filter(n => !here || n !== here.name).slice(0, 6);
+  others.forEach(n => { html += renderRow(n); });
+  if (!others.length && !here) html += `<div class="npcline dim">Visit a few more towns to start building a real picture of the market.</div>`;
+  html += `<div class="dim" style="margin-top:8px">Green = sell here, red = buy here and carry it somewhere greener. Prices turn over daily.</div>`;
+  renderModal("Merchant's Ledger", html, 'Esc to close.');
+  gameState = 'look';
+}
+// ---- Miner profession: a genuine bonus multiplier on top of toolGatherMultiplier for every
+// ore-type destructible in the game (orepile, ruined_wall, scrap_pile, crystal_spire alike) --
+// see grantGatherYield's call site for the hook. Capped well below the tool-vs-no-tool swing so
+// the right pickaxe still matters more than the profession alone.
+function minerYieldMult() { return hasProfession('miner') ? 1 + Math.min(0.5, professionLevelOf('miner') * 0.05) : 1; }
+function woodcutterYieldMult() { return hasProfession('woodcutter') ? 1 + Math.min(0.5, professionLevelOf('woodcutter') * 0.05) : 1; }
+// Both Miner and Woodcutter split along the same axis: a "rare-find" specialization
+// (Gembound/Master Carpenter) that leans into the chance-gated bonus entry every gather-node table
+// already has (gems/starmetal for ore, Ironwood for trees) at the expense of the guaranteed bulk
+// entry, and a "bulk" specialization (Deep Delver/Timber Baron) that's the mirror image. Returns a
+// per-entry multiplier so grantGatherYield can apply it exactly where it belongs instead of one
+// blanket number for the whole node.
+function gatherSpecMult(gatherType, isRareEntry) {
+  const profId = gatherType === 'ore' ? 'miner' : gatherType === 'wood' ? 'woodcutter' : null;
+  if (!profId) return 1;
+  const spec = specializationOf(profId);
+  const rareSpecId = gatherType === 'ore' ? 'gembound' : 'carpenter';
+  const bulkSpecId = gatherType === 'ore' ? 'deepdelver' : 'timberbaron';
+  if (spec === rareSpecId) return isRareEntry ? 1.6 : 0.85;
+  if (spec === bulkSpecId) return isRareEntry ? 0.65 : 1.3;
+  return 1;
+}
+// ---- Farmer profession: harvestCrop's own yield/seed rolls read these two directly.
+function farmerYieldMult() { return hasProfession('farmer') ? 1 + Math.min(0.6, professionLevelOf('farmer') * 0.06) : 1; }
+function farmerSeedBonus() { return hasProfession('farmer') ? Math.min(0.35, professionLevelOf('farmer') * 0.03) : 0; }
+function isAtHomeFarmTile(x, y) { return (player.properties || []).some(p => p.homeFarmTile && p.homeFarmTile.x === x && p.homeFarmTile.y === y); }
+// A dedicated Farmer eventually learns to mill their own flour -- previously an item with real
+// demand across a dozen-plus cooking recipes but literally no in-game source except a shop shelf.
+CROPS.wheat = { name: 'Wheat', stageTurns: 36, yieldMin: 3, yieldMax: 5 };
+RECIPES.push({ id: 'mill_flour', name: 'Mill Flour', category: 'crafting', inputs: [{ id: 'wheat', qty: 2 }], output: { id: 'flour', qty: 2 } });
+// ---- Blacksmith profession: a modest chance to not consume a material on a weapon/armor recipe,
+// checked from inside craftRecipe -- separate from (and stacking with) the existing generic
+// player.craftYieldChance so other classes' balance around that stat is untouched. A Weaponsmith
+// gets a real bonus crafting weapons and a real penalty on armor, and vice versa for an Armorsmith
+// -- unspecialized blacksmiths just get the flat baseline either way.
+function blacksmithMaterialSaveChance(itemType) {
+  if (!hasProfession('blacksmith')) return 0;
+  let chance = Math.min(0.2, professionLevelOf('blacksmith') * 0.015);
+  const spec = specializationOf('blacksmith');
+  if (spec === 'weaponsmith') chance *= (itemType === 'weapon' ? 1.75 : 0.4);
+  else if (spec === 'armorsmith') chance *= (itemType === 'armor' ? 1.75 : 0.4);
+  return chance;
+}
+// ---- Fisherman profession: boosts the existing bite-chance roll in beginFishing, and improves the
+// odds of the rare non-fish catch (a gem) on top of that -- both read directly from here so the
+// fishing minigame itself never needed to change, just gained a reason to specialize in it.
+function fishermanQualityMult() { return hasProfession('fisherman') ? 1 + Math.min(0.45, professionLevelOf('fisherman') * 0.045) + (specializationOf('fisherman') === 'riverside' ? 0.25 : 0) : 1; }
+function fishermanRareBonus() { return hasProfession('fisherman') ? Math.min(0.15, professionLevelOf('fisherman') * 0.015) * (specializationOf('fisherman') === 'deepsea' ? 2 : 1) : 0; }
+// ---- Chef profession: reads directly into the SAME cookingYieldBonus craftRecipe already checks
+// (`qty = (r.output.qty||1) + (cooking ? player.cookingYieldBonus||0 : 0)`) -- no separate bonus
+// path, just a real reason to keep leveling it beyond whatever talents already touch that stat.
+function chefYieldBonus() { return hasProfession('chef') ? Math.floor(professionLevelOf('chef') / 4) + (specializationOf('chef') === 'banquet' ? 1 : 0) : 0; }
+// ---- Alchemist profession: stacks additively with the existing Herbalist talent onto the exact
+// same player.alchemyPotencyBonus stat that already scales every potion/elixir's effect -- a
+// dedicated Alchemist who ALSO took the talent ends up meaningfully stronger than either alone.
+// (The actual grant happens inside gainProfessionXp, where specialization -- Potion Master vs
+// Bomb Specialist -- determines the rate; see there.)
+// ---- Hunter profession: rather than inventing a skinning verb this game never had, it enhances
+// the loot table beast-type monsters already roll from (anything dropping pelt/meat/fang) --
+// mechanically the same shape as Miner boosting ore, just triggered by combat instead of gathering.
+// Trophy Hunter/Provisioner split the same loot table along trophy (fang) vs bulk (pelt, meat_raw).
+const HUNTER_LOOT_IDS = ['pelt', 'meat_raw', 'fang'];
+const HUNTER_TROPHY_IDS = ['fang'];
+const HUNTER_BULK_IDS = ['pelt', 'meat_raw'];
+function hunterBonusChance() { return hasProfession('hunter') ? Math.min(0.5, professionLevelOf('hunter') * 0.05) : 0; }
+function hunterLootPool(availableIds) {
+  const spec = specializationOf('hunter');
+  if (spec === 'trophyhunter') { const t = availableIds.filter(id => HUNTER_TROPHY_IDS.includes(id)); return t.length ? t : availableIds; }
+  if (spec === 'provisioner') { const b = availableIds.filter(id => HUNTER_BULK_IDS.includes(id)); return b.length ? b : availableIds; }
+  return availableIds;
+}
+// ---- Locksmith profession: a real, direct bonus on top of the game's actual skill-check
+// lockpicking formula (lockPickChance, driven by DEX+level against a difficulty rating) -- not a
+// new pick-a-lock verb, just real skill at the one that already exists. Also meaningfully reduces
+// the chance a failed attempt snaps the pick, since a professional doesn't ruin their tools as often.
+function locksmithChanceBonus() { return hasProfession('locksmith') ? Math.min(0.25, professionLevelOf('locksmith') * 0.02) : 0; }
+function locksmithSnapReduction() { return hasProfession('locksmith') ? Math.min(0.7, professionLevelOf('locksmith') * 0.06) : 0; }
+// ---- Jeweler profession: reuses the exact craftingCategoryFor('tinkering') bucket -- rings,
+// amulets, wands, and other trinkets that were never weapons/armor/food/potions -- the same way
+// Blacksmith reuses weaponsmith/armorsmith. Also a real, direct value bonus on gems specifically,
+// since knowing what a stone is actually worth is the other half of being a jeweler.
+function jewelerMaterialSaveChance() { return hasProfession('jeweler') ? Math.min(0.2, professionLevelOf('jeweler') * 0.015) : 0; }
+function jewelerGemValueMult(it) { return (hasProfession('jeweler') && it && it.id === 'gem') ? 1 + Math.min(0.5, professionLevelOf('jeweler') * 0.04) : 1; }
+// ---- Cartographer profession: grants the same auto-reveal-on-new-level effect the Cartographer
+// TALENT already grants (player.autoRevealOnLevel) -- a real way to get genuinely useful map
+// knowledge without spending a talent point on it, and the two stack rather than conflict (the
+// talent just sets the same flag; whichever source is true wins, exactly as intended).
+function cartographerAutoReveal() { return hasProfession('cartographer') && professionLevelOf('cartographer') >= 4; }
+// ---- Scribe profession: reads directly into the existing "study a tome" pickup logic -- normally
+// a tome you already know the spell from just crumbles, wasted. A Scribe can tell what a text is
+// worth even once its one lesson is spent, and sells it on instead of losing it outright.
+function scribeWasteRefundChance() { return hasProfession('scribe') ? Math.min(0.8, professionLevelOf('scribe') * 0.07) : 0; }
+
+let professionsMenuOptions = [];
+function openProfessionsMenu() {
+  Sound.play('uiOpen');
+  gameState = 'professions';
+  const opts = [];
+  let n = 0;
+  const nextKey = () => String.fromCharCode(97 + (n++));
+  let html = '';
+  Object.keys(PROFESSIONS).forEach(id => {
+    const prof = PROFESSIONS[id];
+    if (!hasProfession(id)) {
+      html += `<div class="modal-opt" style="cursor:default"><b>${prof.name}</b> <span class="dim">-- not learned yet. Find a ${id} and ask to learn ${prof.verb}.</span></div>`;
+      return;
+    }
+    const xp = (player.professionXp || {})[id] || 0;
+    const level = professionLevel(xp);
+    const rank = professionRankTitle(level);
+    const nextLvlXp = professionXpForLevel(level + 1);
+    const specId = specializationOf(id);
+    const specTag = specId ? ` -- <span style="color:var(--amber-bright)">${PROFESSION_SPECIALIZATIONS[id].find(s => s.id === specId).label}</span>` : '';
+    html += `<div class="modal-opt" style="cursor:default"><b>${prof.name}</b> -- Level ${level} ${rank}${specTag} <span class="dim">(${xp}/${nextLvlXp} XP)</span></div>`;
+  });
+  if (hasProfession('merchant')) {
+    const k = nextKey();
+    opts.push({ key: k, label: "Check the Merchant's Ledger", action: () => openMerchantLedger({ x: player.x, y: player.y }) });
+    html += `<div class="modal-opt" onclick="simulateKey('${k}')">[${k}] Check the Merchant's Ledger</div>`;
+  }
+  const kc = nextKey();
+  opts.push({ key: kc, label: 'Close', action: () => closeModal() });
+  html += `<div class="modal-opt" onclick="simulateKey('${kc}')" style="margin-top:6px">[${kc}] Close</div>`;
+  professionsMenuOptions = opts;
+  renderModal('Professions', html, 'Letter/click to choose, Esc to close.');
+}
+// =====================================================================================
+
+// =====================================================================================
+// ---- LIFE SIM OVERHAUL, PILLAR 4: CITY RANK & KINGSHIP ----
+// The one genuinely new institution this whole overhaul adds: kingdoms before this pass had a
+// ruler in name only (kingdom.rulerName/rulerTitle were baked-in flavor text from getKingdom's
+// generation, with no living NPC and no way for anything in the world to change them). This pass
+// gives every settlement's existing "senior civic NPC" (the Palace noble in a city/capital's grand
+// building, or the elder/guildclerk/priest who leads elsewhere) a real second job: they can grant
+// standing in the settlement, appoint the player to real civic office, elevate them to the
+// nobility on the kingdom's behalf, and -- right at the top -- ratify an actual, permanent change
+// of rulership. Every rung of this ladder reads a number some earlier system already produces
+// (goodwill for city rank, kingdomRep for nobility) rather than inventing a fourth reputation
+// track, and the capstone deliberately requires proof of civic service (real offices held) on top
+// of the rep number, so a crown can't be bought with quest-grinding alone.
+const CITY_RANKS = [
+  { min: 0,   title: 'Outsider' },
+  { min: 10,  title: 'Resident' },
+  { min: 30,  title: 'Trusted Local' },
+  { min: 60,  title: 'Notable Citizen' },
+  { min: 100, title: 'Freeman of the City' },
+  { min: 200, title: 'City Elder' },
+];
+function cityRankTitleFor(goodwill) {
+  let t = CITY_RANKS[0].title;
+  for (const r of CITY_RANKS) if (goodwill >= r.min) t = r.title;
+  return t;
+}
+function cityRankOf(regionKey) { return cityRankTitleFor((player.goodwill || {})[regionKey] || 0); }
+function kingdomKeyAt(x, y) { return getKingdom(Math.floor(x / CH), Math.floor(y / CH)).key; }
+// ---- Civic Office: one appointment per settlement, petitioned from whichever NPC actually runs
+// the place -- the noble in a Palace-bearing city/capital outranks everyone else there, otherwise
+// it falls to the elder, then whichever senior professional role is present. Reuses roleTierInfo's
+// existing notion of a settlement's "important" roles rather than hardcoding a duplicate list.
+const CIVIC_OFFICE_TITLES = { hamlet: 'Village Reeve', village: 'Village Reeve', town: 'Town Alderman', city: 'City Magistrate', capital: 'Capital Chancellor' };
+function isSeniorCivicNpc(npc) { return npc.roleId === 'noble' || npc.roleId === 'elder'; }
+function petitionForOffice(npc) {
+  const settlement = settlementAt(npc.x, npc.y);
+  if (!settlement) { closeModal(); return; }
+  const region = getRegionKey(npc.x, npc.y);
+  const goodwill = (player.goodwill || {})[region] || 0;
+  if (goodwill < 60) { log(`${npc.name}: "You're known here, but not known well enough yet. Keep at it."`); closeModal(); return; }
+  player.civicOffices = player.civicOffices || {};
+  if (player.civicOffices[settlement.name]) { log(`You already hold civic office in ${settlement.name}.`); closeModal(); return; }
+  const tierKey = (settlement.type || 'Village').toLowerCase();
+  const title = CIVIC_OFFICE_TITLES[tierKey] || 'Reeve';
+  const kingdomKey = kingdomKeyAt(npc.x, npc.y);
+  player.civicOffices[settlement.name] = { title, kingdomKey, settlementTier: tierKey, sinceTurn: turnCount, regionKey: region };
+  addGoodwill(region, 15, null);
+  addKingdomRep(kingdomKey, 10);
+  log(`*** ${npc.name} appoints you ${title} of ${settlement.name}, official and binding. The role carries real duties -- and a real stipend. ***`);
+  Sound.play('discovery');
+  closeModal();
+}
+function civicOfficeCount(kingdomKey) { return Object.values(player.civicOffices || {}).filter(o => o.kingdomKey === kingdomKey).length; }
+// A civic office pays a modest daily stipend, scaled to the settlement's tier -- day-gated exactly
+// like tickPropertyUpkeep/tickFamilyGrowth, so it costs nothing on turns where no day has turned
+// over, and needs no extra per-office bookkeeping beyond the office record itself.
+const CIVIC_STIPEND_BY_TIER = { hamlet: 4, village: 6, town: 10, city: 18, capital: 30 };
+function tickCivicIncome() {
+  const offices = Object.entries(player.civicOffices || {});
+  if (!offices.length) { player.lastCivicDay = Math.floor(turnCount / DAY_LENGTH); return; }
+  const day = Math.floor(turnCount / DAY_LENGTH);
+  if (player.lastCivicDay === undefined || player.lastCivicDay === null) { player.lastCivicDay = day; return; }
+  if (day <= player.lastCivicDay) return;
+  const daysPassed = day - player.lastCivicDay;
+  player.lastCivicDay = day;
+  let total = 0;
+  const lines = [];
+  offices.forEach(([settlementName, office]) => {
+    let stipend = (CIVIC_STIPEND_BY_TIER[office.settlementTier] || 5) * daysPassed;
+    // ---- Lower Taxes policy (see openCourtMenu): a real trade-off, not a flat bonus -- civic
+    // income takes a real cut in exchange for a real, ongoing goodwill trickle in that same
+    // settlement, funded from the office's own region rather than a made-up settlement-wide effect.
+    if ((player.kingdomPolicy || {})[office.kingdomKey] === 'lowtax') {
+      stipend = Math.round(stipend * 0.6);
+      if (office.regionKey) addGoodwill(office.regionKey, daysPassed, null);
+    }
+    total += stipend;
+    lines.push(`${stipend}g as ${office.title} of ${settlementName}`);
+  });
+  if (total > 0) {
+    player.gold += total;
+    log(`Civic stipend received: ${lines.join('; ')}.`);
+  }
+}
+// ---- Nobility: a kingdom-wide ladder, granted by any noble speaking for that kingdom, gated on
+// holding at least one civic office there (you have to have actually served before you're elevated)
+// plus the kingdomRep threshold for the next title up.
+const NOBLE_TITLES = [
+  { level: 1, repMin: 50,  male: 'Knight', female: 'Dame' },
+  { level: 2, repMin: 150, male: 'Baron',  female: 'Baroness' },
+  { level: 3, repMin: 300, male: 'Count',  female: 'Countess' },
+  { level: 4, repMin: 500, male: 'Duke',   female: 'Duchess' },
+];
+function nobleLevelOf(kingdomKey) { return (player.nobleTitles || {})[kingdomKey] || 0; }
+function nobleTitleFor(level, female) { const t = NOBLE_TITLES.find(n => n.level === level); return t ? (female ? t.female : t.male) : null; }
+function petitionForNobility(npc, kingdomKey) {
+  if (civicOfficeCount(kingdomKey) < 1) { log(`${npc.name}: "The crown elevates those who've actually served it. Hold office somewhere first."`); closeModal(); return; }
+  const level = nobleLevelOf(kingdomKey);
+  const next = NOBLE_TITLES[level]; // level 0 -> NOBLE_TITLES[0] (Knight/Dame)
+  if (!next) { log(`${npc.name}: "There's no higher title I can grant you -- only the crown itself sits above a Duke."`); closeModal(); return; }
+  const rep = getKingdomRep(kingdomKey);
+  if (rep < next.repMin) { log(`${npc.name}: "Your standing with the crown isn't there yet. Keep serving ${getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).name}."`); closeModal(); return; }
+  player.nobleTitles = player.nobleTitles || {};
+  player.nobleTitles[kingdomKey] = next.level;
+  const title = nobleTitleFor(next.level, false);
+  log(`*** In recognition of your service, ${npc.name} names you ${title}. Word of it will travel. ***`);
+  addKingdomRep(kingdomKey, 20);
+  Sound.play('discovery');
+  closeModal();
+}
+// ---- Kingship: the capstone. Requires the top noble rank, a steep kingdomRep bar above even
+// that rank's own threshold (nobility alone doesn't imply the crown wants YOU specifically),
+// service in at least two of the kingdom's settlements, and a tribute that funds the actual
+// ceremony -- four independent, already-real numbers that all have to line up at once, not a
+// single stat grind.
+function canClaimCrown(kingdomKey) {
+  return nobleLevelOf(kingdomKey) >= 4 && getKingdomRep(kingdomKey) >= 600 && civicOfficeCount(kingdomKey) >= 2 && player.rulerOf !== kingdomKey && !player.rulerOf;
+}
+function claimCrown(npc, kingdomKey) {
+  if (!canClaimCrown(kingdomKey)) {
+    if (player.rulerOf && player.rulerOf !== kingdomKey) log(`${npc.name}: "One crown is enough for any one person to steward honestly. See to your own kingdom first."`);
+    closeModal(); return;
+  }
+  const cost = 2000;
+  if (player.gold < cost) { log(`${npc.name}: "A coronation isn't free -- the ceremony alone costs ${cost}g. Come back when you can fund it."`); closeModal(); return; }
+  player.gold -= cost;
+  const k = getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
+  const oldRuler = k.rulerName;
+  const title = RULER_TITLES[k.trait] || 'Ruler';
+  player.kingdomOverrides = player.kingdomOverrides || {};
+  player.kingdomOverrides[kingdomKey] = { rulerName: player.name || 'the Adventurer', rulerTitle: title };
+  player.rulerOf = kingdomKey;
+  log(`*** By blood, service, and standing, you are crowned ${title} of ${k.name}, succeeding ${oldRuler}. The kingdom is yours to steward now. ***`);
+  Sound.play('levelup');
+  updateSidebar();
+  closeModal();
+}
+// ---- Usurpation: the violent counterpart to claimCrown, triggered from onDeath rather than
+// dialogue. Requires the kingdom to have genuinely turned on you (deep negative rep -- this can't
+// be reached by simple neglect) and real combat credentials, and is offered as a choice at the
+// moment it becomes possible rather than something the player has to remember to go looking for.
+const USURP_REP_THRESHOLD = -150;
+const USURP_MIN_LEVEL = 12;
+function canUsurpCrown(kingdomKey) {
+  return getKingdomRep(kingdomKey) <= USURP_REP_THRESHOLD && (player.level || 1) >= USURP_MIN_LEVEL && player.rulerOf !== kingdomKey && !player.rulerOf;
+}
+function offerUsurpation(kingdomKey, killedName) {
+  const k = getKingdomByKey(kingdomKey) || getKingdom(Math.floor(player.x / CH), Math.floor(player.y / CH));
+  const opts = [
+    { key: 'a', label: 'Seize the throne by force', action: () => usurpCrown(kingdomKey) },
+    { key: 'b', label: 'Walk away', action: () => closeModal() },
+  ];
+  dialogueOptions = opts; gameState = 'dialogue'; dialogueNPC = null;
+  const html = `<div class="npcline">With ${killedName} dead and ${k.name} in disarray, the throne stands undefended. You could seize it here and now -- not by right, but by force. It won't be a stable claim, not at first.</div>`
+    + opts.map(o => `<div class="modal-opt" onclick="simulateKey('${o.key}')">[${o.key}] ${o.label}</div>`).join('');
+  renderModal('A Moment of Opportunity', html, 'Letter/click to decide.');
+}
+function usurpCrown(kingdomKey) {
+  const k = getKingdomByKey(kingdomKey) || getKingdom(Math.floor(player.x / CH), Math.floor(player.y / CH));
+  const title = RULER_TITLES[k.trait] || 'Ruler';
+  player.kingdomOverrides = player.kingdomOverrides || {};
+  player.kingdomOverrides[kingdomKey] = { rulerName: player.name || 'the Usurper', rulerTitle: title };
+  player.rulerOf = kingdomKey;
+  // A seized throne starts already deep into instability -- close enough to rebellion that a
+  // usurper has to move fast (a Standing Policy, real diplomacy, or just time and restraint) to
+  // actually hold what they took, rather than inheriting the stability an earned crown gets.
+  player.rebellionUnstableDays = KINGSHIP_WARNING_DAYS + 5;
+  player.lastStabilityDay = Math.floor(turnCount / DAY_LENGTH);
+  addKingdomRep(kingdomKey, 80);
+  log(`*** By blood and force alone, you seize the crown of ${k.name}. The realm is yours -- for now. Your grip on it is not yet secure. ***`);
+  Sound.play('levelup');
+  updateSidebar();
+  closeModal();
+}
+// ---- Kingship carries real, ongoing stakes -- letting a kingdom's standing collapse under a
+// crowned ruler risks losing the crown entirely, on the exact same grace-period-then-consequence
+// shape property upkeep already uses (a long warning window, then an actual loss, never a
+// surprise). This is what gives the Court's policies and diplomacy real stakes: they're not just
+// flavor buttons, they're how a ruler actually holds onto power.
+const KINGSHIP_CRITICAL_REP = 100;
+const KINGSHIP_WARNING_DAYS = 10;
+const KINGSHIP_REBELLION_DAYS = 20;
+function tickKingshipStability() {
+  if (!player.rulerOf) { player.lastStabilityDay = null; player.rebellionUnstableDays = 0; return; }
+  const day = Math.floor(turnCount / DAY_LENGTH);
+  if (player.lastStabilityDay === null || player.lastStabilityDay === undefined) { player.lastStabilityDay = day; return; }
+  if (day <= player.lastStabilityDay) return;
+  let daysPassed = day - player.lastStabilityDay;
+  player.lastStabilityDay = day;
+  const kingdomKey = player.rulerOf;
+  const rep = getKingdomRep(kingdomKey);
+  // Fortify the Realm policy: a real, ongoing safety net -- halves how fast instability builds --
+  // funded by a real daily cost from the treasury, deducted here rather than left as a free perk.
+  if ((player.kingdomPolicy || {})[kingdomKey] === 'fortify') {
+    const fortifyCost = 5 * daysPassed;
+    player.gold = Math.max(0, player.gold - fortifyCost);
+    daysPassed *= 0.5;
+  }
+  if (rep < KINGSHIP_CRITICAL_REP) {
+    const before = player.rebellionUnstableDays || 0;
+    player.rebellionUnstableDays = before + daysPassed;
+    if (before < KINGSHIP_WARNING_DAYS && player.rebellionUnstableDays >= KINGSHIP_WARNING_DAYS) {
+      const k = getKingdomByKey(kingdomKey);
+      log(`*** Whispers of rebellion reach the court. Your standing with ${k ? k.name : 'the kingdom'} has fallen dangerously low -- shore it up, or lose the crown. ***`);
+    }
+    if (player.rebellionUnstableDays >= KINGSHIP_REBELLION_DAYS) {
+      const k = getKingdomByKey(kingdomKey);
+      log(`*** The nobles conspire against you, and the crown is taken. ${k ? k.name : 'The kingdom'} has a new ruler, and it is not you. ***`);
+      if (player.kingdomOverrides) delete player.kingdomOverrides[kingdomKey];
+      if (player.kingdomPolicy) delete player.kingdomPolicy[kingdomKey];
+      addKingdomRep(kingdomKey, -100);
+      player.rulerOf = null;
+      player.rebellionUnstableDays = 0;
+      Sound.play('playerDeath');
+      updateSidebar();
+    }
+  } else {
+    // Recovering standing slowly walks instability back down rather than resetting it instantly --
+    // a ruler who let things slip has to actually hold steady for a while, not just have one good day.
+    player.rebellionUnstableDays = Math.max(0, (player.rebellionUnstableDays || 0) - daysPassed);
+  }
+}
+const KINGDOM_POLICIES = [
+  { id: 'fortify', label: 'Fortify the Realm', desc: 'Halves how fast rebellion risk builds if standing falls, for 5g/day from the treasury.' },
+  { id: 'lowtax', label: 'Lower Taxes', desc: 'Civic offices in this kingdom pay 40% less, but each grants steady local goodwill instead.' },
+  { id: 'patronage', label: 'Royal Patronage', desc: 'All kingdom reputation gained here is boosted 25%.' },
+];
+// ---- The Court: a crowned player's family gets real, mechanical roles rather than just flavor --
+// direct payoff for Pillar 2 (Family) having been built as a real system instead of a stat.
+function openCourtMenu(kingdomKey) {
+  const k = getKingdom(Math.floor(player.x / CH), Math.floor(player.y / CH));
+  const opts = [];
+  let n = 0;
+  const nextKey = () => String.fromCharCode(97 + (n++));
+  let html = `<div class="npcline">The Court of ${k.name} awaits your word.</div>`;
+  const unstable = player.rebellionUnstableDays || 0;
+  if (unstable > 0) {
+    const risk = unstable >= KINGSHIP_WARNING_DAYS ? 'color:#d07f7f' : 'color:var(--amber-bright)';
+    html += `<div class="npcline" style="${risk}">Standing is shaky -- ${unstable} day(s) of instability (rebellion at ${KINGSHIP_REBELLION_DAYS}).</div>`;
+  }
+  const spouseNpc = player.spouse && findNPCByUid(player.spouse.uid);
+  if (spouseNpc && !player.consortAppointed) {
+    const key = nextKey();
+    opts.push({ key, label: `Name ${spouseNpc.name} Consort`, action: () => {
+      player.consortAppointed = true;
+      addKingdomRep(kingdomKey, 15);
+      log(`*** ${spouseNpc.name} is named Consort of ${k.name}. The court receives them warmly. ***`);
+      closeModal();
+    }});
+    html += `<div class="modal-opt" onclick="simulateKey('${key}')">[${key}] Name ${spouseNpc.name} Consort</div>`;
+  }
+  const heirCandidate = (player.children || []).find(c => c.settledDown && !c.leftHome && !c.recruited && !c.deceased && !c.governorOf);
+  if (heirCandidate) {
+    const key = nextKey();
+    opts.push({ key, label: `Name ${heirCandidate.name} Governor`, action: () => {
+      heirCandidate.governorOf = heirCandidate.settlementName;
+      addGoodwill(getRegionKey(player.x, player.y), 20, null);
+      log(`*** ${heirCandidate.name} is named Governor of ${heirCandidate.settlementName}, ruling in your name. ***`);
+      closeModal();
+    }});
+    html += `<div class="modal-opt" onclick="simulateKey('${key}')">[${key}] Name ${heirCandidate.name} Governor of ${heirCandidate.settlementName}</div>`;
+  }
+  const decreeCost = 200;
+  const decreeKey = nextKey();
+  opts.push({ key: decreeKey, label: 'Issue a Royal Decree', action: () => {
+    if (player.gold < decreeCost) { log(`A decree worth issuing costs ${decreeCost}g to see through.`); closeModal(); return; }
+    player.gold -= decreeCost;
+    addKingdomRep(kingdomKey, 25);
+    log(`*** Your decree is carried out across ${k.name}. Standing with the crown deepens. ***`);
+    closeModal();
+  }});
+  html += `<div class="modal-opt" onclick="simulateKey('${decreeKey}')">[${decreeKey}] Issue a Royal Decree (${decreeCost}g, +25 kingdom standing)</div>`;
+  // ---- Lasting policy: unlike the one-shot Decree above, a policy stays in effect until changed
+  // -- a real governance choice with an ongoing cost, not a button you press once and forget.
+  // Only one active per kingdom at a time. See addKingdomRep (patronage), tickCivicIncome
+  // (lowtax), and tickKingshipStability (fortify) for where each is actually felt.
+  const currentPolicy = (player.kingdomPolicy || {})[kingdomKey] || null;
+  html += `<div class="npcline" style="margin-top:8px"><b>Standing Policy:</b> ${currentPolicy ? KINGDOM_POLICIES.find(p => p.id === currentPolicy).label : 'None set'}</div>`;
+  KINGDOM_POLICIES.forEach(policy => {
+    if (currentPolicy === policy.id) return;
+    const key = nextKey();
+    opts.push({ key, label: `Set policy: ${policy.label}`, action: () => {
+      player.kingdomPolicy = player.kingdomPolicy || {};
+      player.kingdomPolicy[kingdomKey] = policy.id;
+      log(`*** You set ${k.name}'s standing policy to ${policy.label}. ${policy.desc} ***`);
+      closeModal();
+    }});
+    html += `<div class="modal-opt" onclick="simulateKey('${key}')">[${key}] Set policy: ${policy.label} -- ${policy.desc}</div>`;
+  });
+  if (currentPolicy) {
+    const key = nextKey();
+    opts.push({ key, label: 'Rescind current policy', action: () => { delete player.kingdomPolicy[kingdomKey]; log(`*** The policy is rescinded. ***`); closeModal(); } });
+    html += `<div class="modal-opt" onclick="simulateKey('${key}')">[${key}] Rescind current policy</div>`;
+  }
+  // ---- Real diplomacy: reuses nudgeKingdomRelation wholesale -- the same function that already
+  // drives every AI-vs-AI relation shift in the game, complete with its own history-text and
+  // event-log side effects (see its definition) -- rather than inventing a second, parallel,
+  // ruler-only relations number. A ruler can only act on kingdoms they've actually built up some
+  // standing with (player.story.kingdomRep), so this can't be used to manipulate a kingdom the
+  // player has never actually encountered.
+  const knownForeign = Object.keys((player.story || {}).kingdomRep || {}).filter(k2 => k2 !== kingdomKey);
+  if (knownForeign.length) {
+    knownForeign.slice(0, 3).forEach(foreignKey => {
+      const fKingdom = getKingdomByKey(foreignKey);
+      if (!fKingdom) return;
+      const relation = getKingdomRelation(kingdomKey, foreignKey);
+      const relLabel = (KINGDOM_RELATION_STATES.find(s => s.id === relation) || {}).label || relation;
+      const kKey1 = nextKey();
+      opts.push({ key: kKey1, label: `Extend an olive branch to ${fKingdom.name}`, action: () => {
+        if (player.gold < 150) { log(`Sending an envoy with real gifts costs 150g.`); closeModal(); return; }
+        player.gold -= 150;
+        nudgeKingdomRelation(kingdomKey, foreignKey, 20);
+        closeModal();
+      }});
+      html += `<div class="modal-opt" onclick="simulateKey('${kKey1}')">[${kKey1}] Extend an olive branch to ${fKingdom.name} <span class="dim">(currently ${relLabel}, 150g)</span></div>`;
+      const kKey2 = nextKey();
+      opts.push({ key: kKey2, label: `Rattle sabers at ${fKingdom.name}`, action: () => {
+        nudgeKingdomRelation(kingdomKey, foreignKey, -20);
+        closeModal();
+      }});
+      html += `<div class="modal-opt" onclick="simulateKey('${kKey2}')">[${kKey2}] Rattle sabers at ${fKingdom.name} <span class="dim">(free, but there's no taking it back)</span></div>`;
+    });
+  }
+  const leaveKey = nextKey();
+  opts.push({ key: leaveKey, label: 'Leave court', action: () => closeModal() });
+  html += `<div class="modal-opt" onclick="simulateKey('${leaveKey}')" style="margin-top:6px">[${leaveKey}] Leave court</div>`;
+  dialogueOptions = opts; gameState = 'dialogue'; dialogueNPC = null;
+  renderModal(`Court of ${k.name}`, html, 'Letter/click to choose, Esc to close.');
+}
+// =====================================================================================
 
 // ---- family: child tracking ----
+function livingChildCount() { return (player.children || []).filter(c => !c.leftHome && !c.recruited && !c.deceased).length; }
 function tryForChild(npc) {
   if (turnCount - player.lastChildTurn < 150) { log('Perhaps in time... (check back later)'); return; }
+  if (livingChildCount() >= 4) { log(`Your household already has its hands full with ${livingChildCount()} children.`); closeModal(); return; }
   player.kids++;
   player.lastChildTurn = turnCount;
-  const c = getChunk(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
-  const child = makeNPC('child', npc.x, npc.y, Math.random, npc.home, npc.species);
+  // Spawns at the family's primary residence when the player has bought one (see Pillar 1) -- a
+  // child is born into an actual home, not just wherever the spouse happened to be standing.
+  const primary = (player.properties || []).find(p => p.id === player.primaryResidenceId);
+  const spawnX = primary ? primary.x0 + 1 : npc.x, spawnY = primary ? primary.y0 + 1 : npc.y;
+  const spawnChunk = primary ? getChunk(primary.cx, primary.cy) : getChunk(Math.floor(npc.x / CH), Math.floor(npc.y / CH));
+  const home = primary ? primary.settlementName : npc.home;
+  const child = makeNPC('child', spawnX, spawnY, Math.random, home, npc.species);
   child.name = choice(Math.random, FIRST_NAMES) + ' ' + (npc.name.split(' ').slice(-1)[0]);
-  c.npcs.push(child);
-  player.children.push({ uid: child.uid, name: child.name });
+  child.homeX = spawnX; child.homeY = spawnY;
+  applyChildStageToNpc(child, CHILD_STAGES[0]);
+  spawnChunk.npcs.push(child);
+  spawnChunk.dirty = true;
+  player.children.push({ uid: child.uid, name: child.name, birthTurn: turnCount, stage: 'infant', trait: child.trait, gender: child.gender });
   Sound.play('childBorn');
   log(`You and ${npc.name} welcome a child, ${child.name}, into your family! (Children: ${player.kids})`);
   closeModal();
@@ -20491,6 +22244,7 @@ function openDialogue(npc) {
   let n = 0;
   const nextKey = () => String.fromCharCode(97 + (n++));
   const isSpouse = player.spouse && player.spouse.uid === npc.uid;
+  const childRec = childRecordFor(npc);
   applyAffectionDecay(npc);
   opts.push({ key: nextKey(), label: isSpouse ? 'Chat' : 'Talk', action: () => {
     const cooldown = Math.max(5, Math.round(30 * (1 - (player.affectionBonus || 0))));
@@ -20502,7 +22256,16 @@ function openDialogue(npc) {
     const phaseLine = !isSpouse ? worldPhaseReactionLine(npc) : null;
     const memoryLine = (!isSpouse && (npc.questHistory || []).length >= 2 && Math.random() < 0.3)
       ? `You've done -- what, ${npc.questHistory.length} jobs for me now? I don't forget that kind of thing.` : null;
-    if (isSpouse) {
+    if (childRec) {
+      const stage = childStageFor(childRec.birthTurn == null ? turnCount : childRec.birthTurn);
+      if (stage.id === 'infant') {
+        line = `*${npc.name} is too little to talk yet, but reaches for you and coos.*`;
+      } else {
+        const pool = CHILD_STAGE_LINES[stage.id] || CHILD_STAGE_LINES.child;
+        const traitPool = CHILD_TRAIT_LINES[childRec.trait];
+        line = (traitPool && Math.random() < 0.35) ? choice(Math.random, traitPool) : choice(Math.random, pool);
+      }
+    } else if (isSpouse) {
       line = choice(Math.random, MARRIED_LINES);
     } else if (phaseLine) {
       line = phaseLine;
@@ -20678,10 +22441,51 @@ function openDialogue(npc) {
   if (!npc.spouse && !player.spouse && (npc.affection || 0) >= 80 && !NON_MARRIAGEABLE.has(npc.roleId)) opts.push({ key: nextKey(), label: 'Propose marriage', action: () => proposeMarriage(npc) });
   if (isSpouse) {
     opts.push({ key: nextKey(), label: 'Rest at home', action: () => restAtHome(npc) });
+    opts.push({ key: nextKey(), label: 'Spend a quiet evening together', action: () => spendEveningTogether(npc) });
+    opts.push({ key: nextKey(), label: 'Ask about the children', action: () => askAboutChildren(npc) });
     opts.push({ key: nextKey(), label: 'Try for a child', action: () => tryForChild(npc) });
     opts.push({ key: nextKey(), label: npc.following ? 'Ask to wait at home' : 'Ask to join your travels', action: () => toggleSpouseFollow(npc) });
     if (npc.following) opts.push({ key: nextKey(), label: 'Give orders', action: () => openOrdersMenu(npc) });
-    opts.push({ key: nextKey(), label: 'View family', action: () => openFamily() });
+    opts.push({ key: nextKey(), label: 'View family', action: () => openFamilyMenu() });
+  }
+  if (childRec) {
+    const stage = childStageFor(childRec.birthTurn == null ? turnCount : childRec.birthTurn);
+    if (stage.id === 'child' || stage.id === 'teen') opts.push({ key: nextKey(), label: 'Play together', action: () => playWithChild(npc) });
+    if (stage.id === 'teen') opts.push({ key: nextKey(), label: 'Ask about their future', action: () => askChildFuture(npc, childRec) });
+    if (stage.id === 'adult' && !childRec.lifePathChosen) opts.push({ key: nextKey(), label: `Discuss ${childRec.name.split(' ')[0]}'s path in life`, action: () => openChildLifePathMenu(npc, childRec) });
+    opts.push({ key: nextKey(), label: 'View family', action: () => openFamilyMenu() });
+  }
+  // ---- Pillar 3: professions -- learning a trade, working an honest shift, and (merchants only)
+  // reading the local market are all ordinary conversation options with the right NPC, exactly
+  // like Learn/Trade already are, rather than a menu divorced from the world.
+  Object.keys(PROFESSIONS).forEach(id => {
+    const prof = PROFESSIONS[id];
+    if (!prof.trainerRoles.includes(npc.roleId)) return;
+    if (!hasProfession(id)) {
+      opts.push({ key: nextKey(), label: `Ask to learn ${prof.verb} (20g)`, action: () => learnProfession(npc, id) });
+    } else {
+      opts.push({ key: nextKey(), label: 'Work a shift', action: () => workShift(npc, id) });
+      if (id === 'merchant') opts.push({ key: nextKey(), label: "Check the local market", action: () => openMerchantLedger(npc) });
+      if (canSpecialize(id)) opts.push({ key: nextKey(), label: `Specialize your ${prof.name}ing`, action: () => openSpecializationChoice(npc, id) });
+    }
+  });
+  // ---- Pillar 4: civic office, nobility, and (right at the top) the crown itself -- all ordinary
+  // conversation options with whichever NPC actually speaks for the settlement/kingdom.
+  if (isSeniorCivicNpc(npc) && !curIsDungeon() && !curIsDimension()) {
+    const settlement = settlementAt(npc.x, npc.y);
+    if (settlement) {
+      const region = getRegionKey(npc.x, npc.y);
+      if (!(player.civicOffices || {})[settlement.name]) {
+        opts.push({ key: nextKey(), label: 'Petition for civic office', action: () => petitionForOffice(npc) });
+      }
+      if (npc.roleId === 'noble') {
+        const kingdomKey = kingdomKeyAt(npc.x, npc.y);
+        const level = nobleLevelOf(kingdomKey);
+        if (level < 4) opts.push({ key: nextKey(), label: level === 0 ? 'Ask about earning a noble title' : 'Petition for a higher title', action: () => petitionForNobility(npc, kingdomKey) });
+        if (canClaimCrown(kingdomKey)) opts.push({ key: nextKey(), label: 'Claim the crown (500g)', action: () => claimCrown(npc, kingdomKey) });
+        if (player.rulerOf === kingdomKey) opts.push({ key: nextKey(), label: 'Hold court', action: () => openCourtMenu(kingdomKey) });
+      }
+    }
   }
   opts.push({ key: nextKey(), label: 'Attack', action: () => {
     const wasHostile = npc.hostile;
@@ -21188,6 +22992,34 @@ const TILE_FEATURE_DESCRIPTIONS = {
   fungus: 'A patch of faintly bioluminescent fungus, glowing dim green against the dark.',
   waystone: 'A waystone, carved with old travel-wardings. Stand here to reach the fast-travel network for free.',
   rift_portal: "A tear in the world, its edges rippling like heat over sand. It leads somewhere that isn't here.",
+  // ---- Pillar 1 furnishings, made physically real (see placeHomeDecor) rather than just a menu line.
+  homehearth: 'A warm hearth crackles here, a real bed and real furniture arranged around it. This is a home now.',
+  homelibrary: 'Shelves of books line the wall, well-thumbed and clearly well-loved.',
+  homenursery: "A small crib sits ready, blankets folded neat, waiting for someone to grow into it.",
+  homestrongbox: 'A heavy strongbox, bolted to the floor and locked tight.',
+  homefinequarters: 'Fine linens and gilded furniture -- this room means to impress.',
+  homeforge: 'A proper forge and anvil, coals still faintly warm.',
+  homestall: "A market stall's worth of goods, neatly stacked and ready to sell.",
+  homelarder: 'A stocked larder and a proper oven -- more than enough to cook and sell a real meal.',
+  homeapothecary: 'A bench crowded with vials, mortars, and drying herbs.',
+  homeparlor: 'A comfortable sitting room, clearly meant for two.',
+  hometrophycase: 'A case of finds from your travels, arranged for anyone who visits to see.',
+  homeaviary: 'A small roost for message-birds, empty for now but ready.',
+  homelockworkshop: "A workbench of picks, tools, and half-disassembled locks.",
+  homejewelrybench: 'A jeweler\'s bench, loupe and tools laid out neatly.',
+  homescribedesk: 'A writing desk stacked with texts mid-copy.',
+  homealchemygarden: 'A small, carefully tended plot of herbs and roots.',
+  homemapstudy: 'Charts and survey notes cover every wall.',
+  homemusicroom: 'An instrument or two, clearly well-used.',
+  homechapel: 'A small, quiet place kept for faith.',
+  homebathhouse: 'A proper heated bath, steam still rising.',
+  homeobservatory: 'A room for quiet study, star charts and notes everywhere.',
+  homeweaponrack: 'A rack of well-kept gear, ready for the next fight.',
+  homewardrobe: 'A proper wardrobe -- simple, but real furniture.',
+  homewinecellar: 'Racks of aging wine, cool and dim.',
+  homebalcony: 'A balcony with a real view -- worth having for its own sake.',
+  homestables: 'A stable stall, clean and ready for a mount.',
+  homearmordisplay: 'A stand for your finest armor, polished and displayed.',
   rift_anchor: "A shard driven into the ground, humming faintly out of sync with everything around it. Interact with it to jump to the arrival rift or another planted anchor.",
   winding_post: "A seized gear-mechanism jutting from the ground, dormant and rust-locked. Something about it suggests it would turn again, given the right key.",
   winding_post_spent: "A gear-mechanism, freshly turned and settled into its new position. Whatever it unseized, it did so for good.",
@@ -22318,6 +24150,14 @@ function newPlayer() {
     mutations: [],
     buffs: {}, statusPoison: 0, statusFear: 0, statusConfuse: 0, alive: true, kind: 'player', name: 'You',
     allies: [], companions: [], quests: [], killCounts: {}, spouse: null, kids: 0, children: [], lastChildTurn: -9999,
+    // ---- Property & Housing (Life Sim overhaul, pillar 1) ----
+    properties: [], primaryResidenceId: null, propertyDebt: 0, lastUpkeepDay: null,
+    // ---- Family & Relationships (Life Sim overhaul, pillar 2) ----
+    lastGrowthDay: null, lastEveningTurn: -9999,
+    // ---- Civilian Professions (Life Sim overhaul, pillar 3) ----
+    professionsLearned: {}, professionXp: {}, professionSpecialization: {},
+    // ---- City Rank & Kingship (Life Sim overhaul, pillar 4) ----
+    civicOffices: {}, nobleTitles: {}, kingdomOverrides: {}, kingdomPolicy: {}, rulerOf: null, consortAppointed: false, lastCivicDay: null, lastStabilityDay: null, rebellionUnstableDays: 0,
     story: null, kingdomEventLog: [],
     dimensionId: null, dimensionReturn: null, discoveredDimensions: [], visitedDimensions: [],
     gameCompleted: false, completionTurn: null,
@@ -29094,6 +30934,14 @@ function endTurn() {
   if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
   tickWyrmreachGreed();
   if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
+  tickPropertyUpkeep();
+  if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
+  tickFamilyGrowth();
+  if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
+  tickCivicIncome();
+  if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
+  tickKingshipStability();
+  if (!player.alive || player.hp <= 0) { if (player.alive) gameOver(); return; }
   const curT = curTileAt(player.x, player.y);
   // ---- BUG FIX: matches the movePlayer water-crossing fix above -- this used to also exclude
   // dungeons, which was harmless only because dungeon water was unreachable before that fix. Now
@@ -29937,7 +31785,13 @@ function useItem(it) {
   }
   if (it.type === 'tome') {
     if (!player.knownSpells.includes(it.spellId)) { player.knownSpells.push(it.spellId); log(`You study the ${it.name} and learn ${SPELLS.find(s=>s.id===it.spellId).name}!`); }
+    else if (hasProfession('scribe') && Math.random() < scribeWasteRefundChance()) {
+      const refund = Math.max(5, Math.round((it.value || 20) * 0.6));
+      player.gold += refund;
+      log(`You already know this spell -- but your training as a Scribe means the tome isn't a total loss. You sell it on for ${refund}g.`);
+    }
     else log('You already know this spell — the tome crumbles to dust, its knowledge wasted.');
+    gainProfessionXp('scribe', 5);
     player.inventory = player.inventory.filter(i => i.uid !== it.uid);
     updateSidebar(); return;
   }
@@ -30414,7 +32268,10 @@ function updateSidebar() {
   let allyHtml = allies.length ? allies.map(a => `${a.name} (${Math.max(0,a.hp)}/${a.maxHp})`).join('<br>') : '';
   if (companions.length) allyHtml += (allyHtml ? '<br>' : '') + companions.map(c => `${c.name} ♥ (${Math.max(0,c.hp)}/${c.maxHp})`).join('<br>');
   document.getElementById('ally-text').innerHTML = allyHtml || '<span class="dim">none</span>';
-  document.getElementById('spouse-text').textContent = player.spouse ? `Married to ${player.spouse.name}${player.kids ? ` · ${player.kids} child(ren)` : ''}${(findNPCByUid(player.spouse.uid)||{}).following ? ' (traveling with you)' : ''}` : 'Unmarried';
+  const propCount = (player.properties || []).length;
+  const primaryProp = propCount ? (player.properties.find(p => p.id === player.primaryResidenceId) || player.properties[0]) : null;
+  const propSuffix = propCount ? ` · ${primaryProp.tierLabel} in ${primaryProp.settlementName}${propCount > 1 ? ` (+${propCount - 1} more)` : ''}` : '';
+  document.getElementById('spouse-text').textContent = (player.spouse ? `Married to ${player.spouse.name}${player.kids ? ` · ${player.kids} child(ren)` : ''}${(findNPCByUid(player.spouse.uid)||{}).following ? ' (traveling with you)' : ''}` : 'Unmarried') + propSuffix;
   const hasCompass = player.inventory.some(i => i.id === 'compass');
   const compassRow = document.getElementById('compass-row');
   if (hasCompass) {
@@ -32005,11 +33862,14 @@ const GUIDE_SECTIONS = [
       ['z','Abilities — spells, techniques, active cybernetics, and active mutations together.'],
       ['T','Talents.'],
       ['K','Crafting &amp; Cooking.'],
-      ['q','Quest Log — including a "Where to look" hint for your current main quest stage.'],
+      ['q','Quest Log — including a "Where to look" hint for your current main quest stage, plus your city rank, civic offices, and any noble title or crown.'],
       ['L','Library — every book you have read, kept for reference even after you have sold or dropped the physical copy.'],
       ['Y','Cybernetics management.'],
       ['U','Eldritch/mutation screen.'],
       ['V','Fast Travel.'],
+      ['p','Property &amp; Housing — buy/sell/furnish houses, set a primary residence.'],
+      ['F','Family — spouse and children at a glance, including any grown child\'s life-path choice.'],
+      ['O','Professions — your trade levels/ranks, and the Merchant\'s Ledger if you\'ve taken up Trading.'],
     ])}
     ${guideKeyTable('System', [
       ['Esc','Open the in-game menu — Save, Load, Export/Import, Settings, or Quit to Title Screen. Also backs out of whatever screen you\'re currently in.'],
@@ -32403,7 +34263,7 @@ const GUIDE_SECTIONS = [
     <div class="modal-opt">Open ocean is no longer empty — sharks, eels, sirens, and drowned raiders swim it, boats and
     shipwrecks (some guarded, some worth looting) drift on it, and out in the deepest water a rare few — the
     Kraken, the Megalodon, Coilfang the Endless Serpent — are worth watching for, and worth avoiding until you're ready.</div>` },
-  { id:'relationships', label:'Relationships', html: () => `
+  { id:'relationships', label:'Relationships & Home', html: () => `
     <div class="modal-opt">t talks to an adjacent NPC — Trade, Learn, Ask for work, Pay for healing, Give a gift, and
     (80+ affection) Propose Marriage. Affection builds honestly: Talk only helps once per cooldown, gifts have
     diminishing returns, quests give a real boost. A traveling spouse fights at your side and can be sent home anytime;
@@ -32417,6 +34277,31 @@ const GUIDE_SECTIONS = [
     reputation/species/tier price multipliers. And relationships aren't a number that only ever goes up anymore --
     go roughly ten in-game days without talking to someone and the bond starts quietly softening back toward neutral,
     a point per additional day of silence. Spouses are exempt; a marriage doesn't decay from a few quiet days apart.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Property & Housing (new).</b> Press <b>p</b> anywhere to browse
+    property -- unclaimed houses (priced by settlement tier, Cottage up through Grand Residence) are listed whenever
+    you're standing inside a settlement that has one going. Own as many as you like, and Furnish this home... opens a
+    dedicated screen listing all 28 furnishings you could add -- each one places an actual, distinct, walkable piece
+    of decor inside your specific house (not just a number on a menu). A Kitchen Garden and Alchemy Garden both
+    become real tillable plots right outside your door; a Parlor and Music Room give real boosts to time spent with
+    your spouse and children respectively; a Trophy Case and Chapel both boost standing (local and kingdom-wide);
+    Home Forge, Market Stall, Larder, Apothecary, Lock Workshop, Jeweler's Bench, and Scribe's Desk are all real home
+    businesses once you've taken up the matching trade (see Professions); an Aviary brings occasional word from a
+    grown child who left home; and every furnishing's comfort value -- even the purely decorative ones like a
+    Balcony or Wardrobe -- adds up into a real, honest bonus when you rest. Name one property your primary residence,
+    which is also where a spouse told to "wait at home" actually goes, and give any property a real name of your
+    own. Upkeep is billed daily; falling badly behind gets a final warning long before a property is ever
+    repossessed.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Family & Growing Up (new).</b> Press <b>F</b> anywhere to check on
+    your spouse and children. A child is born into your primary residence if you have one, then genuinely grows up
+    over real (if compressed) game time -- Infant, Toddler, Child, Teenager, Young Adult -- widening how far they
+    wander on their own the whole way, with dialogue that actually changes with their age and a distinct personality
+    trait. Once grown, you talk it through with them: settle down nearby in a real trade of their own, set off to make
+    their own way in the world, or grab a pack and adventure at your side as a proper scaled companion. Your spouse
+    also has more to do than wait around -- Spend a quiet evening together (a real affection and rest bonus, once a
+    day) and Ask about the children sit right alongside Chat and Rest at Home. And a spouse waiting at home isn't
+    just idle: if the trade they already had when you married them happens to be a real Profession (Farmer, Miner,
+    Blacksmith, Merchant, Fisherman), they keep working it while you're away and bring home real, if modest, income
+    of their own -- a career independent of anything you did to earn it.</div>
     <div class="modal-opt" style="margin-top:6px"><b>NPC Schedules (new).</b> Most NPCs now actually sleep at night --
     once night falls, everyone except night-economy roles (guards, watchmen, captains, innkeepers, tavernkeepers,
     dealers, companions, and guild clerks) heads back home and turns in. Approach a sleeping NPC and you can wake
@@ -32424,17 +34309,91 @@ const GUIDE_SECTIONS = [
     working NPCs eligible for it (merchants, crafters, nobles, clergy, and similar -- see SEPARATE_HOME_ELIGIBLE_ROLES)
     now get an actual separate house to walk home to at night, distinct from their shop; everyone else still lives
     above their own workplace, same as many real trades historically did.</div>
-    <div class="modal-opt" style="margin-top:6px"><b>Profession Tiers (new).</b> Every NPC rolls a skill tier when
+    <div class="modal-opt" style="margin-top:6px"><b>NPC Profession Tiers.</b> Every NPC rolls a skill tier when
     they're generated: Novice (~55% of NPCs, weaker stats, cheaper prices, a smaller spell/recipe roster if they
     teach), unmarked Journeyman (~35%, the ordinary baseline), or Master (~10%, noticeably tougher, pricier, and far
     more capable — a Master trainer knows several times as many spells as a Novice, a Master craftsperson knows their
     full recipe list where a Novice only knows half). Worth seeking out a settlement's Master blacksmith or healer if
     you can find one. There are now ${ROLES.length}+ distinct NPC roles and jobs across all settlements, from
     blacksmiths and priests down to cobblers, coopers, cartographers, midwives, and gravediggers -- most exist purely
-    to make a settlement feel like a real, working economy rather than a backdrop.</div>` },
-  { id:'reputation', label:'Reputation', html: () => `
+    to make a settlement feel like a real, working economy rather than a backdrop. (Not to be confused with your own
+    <b>Player Professions</b> -- see the Professions tab.)</div>` },
+  { id:'professions', label:'Professions', html: () => `
+    <div class="modal-opt">Press <b>O</b> anywhere to see your professions. Fourteen real trades are available --
+    Farming, Mining, Blacksmithing, Trading, Fishing, Cooking, Brewing (alchemy), Woodcutting, Hunting,
+    Locksmithing, Jewelcrafting, Cartography, Scribing, and Guarding -- each with its own level and rank (Novice
+    through Renowned), learned by asking a matching NPC to teach you (a small one-time fee), not from a menu. None
+    of them replace the base action -- tilling, smashing an ore vein, forging a recipe, casting a line, cooking a
+    meal, brewing a potion, felling a tree, dropping a beast, picking a lock, cutting a stone, reading the terrain,
+    studying a tome, or fighting off an attack on a settlement were all already things anyone could do -- what
+    taking up the trade adds is real, growing skill at it.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Farmer</b> raises crop yield and seed-recovery odds, and at real
+    experience unlocks Wheat -- the first source of Flour, which a dozen-plus cooking recipes have always wanted for.
+    <b>Miner</b> and <b>Woodcutter</b> both raise the yield of their respective gathering nodes (ore and wood alike,
+    world and dungeon) on top of whatever tool you're using. <b>Blacksmith</b> layers a chance to not consume a
+    material on top of forging real weapons and armor. <b>Chef</b> feeds directly into the existing cooking-yield
+    stat every food-loving talent already uses. <b>Alchemist</b> does the same for potion/elixir potency, stacking
+    with the Herbalist talent line rather than competing with it. <b>Fisherman</b> raises bite chance and rare-catch
+    odds. <b>Hunter</b> improves the loot table any beast-type monster already drops pelt, meat, or fang from.
+    <b>Merchant</b> is the deep one: a real, deterministic commodity market that shifts day to day, town to town.
+    <b>Locksmith</b> boosts the game's real lockpicking skill-check formula and meaningfully reduces how often a
+    failed attempt snaps the pick. <b>Jeweler</b> reuses the exact same "tinkering" craft-skill bucket the game
+    already tracks for rings, amulets, and wands, plus a real bonus to what your gems are actually worth. <b>
+    Cartographer</b> grants the same wide-area reveal on reaching a new dungeon level that the Cartographer talent
+    grants -- a real way to get it without spending a talent point (the two stack rather than conflict). <b>
+    Scribe</b> means a spell tome you already know isn't a total loss -- you can sell it on instead of watching it
+    crumble to dust. <b>Guard</b> is the one built entirely on combat: the game already has a real war system where
+    rival kingdoms send raiders to attack settlements (see any settlement's guards, watchmen, and captains), and a
+    real reward for personally driving them off. Taking up Guarding scales that same reward with your level, and
+    leaves you a real, if temporary, edge right after the fight.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Specializations.</b> Reach level 5 in any trade with one and
+    <b>Weaponsmith</b>/<b>Armorsmith</b> (Blacksmith), <b>Trade Baron</b>/<b>Import Broker</b> (Merchant),
+    <b>Orchardist</b>/<b>Homesteader</b> (Farmer -- crop value vs. a real bonus at your own home garden),
+    <b>Gembound</b>/<b>Deep Delver</b> (Miner -- rare finds vs. bulk ore), <b>Master Carpenter</b>/<b>Timber
+    Baron</b> (Woodcutter -- Ironwood vs. bulk timber), <b>Trophy Hunter</b>/<b>Provisioner</b> (Hunter -- fangs vs.
+    pelts and meat), <b>Deep Sea Angler</b>/<b>Riverside Regular</b> (Fisherman -- rare catches vs. bite chance),
+    <b>Banquet Chef</b>/<b>Battle Cook</b> (extra portions vs. stronger healing), and <b>Potion Master</b>/<b>Bomb
+    Specialist</b> (Alchemist -- stronger potions vs. stronger bombs), and <b>Watch Captain</b>/<b>Sellsword</b>
+    (Guard -- standing vs. coin).</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Work a shift</b> with anyone who's taught you a trade for
+    straightforward, honest wages plus experience -- costs a day of game time, same trade-off as resting. A Home Forge
+    or Market Stall furnishing (see Property & Housing) pays passive income of its own on top of all that, but only if
+    someone's actually minding it while you're away -- your spouse waiting at that exact house, or a grown child who
+    settled down in the same town.</div>` },
+  { id:'reputation', label:'Reputation & Rule', html: () => `
     <div class="modal-opt">Crime is regional. Assaulting/killing a peaceful NPC raises a bounty and alerts guards in
-    that settlement; high enough bounty makes guards attack on sight there. Bounties decay slowly over time.</div>` },
+    that settlement; high enough bounty makes guards attack on sight there. Bounties decay slowly over time.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Standing & Kingdom Reputation.</b> Every settlement quietly
+    tracks your local standing (goodwill) from quests, trade, and simply living there; every kingdom separately
+    tracks your reputation with it, nudging prices and how its people treat you. Both are visible in the Quest Log
+    (<b>q</b>), along with any civic office, noble title, or crown you hold.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>City Rank & Civic Office (new).</b> Local standing carries a real
+    title -- Outsider, Resident, Trusted Local, Notable Citizen, Freeman of the City, City Elder. Once you're a
+    Notable Citizen somewhere, ask whoever actually runs the place (a Palace noble, or an elder) to petition for civic
+    office -- a real, binding appointment (Village Reeve up through Capital Chancellor) with its own daily stipend.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Nobility & the Crown (new).</b> Any noble you've met can elevate
+    you through the kingdom's own titles -- Knight/Dame, Baron/Baroness, Count/Countess, Duke/Duchess -- once your
+    kingdom reputation clears each rank's bar and you've actually served in civic office first; a crown isn't handed
+    out to a stranger with a good record on paper. At the very top, holding office in two of the kingdom's
+    settlements, top nobility, and a steep reputation bar together unlock the crown itself -- a real coronation
+    (funded by a real tribute) that permanently makes you that kingdom's ruler. Once crowned, Hold court with any
+    noble of your kingdom: name your spouse Consort, name a settled grown child Governor of their city, issue a
+    Royal Decree, set a lasting Standing Policy (Fortify the Realm, Lower Taxes, or Royal Patronage -- each a real,
+    ongoing trade-off, not a one-time button), or work the kingdom's real diplomacy -- extending an olive branch or
+    rattling sabers at any foreign kingdom you have standing with genuinely shifts that pair's relationship (the
+    same war/tension/peace/trade-pact/alliance system already driving the wider world).</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Holding the crown (new).</b> Ruling isn't a free state once
+    won -- if a kingdom's reputation with you collapses below a critical point while you rule it, instability
+    quietly builds (visible in the Quest Log), with a clear warning long before anything happens. Let it run long
+    enough and the nobles conspire: the crown is lost outright. Standing policies, diplomacy, and simply not
+    neglecting the kingdom's reputation are how a ruler actually holds onto power.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Usurpation (new).</b> There's a second, violent path to a crown
+    for a kingdom that has genuinely turned on you (deep negative reputation -- this can't happen by simple neglect)
+    if you're a capable enough fighter: killing a noble of that kingdom yourself opens the option to seize the throne
+    by force on the spot, no petitions or coronation tribute required. It's real power, gained fast -- but a seized
+    throne starts already dangerously close to rebellion (see Holding the crown, above), not stable from day one
+    the way an earned one is. The two paths are mutually exclusive with each other and with ever holding two crowns
+    at once.</div>` },
   { id:'quests', label:'Quests', html: () => `
     <div class="modal-opt"><b>Main Quest</b>: a story generated fresh for this world's seed, drawn from 9 possible
     premises — the antagonist's name, and which of the game's named story bosses fill each beat, vary between
@@ -32955,6 +34914,9 @@ function handleKey(e) {
     if (key === 'Y') { openCybernetics(); return; }
     if (key === 'U') { openEldritch(); return; }
     if (key === 'P') { openSaveLoadMenu(); return; }
+    if (key === 'p') { openPropertyMenu(); return; }
+    if (key === 'F') { openFamilyMenu(); return; }
+    if (key === 'O') { openProfessionsMenu(); return; }
     if (key === 'V') { openTravel(); return; }
     if (key === 'm') { markWaypoint(); return; }
     if (key === 'G') { autoTravelToStairs(); return; }
@@ -32978,6 +34940,30 @@ function handleKey(e) {
   if (gameState === 'saveload') {
     if (key === 'Escape') { closeModal(); return; }
     if (/^[a-z]$/.test(key)) { saveLoadChoice(key); return; }
+    return;
+  }
+  if (gameState === 'property') {
+    if (key === 'Escape') { gameState = 'playing'; closeModal(); return; }
+    const opt = propertyMenuOptions.find(o => o.key === key);
+    if (opt) opt.action();
+    return;
+  }
+  if (gameState === 'furnish') {
+    if (key === 'Escape') { gameState = 'playing'; closeModal(); return; }
+    const opt = furnishMenuOptions.find(o => o.key === key);
+    if (opt) opt.action();
+    return;
+  }
+  if (gameState === 'family') {
+    if (key === 'Escape') { closeModal(); return; }
+    const opt = familyMenuOptions.find(o => o.key === key);
+    if (opt) opt.action();
+    return;
+  }
+  if (gameState === 'professions') {
+    if (key === 'Escape') { closeModal(); return; }
+    const opt = professionsMenuOptions.find(o => o.key === key);
+    if (opt) opt.action();
     return;
   }
   if (gameState === 'cyber') {
