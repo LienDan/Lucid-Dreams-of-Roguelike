@@ -652,6 +652,17 @@ const MOVE_DIRS = [
  *      dead end (e.g. a small island) doesn't just repeat one blocked step forever.
  * Returns { progressed: boolean, turnCountAfter: number }.
  */
+// PERFORMANCE NOTE (investigated this session after a batch life ran ~16 minutes of real
+// wall-clock time -- confirmed via direct timing, not a bug): exploreStep/keyAndWait's async
+// design means EVERY call pays a real ~30ms minimum sleep (see waitForAutoAction), and any call
+// that actually triggers a multi-turn auto-action (X/G/travel) can run 300ms-1300ms+ of real
+// time. Verified directly: in a timed reproduction, exploreStep advanced the turn counter on
+// 100% of calls (40/40) -- it is NOT getting stuck, it is doing real, correct work that simply
+// costs real wall-clock time per call. Over a long life (thousands of actions), this adds up
+// arithmetically: a 6000-action budget life can legitimately take 10-20+ minutes of real time to
+// fully play out. This is an expected cost of the async-jsdom-driven approach, not a hang or an
+// infinite loop -- don't mistake a long-running batch for evidence of a bug without checking
+// actionsUsed/turnCount progress first (report.json's per-life actionsUsed is the ground truth).
 async function exploreStep(win, wanderState) {
   const before = evalGame(win, 'turnCount').value;
 
@@ -860,6 +871,54 @@ async function trySeekSupplies(win, log) {
   const bleeding = evalGame(win, '(player.bleedTurns||0) > 0').value === true;
   if (bleeding) return false; // autoTravelHome would refuse to even start -- see runAutoLoop's guard
 
+  // BUG FIX (found via live batch this session): a life stalled 500+ actions on an 'enter_dungeon'
+  // stage despite tryPathTowardAnyDungeon correctly locating and steadily approaching (one tile
+  // per call) a real dungeon entrance -- the event log showed "Heading toward a known dungeon
+  // entrance" and "Traveling to restock supplies" alternating for the whole life. Root cause:
+  // this function's autoTravelHome ('H') is a MULTI-TURN action (keyAndWait can consume dozens of
+  // turns in a single call, unlike the single-tile-per-call quest-pathing functions above it in
+  // the priority chain), so on any turn where the slow, steady dungeon approach happened to be
+  // blocked or already-arrived (returning false for one turn), this fired instead and could yank
+  // the character a long distance back toward a remembered settlement in one jump, undoing most
+  // of the incremental progress just made. Fixed by deferring the deliberate (not merely
+  // opportunistic -- tryShopIfTrading still restocks normally if a shop is passed along the way)
+  // restock trip while a concretely-navigable main-quest target is actively being pursued; supply
+  // shortage isn't so urgent that finishing the trip to an already-located objective first is
+  // unsafe (still bails immediately above if actually bleeding or a monster is nearby).
+  //
+  // FOLLOW-UP BUG FIX, same session: this only covered 'enter_dungeon', because that's the only
+  // case that had actually been caught live yet -- but the exact same interference applies to
+  // ANY of the quest-pathing functions above this one in the priority chain, and it recurred:
+  // a life on a 'talk_npc' (role-gated) stage showed 263 "restock" interruptions and ZERO actual
+  // rests over 9000+ turns, same alternation pattern, just with tryPathTowardQuestNpc instead of
+  // tryPathTowardAnyDungeon. Generalized the check to cover every quest-pathing case at once
+  // (talk_npc, enter_dungeon, and anything getMainQuestNavigationTarget covers) instead of
+  // enumerating stage types one at a time as each one gets caught live -- the underlying
+  // principle ("don't interrupt an active, locatable pursuit for a non-urgent restock trip") is
+  // the same regardless of which specific stage type is involved.
+  // SECOND FOLLOW-UP BUG FIX, same session, same recurring lesson: the interference reappeared a
+  // THIRD time, now for 'kill_any' -- a life on pro_town_2 ("Earning a Welcome", kill 2 boar/
+  // wolf) showed 123 restock interruptions and only ONE combat interaction (a single spell cast,
+  // zero kills) across 11800+ turns, meaning the character barely ever got far enough from town
+  // to reach boar/wolf terrain before getting yanked back by a restock trip. 'kill_any' wasn't in
+  // the enumerated list above because, unlike enter_dungeon/talk_npc, its navigation
+  // (tryPathTowardBossBiome, extended this session to cover kill_any's required-species biomes
+  // too) isn't reachable from a single shared helper the way getMainQuestNavigationTarget covers
+  // kill_boss/dungeon_tier/dimension_trail -- so it kept getting left out of this list one stage
+  // type at a time, the exact anti-pattern the comment above already warned about. Added 'kill_any'
+  // explicitly this time. LESSON FOR A FUTURE SESSION: if a new navigable stage type is EVER
+  // added anywhere in this file (a new function like tryPathTowardX), it must be added to this
+  // enumerated list too, or this exact interference will silently reappear a fourth time.
+  const pursuingQuestTarget = evalGame(win, `(function(){ const s = curStoryStage(); return s && (s.type === 'enter_dungeon' || s.type === 'talk_npc' || s.type === 'kill_any' || s.type === 'kill_boss'); })()`).value === true
+    || getMainQuestNavigationTarget(win) !== null; // reuses the SAME target-finding logic tryAdvanceMainQuest itself uses, rather than re-deriving which stage types count as "actively navigable" a second way
+  if (pursuingQuestTarget) return false;
+  // NOTE: 'kill_boss' added alongside 'kill_any' in the same pass -- found together in the same
+  // batch life (51 restock interruptions during a kill_boss stage that turned out to be an
+  // OVERWORLD_BOSSES/biome case, the same gap as kill_any's, since getMainQuestNavigationTarget
+  // only covers the DUNGEON-theme half of kill_boss, not the biome half tryPathTowardBossBiome
+  // handles). Between this and 'kill_any', every stage type tryPathTowardBossBiome can act on is
+  // now covered -- if that function is ever extended to a THIRD stage type, extend this list too.
+
   const beforeTurn = evalGame(win, 'turnCount').value;
   await keyAndWait(win, 'H', 8000);
   const afterTurn = evalGame(win, 'turnCount').value;
@@ -947,17 +1006,46 @@ function tryFireRanged(win, log) {
  * threat (a ranged attacker already keeps its distance via tryFireRanged). Moves to the open
  * tile that maximizes distance from the nearest hostile; if fully boxed in with nowhere to
  * retreat, falls through and lets combat proceed (better to swing back than stand still).
+ *
+ * BUG FIX (found this session via a live debug-assisted stress test): `canRecover` unconditionally
+ * blocked fleeing whenever ANY heal spell/bandage/potion was available, regardless of whether that
+ * recovery was actually WINNING the exchange. A character with a Heal spell against a boss that
+ * outdamaged it stayed critical and kept "recovering" for 3000+ actions without ever gaining
+ * ground, never fleeing, until it died anyway -- healing is not the same as having a way to
+ * actually turn a fight around.
+ *
+ * Fixed with a "sustained danger" counter (`stall`, life-scoped like the various navigation locks
+ * elsewhere): it accumulates every turn the character stays below a moderate health threshold
+ * (BOT_PROFILE.recoverHpFrac -- the same bar tryRecoverHp itself uses) while something is still
+ * actively threatening, and only resets once HP climbs convincingly high (70%+) or the threat is
+ * gone. Deliberately NOT a strict consecutive-critical-turns streak: an early version reset the
+ * counter the instant HP ticked back above the strict flee line even once, so a character healing
+ * itself back to "just barely not critical" every single turn (exactly what repeated curative use
+ * does) never accumulated 15 turns of true critical HP in a row -- confirmed live: 6 curatives
+ * used back to back (hp 19/290 -> 36 -> 53 -> 68 -> 84 -> 101 of 290), still died, never fled once.
+ * Tracking "hurt AND threatened" as a running total instead of a streak catches that oscillating
+ * war-of-attrition pattern correctly. Two separate triggers then decide whether to actually flee:
+ * a freshly critical HP reading (hpFrac) gives recovery one real chance first, same as before;
+ * 15+ accumulated turns of sustained danger overrides recovery outright, since by definition it
+ * has already had many chances and isn't resolving the situation.
+ * @param stall mutable {count: number} object, create with `{count: 0}` once per life
  */
-async function tryFleeIfCritical(win, log, hpFrac = BOT_PROFILE.fleeHpFrac) {
+async function tryFleeIfCritical(win, log, hpFrac = BOT_PROFILE.fleeHpFrac, stall = { count: 0 }) {
   const st = evalGame(win, 'JSON.stringify({hp:player.hp,maxHp:player.maxHp})').value;
   let hp, maxHp;
   try { ({ hp, maxHp } = JSON.parse(st)); } catch (e) { return false; }
-  if (typeof hp !== 'number' || typeof maxHp !== 'number' || hp >= maxHp * hpFrac) return false;
-  if (!nearbyMonster(win)) return false;
+  if (typeof hp !== 'number' || typeof maxHp !== 'number') { return false; }
 
-  // If we have any real way to turn this around this turn, don't flee -- use it instead (these
-  // are cheap/no-op to check and the caller already tries them at higher priority, but a life
-  // total this low is worth double-checking before committing to a retreat that costs a turn).
+  const threatened = nearbyMonster(win);
+  if (hp >= maxHp * 0.7 || !threatened) { stall.count = 0; return false; } // convincingly fine, or nothing even threatening right now
+  if (hp < maxHp * BOT_PROFILE.recoverHpFrac) stall.count = (stall.count || 0) + 1; // hurt enough that tryRecoverHp itself would act -- count it toward sustained danger
+
+  const freshlyCritical = hp < maxHp * hpFrac;
+  const sustainedDanger = stall.count >= 15;
+  if (!freshlyCritical && !sustainedDanger) return false; // hurt, but neither an acute crisis nor an established pattern yet -- normal play continues
+
+  // If we have any real way to turn this around this turn, don't flee -- use it instead, UNLESS
+  // we've already established (via sustainedDanger) that recovery isn't actually working.
   const canRecover = evalGame(win, `
     (function(){
       if ((player.bleedTurns||0) > 0 && player.inventory.some(it => it.effect==='bandage' || /bandage/i.test(it.name))) return true;
@@ -967,7 +1055,7 @@ async function tryFleeIfCritical(win, log, hpFrac = BOT_PROFILE.fleeHpFrac) {
       return healItem;
     })()
   `).value === true;
-  if (canRecover) return false;
+  if (canRecover && !sustainedDanger) return false;
 
   const step = bestRetreatStep(win);
   if (!step) return false; // boxed in -- let normal combat handle it
@@ -1222,6 +1310,39 @@ function tryCastSummonAbility(win, log, chance = BOT_PROFILE.summonChance) {
     })()
   `);
   if (r.ok && r.value) { if (log) log(`Summoned help with ${r.value}.`); return true; }
+  return false;
+}
+
+/**
+ * The 'raise' counterpart to tryCastSummonAbility above -- FIXED this session, closing the gap
+ * that function's own comment (and the SECTION 5 header's open-gaps list) explicitly called out.
+ * Same conjure-an-ally family as 'summon' (Raise Dead et al -- see UNIFIED ABILITY POOL), but
+ * needs a corpse within the spell's range rather than being purely self-targeted; the game's own
+ * castSpell() handler already does fully automatic targeting via findNearestCorpse(spell.range)
+ * once cast (see 'raise' handling in game.html) -- no manual target selection exists to build,
+ * this was purely a "never attempted at all" gap, not a "needs real targeting logic" one. Checks
+ * findNearestCorpse(spell.range) itself first so this doesn't waste mana attempting to raise
+ * with no corpse anywhere nearby (the game would just log 'No corpse nearby to raise.' and still
+ * consume the turn, same as any other whiffed action -- checking first avoids that for free).
+ */
+function tryCastRaiseAbility(win, log, chance = BOT_PROFILE.summonChance) {
+  if (Math.random() > chance) return false;
+  if (evalGame(win, '(player.allies||[]).some(a => a.alive)').value === true) return false;
+  const r = evalGame(win, `
+    (function(){
+      const ids = [...new Set([
+        ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
+        ...(player.installedCyber||[]), ...(player.mutations||[]),
+      ])];
+      const known = ids.map(id => findAbilityById(id)).filter(s => s && s.type==='raise');
+      const usable = known.filter(s => getPoolValue(s.resource||'mp') >= effectiveCost(s) && findNearestCorpse(s.range));
+      if (!usable.length) return null;
+      const spell = choice(Math.random, usable);
+      castSpell(spell.id);
+      return spell.name;
+    })()
+  `);
+  if (r.ok && r.value) { if (log) log(`Raised the dead with ${r.value}.`); return true; }
   return false;
 }
 
@@ -1703,22 +1824,22 @@ function tryPickUpHere(win, log) {
   const gs1 = evalGame(win, 'gameState').value;
 
   if (gs1 === 'choice') {
-    // Prefer: pick a lock (only offered if we're actually carrying a lockpick -- see
-    // attemptPickLock -- so this never wastes a turn fumbling with bare hands when picking
-    // isn't really an option) > take everything at once > force a lock open (last-resort on a
-    // locked container: no lockpick, so this is the only way in, at the cost of a chance to
-    // fail and a possible "crime" flag) > pick up a single named item > salvage a wreck > fish.
-    // Deliberately NOT preferring "^open X" here: every unlocked container WITH real contents
-    // was already looted directly above, before 'g' was ever pressed -- see the lootedUnlocked
-    // block -- so any "Open X" entry still present in this menu can only belong to an
-    // already-empty container. An earlier version put that pattern first in this list anyway,
-    // which meant it kept "successfully" reopening an empty crate forever every time real loose
-    // items ALSO sat on the same tile, since the empty-crate option always won the preference
-    // order and the actual items were never reached. Explicitly avoided unless nothing else
-    // qualifies: fishing (ties up many turns for a minor food item -- fine as a fallback, not a
-    // priority over anything with clearer immediate value).
+    // BUG FIX (found via live batch this session -- a real "stuck" life, 300+ actions with
+    // turnCount frozen, log showing the same "Pick the lock on the vault case" line repeated
+    // dozens of times). The comment this replaces claimed "Pick the lock" is only OFFERED when
+    // actually carrying a lockpick -- checked pickUp() in game.html directly and that's false:
+    // the menu option is offered unconditionally (see options.push for c.locked, no lockpick
+    // check at all); attemptPickLock() is what checks, and on failure-to-even-attempt (no
+    // lockpick) it logs a message and returns WITHOUT calling endTurn() -- unlike a genuine
+    // fumbled attempt, which still consumes a turn. With "pick the lock" as the top regex
+    // preference regardless of inventory, a character whose lockpick had snapped (a real,
+    // documented mechanic -- see attemptPickLock's ~15% snap chance) would keep "choosing" this
+    // option forever: menu opens, option picked, function no-ops, turnCount never advances,
+    // repeat. Fixed by only preferring it when a lockpick is actually confirmed in inventory;
+    // otherwise "force it open" (always available, no lockpick required) naturally wins instead.
+    const hasLockpick = evalGame(win, `player.inventory.some(i => i.id === 'lockpick')`).value === true;
     resolveChoiceMenu(win, log, {
-      prefer: [/pick the lock/i, /pick up everything/i, /force .* open/i, /^pick up /i, /salvage/i],
+      prefer: [...(hasLockpick ? [/pick the lock/i] : []), /pick up everything/i, /force .* open/i, /^pick up /i, /salvage/i],
       avoid: [/fish here/i, /^open /i],
       logPrefix: 'Interacted with tile: ',
     });
@@ -2221,6 +2342,20 @@ function tryHandleDialogueIfOpen(win, log) {
 // detecting content that's too rare or a fight that's miscalibrated), NOT something to patch
 // away by teaching the bot to hunt specific species -- doing that would make the tool blind to
 // the very class of problem it's meant to catch. Left as-is and reported, not engineered around.
+//
+// SIXTH item, same family, found later this session with much cleaner evidence: after fixing the
+// talk_npc settlement-fallback bug (see tryPathTowardQuestNpc's BUG FIX comments), a life that
+// used to stall on Act-0 entirely instead sailed through its talk_npc stage in ~540 turns and
+// immediately hit pro_hamlet_2 ("Far From Help", killAnyStage(['wolf'], 1)) -- then stayed on
+// that EXACT stage for the rest of a 10000-action life (~49000 turns). combatSummary shows why:
+// 10 real kills across 8 different species (vulture/jackal/boar/bandit/deer/cultist/
+// giant_catfish/rust_sentinel) -- deer and boar (the SAME PROLOGUE_WILDLIFE tier as wolf) were
+// both killed at least once -- but not one single wolf the entire life. This is about as clean a
+// piece of evidence as this kind of finding gets: not "the bot failed to fight," not "the bot
+// failed to explore," but "an enormous, varied combat sample never produced the one specific
+// species this stage needs one kill of." Exactly the discoverability/rarity question this
+// toolkit exists to surface -- reported here rather than special-cased into a wolf-hunting
+// behavior, for the same reason as the giant rat case above.
 function tryTalkToAdjacentNpc(win, log, talkedNpcUids) {
   const roles = evalGame(win, `(function(){ const s = curStoryStage(); return (s && s.type === 'talk_npc') ? s.targetRoles : undefined; })()`).value;
   const r = evalGame(win, `
@@ -2398,20 +2533,65 @@ function getMainQuestNavigationTarget(win) {
  * falls through to normal exploration. This intentionally reuses the exact same pathfinding
  * primitive as the wide-frontier explore fallback in navigation.js, just with a purposeful
  * destination instead of "nearest unexplored tile".
+ *
+ * BUG FIX (found via auditing tryPathTowardAnyDungeon's own real thrashing bug this session, and
+ * fixed here proactively rather than waiting to catch it live a second time): this used to call
+ * getMainQuestNavigationTarget() fresh every turn, which itself always returns the CURRENTLY
+ * nearest matching dungeon/dimension for the active stage. If a second dungeon of the same theme
+ * gets discovered mid-approach (routine during normal exploration), or the player's own movement
+ * makes a different candidate marginally closer, the target could flip and the approach restart
+ * from wherever it happened to be -- same root cause, same fix as tryPathTowardQuestNpc/
+ * tryPathTowardAnyDungeon: lock onto a specific target for a given stage (keyed on the stage's
+ * own id, not on the resolved dungeon/dimension name) and stay committed to it, only re-picking when
+ * the underlying quest stage itself actually changes. Consistency of pursuit beats optimality of
+ * pick -- reaching the target locked onto first is strictly better than never reaching any target
+ * because "nearest" kept moving.
+ * @param lock mutable {} object, create once per life (fields set internally: x, y, why)
  */
-function tryAdvanceMainQuest(win, log) {
-  const target = getMainQuestNavigationTarget(win);
-  if (!target) return false;
-  const already = evalGame(win, `chebyshev(player.x, player.y, ${target.x}, ${target.y})`).value;
-  if (already <= 1) return false; // already there -- let stairs/dive/explore-local handle the rest
+function tryAdvanceMainQuest(win, log, lock) {
+  const fresh = getMainQuestNavigationTarget(win);
+  if (!fresh) { lock.stageId = undefined; return false; }
+  // Key the lock on the STAGE's own identity (its id, stable for as long as this is the current
+  // main-quest stage), not on `why` -- `why` includes the resolved dungeon/dimension NAME, which
+  // is exactly the thing that can change mid-approach if a second matching dungeon gets
+  // discovered (the failure mode this fix exists to prevent). Keying on the stage id instead
+  // means "the same objective, a supposedly closer candidate just appeared" correctly keeps the
+  // original lock, while "the story actually advanced to a new stage" correctly resets it.
+  const stageId = evalGame(win, `(function(){ const s = curStoryStage(); return s ? s.id : null; })()`).value;
+  const target = (lock.stageId === stageId) ? { x: lock.x, y: lock.y, why: lock.why } : fresh;
+  lock.x = target.x; lock.y = target.y; lock.why = fresh.why; lock.stageId = stageId;
+  const onTile = evalGame(win, `player.x === ${target.x} && player.y === ${target.y}`).value;
+  if (onTile) {
+    // FOURTH BUG FIX, found immediately after fixing the identical issue in
+    // tryPathTowardAnyDungeon (see its own inline BUG FIX comment): arriving at a registered
+    // dungeon's entrance coordinate does NOT automatically enter it -- the game requires an
+    // explicit '>' key press while standing on the entrance tile (t.feature ===
+    // 'dungeon_entrance' in game.html, same key dispatch as stairs/altars/structures). The old
+    // comment here ("let stairs/dive/explore-local handle the rest") turned out to be an
+    // unverified assumption: grepped the whole file for anything that presses '>' near a
+    // dungeon entrance specifically, and nothing does. Every kill_boss (dungeon-theme),
+    // dungeon_tier, and dimension_trail(boss_kill) stage funnels through this exact same
+    // "arrive at a registered dungeon" path, so this single gap plausibly explains a meaningful
+    // share of why deep main-quest progress has been hard to observe organically all session --
+    // reaching the right area is not the same as actually going in.
+    if (evalGame(win, 'curIsDungeon() || curIsDimension()').value) return false; // already inside -- nothing more to do here
+    const before = evalGame(win, 'turnCount').value;
+    key(win, '>');
+    if (evalGame(win, 'turnCount').value !== before) {
+      if (log) log(`Entered dungeon for main quest target (${target.why}).`);
+      return true;
+    }
+    lock.stageId = undefined; // wasn't actually enterable from here -- drop the lock, re-evaluate fresh next time
+    return false;
+  }
   const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 300)`).value;
-  if (!step) return false;
+  if (!step) { lock.stageId = undefined; return false; } // unreachable -- drop the lock, let a fresh pick happen next time
   const MOVE_DIRS = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
   const dirEntry = MOVE_DIRS.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
   if (!dirEntry) return false;
   const before = evalGame(win, 'turnCount').value;
   key(win, dirEntry[0]);
-  if (evalGame(win, 'turnCount').value === before) return false; // blocked -- let normal explore handle it
+  if (evalGame(win, 'turnCount').value === before) { lock.stageId = undefined; return false; } // blocked -- drop the lock, let normal explore handle it
   if (log && Math.random() < 0.05) log(`Heading toward main quest target (${target.why}).`); // sampled, not every step
   return true;
 }
@@ -2480,21 +2660,43 @@ function tryPathTowardQuestNpc(win, log, lock) {
     // candidate is currently loaded, so the bot has a reason to return toward civilization
     // instead of drifting further into the wilderness while this stage is stuck.
     if (!evalGame(win, 'curIsDungeon() || curIsDimension()').value) {
-      const settlement = evalGame(win, `
-        (function(){
-          const CHUNK = 24;
-          const pcx = Math.floor(player.x / CHUNK), pcy = Math.floor(player.y / CHUNK);
-          let best = null, bestD = Infinity;
-          for (const [key, c] of worldChunks) {
-            if (!c || !c.settlement) continue;
-            const [cx, cy] = key.split(',').map(Number);
-            const d = Math.max(Math.abs(cx - pcx), Math.abs(cy - pcy));
-            if (d < bestD && d > 0) { bestD = d; best = { x: cx * CHUNK + Math.floor(CHUNK / 2), y: cy * CHUNK + Math.floor(CHUNK / 2) }; }
-          }
-          return best;
-        })()
-      `).value;
-      if (settlement) target = settlement;
+      // THIRD BUG FIX, same session, found via a clean reproduction (a life spent its ENTIRE
+      // 15000-action budget stuck on this exact fallback branch -- 436 "heading back toward
+      // known civilization" attempts, zero talks, zero progress). Two compounding problems:
+      // (1) this recomputed "nearest OTHER-than-current-chunk settlement" fresh on every call,
+      // the SAME un-locked target-thrashing pattern already found and fixed in
+      // tryPathTowardAnyDungeon/tryAdvanceMainQuest/tryPathTowardBossBiome -- just never audited
+      // here too. (2) `d > 0` explicitly EXCLUDED the player's own current chunk, meaning a
+      // character standing right at their home settlement (extremely common early in a
+      // hamlet/village/etc. origin, since that's literally where they start) could never target
+      // it and would instead chase some OTHER, farther, possibly nonexistent settlement forever.
+      // Fixed both: locks onto a specific settlement coordinate (via `lock.settlement`, reusing
+      // the same lock object already threaded through this whole function) instead of re-picking
+      // every call, and allows d===0 (the current chunk) as a valid target -- if we're already
+      // in the right place and still finding nobody, the problem is curNPCs()'s 3x3 radius not
+      // including every corner of a large settlement, not "wrong settlement chosen".
+      if (lock.settlement) {
+        const stillValid = evalGame(win, `worldChunks.has(${JSON.stringify(Math.floor(lock.settlement.x/24) + ',' + Math.floor(lock.settlement.y/24))})`).value;
+        if (!stillValid) lock.settlement = null;
+      }
+      if (!lock.settlement) {
+        const settlement = evalGame(win, `
+          (function(){
+            const CHUNK = 24;
+            const pcx = Math.floor(player.x / CHUNK), pcy = Math.floor(player.y / CHUNK);
+            let best = null, bestD = Infinity;
+            for (const [key, c] of worldChunks) {
+              if (!c || !c.settlement) continue;
+              const [cx, cy] = key.split(',').map(Number);
+              const d = Math.max(Math.abs(cx - pcx), Math.abs(cy - pcy));
+              if (d < bestD) { bestD = d; best = { x: cx * CHUNK + Math.floor(CHUNK / 2), y: cy * CHUNK + Math.floor(CHUNK / 2) }; }
+            }
+            return best;
+          })()
+        `).value;
+        if (settlement) lock.settlement = settlement;
+      }
+      if (lock.settlement) target = lock.settlement;
     }
     if (target) viaSettlementFallback = true;
     if (!target) return false; // no NPC candidate and no known settlement to return to -- let normal explore find new chunks
@@ -2502,7 +2704,19 @@ function tryPathTowardQuestNpc(win, log, lock) {
     lock.uid = target.uid;
   }
   const already = evalGame(win, `chebyshev(player.x, player.y, ${target.x}, ${target.y})`).value;
-  if (already <= 1) return false; // already adjacent -- tryTalkToAdjacentNpc handles this turn
+  if (already <= 1) {
+    // If we arrived via the settlement fallback and STILL find nobody matching (checked at the
+    // top of this same function on a later call), sitting frozen at that one settlement's center
+    // forever would be its own dead end. Give it a bounded number of attempts once arrived, then
+    // drop the lock so a DIFFERENT known settlement gets tried instead of oscillating around one
+    // that turned out to have nobody useful.
+    if (viaSettlementFallback) {
+      lock.settlementArrivedCount = (lock.settlementArrivedCount || 0) + 1;
+      if (lock.settlementArrivedCount > 20) { lock.settlement = null; lock.settlementArrivedCount = 0; }
+    }
+    return false; // already adjacent/arrived -- tryTalkToAdjacentNpc handles adjacency; nothing more to do this turn otherwise
+  }
+  if (viaSettlementFallback) lock.settlementArrivedCount = 0; // moving again -- reset the stuck-at-arrival counter
   const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 300)`).value;
   if (!step) { lock.uid = null; return false; } // unreachable -- drop the lock and let a fresh pick happen next time
   const MOVE_DIRS_Q = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
@@ -2533,28 +2747,69 @@ function tryPathTowardQuestNpc(win, log, lock) {
  * cause as the talk_npc issue fixed earlier this session. Mirrors nearestRegisteredDungeonOfTheme
  * (see getMainQuestNavigationTarget) but without a theme filter, since any dungeon qualifies.
  */
-function tryPathTowardAnyDungeon(win, log) {
+/**
+ * BUG FIX (found via live batch this session): same target-thrashing pattern already found and
+ * fixed for tryPathTowardQuestNpc, just never applied here too. This used to recompute "nearest
+ * registered dungeon" fresh on every single call -- if the bot discovers a NEW, closer dungeon
+ * mid-approach (routine while exploring), the target would flip and the approach would restart
+ * from scratch, potentially forever. Confirmed directly off a real life: 900+ turns of "Heading
+ * toward a known dungeon entrance" logged with zero net progress. Fixed the same way as
+ * tryPathTowardQuestNpc: lock onto a specific dungeon's coordinates via `lock` (life-scoped,
+ * like questNpcLock) and stay committed to it until actually reached, rather than re-picking
+ * "nearest" every call.
+ * @param lock mutable {x,y}|{} object, create with `{}` once per life
+ *
+ * THIRD note, same function: see the inline BUG FIX comment further down for a second real bug
+ * found after this lock fix -- reaching the entrance correctly still didn't complete the stage,
+ * because entering a dungeon needs an explicit '>' key press, not just standing on the tile.
+ */
+function tryPathTowardAnyDungeon(win, log, lock) {
   const stageR = evalGame(win, `(function(){ const s = curStoryStage(); return (s && s.type === 'enter_dungeon' && !curIsDungeon()) ? true : false; })()`);
-  if (!stageR.ok || !stageR.value) return false;
-  const target = evalGame(win, `
-    (function(){
-      let best = null, bestD = Infinity;
-      for (const dg of dungeonRegistry.values()) {
-        const d = chebyshev(player.x, player.y, dg.x, dg.y);
-        if (d < bestD) { bestD = d; best = dg; }
-      }
-      return best ? { x: best.x, y: best.y } : null;
-    })()
-  `).value;
-  if (!target) return false; // no dungeon registered/discovered yet -- normal exploration is what reveals one
+  if (!stageR.ok || !stageR.value) { lock.x = undefined; return false; }
+  let target = (lock.x != null) ? { x: lock.x, y: lock.y } : null;
+  if (!target) {
+    target = evalGame(win, `
+      (function(){
+        let best = null, bestD = Infinity;
+        for (const dg of dungeonRegistry.values()) {
+          const d = chebyshev(player.x, player.y, dg.x, dg.y);
+          if (d < bestD) { bestD = d; best = dg; }
+        }
+        return best ? { x: best.x, y: best.y } : null;
+      })()
+    `).value;
+    if (!target) return false; // no dungeon registered/discovered yet -- normal exploration is what reveals one
+    lock.x = target.x; lock.y = target.y;
+  }
+
+  // SECOND BUG FIX, found via direct distance-tracing this session after the lock fix above
+  // still didn't fully resolve a real stall: this used to go straight to bfsFirstStep, which
+  // returns null BOTH when genuinely unreachable AND when already standing on the destination
+  // tile -- both cases were treated identically as "unreachable, drop the lock". Traced a life
+  // that reached the exact registered (x,y) after 50 turns of correct approach, then sat frozen
+  // on that tile for 1300+ more turns doing nothing: dungeon entry isn't automatic-on-step, it
+  // needs the same '>' key every other "enter/use" feature in this file needs (see
+  // t.feature === 'dungeon_entrance' in game.html, handled by the identical key dispatch as
+  // stairs/altars/structures) -- this function approached correctly but never pressed it once
+  // arrived. Fixed by checking distance first and pressing '>' when already there, instead of
+  // only ever attempting to move closer.
+  const already = evalGame(win, `player.x === ${target.x} && player.y === ${target.y}`).value;
+  if (already) {
+    const before = evalGame(win, 'turnCount').value;
+    key(win, '>');
+    if (evalGame(win, 'turnCount').value === before) { lock.x = undefined; return false; } // wasn't actually the entrance tile after all -- drop the lock and let a fresh pick happen
+    if (log) log('Entered the dungeon for the current quest stage.');
+    return true;
+  }
+
   const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 300)`).value;
-  if (!step) return false;
+  if (!step) { lock.x = undefined; return false; } // unreachable from here -- drop the lock, let a fresh pick happen next time
   const MOVE_DIRS_D = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
   const dirEntry = MOVE_DIRS_D.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
   if (!dirEntry) return false;
   const before = evalGame(win, 'turnCount').value;
   key(win, dirEntry[0]);
-  if (evalGame(win, 'turnCount').value === before) return false; // blocked (e.g. stepped onto the entrance itself and triggered entry, or wall) -- fine either way
+  if (evalGame(win, 'turnCount').value === before) { lock.x = undefined; return false; } // blocked -- drop the lock, let normal explore/a fresh pick handle it
   if (log && Math.random() < 0.1) log('Heading toward a known dungeon entrance for the current quest stage.');
   return true;
 }
@@ -2726,23 +2981,55 @@ function tryAdvanceDimensionGateStructure(win, log, memory) {
  * current boss's required biome(s) are known, using the exact same OVERWORLD_BOSSES.biomes list
  * questStageHint() itself reads.
  *
+ * EXTENDED, same session, to also cover killAnyStage prologue stages (e.g. pro_hamlet_2, "Far
+ * From Help", kill 1 wolf): a life that finally escaped the Act-0 talk_npc bottleneck (see
+ * tryPathTowardQuestNpc's BUG FIX comments) immediately got stuck on exactly this kind of stage
+ * instead -- 10000 actions (~49000 turns), 10 real kills across 8 different species including
+ * SAME-TIER wildlife (deer, boar), but not one wolf. Checked BIOMES directly rather than assume:
+ * wolf is NOT rare overall (present with real weight in plains/forest/denseforest/tundra/taiga
+ * and others), which means the actual problem was almost certainly that THIS hamlet happened to
+ * be placed somewhere without wolf in the local biome's own encounter table (the other kills --
+ * jackal/vulture/giant_catfish -- point at desert/coastal-family terrain, none of which include
+ * wolf). This is the exact same shape of problem as the kill_boss/OVERWORLD_BOSSES case above,
+ * just computed from BIOMES.encounter directly instead of a pre-authored boss->biome list, since
+ * no such list exists for ordinary wildlife. Deliberately still content-agnostic: this reads
+ * whatever species+biomes the CURRENT stage and BIOMES table actually contain, never hardcodes
+ * "wolf" or any other name.
+ *
  * @param memory mutable {biomeName: {x,y}, ...} object, create with `{}` once per life
+ * @param lock mutable {stageId, biome} object, create with `{}` once per life -- see the BUG FIX
+ *   note below (added proactively, same session, right after finding and fixing the identical
+ *   pattern in tryPathTowardAnyDungeon/tryAdvanceMainQuest)
  */
-function tryPathTowardBossBiome(win, log, memory) {
+function tryPathTowardBossBiome(win, log, memory, lock) {
   const info = evalGame(win, `
     (function(){
       const s = curStoryStage();
-      if (!s || s.type !== 'kill_boss') return null;
-      const bossId = s.targetBossId;
-      if (typeof BOSS_DUNGEON_THEME !== 'undefined' && BOSS_DUNGEON_THEME[bossId]) return null; // dungeon-theme nav already covers this
-      const owb = (typeof OVERWORLD_BOSSES !== 'undefined') ? OVERWORLD_BOSSES.find(b => b.id === bossId) : null;
-      return (owb && owb.biomes && owb.biomes.length) ? owb.biomes : null;
+      if (!s) return null;
+      if (s.type === 'kill_boss') {
+        const bossId = s.targetBossId;
+        if (typeof BOSS_DUNGEON_THEME !== 'undefined' && BOSS_DUNGEON_THEME[bossId]) return null; // dungeon-theme nav already covers this
+        const owb = (typeof OVERWORLD_BOSSES !== 'undefined') ? OVERWORLD_BOSSES.find(b => b.id === bossId) : null;
+        return (owb && owb.biomes && owb.biomes.length) ? owb.biomes : null;
+      }
+      if (s.type === 'kill_any' && s.targetIds && s.targetIds.length && (s.progress||0) < s.targetCount) {
+        // No pre-authored species->biome list exists for ordinary wildlife (unlike bosses), so
+        // compute it directly: which biomes' own encounter table includes ANY of the required
+        // species at all. A species with truly no biome home (dungeon-only monster used in a
+        // kill_any stage, if that ever happens) correctly yields an empty list -> null -> this
+        // function steps aside for that stage, same as it always has for cases it can't help with.
+        const biomes = Object.entries(BIOMES)
+          .filter(([name, b]) => b.encounter && b.encounter.some(([id]) => s.targetIds.includes(id)))
+          .map(([name]) => name);
+        return biomes.length ? biomes : null;
+      }
+      return null;
     })()
   `).value;
   if (!info) return false;
   if (evalGame(win, 'curIsDungeon() || curIsDimension()').value) return false; // biomes are an overworld-only concept
   const alreadyHere = evalGame(win, `${JSON.stringify(info)}.includes((getTile(player.x, player.y)||{}).biome)`).value;
-  if (alreadyHere) return false; // in the right terrain already -- let normal explore+combat find the actual boss
+  if (alreadyHere) return false; // in the right terrain already -- let normal explore+combat find the actual target
 
   // scan only the currently-loaded 3x3 chunk radius, same bounded cost as scanForDimensionGateFeatures
   const seen = evalGame(win, `
@@ -2769,15 +3056,30 @@ function tryPathTowardBossBiome(win, log, memory) {
       return out;
     })()
   `).value || {};
-  for (const [biome, pos] of Object.entries(seen)) memory[biome] = pos;
-
-  let best = null, bestD = Infinity;
-  for (const b of info) {
-    if (!memory[b]) continue;
-    const d = evalGame(win, `chebyshev(player.x, player.y, ${memory[b].x}, ${memory[b].y})`).value;
-    if (d < bestD) { bestD = d; best = memory[b]; }
+  for (const [biome, pos] of Object.entries(seen)) {
+    if (!memory[biome]) memory[biome] = pos; // keep the FIRST-remembered location stable -- see lock note below
   }
-  if (!best) return false; // haven't personally seen any matching terrain yet -- normal explore will find some eventually
+
+  // BUG FIX (proactive, same pattern as tryPathTowardAnyDungeon/tryAdvanceMainQuest's real
+  // thrashing bugs this session): a boss with multiple valid biomes (e.g. plains/forest/tundra)
+  // could otherwise flip its target between two remembered biome locations as "nearest" shifts
+  // with the bot's own movement, or even drift its target WITHIN the same biome name if a
+  // closer patch of it got rescanned (the `if (!memory[biome])` guard above now prevents that
+  // second half). Locks onto one specific biome name for the life of the current stage.
+  const stageId = evalGame(win, `(function(){ const s = curStoryStage(); return s ? s.id : null; })()`).value;
+  if (lock.stageId !== stageId) { lock.stageId = stageId; lock.biome = null; }
+  if (lock.biome && !memory[lock.biome]) lock.biome = null; // shouldn't happen, but stay honest if it does
+  if (!lock.biome) {
+    let best = null, bestD = Infinity, bestName = null;
+    for (const b of info) {
+      if (!memory[b]) continue;
+      const d = evalGame(win, `chebyshev(player.x, player.y, ${memory[b].x}, ${memory[b].y})`).value;
+      if (d < bestD) { bestD = d; best = memory[b]; bestName = b; }
+    }
+    if (!best) return false; // haven't personally seen any matching terrain yet -- normal explore will find some eventually
+    lock.biome = bestName;
+  }
+  const best = memory[lock.biome];
 
   const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${best.x}, ${best.y}, 300)`).value;
   if (!step) return false;
@@ -2819,7 +3121,7 @@ const nav = { MOVE_DIRS, exploreStep };
 const strat = {
   tryFightAdjacent, tryFireRanged, tryFleeIfCritical, tryAvoidOverwhelmingMonster, tryUseHackChip,
   tryCalledShot, tryCastOffensiveSpell, tryCastHealSpell, tryCastDebuffAbility, tryCastBuffAbility,
-  tryCastSummonAbility, tryStanchBleeding, tryCurePoison, tryRecoverHp,
+  tryCastSummonAbility, tryCastRaiseAbility, tryStanchBleeding, tryCurePoison, tryRecoverHp,
   tryEquipUpgrades, tryPickUpHere, tryFarm, tryCraftUseful, tryCraftGearUpgrade, tryShopIfTrading, tryTrainIfOffered,
   tryGiftIfOffered, tryHandleDialogueIfOpen, tryTalkToAdjacentNpc, tryAdvanceMainQuest, tryPathTowardQuestNpc,
   tryAdvanceDimensionGateStructure, tryPathTowardAnyDungeon, tryPathTowardBossBiome,
@@ -2972,23 +3274,40 @@ const strat = {
 //     placed dungeon theme -- see DUNGEON_THEMES in game.html) but questStageHint() itself
 //     doesn't expose that connection generically (it's the one gate kind with no bossId to hang
 //     a lookup off), so this wasn't wired in to avoid a special-cased hardcode for one dimension.
-//   Not implemented (real extension points): crafting deliberately toward a specific gear
-//     upgrade (tryCraftUseful only crafts known/affordable curatives), farming toward a
-//     specific goal (tryFarm exists but isn't goal-directed), deliberate companion/ally direct
-//     command (allies already fight and follow fully autonomously via companionFollowAI -- see
-//     game.html -- including defensive/passive stances and disengaging from danger on their own,
-//     so this is a much smaller gap than it sounds: a companion in a bot-played game already
-//     behaves like a real one without any instruction from here; only the deliberate "send to a
-//     specific tile" command (beginCompanionGotoTargeting) and the openOrdersMenu stance-setting
-//     dialogue go unused), 'raise'-type abilities (see UNIFIED ABILITY POOL above), and no claim
-//     of exhaustive coverage beyond what's listed here -- this list reflects what's been
-//     specifically audited and fixed, not a systematic walk of every gameState/function in the
-//     game. IMPORTANT FOR A NEW SESSION: if you need to test something not listed as covered
+//   Not implemented (real extension points): farming toward a specific goal (tryFarm exists but
+//     is opportunistic -- plants/harvests/tills whatever's already on the current tile, never
+//     deliberately paths to a farmplot for a specific needed crop; left as-is since farming is a
+//     genuinely optional side-activity with no clear "goal" to path toward the way gear or main-
+//     quest targets have), deliberate companion/ally direct command (allies already fight and
+//     follow fully autonomously via companionFollowAI -- see game.html -- including defensive/
+//     passive stances and disengaging from danger on their own, so this is a much smaller gap
+//     than it sounds: a companion in a bot-played game already behaves like a real one without
+//     any instruction from here; only the deliberate "send to a specific tile" command
+//     (beginCompanionGotoTargeting) and the openOrdersMenu stance-setting dialogue go unused),
+//     and no claim of exhaustive coverage beyond what's listed here -- this list reflects what's
+//     been specifically audited and fixed, not a systematic walk of every gameState/function in
+//     the game. IMPORTANT FOR A NEW SESSION: if you need to test something not listed as covered
 //     above, don't assume it's untested OR assume it's fine -- check for yourself (grep this
 //     file for the relevant game.html function name, or just try it directly via SECTION 8's
 //     interactive session and see what happens), and add a real strategy function (or extend
 //     an existing one, the way tryCastOffensiveSpell was broadened above) if it's worth folding
 //     into the autonomous bot rather than only ever being reachable by hand.
+//
+//   ---- STALE-DOC CORRECTIONS + 'raise'-TYPE ABILITY FIX (this session) ---- This list used to
+//   claim "crafting deliberately toward a specific gear upgrade" and "'raise'-type abilities"
+//   were both unimplemented gaps. The first claim was already FALSE by the time this session
+//   started -- tryCraftGearUpgrade (see above, called periodically in the main loop) already
+//   does exactly that; the doc comment had simply gone stale after that function was added in an
+//   earlier session and nobody updated this list. The second was genuinely true and is now
+//   fixed: tryCastRaiseAbility mirrors tryCastSummonAbility (same conjure-an-ally family) but
+//   for 'raise'-type spells like Raise Dead, checking findNearestCorpse(spell.range) first since
+//   the game's own castSpell() handler already does fully automatic corpse-targeting once cast
+//   -- there was never any manual targeting logic to build, this was purely a "never attempted
+//   at all" gap. Verified end-to-end via a direct unit test (planted a real corpse item, called
+//   the function, confirmed a Reanimated Skeleton ally actually appeared in player.allies).
+//   LESSON for future sessions: this list is not self-maintaining -- verify claims here against
+//   the actual code (grep for the function name) before trusting them, the way this correction
+//   had to happen the hard way.
 //
 //   ---- DISCOVERABILITY METRIC (added this session, closes the gap the previous handoff
 //   flagged as the top candidate next task) ---- Every life now tracks, for every quest with a
@@ -3195,6 +3514,171 @@ async function createRandomCharacter(win, log) {
   return { ok: true, errors };
 }
 
+/**
+ * Build a character to an EXACT specification -- the deliberate-build counterpart to
+ * createRandomCharacter (random variety) and draftCustomCharacter (randomized-but-focused
+ * point-buy). This is the piece that was missing for "test THIS specific build's balance on
+ * purpose" (e.g. "a pure caster with zero combat stats and only these three spells, see how it
+ * fares") -- until now, that required hand-writing a one-off script per attempt, driving raw
+ * keys/creationDraft manipulation from scratch each time, exactly what every test_*.js file
+ * this session did. This formalizes that into a single reusable, documented call.
+ *
+ * Drives the exact same real functions the interactive session's pickSpecies/pickArchetype/
+ * allocateStat/toggleAbility/toggleItem/pickScenario action handlers call (speciesChoice,
+ * archetypeChoice, direct creationDraft mutation, beginScenario) -- nothing about validation is
+ * bypassed, this is just those same verified code paths made callable in one shot with a plain
+ * spec object instead of one HTTP request per step.
+ *
+ * @param spec {
+ *   speciesId?: string,      // species id or case-insensitive name (default: random)
+ *   scenarioId?: string,     // starting scenario id (default: random)
+ *   stats?: {str?,dex?,int?,con?,wil?,cha?}, // points to add to each (each capped at
+ *                            // CREATION_MAX_STAT_ADD, silently clamped -- see warnings)
+ *   abilities?: string[],    // spell/technique/mutation/cybernetic ids to buy, any mix across
+ *                            // pools -- costs/caps (e.g. CREATION_MAX_STARTING_CYBER) are real,
+ *                            // enforced exactly like toggleAbility does; a rejected id is
+ *                            // reported in warnings, not silently dropped without explanation
+ *   items?: string[],        // starting item ids to buy (3 points each, same real cost as toggleItem)
+ *   convertRemainingToGold?: boolean, // default true -- if false, leftover points are simply lost,
+ *                            // matching what happens if a human clicks "Next" without spending them
+ * }
+ * @returns { ok, warnings: string[], summary: {species, scenario, statAdds, abilities, items, gold} }
+ */
+async function createCustomCharacter(win, log, spec = {}) {
+  const warnings = [];
+  const speciesStep = key(win, 'a'); // title -> species picker
+  if (!speciesStep.ok) return { ok: false, warnings: [`title->species failed: ${speciesStep.error}`] };
+
+  const speciesR = evalGame(win, `
+    (function(){
+      const ref = ${spec.speciesId ? JSON.stringify(spec.speciesId) : 'null'};
+      if (ref === null) { speciesChoice('9'); return { ok:true, name:'Random' }; }
+      const idx = SPECIES.findIndex(s => s.id === ref || s.name.toLowerCase() === String(ref).toLowerCase());
+      if (idx < 0) { speciesChoice('9'); return { ok:false, name:'Random (fallback)' }; }
+      speciesChoice(String.fromCharCode(97 + idx));
+      return { ok:true, name: SPECIES[idx].name };
+    })()
+  `);
+  if (!speciesR.ok || !speciesR.value.ok) warnings.push(`Unknown speciesId "${spec.speciesId}" -- fell back to random species.`);
+
+  if (evalGame(win, 'gameState').value !== 'create_archetype') {
+    return { ok: false, warnings: [...warnings, `Expected create_archetype, got ${evalGame(win, 'gameState').value}`] };
+  }
+  const archStep = key(win, '0'); // archetype picker -> Custom (point-buy) -- always custom here, that's the whole point of this function
+  if (!archStep.ok || evalGame(win, 'gameState').value !== 'create_stats') {
+    return { ok: false, warnings: [...warnings, `Could not reach create_stats: ${archStep.error || evalGame(win, 'gameState').value}`] };
+  }
+
+  // ---- stats: add points one at a time via the SAME statAdds mutation allocateStat's own
+  // interactive-session handler uses, respecting the real CREATION_MAX_STAT_ADD cap and total
+  // point pool exactly (no bypass -- points run out or cap out exactly like a human clicking) ----
+  const statResult = evalGame(win, `
+    (function(){
+      const d = creationDraft;
+      const req = ${JSON.stringify(spec.stats || {})};
+      const applied = {}, rejected = {};
+      for (const [stat, want] of Object.entries(req)) {
+        if (!['str','dex','int','con','wil','cha'].includes(stat)) { rejected[stat] = 'unknown stat'; continue; }
+        let added = 0;
+        for (let i = 0; i < want; i++) {
+          if (d.points <= 0 || d.statAdds[stat] >= CREATION_MAX_STAT_ADD) break;
+          d.statAdds[stat]++; d.points--; added++;
+        }
+        applied[stat] = added;
+        if (added < want) rejected[stat] = \`only \${added}/\${want} applied (points exhausted or hit CREATION_MAX_STAT_ADD)\`;
+      }
+      return { applied, rejected };
+    })()
+  `).value;
+  Object.entries(statResult.rejected).forEach(([stat, reason]) => warnings.push(`Stat "${stat}": ${reason}.`));
+
+  const statsAdvance = key(win, 'Enter'); // create_stats -> create_abilities
+  if (!statsAdvance.ok || evalGame(win, 'gameState').value !== 'create_abilities') {
+    return { ok: false, warnings: [...warnings, `Could not reach create_abilities: ${statsAdvance.error || evalGame(win, 'gameState').value}`] };
+  }
+
+  // ---- abilities: exact same logic as the interactive session's toggleAbility case, just
+  // looped over the whole requested list in one call instead of one HTTP round-trip each ----
+  const abilityResult = evalGame(win, `
+    (function(){
+      const d = creationDraft;
+      const ids = ${JSON.stringify(spec.abilities || [])};
+      const added = [], rejected = {};
+      for (const id of ids) {
+        let foundCat = null, ability = null;
+        for (const cat of CREATION_ABILITY_CATS) {
+          const found = cat.pool().find(a => a.id === id);
+          if (found) { foundCat = cat; ability = found; break; }
+        }
+        if (!ability) { rejected[id] = 'unknown ability id'; continue; }
+        if (d.abilities.includes(id)) { rejected[id] = 'already added'; continue; }
+        const cost = foundCat.costFn(ability);
+        if (foundCat.key === 'cyber') {
+          const chosen = d.abilities.filter(x => CYBERNETICS.some(c => c.id === x)).length;
+          if (chosen >= CREATION_MAX_STARTING_CYBER) { rejected[id] = 'starting cyber slots full'; continue; }
+        }
+        if (d.points < cost) { rejected[id] = \`not enough points (needs \${cost}, have \${d.points})\`; continue; }
+        d.points -= cost; d.abilities.push(id); added.push(ability.name);
+      }
+      return { added, rejected };
+    })()
+  `).value;
+  Object.entries(abilityResult.rejected).forEach(([id, reason]) => warnings.push(`Ability "${id}": ${reason}.`));
+
+  const abilitiesAdvance = key(win, 'Enter'); // create_abilities -> create_final
+  if (!abilitiesAdvance.ok || evalGame(win, 'gameState').value !== 'create_final') {
+    return { ok: false, warnings: [...warnings, `Could not reach create_final: ${abilitiesAdvance.error || evalGame(win, 'gameState').value}`] };
+  }
+
+  // ---- items + gold: same real 3-point cost as toggleItem, then convert whatever's left ----
+  const itemResult = evalGame(win, `
+    (function(){
+      const d = creationDraft;
+      const ids = ${JSON.stringify(spec.items || [])};
+      const added = [], rejected = {};
+      for (const id of ids) {
+        const b = CREATION_STARTING_ITEM_POOL.find(x => x.id === id);
+        if (!b) { rejected[id] = 'unknown item id'; continue; }
+        if (d.points < 3) { rejected[id] = \`not enough points (needs 3, have \${d.points})\`; continue; }
+        d.points -= 3; d.items.push(id); added.push(b.name);
+      }
+      if (${spec.convertRemainingToGold !== false}) { d.gold += d.points * CREATION_GOLD_PER_POINT; d.points = 0; }
+      return { added, rejected, remainingPoints: d.points, gold: d.gold };
+    })()
+  `).value;
+  Object.entries(itemResult.rejected).forEach(([id, reason]) => warnings.push(`Item "${id}": ${reason}.`));
+
+  const finalAdvance = key(win, 'Enter'); // create_final -> finishCustomCreation() -> 'start'
+  if (!finalAdvance.ok || evalGame(win, 'gameState').value !== 'start') {
+    return { ok: false, warnings: [...warnings, `Could not finish creation: ${finalAdvance.error || evalGame(win, 'gameState').value}`] };
+  }
+
+  const scenarioR = evalGame(win, `
+    (function(){
+      const ref = ${spec.scenarioId ? JSON.stringify(spec.scenarioId) : 'null'};
+      const idx = ref === null ? Math.floor(Math.random() * START_SCENARIOS.length) : START_SCENARIOS.findIndex(s => s.id === ref);
+      if (idx < 0) return { ok:false };
+      beginScenario(String.fromCharCode(97 + idx));
+      return { ok:true, name: START_SCENARIOS[idx].name };
+    })()
+  `).value;
+  if (!scenarioR.ok) {
+    warnings.push(`Unknown scenarioId "${spec.scenarioId}" -- falling back to a random one.`);
+    key(win, 'a');
+  }
+
+  const st = getState(win);
+  if (!st || st.gameState !== 'playing') {
+    return { ok: false, warnings: [...warnings, `Expected playing after scenario pick, got ${st && st.gameState}`] };
+  }
+  const summary = {
+    species: st.species, scenario: st.scenario,
+    statAdds: statResult.applied, abilities: abilityResult.added, items: itemResult.added, gold: itemResult.gold,
+  };
+  if (log) log(`Custom character built: species=${st.species} scenario=${st.scenario}, stats=${JSON.stringify(summary.statAdds)}, abilities=[${summary.abilities.join(', ')}], items=[${summary.items.join(', ')}], gold=${summary.gold}${warnings.length ? ` -- ${warnings.length} warning(s), see result.warnings` : ''}.`);
+  return { ok: true, warnings, summary };
+}
+
 async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
   const { collectTelemetry = true, vitalsInterval = 25, onAction = null } = opts;
   const win = dom.window;
@@ -3213,7 +3697,11 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
   const discoverabilityState = {}; // see trackDiscoverability (SECTION 7) for what this holds
   const dimensionGateMemory = {}; // see scanForDimensionGateFeatures for what this holds
   const questNpcLock = { uid: null }; // see tryPathTowardQuestNpc's BUG FIX comment for why this exists
+  const mainQuestNavLock = {}; // see tryAdvanceMainQuest's BUG FIX comment for why this exists
+  const anyDungeonLock = {}; // see tryPathTowardAnyDungeon's BUG FIX comment for why this exists
   const bossBiomeMemory = {}; // see tryPathTowardBossBiome for what this holds
+  const bossBiomeLock = {}; // see tryPathTowardBossBiome's BUG FIX comment for why this exists
+  const fleeStall = { count: 0 }; // see tryFleeIfCritical's BUG FIX comment for why this exists
   let hasBeenPlaying = false; // tracks whether we've ever reached 'playing' -- see the
   // implicit-death handling below, right before the main loop.
 
@@ -3388,11 +3876,12 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     acted = acted || await strat.tryStanchBleeding(win, log); if (acted) actionLabel = 'bandage';
     if (!acted) { acted = strat.tryCurePoison(win, log); if (acted) actionLabel = 'antidote'; }
     if (!acted) { acted = await strat.tryRecoverHp(win, log); if (acted) actionLabel = 'recover'; }
-    if (!acted) { acted = await strat.tryFleeIfCritical(win, log); if (acted) actionLabel = 'flee'; }
+    if (!acted) { acted = await strat.tryFleeIfCritical(win, log, undefined, fleeStall); if (acted) actionLabel = 'flee'; }
     if (!acted) { acted = await strat.tryAvoidOverwhelmingMonster(win, log); if (acted) actionLabel = 'retreat'; }
     if (!acted) { acted = strat.tryUseHackChip(win, log); if (acted) actionLabel = 'hack'; }
     if (!acted) { acted = strat.tryCastBuffAbility(win, log); if (acted) actionLabel = 'buff'; }
     if (!acted) { acted = strat.tryCastSummonAbility(win, log); if (acted) actionLabel = 'summon'; }
+    if (!acted) { acted = strat.tryCastRaiseAbility(win, log); if (acted) actionLabel = 'raise'; }
     if (!acted) { acted = strat.tryCastDebuffAbility(win, log); if (acted) actionLabel = 'debuff'; }
     if (!acted) { acted = strat.tryCastOffensiveSpell(win, log); if (acted) actionLabel = 'spell'; }
     if (!acted) { acted = strat.tryFireRanged(win, log); if (acted) actionLabel = 'ranged'; }
@@ -3408,10 +3897,10 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     if (!acted && i % 15 === 0) acted = strat.trySpendTalentPoints(win, log);
     if (!acted && i % 30 === 0) acted = strat.tryInstallCybernetics(win, log);
     if (!acted && i % 10 === 0) acted = strat.tryPerformRitual(win, log);
-    if (!acted) acted = strat.tryAdvanceMainQuest(win, log);
+    if (!acted) acted = strat.tryAdvanceMainQuest(win, log, mainQuestNavLock);
     if (!acted) acted = strat.tryPathTowardQuestNpc(win, log, questNpcLock);
-    if (!acted) acted = strat.tryPathTowardAnyDungeon(win, log);
-    if (!acted) acted = strat.tryPathTowardBossBiome(win, log, bossBiomeMemory);
+    if (!acted) acted = strat.tryPathTowardAnyDungeon(win, log, anyDungeonLock);
+    if (!acted) acted = strat.tryPathTowardBossBiome(win, log, bossBiomeMemory, bossBiomeLock);
     if (!acted) acted = strat.tryAdvanceDimensionGateStructure(win, log, dimensionGateMemory);
     if (!acted) acted = await strat.trySeekSupplies(win, log);
     if (!acted) {
@@ -5438,10 +5927,11 @@ function restoreFromFile(win, filePath) {
 module.exports = {
   // -- low-level game control (SECTION 1/2) --
   boot, evalGame, key, keyAndWait, waitForAutoAction, attachErrorCapture,
+  nav,
   getState, getInventorySummary, nearbyMonster, directionToAdjacentMonster,
   readPendingChoiceLabels, resolveChoiceMenu, bestRetreatStep,
   // -- character creation (SECTION 4) --
-  createRandomCharacter, draftCustomCharacter,
+  createRandomCharacter, createCustomCharacter, draftCustomCharacter,
   // -- every individual strategy function, callable one at a time (SECTION 4) --
   strat,
   // -- full autonomous life driver + CLI entrypoint, callable programmatically too (SECTION 5) --
