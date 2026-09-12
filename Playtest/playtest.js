@@ -1782,6 +1782,49 @@ function tryTrainIfOffered(win, log) {
  * it and leaves; if it opened anything else this function doesn't specifically recognize
  * (e.g. a rare bespoke interaction some tile adds), just closes it rather than guessing.
  */
+/**
+ * COVERAGE GAP CLOSED (this session, third audit pass): found by tracing key '>' (useStairs() in
+ * game.html -- a misleading name; it's actually a generic dispatch on `curTileAt(...).feature`
+ * covering stairs, dungeon entrances, rift portals, AND seven single-use world-feature tiles:
+ * dimension shrines (lore/xp/materials), winding posts, confessional pillars, dream rifts, patch
+ * terminals, restless graves, and buried hoards). Confirmed via grep that this file presses '>'
+ * only for stairs/dungeon-entrances and one specific main-quest case
+ * (tryAdvanceDimensionGateStructure's dream_sanctum altar) -- the other seven tile features had
+ * no strategy ever pressing '>' while standing on them, so a character could walk directly over
+ * a dimension shrine or a winding post and simply never interact with it unless the surrounding
+ * exploration pathing happened to also need '>' there for an unrelated reason (essentially never).
+ * Deliberately covers only 5 of the 7 here (dimension_shrine, confessional, winding_post,
+ * patch_terminal, dream_rift) -- all five are free of any real downside: each self-guards on its
+ * own precondition (a resource/item check) and does nothing (confirmed by checking the tile's
+ * feature name before/after -- these interactions are turn-FREE, like trade/dialogue, so a
+ * missing precondition can never look like a false "acted") if it can't proceed. The other two
+ * are handled only in runContentSweep's deterministic checks instead, on purpose:
+ *   - restless_grave (performLastRites) blocks for 5 real turns standing still, broken by ANY
+ *     interruption -- a real risk/reward call an autonomous character has no way to judge (is
+ *     the area actually clear?), unlike the other five which are instant.
+ *   - buried_hoard (useBuriedHoard) spends the player's ENTIRE current gold unconditionally on
+ *     success, no partial/reserve option -- a judgment call this file's other gold-spending
+ *     strategies (tryManageProperty et al) handle via a reserve floor; buried_hoard's own
+ *     "cost is all-or-nothing" design doesn't fit that pattern cleanly enough to bolt on here.
+ */
+function tryUseTileFeatureHere(win, log) {
+  const feature = evalGame(win, `(function(){ const t = curTileAt(player.x, player.y); return t ? t.feature : null; })()`).value;
+  if (!['dimension_shrine', 'confessional', 'winding_post', 'patch_terminal', 'dream_rift'].includes(feature)) return false;
+  key(win, '>');
+  // CAUGHT IN TESTING: an earlier version of this checked turnCount before/after to detect
+  // success, the same pattern used elsewhere in this file -- but these seven tile interactions
+  // are turn-FREE (like trade/dialogue, per this file's own established pattern for those), so
+  // turnCount never moves even on a genuine success, making that check always read as failure.
+  // Confirmed directly: a real dimension-shrine use correctly granted xp and flipped the tile to
+  // 'dimension_shrine_spent' while turnCount stayed exactly the same. The feature name itself
+  // changing (every one of these renames its tile to a `_spent`/`_tended` variant on success,
+  // confirmed by reading each function in game.html) is the correct, reliable success signal.
+  const after = evalGame(win, `(function(){ const t = curTileAt(player.x, player.y); return t ? t.feature : null; })()`).value;
+  if (after === feature) return false; // precondition not met (item/resource missing) -- feature unchanged, nothing to report
+  if (log) log(`Used a ${feature.replace(/_/g, ' ')}.`);
+  return true;
+}
+
 function tryPickUpHere(win, log) {
   // ---- containers: handle every unlocked container with real contents directly via the
   // game's own openContainer()/containerTakeAll(), one tile can hold MULTIPLE containers (e.g.
@@ -3218,7 +3261,17 @@ function tryAdvanceDimensionGateStructure(win, log, memory) {
   if (!feature) return false; // boss_kill / discovery / not one of the two item_structure gates
   const gateR = evalGame(win, `(typeof DIMENSION_GATE_INFO !== 'undefined') ? DIMENSION_GATE_INFO[${JSON.stringify(dimId)}] : null`);
   if (!gateR.ok || !gateR.value) return false;
-  const hasItem = evalGame(win, `player.inventory.some(i => i.name === ${JSON.stringify(gateR.value.itemName)})`).value;
+  // BUG FOUND THIS SESSION (narrow, but real): fourth_corridor's gate has a `secondItemName`
+  // ('Recursive Key', from the free-roaming overworld boss the_recursion -- see questStageHint's
+  // own comment on why that boss is deliberately NOT looked for here, it's handled by the
+  // ordinary overworld-boss biome-steering this session's SIXTH finding already covers) in
+  // addition to `itemName` ('Bent Lens') -- useFoldingStone() itself correctly requires BOTH
+  // before it does anything (confirmed by reading it directly: it safely no-ops with a distinct
+  // message for "only have one of the two"), so this was never a crash risk, just a case where
+  // this function would think it was ready and press '>' one call early -- harmless (the
+  // underlying game function just logs and does nothing, no turn spent), but still worth fixing
+  // now that it's been noticed, since checking both costs nothing extra.
+  const hasItem = evalGame(win, `player.inventory.some(i => i.name === ${JSON.stringify(gateR.value.itemName)}) && (!${JSON.stringify(gateR.value.secondItemName || null)} || player.inventory.some(i => i.name === ${JSON.stringify(gateR.value.secondItemName || null)}))`).value;
   if (!hasItem) return false; // don't bother seeking the structure without the key item yet
   const pos = memory[feature];
   if (!pos) return false; // haven't seen it yet this life -- nothing to path toward
@@ -3406,7 +3459,7 @@ const strat = {
   tryAdvanceDimensionGateStructure, tryPathTowardAnyDungeon, tryPathTowardBossBiome,
   getMainQuestNavigationTarget, tryEscapeUnknownMenu, trySpendStatPoints, trySpendTalentPoints,
   tryInstallCybernetics, tryPerformRitual, trySeekSupplies,
-  tryManageSockets, tryManageProperty, tryManageFamilyMenu, tryPathTowardQuestKillTarget,
+  tryManageSockets, tryManageProperty, tryManageFamilyMenu, tryPathTowardQuestKillTarget, tryUseTileFeatureHere,
 };
 // Main autonomous playtest driver. Usage:
 //   node bot.js [numLives] [maxActionsPerLife] [maxStuckActions]
@@ -3680,6 +3733,97 @@ const strat = {
 //   landing on this combination, having failed close to 100% of the time on at least three
 //   earlier, individually-plausible-looking combinations along the way -- each failure was
 //   root-caused with real instrumentation (not guessed at) before moving to the next fix.
+//
+//   ---- SYSTEMATIC AUDIT PASS (this session, prompted directly by "does it do EVERYTHING") ----
+//   Everything above this point in this doc came from opportunistic gap-chasing: reading this
+//   file's own prior "known gaps" notes, auditing gameState coverage, or following up on a
+//   specific question. This pass was different on purpose -- enumerated every top-level `const
+//   NAME = ...` and every `function open[A-Z]...` entry point in game.html and checked each
+//   systematically, specifically to stress-test the stronger claim rather than just "no more
+//   crashes". Two real, substantial findings came out of it, both fixed the same way as the
+//   life-sim systems above (a real strategy where normal play benefits, a forced deterministic
+//   sweep check where it's too rare/risky/precondition-heavy to ever occur naturally):
+//   (1) KINGSHIP -- an entire capstone system (claimCrown/usurpCrown/tickKingshipStability/
+//   openCourtMenu -- see game.html) had ZERO presence anywhere in this file before now. Adding
+//   `runContentSweep`'s new 'kingship' check (forces the four independently-real preconditions
+//   legitimate succession needs -- noble rank 4+, 600+ kingdom rep, 2+ settlements' civic
+//   service, gold -- since they could never plausibly all line up in a bounded batch run) caught
+//   a real bug in the TEST itself: a 'fortify' policy set earlier in the same check was still
+//   active during the later rebellion-threshold test, and fortify halves the tick's
+//   `daysPassed` (see game.html), silently diluting "advance exactly 1 day past the threshold"
+//   math below the actual threshold every time -- root-caused by direct instrumentation, not
+//   guessed at, then fixed by clearing the policy before that specific sub-test. Also verified
+//   openCourtMenu's decree and standing-policy actions directly. NOTABLE FINDING surfaced along
+//   the way and left as a `notableFindings` entry (a game.html bug, not a playtest.js one, so
+//   not fixed here): claimCrown's dialogue option displays "Claim the crown (500g)" but the
+//   function itself charges a flat 2000g.
+//   (2) SEVEN '>'-TRIGGERED WORLD-FEATURE TILES -- found by tracing key '>' (useStairs() in
+//   game.html, a misleading name -- it's a generic dispatch on tile feature covering stairs,
+//   dungeon entrances, rift portals, AND dimension shrines/winding posts/confessional pillars/
+//   dream rifts/patch terminals/restless graves/buried hoards). Confirmed via grep that this
+//   file only ever pressed '>' for stairs and one specific main-quest case; the other seven had
+//   no strategy pressing '>' while standing on them at all -- a character could walk directly
+//   over a dimension shrine and simply never use it. Added tryUseTileFeatureHere (SECTION 4,
+//   wired into the main loop) for the five that are unconditionally safe (each self-guards on
+//   its own resource/item precondition and does nothing if unmet); CAUGHT IN TESTING, its first
+//   version checked turnCount before/after to detect success (the pattern used elsewhere in this
+//   file) but these seven interactions are turn-FREE like trade/dialogue, so that check always
+//   read as failure even on a real, confirmed success (verified directly: xp granted and the
+//   tile correctly flipped to 'dimension_shrine_spent', with turnCount completely unchanged) --
+//   fixed to check the tile's own feature-name change instead. The other two
+//   (restless_grave/performLastRites blocks for 5 real turns with real interruption risk;
+//   buried_hoard/useBuriedHoard spends 100% of current gold unconditionally, no reserve option)
+//   are deliberately NOT wired into normal play -- a rational autonomous character has no way to
+//   judge "is standing still here safe" and no reason to bury its entire stash -- and instead
+//   get their own forced, deterministic check in runContentSweep's new 'tile-features' entry.
+//
+//   ---- THIRD PASS: EVERY `use[A-Z]`/`begin[A-Z]` FUNCTION IN game.html (same session) ----
+//   Completing the systematic sweep started above: enumerated every `function use[A-Z]...` and
+//   `function begin[A-Z]...` in game.html (not just `open[A-Z]...`) and checked each. Found one
+//   more real (if narrow) bug, ruled out several more candidates with actual evidence rather
+//   than assumption, and confirmed the existing dimension-gate-structure logic is considerably
+//   more complete than an earlier pass in this same session gave it credit for:
+//   - BUG FIXED: tryAdvanceDimensionGateStructure's `hasItem` check only ever looked for
+//     DIMENSION_GATE_INFO's `itemName` -- but fourth_corridor's gate ALSO has a `secondItemName`
+//     ('Recursive Key', needed alongside 'Bent Lens' before useFoldingStone() will do anything --
+//     confirmed by reading it directly, it safely no-ops with a distinct message for "only have
+//     one of the two" either way, so this was never a crash risk) which the check never
+//     accounted for. Fixed to require both when a gate specifies a second item. Verified with a
+//     direct unit test of the boolean expression against both the single-item and dual-item
+//     gate shapes.
+//   - CORRECTED AN EARLIER CLAIM IN THIS SAME DOC: the "discovery-kind gate... wasn't wired in"
+//     note above (about lucid_expanse) undersold what's actually there -- re-reading
+//     tryAdvanceDimensionGateStructure in full while investigating the bug above showed it
+//     already handles lucid_expanse AND both real item_structure gates (the_drift's Launch
+//     Cradle, fourth_corridor's Folding Stones) generically via
+//     DIMENSION_GATE_FEATURE_BY_DIMENSION -- a past session had already built this properly.
+//     Left as a lesson for future sessions in this file's own doc: verify by reading the current
+//     code in full before restating an old claim, even one this file made itself.
+//   - RULED OUT, with evidence: useQuickslot (a pure UI shortcut to equipItem/useItem, both
+//     already called directly elsewhere -- no unique behavior to miss); beginScenario (already
+//     covered -- createRandomCharacter explicitly randomizes across all START_SCENARIOS, see its
+//     own comment); beginBypassTravel (routes to the already-generic-closed 'travel' state, no
+//     new mechanic); CORRUPTION_MILESTONES (passive flavor-text log lines, no player action
+//     possible or needed); LEGACY_MONSTER_FACTIONS/LEGACY_TALENT_CATEGORIES/
+//     REGEN_PCT_PER_LEGACY_POINT ("legacy" here means "pre-existing/old", internal balance
+//     naming -- NOT a New-Game-Plus/rebirth system, checked specifically because the name
+//     suggested one).
+//   IMPLICATION FOR ANYONE ASKING "IS THIS NOW FULLY COMPLETE": after three systematic passes
+//   (gameState audit, open[A-Z] audit, use/begin[A-Z] audit) plus the original opportunistic
+//   history, every top-level `const NAME = ...` and every menu/interaction ENTRY POINT in
+//   game.html has now been at least named-checked, and the ones that looked load-bearing were
+//   traced in full with real evidence, not assumption -- this is a materially different
+//   confidence level than "opportunistic gap-chasing found what it found." What has NOT been
+//   done, and would be needed to upgrade "no more entry points found" to "provably complete":
+//   tracing every BRANCH inside each already-covered function (e.g. every individual spell/
+//   technique/mutation/cybernetic's specific numeric effect, every one of the ~50 GOD_MOVES,
+//   every dialogue tree's every leaf), and a similar audit of every `function` that ISN'T
+//   prefixed open/use/begin (there are hundreds -- most are plumbing, but "most" isn't "all").
+//   Given the game's actual size, the honest position is: this is now extensively, systematically
+//   audited rather than spot-checked, real gaps were found and fixed at each level checked so
+//   far, and diminishing returns make a full line-by-line trace of the remaining unprefixed
+//   functions a genuinely large undertaking rather than a quick next step -- a call worth making
+//   explicitly with whoever's asking, not silently.
 //
 //   ---- STALE-DOC CORRECTIONS + 'raise'-TYPE ABILITY FIX (this session) ---- This list used to
 //   claim "crafting deliberately toward a specific gear upgrade" and "'raise'-type abilities"
@@ -4353,6 +4497,7 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     if (!acted) strat.tryCalledShot(win, log); // never counts as "acted" on its own -- setup only
     if (!acted) { acted = await strat.tryFightAdjacent(win); if (acted) actionLabel = 'melee'; }
     if (!acted) acted = strat.tryPickUpHere(win, log);
+    if (!acted) acted = strat.tryUseTileFeatureHere(win, log);
     if (!acted) acted = strat.tryFarm(win, log);
     if (!acted) acted = strat.tryTalkToAdjacentNpc(win, log, talkedNpcUids);
     if (!acted && i % 40 === 0) acted = strat.tryEquipUpgrades(win, log);
@@ -5222,6 +5367,141 @@ async function runContentSweep(win, opts = {}) {
       if (parsed.gameState !== 'playing') throw new Error(`confirmTileTarget left gameState as '${parsed.gameState}', expected 'playing'`);
       if (parsed.orderMode !== 'goto' || !parsed.orderPos) throw new Error(`companion goto order was not actually set: ${after.value}`);
       visited.lifesim.push('companion-orders');
+    });
+    await safely('lifesim', 'kingship', async () => {
+      onProgress('lifesim: kingship (claim crown, usurp crown, stability tick)');
+      // MAJOR COVERAGE GAP CLOSED (this session): the entire kingship system (claimCrown/
+      // usurpCrown/tickKingshipStability, canClaimCrown/canUsurpCrown, KINGSHIP_* constants --
+      // see game.html) had ZERO presence anywhere in this file before now -- not a strategy, not
+      // a mention, not even a comment noting it as a known gap. Found via a systematic pass
+      // through every top-level `const NAME = ...` in game.html (not the opportunistic gap-
+      // chasing the rest of this file's history has mostly been) specifically to check the
+      // stronger "does this do EVERYTHING" claim rather than just "does this hit no more
+      // crashes". This is a genuine capstone system: legitimate succession (claimCrown) needs
+      // noble rank 4+, 600+ kingdom reputation, service in 2+ settlements as a civic officer,
+      // and a 2000g ceremony fee -- four independently-real, long-term numbers that could never
+      // plausibly all line up within a bounded batch run, which is exactly why (like family/
+      // property/sockets before it) this needs to be forced deterministically rather than left
+      // to chance. The violent alternative (usurpCrown) needs kingdom rep <= -150 and level 12+.
+      // Both routes ultimately just set dialogueOptions/gameState='dialogue' (claimCrown is a
+      // normal NPC dialogue option; usurpCrown is offered as a 'moment of opportunity' choice
+      // from an onDeath hook, but resolves through the exact same dialogue mechanism) --
+      // routing through machinery this file already handles generically -- so the real risk
+      // being tested here isn't "does opening a menu crash", it's "do these functions
+      // themselves, and the ongoing per-day stability tick a ruler is subject to afterward,
+      // execute correctly all the way through". NOTABLE FINDING along the way, NOT fixed here
+      // since it's a game.html issue, not a playtest.js one: the dialogue option that offers
+      // claimCrown displays "Claim the crown (500g)" but the function itself charges 2000g --
+      // a real display/logic mismatch in the game, flagged in notableFindings below rather than
+      // silently worked around.
+      const kingdomKey = evalGame(win, `getKingdom(Math.floor(player.x / CH), Math.floor(player.y / CH)).key`).value;
+      // ---- legitimate succession ----
+      evalGame(win, `
+        (function(){
+          player.civicOffices = { off1: { kingdomKey: ${JSON.stringify(kingdomKey)} }, off2: { kingdomKey: ${JSON.stringify(kingdomKey)} } };
+          player.nobleTitles = { [${JSON.stringify(kingdomKey)}]: 4 };
+          ensureStory();
+          player.story.kingdomRep[${JSON.stringify(kingdomKey)}] = 700;
+        })()
+      `);
+      debugAddGold(win, 3000);
+      const canClaim = evalGame(win, `canClaimCrown(${JSON.stringify(kingdomKey)})`);
+      if (!canClaim.ok || canClaim.value !== true) throw new Error(`canClaimCrown false despite meeting all documented preconditions: ${canClaim.ok ? canClaim.value : canClaim.error}`);
+      // claimCrown(npc, kingdomKey) only reads npc.name (for the log line) and npc.x/npc.y (to
+      // re-derive the kingdom, redundantly with the kingdomKey already passed) -- resolving and
+      // passing the NPC reference in the SAME eval call avoids round-tripping a live game object
+      // through JSON just to hand its uid back next call, the way the family/companion checks
+      // above do (those need the uid across multiple calls; this doesn't).
+      evalGame(win, `
+        (function(){
+          const npc = curNPCs()[0] || { name: 'Test NPC', x: player.x, y: player.y };
+          claimCrown(npc, ${JSON.stringify(kingdomKey)});
+        })()
+      `);
+      const claimed = evalGame(win, `player.rulerOf === ${JSON.stringify(kingdomKey)}`);
+      if (!claimed.ok || claimed.value !== true) throw new Error(`claimCrown did not set player.rulerOf: ${claimed.ok ? claimed.value : claimed.error}`);
+      evalGame(win, `player.kingdomPolicy = player.kingdomPolicy || {}; player.kingdomPolicy[${JSON.stringify(kingdomKey)}] = 'fortify';`);
+      // ---- ongoing stability tick, both the "holding steady" and the "losing the crown" paths ----
+      evalGame(win, `for (let i = 0; i < 5; i++) { turnCount += DAY_LENGTH; tickKingshipStability(); }`); // rep still high -- should stay stable, exercises the 'fortify' cost-deduction branch
+      const stillRuler = evalGame(win, `player.rulerOf === ${JSON.stringify(kingdomKey)}`);
+      if (!stillRuler.ok || stillRuler.value !== true) throw new Error('lost the crown from stability ticks despite high reputation -- tickKingshipStability may have a real bug');
+      evalGame(win, `player.story.kingdomRep[${JSON.stringify(kingdomKey)}] = -200; player.rebellionUnstableDays = KINGSHIP_REBELLION_DAYS - 1;`);
+      // Clear the 'fortify' policy set above before testing the rebellion path -- CAUGHT IN
+      // TESTING: leaving it active here was a real bug in this TEST (not in tickKingshipStability
+      // itself) -- fortify halves `daysPassed` inside the tick (see game.html), so with it still
+      // active the "advance exactly 1 day to push rebellionUnstableDays from 19 to the 20-day
+      // threshold" math below silently became +0.5 instead of +1, never crossing the threshold
+      // and making this check fail every time despite the real game logic being correct. Each
+      // policy's effect gets tested in the scenario that isolates it: fortify's cost-deduction
+      // already got exercised during the 5-stable-days loop above; the rebellion path is cleaner
+      // to verify without it also diluting the numbers.
+      evalGame(win, `if (player.kingdomPolicy) delete player.kingdomPolicy[${JSON.stringify(kingdomKey)}];`);
+      evalGame(win, `turnCount += DAY_LENGTH; tickKingshipStability();`); // should push over the rebellion threshold and take the crown away
+      const rebelled = evalGame(win, `player.rulerOf === null || player.rulerOf === undefined`);
+      if (!rebelled.ok || rebelled.value !== true) throw new Error('tickKingshipStability did not take the crown away after crossing the rebellion threshold');
+      // ---- usurpation (the violent path) -- reset state, this is a separate, mutually exclusive route ----
+      evalGame(win, `player.rulerOf = null; player.kingdomOverrides = {}; ensureStory(); player.story.kingdomRep[${JSON.stringify(kingdomKey)}] = -200; player.level = 15;`);
+      const canUsurp = evalGame(win, `canUsurpCrown(${JSON.stringify(kingdomKey)})`);
+      if (!canUsurp.ok || canUsurp.value !== true) throw new Error(`canUsurpCrown false despite meeting all documented preconditions: ${canUsurp.ok ? canUsurp.value : canUsurp.error}`);
+      evalGame(win, `usurpCrown(${JSON.stringify(kingdomKey)})`);
+      const usurped = evalGame(win, `player.rulerOf === ${JSON.stringify(kingdomKey)}`);
+      if (!usurped.ok || usurped.value !== true) throw new Error(`usurpCrown did not set player.rulerOf: ${usurped.ok ? usurped.value : usurped.error}`);
+      // ---- openCourtMenu -- found via a second pass (grepping every `function open[A-Z]` entry
+      // point in game.html, the same systematic method that found kingship itself) after the
+      // first version of this check already covered claim/usurp/stability but not the actual
+      // ongoing management menu a ruler uses (decrees, standing policy, foreign diplomacy) ----
+      evalGame(win, `debugAddGold(300)`);
+      const beforeDecreeRep = evalGame(win, `getKingdomRep(${JSON.stringify(kingdomKey)})`).value;
+      evalGame(win, `
+        (function(){
+          openCourtMenu(${JSON.stringify(kingdomKey)});
+          const decree = (dialogueOptions || []).find(o => /royal decree/i.test(o.label));
+          if (decree) decree.action();
+        })()
+      `);
+      const afterDecreeRep = evalGame(win, `getKingdomRep(${JSON.stringify(kingdomKey)})`).value;
+      if (!(afterDecreeRep > beforeDecreeRep)) throw new Error(`Issuing a Royal Decree did not raise kingdom rep (before=${beforeDecreeRep}, after=${afterDecreeRep})`);
+      if (evalGame(win, 'gameState').value === 'dialogue') key(win, 'Escape'); // decree's own action already closeModal()s; belt-and-suspenders
+      evalGame(win, `
+        (function(){
+          openCourtMenu(${JSON.stringify(kingdomKey)});
+          const setPolicy = (dialogueOptions || []).find(o => /^set policy/i.test(o.label));
+          if (setPolicy) setPolicy.action();
+        })()
+      `);
+      const policySet = evalGame(win, `!!(player.kingdomPolicy && player.kingdomPolicy[${JSON.stringify(kingdomKey)}])`);
+      if (!policySet.ok || policySet.value !== true) throw new Error('Setting a Standing Policy from the court menu did not persist to player.kingdomPolicy');
+      if (evalGame(win, 'gameState').value === 'dialogue') key(win, 'Escape');
+      notableFindings.push({ area: 'kingship', note: "game.html display/logic mismatch: claimCrown's dialogue option is labeled \"Claim the crown (500g)\" but the function itself charges a flat 2000g -- a real bug in the game, not in this test." });
+      visited.lifesim.push('kingship');
+    });
+    await safely('lifesim', 'tile-features', async () => {
+      onProgress('lifesim: restless-grave last rites + buried hoard (the two riskier tile features tryUseTileFeatureHere skips)');
+      // Covers the two of the seven '>'-triggered world-feature tiles that tryUseTileFeatureHere
+      // (SECTION 4) deliberately excludes from normal autonomous play -- see its own comment for
+      // why (last rites blocks for 5 real turns with real interruption risk; buried hoard spends
+      // 100% of current gold unconditionally) -- so they still get a genuine crash-test even
+      // though a rational autonomous character has no good reason to trigger either on its own.
+      debugTeleportToDimension(win, 'the_boneyard');
+      evalGame(win, `(function(){ const t = curTileAt(player.x, player.y); t.feature = 'restless_grave'; })()`);
+      const peaceBefore = evalGame(win, 'player.vigilsPeace || 0').value;
+      evalGame(win, `performLastRites()`); // blocks for 5 real turns internally via endTurn() -- god-mode flags (set at the top of this sweep) keep it safe
+      const peaceAfter = evalGame(win, 'player.vigilsPeace || 0').value;
+      if (!(peaceAfter > peaceBefore)) throw new Error(`performLastRites did not increase vigilsPeace (before=${peaceBefore}, after=${peaceAfter})`);
+      const graveFeature = evalGame(win, 'curTileAt(player.x, player.y).feature').value;
+      if (graveFeature !== 'restless_grave_tended') throw new Error(`restless_grave did not flip to 'restless_grave_tended': got '${graveFeature}'`);
+      debugReturnToOverworld(win);
+      debugTeleportToDimension(win, 'wyrmreach');
+      evalGame(win, `(function(){ const t = curTileAt(player.x, player.y); t.feature = 'buried_hoard'; })()`);
+      debugAddGold(win, 500);
+      const restraintBefore = evalGame(win, 'player.wyrmreachRestraint || 0').value;
+      evalGame(win, `useBuriedHoard()`);
+      const goldAfter = evalGame(win, 'player.gold').value;
+      const restraintAfter = evalGame(win, 'player.wyrmreachRestraint || 0').value;
+      if (goldAfter !== 0) throw new Error(`useBuriedHoard did not spend all gold as documented: gold is now ${goldAfter}`);
+      if (!(restraintAfter > restraintBefore)) throw new Error(`useBuriedHoard did not increase wyrmreachRestraint (before=${restraintBefore}, after=${restraintAfter})`);
+      debugReturnToOverworld(win);
+      visited.lifesim.push('tile-features');
     });
     await recoverFromDeathIfNeeded('lifesim', 'cleanup'); // in case anything above somehow ended the run
   }
