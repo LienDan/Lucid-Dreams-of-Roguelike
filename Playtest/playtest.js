@@ -48,8 +48,10 @@
 //          false) once some condition you care about is met, instead of only inspecting a
 //          finished run's report afterward.
 //        - pt.runContentSweep(win) -- deterministically visits EVERY dungeon type, dimension,
-//          spell, recipe, weather type, and world event at least once under god-mode, catching
-//          real crashes -- the "did we actually test everything" answer, not a probabilistic one.
+//          spell, recipe, weather type, world event, AND (added this session) the property/
+//          furnishing, rune-socketing, and family-life-path systems, at least once under
+//          god-mode, catching real crashes -- the "did we actually test everything" answer,
+//          not a probabilistic one.
 //        - pt.simulateCombat(win, monsterId, {trials, spellId}) / pt.runComparison(configs) --
 //          isolated, repeatable balance testing: how many hits to kill X with weapon/spell Y,
 //          or is profile A actually meaningfully safer than profile B, with real numbers.
@@ -1942,6 +1944,88 @@ function tryCraftGearUpgrade(win, log) {
 }
 
 /**
+ * COVERAGE GAP CLOSED (this session): the rune socketing system (RUNE_TYPES/canSocket/
+ * socketRune/unsocketRune in game.html, gameStates 'socketpick'/'unsocketpick') had ZERO
+ * exercise from autonomous play -- not because it's hard to reach, but because of a gap
+ * between two systems that never got connected. Runes are ONLY ever created via crafting
+ * (RECIPES.push(...RUNE_TYPES.flatMap(...)) generates one recipe per rune type per tier --
+ * there is no loot-table or shop path to a rune at all, see makeItem()'s socket-roll block
+ * which only ever sets `sockets`/`socketedRunes:[]` on the GEAR, never rolls a rune itself).
+ * Those recipes ARE already learnable through the existing generic NPC-teach system (see
+ * npc.teachRecipes in game.html, e.g. every blacksmith/jeweler-tier NPC), which
+ * tryTrainIfOffered already learns everything affordable from with zero rune-specific code --
+ * so a character's `knownRecipes` genuinely can and does end up with rune recipes in normal
+ * play. But tryCraftGearUpgrade explicitly filters to `outBase.type === 'weapon' || 'armor'`
+ * (a rune's ITEM_BASES type is 'rune'), and tryCraftUseful's wantRegex only ever matches heal/
+ * bandage/antidote/potion -- so even a character who legitimately learned a rune recipe and
+ * carries the ingredients would never actually craft one, and even if a rune somehow ended up
+ * in inventory (e.g. granted via debug or a future content addition that drops one), nothing
+ * would ever socket it -- 'itemaction' sits in GENERIC_CLOSE_STATES, so the 'k'/'j' socket/
+ * unsocket keys were never pressed. Net effect: an entire itemization system with its own two
+ * dedicated gameStates was completely dark under autonomous play, silently, with no crash to
+ * signal it (confirmed by grepping this file for 'socket' before this fix: zero hits outside
+ * comments).
+ *
+ * Fixed by doing both halves in one function, called periodically like tryCraftGearUpgrade:
+ * for each equipped weapon/armor with a free socket (`canSocket`), first try to socket an
+ * already-owned matching rune directly (openSocketableRunesFor + socketRune -- these are the
+ * exact same functions the real 'k' menu calls, invoked directly rather than simulating the
+ * menu's keys, the same "call the real function" pattern tryCraftGearUpgrade/tryFarm already
+ * use elsewhere in this file); if none is owned yet, craft the highest-tier known-and-
+ * affordable rune recipe that applies to that slot's gear type via the real craftRecipe() (this
+ * is what actually invokes the game's own runeTier/runeStat/runeValue resolution shown above --
+ * nothing here reimplements that math). One action per call, same granularity as every other
+ * strategy in this section. Deliberately never calls unsocketRune from here -- removing a rune
+ * is a destructive, chance-to-lose-the-rune operation with no upside for an autonomous
+ * character that already made a reasonable choice socketing it; unsocketing is instead covered
+ * once, deterministically, by runContentSweep (SECTION 7) so the *mechanism* still gets a real
+ * crash-test without a normal playthrough ever choosing to burn a rune pointlessly.
+ */
+function tryManageSockets(win, log) {
+  const r = evalGame(win, `
+    (function(){
+      const slots = Object.keys(player.equipment || {});
+      for (const slot of slots) {
+        const it = player.equipment[slot];
+        if (!it || (it.type !== 'weapon' && it.type !== 'armor')) continue;
+        const freeSockets = (it.sockets || 0) - (it.socketedRunes || []).length;
+        if (freeSockets <= 0) continue;
+        // ---- have one already? socket it directly, same call the real 'k' menu makes. ----
+        const owned = openSocketableRunesFor(it);
+        if (owned.length) {
+          // prefer the highest tier owned (biggest runeValue) so a character carrying both a
+          // Minor and a Major rune for the same slot doesn't waste the socket on the weaker one.
+          owned.sort((a, b) => (b.runeValue || 0) - (a.runeValue || 0));
+          socketRune(it, owned[0]);
+          return { action: 'socket', item: it.name, rune: owned[0].name, slot };
+        }
+        // ---- none owned: craft the best known+affordable rune recipe for this slot's type ----
+        const candidateRecipes = (player.knownRecipes || [])
+          .map(rid => RECIPES.find(r => r.id === rid))
+          .filter(rec => rec && rec.runeTier && hasIngredients(rec))
+          .filter(rec => {
+            const rt = RUNE_TYPES.find(x => x.id === rec.output.id);
+            return rt && (rt.appliesTo === 'any' || rt.appliesTo === it.type);
+          })
+          .sort((a, b) => b.runeTier - a.runeTier); // highest tier we can afford first
+        if (candidateRecipes.length) {
+          const rec = candidateRecipes[0];
+          craftRecipe(rec.id);
+          return { action: 'craft', recipe: rec.name, slot };
+        }
+      }
+      return null;
+    })()
+  `);
+  if (r.ok && r.value) {
+    const v = r.value;
+    if (log) log(v.action === 'socket' ? `Socketed ${v.rune} into ${v.item}.` : `Crafted ${v.recipe} to socket into ${v.slot}.`);
+    return true;
+  }
+  return false;
+}
+
+/**
  * Till/plant/harvest via the exact same "interact with this tile" menu tryPickUpHere already
  * drives for containers/items/salvage/fishing (see pickUp() in game.html) -- till requires a
  * Hoe equipped, plant needs a seed item already in inventory, harvest needs a matured farmplot.
@@ -2000,6 +2084,141 @@ function tryFarm(win, log) {
     return true;
   }
   return false;
+}
+
+// ---------------------------------------------------------------------------------------
+// Property, furnishing & family (COVERAGE GAP CLOSED this session)
+// ---------------------------------------------------------------------------------------
+// These three gameStates ('property', 'furnish', 'family') were previously in nobody's list
+// at all -- not GENERIC_CLOSE_STATES, not SPECIFICALLY_HANDLED_STATES -- which meant a life
+// that ever somehow entered one (nothing in the old strategy set ever pressed 'p'/'F' to open
+// them on purpose) would print as an UNRECOGNIZED gameState, and more importantly, the systems
+// themselves (buying/naming/furnishing a home; discussing a grown child's life path) had never
+// been exercised by a single automated run. Verified via direct code read (grep for
+// gameState === 'property'/'furnish'/'family' in game.html) that Escape safely no-ops out of
+// all three (no accidental purchase/commitment from a generic close), so nothing here was ever
+// at risk of crashing -- it was purely an untested-feature gap, the same shape as the rune-
+// socketing gap fixed just above.
+//
+// Both tryManageProperty and tryManageFamilyMenu call the game's own buyProperty()/
+// furnishProperty()/openChildLifePathMenu() functions directly (same "invoke the real function,
+// skip simulating the menu's keys" pattern as tryManageSockets/tryCraftGearUpgrade above) --
+// buyProperty/furnishProperty already self-guard on affordability and log a message rather than
+// erroring if called when unaffordable, so calling them speculatively is safe.
+
+/**
+ * Buys a first home in whatever settlement the character happens to be standing in once it can
+ * comfortably afford one, then furnishes properties it already owns as spare gold allows.
+ * Deliberately conservative about WHEN to spend, since this competes with the same gold pool as
+ * curative restocking (tryShopIfTrading) and gear upgrades (tryCraftGearUpgrade) that matter
+ * far more for survival: never buys/furnishes if doing so would drop gold below a flat 100g
+ * floor (property is a pure quality-of-life/roleplay system with no survival upside -- rest-at-
+ * home is a minor convenience already available via the normal 'r' rest tryRecoverHp already
+ * uses, so there's no reason to risk being unable to afford a bandage next encounter for it),
+ * and only ever buys ONE property per settlement (checked by settlementName, not a hardcoded
+ * count) rather than speculatively buying every house in every town the bot passes through.
+ * Checked at the same low, periodic priority as tryCraftGearUpgrade/tryInstallCybernetics --
+ * see its call site in SECTION 5's main loop.
+ */
+function tryManageProperty(win, log) {
+  const GOLD_FLOOR = 100; // see comment above: property is QoL, never worth risking survival gold for
+  const r = evalGame(win, `
+    (function(){
+      if (curIsDungeon() || curIsDimension()) return null; // buyProperty/openPropertyMenu both refuse here anyway
+      const chunk = getChunk(Math.floor(player.x / CH), Math.floor(player.y / CH));
+      const owned = player.properties || [];
+      // ---- buy pass: one house per settlement, cheapest vacant one, only if we'd still clear the floor ----
+      if (chunk && chunk.settlement && !owned.some(p => p.settlementName === chunk.settlement.name)) {
+        const vacant = vacantHousesInChunk(chunk);
+        if (vacant.length) {
+          let bestIdx = -1, bestPrice = Infinity;
+          vacant.forEach(idx => { const q = propertyPriceFor(chunk, idx); if (q.price < bestPrice) { bestPrice = q.price; bestIdx = idx; } });
+          if (bestIdx !== -1 && player.gold - bestPrice >= ${GOLD_FLOOR}) {
+            const settlementName = chunk.settlement.name;
+            buyProperty(chunk, bestIdx);
+            return { action: 'buy', settlementName };
+          }
+        }
+      }
+      // ---- furnish pass: cheapest affordable not-yet-owned furnishing on ANY owned property ----
+      for (const p of owned) {
+        const available = Object.keys(FURNISHINGS)
+          .filter(fid => !p.furnishings.includes(fid))
+          .filter(fid => !(FURNISHINGS[fid].requiresProfession && !(player.professionsLearned||{})[FURNISHINGS[fid].requiresProfession]))
+          .filter(fid => player.gold - FURNISHINGS[fid].cost >= ${GOLD_FLOOR})
+          .sort((a,b) => FURNISHINGS[a].cost - FURNISHINGS[b].cost);
+        if (available.length) {
+          const fid = available[0];
+          const name = FURNISHINGS[fid].name;
+          furnishProperty(p.id, fid);
+          return { action: 'furnish', name, home: propertyDisplayName(p) };
+        }
+      }
+      return null;
+    })()
+  `);
+  if (r.ok && r.value) {
+    const v = r.value;
+    if (log) log(v.action === 'buy' ? `Bought a home in ${v.settlementName}.` : `Furnished ${v.home} with ${v.name}.`);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Handles the one genuinely actionable item the 'family' gameState ever surfaces beyond a
+ * status readout: an adult child with `!rec.lifePathChosen` gets openChildLifePathMenu()'s
+ * choices resolved.
+ *
+ * BUG CAUGHT IN TESTING, before this ever reached a batch run: openChildLifePathMenu() (see
+ * game.html) sets `gameState = 'dialogue'` and populates the ordinary `dialogueOptions` array
+ * -- it does NOT use the 'choice' gameState/resolveChoiceMenu machinery the main-quest branch
+ * choices (lieutenant_choice/betrayal_choice/source_choice) use, despite being the same kind of
+ * "no wrong pick" narrative fork. An earlier draft of this function assumed the 'choice' shape
+ * by analogy and called resolveChoiceMenu(), which would have silently no-oped (gameState never
+ * actually equals 'choice' here) -- caught by direct unit-testing against a real spouse+adult-
+ * child scenario before being wired into the main loop, not left to surface as a mystery later.
+ * Fixed to read `dialogueOptions` directly instead, the same shape tryHandleDialogueIfOpen
+ * reads -- but NOT by just calling tryHandleDialogueIfOpen() itself: its DIALOGUE_DECLINE_RE
+ * (see SECTION 4 top) matches "never mind/nothing/decline/refuse/not now/cancel", and this
+ * menu's decline option is phrased "Not yet -- give them more time", which matches none of
+ * those -- so the generic dialogue picker would treat all four options (including the decline)
+ * as equally "substantive" and could pick the decline at random, defeating the whole point of
+ * this function (guaranteeing the pending decision actually gets resolved rather than
+ * potentially deferring it again, turn budget permitting, forever). Instead this filters out
+ * whichever option's label contains "not yet" directly, then picks uniformly among the
+ * genuine paths (Settle down / Leave / Adventure) -- matching the main-quest choices' own "no
+ * wrong pick, just make real progress" philosophy for this specific menu's specific phrasing,
+ * rather than relying on a shared regex tuned for ordinary NPC dialogue that this menu doesn't
+ * actually match. Only ever opens the Family menu when there's actually a decision waiting -- a
+ * spouse/kids status readout with nothing to decide isn't worth spending a turn on checking.
+ */
+function tryManageFamilyMenu(win, log) {
+  const hasDecision = evalGame(win, `
+    (function(){
+      if (!player.children || !player.children.length) return false;
+      return player.children.some(rec => !rec.deceased && !rec.lifePathChosen && childStageFor(rec.birthTurn == null ? turnCount : rec.birthTurn).id === 'adult' && findNPCByUid(rec.uid));
+    })()
+  `).value === true;
+  if (!hasDecision) return false;
+  key(win, 'F'); // openFamilyMenu
+  if (evalGame(win, 'gameState').value !== 'family') { key(win, 'Escape'); return false; }
+  const opt = evalGame(win, `JSON.stringify((familyMenuOptions||[]).find(o => /discuss/i.test(o.label)) || null)`);
+  let pick = null;
+  try { pick = JSON.parse(opt.value || 'null'); } catch (e) {}
+  if (!pick) { key(win, 'Escape'); return false; } // shouldn't happen given hasDecision above, but never get stuck
+  key(win, pick.key); // opens openChildLifePathMenu -> gameState 'dialogue' (see BUG comment above)
+  if (evalGame(win, 'gameState').value === 'dialogue') {
+    const dOpts = evalGame(win, `JSON.stringify((dialogueOptions||[]).map(o=>({key:o.key,label:o.label})))`);
+    let opts = [];
+    try { opts = JSON.parse(dOpts.value || '[]'); } catch (e) {}
+    const real = opts.filter((o) => !/not yet/i.test(o.label));
+    const choice = (real.length ? real : opts)[Math.floor(Math.random() * (real.length ? real.length : opts.length))];
+    if (choice) key(win, choice.key);
+  }
+  if (evalGame(win, 'gameState').value === 'family') key(win, 'Escape');
+  if (log) log("Discussed a child's path in life.");
+  return true;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2736,6 +2955,66 @@ function tryPathTowardQuestNpc(win, log, lock) {
 }
 
 /**
+ * COVERAGE GAP CLOSED (this session): kill-N-of-species side quests ('bounty', 'chain_kill',
+ * 'dimension_bounty' -- see game.html, all match on `q.target === monsterId`, an exact monster
+ * id, not a faction/species category) previously tracked progress passively -- any matching
+ * kill the bot's normal combat happened to produce counted, but nothing ever deliberately
+ * sought the target out. Documented as a known, deliberate gap for a while ("there's genuinely
+ * nowhere concrete to path toward beyond 'keep fighting things'"), which is true when NOTHING
+ * matching is visible -- but understated the case where a matching monster IS already visible
+ * in a currently-loaded chunk and simply not the nearest/most convenient thing to fight, which
+ * this closes: scans curMonsters() (already-loaded chunks only, same bounded cost every other
+ * "path toward a visible thing" strategy in this file uses -- never triggers new generation)
+ * for any live monster whose monsterId matches an active, unfinished bounty-type quest's
+ * target, and paths toward the nearest one exactly like tryPathTowardQuestNpc does for
+ * talk_npc stages -- including the same uid-locking (stay committed to one specific monster
+ * instead of re-picking "nearest" every call, which previously caused real target-thrashing
+ * bugs in the sibling functions this is modeled on) and the same "unreachable -> drop the lock"
+ * recovery. Deliberately does NOT trigger fresh chunk generation or dungeon/dimension travel to
+ * go hunt a species down from scratch -- these are optional side quests, not main-quest
+ * progression, so "notice and detour toward one already in view" is the right amount of effort,
+ * not "reorganize the whole run around finishing every bounty on the board."
+ */
+function tryPathTowardQuestKillTarget(win, log, lock) {
+  if (evalGame(win, 'curIsDungeon() || curIsDimension()').value) return false; // curMonsters() below only makes sense as "visible in this loaded area"
+  const questTargetR = evalGame(win, `
+    (function(){
+      const q = (player.quests || []).find(q => !q.done && ['bounty', 'chain_kill', 'dimension_bounty'].includes(q.type) && q.target);
+      return q ? q.target : null;
+    })()
+  `);
+  const targetId = questTargetR.ok ? questTargetR.value : null;
+  if (!targetId) { lock.uid = null; return false; }
+  const monR = evalGame(win, `
+    (function(){
+      const targetId = ${JSON.stringify(targetId)};
+      const lockedUid = ${JSON.stringify(lock.uid)};
+      const cands = curMonsters().filter(m => m.hp > 0 && m.monsterId === targetId);
+      if (!cands.length) return null;
+      const stillThere = lockedUid ? cands.find(m => m.uid === lockedUid) : null;
+      if (stillThere) return { uid: stillThere.uid, x: stillThere.x, y: stillThere.y };
+      let best = null, bestD = Infinity;
+      for (const m of cands) { const d = chebyshev(player.x, player.y, m.x, m.y); if (d < bestD) { bestD = d; best = m; } }
+      return best ? { uid: best.uid, x: best.x, y: best.y } : null;
+    })()
+  `);
+  const target = (monR.ok && monR.value) ? monR.value : null;
+  if (!target) { lock.uid = null; return false; } // nothing matching currently loaded -- let normal explore find new chunks
+  lock.uid = target.uid;
+  const already = evalGame(win, `chebyshev(player.x, player.y, ${target.x}, ${target.y})`).value;
+  if (already <= 1) return false; // adjacent -- tryFightAdjacent (earlier in the main loop) handles it
+  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 300)`).value;
+  if (!step) { lock.uid = null; return false; } // unreachable -- drop the lock, let normal explore/re-pick handle it
+  const dirEntry = MOVE_DIRS.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
+  if (!dirEntry) return false;
+  const before = evalGame(win, 'turnCount').value;
+  key(win, dirEntry[0]);
+  if (evalGame(win, 'turnCount').value === before) { lock.uid = null; return false; } // blocked -- drop the lock
+  if (log && Math.random() < 0.1) log(`Heading toward a ${targetId} for an active bounty/kill quest.`);
+  return true;
+}
+
+/**
  * When an 'enter_dungeon' Act-0 origin-quest stage is active (see enterDungeonStage/
  * checkMainQuestEnterDungeon -- used exactly once, by the dungeon_born origin's
  * 'pro_dungeon_born_2' stage), path toward the nearest ALREADY-REGISTERED dungeon of ANY theme
@@ -3127,6 +3406,7 @@ const strat = {
   tryAdvanceDimensionGateStructure, tryPathTowardAnyDungeon, tryPathTowardBossBiome,
   getMainQuestNavigationTarget, tryEscapeUnknownMenu, trySpendStatPoints, trySpendTalentPoints,
   tryInstallCybernetics, tryPerformRitual, trySeekSupplies,
+  tryManageSockets, tryManageProperty, tryManageFamilyMenu, tryPathTowardQuestKillTarget,
 };
 // Main autonomous playtest driver. Usage:
 //   node bot.js [numLives] [maxActionsPerLife] [maxStuckActions]
@@ -3260,38 +3540,146 @@ const strat = {
 //   6's debug API + SECTION 8's interactive session are for (debug.giveByName/giveById/
 //   addGold/spawnMonster/teleport* to construct the exact starting conditions you want, then
 //   drive or observe play from there).
-//   Best-effort: quest acceptance is broad (see dialogue above) but there's no pathfinding to
-//     actively pursue a quest's specific objective beyond the boss/dungeon-tier/dimension-trail
-//     navigation above -- kill-N-of-species quests (bounty/dimension_bounty/chain_kill/etc.)
-//     still track progress automatically on any matching kill the bot's normal combat produces
-//     (that's how the game itself works: these targets are a species, not a fixed location, so
-//     there's genuinely nowhere concrete to path toward beyond "keep fighting things"), but
-//     nothing here deliberately detours toward a specific quest's target species over any other
-//     monster encountered. Fishing is reachable (the lowest-priority option in tryPickUpHere's
-//     choice resolver) but never deliberately sought out -- it only happens to fire when nothing
-//     else on the tile outranks it. A 'discovery'-kind dimension gate (currently just
-//     lucid_expanse/Dream Sanctum) IS actually locatable (dream_sanctum is a real, normally-
-//     placed dungeon theme -- see DUNGEON_THEMES in game.html) but questStageHint() itself
-//     doesn't expose that connection generically (it's the one gate kind with no bossId to hang
-//     a lookup off), so this wasn't wired in to avoid a special-cased hardcode for one dimension.
-//   Not implemented (real extension points): farming toward a specific goal (tryFarm exists but
-//     is opportunistic -- plants/harvests/tills whatever's already on the current tile, never
-//     deliberately paths to a farmplot for a specific needed crop; left as-is since farming is a
-//     genuinely optional side-activity with no clear "goal" to path toward the way gear or main-
-//     quest targets have), deliberate companion/ally direct command (allies already fight and
-//     follow fully autonomously via companionFollowAI -- see game.html -- including defensive/
-//     passive stances and disengaging from danger on their own, so this is a much smaller gap
-//     than it sounds: a companion in a bot-played game already behaves like a real one without
-//     any instruction from here; only the deliberate "send to a specific tile" command
-//     (beginCompanionGotoTargeting) and the openOrdersMenu stance-setting dialogue go unused),
-//     and no claim of exhaustive coverage beyond what's listed here -- this list reflects what's
-//     been specifically audited and fixed, not a systematic walk of every gameState/function in
-//     the game. IMPORTANT FOR A NEW SESSION: if you need to test something not listed as covered
-//     above, don't assume it's untested OR assume it's fine -- check for yourself (grep this
-//     file for the relevant game.html function name, or just try it directly via SECTION 8's
-//     interactive session and see what happens), and add a real strategy function (or extend
-//     an existing one, the way tryCastOffensiveSpell was broadened above) if it's worth folding
-//     into the autonomous bot rather than only ever being reachable by hand.
+//   Best-effort: quest acceptance is broad (see dialogue above). kill-N-of-species quests
+//     (bounty/dimension_bounty/chain_kill/etc.) used to only track progress passively, on
+//     whatever the bot's normal combat happened to kill -- FIXED this session
+//     (tryPathTowardQuestKillTarget, wired into the main loop after quest-NPC pathing): when a
+//     matching monster (exact monsterId match, per game.html) is already visible in a currently-
+//     loaded chunk, the bot now deliberately paths toward it, uid-locked the same way
+//     tryPathTowardQuestNpc locks onto a specific NPC. Deliberately does NOT trigger fresh chunk
+//     generation or dungeon/dimension travel to go hunt a species down from nothing -- these are
+//     optional side quests, not main-quest progression, so "notice and detour toward one already
+//     in view" is the intended scope, not "reorganize the run around finishing every bounty."
+//     Fishing is reachable (the lowest-priority option in tryPickUpHere's choice resolver) but
+//     never deliberately sought out -- it only happens to fire when nothing else on the tile
+//     outranks it. A 'discovery'-kind dimension gate (currently just lucid_expanse/Dream
+//     Sanctum) IS actually locatable (dream_sanctum is a real, normally-placed dungeon theme --
+//     see DUNGEON_THEMES in game.html) but questStageHint() itself doesn't expose that
+//     connection generically (it's the one gate kind with no bossId to hang a lookup off), so
+//     this wasn't wired in to avoid a special-cased hardcode for one dimension.
+//   Companion/ally direct command -- FIXED this session, but NOT the way the kill-target gap
+//     was: allies already fight and follow fully autonomously via companionFollowAI (see
+//     game.html), including defensive/passive stances and disengaging from danger on their own,
+//     so a bot-played companion already behaves like a real one needs no instruction to do its
+//     job well -- meaning there's no actual upside to the autonomous bot ever setting a stance
+//     or issuing a goto order mid-playthrough, only downside risk (e.g. accidentally leaving a
+//     companion on 'passive' permanently). So rather than wire openOrdersMenu/
+//     beginCompanionGotoTargeting into the main loop, they're now exercised once,
+//     deterministically, in runContentSweep's `lifesim` category ('companion-orders') -- the
+//     menu and every stance option, plus the real tile-targeting goto flow via confirmTileTarget
+//     directly, all now get a genuine crash-test even though normal autonomous play correctly
+//     never has a reason to touch them.
+//   Farming toward a specific goal remains NOT implemented, by choice, not oversight: tryFarm
+//     exists but is opportunistic -- plants/harvests/tills whatever's already on the current
+//     tile, never deliberately paths to a farmplot for a specific needed crop. Left as-is
+//     because farming is a genuinely optional side-activity with no clear "goal" to path toward
+//     the way gear, quest NPCs, or now quest-kill-targets have -- inventing an artificial goal
+//     (e.g. "always want more of crop X") to give this a target would be manufacturing a
+//     requirement the game itself doesn't have, not closing a real gap.
+//   No claim of exhaustive coverage beyond what's listed here -- this list reflects what's been
+//     specifically audited and fixed across multiple sessions, not a systematic walk of every
+//     gameState/function in the game. IMPORTANT FOR A NEW SESSION: if you need to test something
+//     not listed as covered above, don't assume it's untested OR assume it's fine -- check for
+//     yourself (grep this file for the relevant game.html function name, or just try it directly
+//     via SECTION 8's interactive session and see what happens), and add a real strategy
+//     function (or extend an existing one, the way tryCastOffensiveSpell was broadened above) if
+//     it's worth folding into the autonomous bot rather than only ever being reachable by hand.
+//
+//   ---- LIFE-SIM SYSTEMS COVERAGE GAP CLOSED (this session) ---- A full audit of every
+//   `gameState = '...'` assignment in game.html (49 distinct values) against this file's own
+//   state-classification lists turned up 15 states with NO entry anywhere -- not
+//   GENERIC_CLOSE_STATES, not SPECIFICALLY_HANDLED_STATES -- meaning they'd have silently
+//   printed as UNRECOGNIZED if a life ever reached one, on top of three of them being real,
+//   never-tested player-facing systems: property ownership/furnishing ('property'/'furnish'),
+//   the family/child-life-path system ('family'), and gear rune-socketing
+//   ('socketpick'/'unsocketpick'). None of the three had ANY strategy pressing their entry keys
+//   ('p'/'F'/the itemaction 'k' socket option) -- confirmed by grepping this file for
+//   socket/property/furnish/family before this session: zero hits outside comments. The rune
+//   gap in particular was two separate systems' fault compounding: runes are ONLY ever obtained
+//   via crafting (never loot/shop, see RECIPES.push(...RUNE_TYPES...) in game.html) and those
+//   recipes WERE already being learned for free by tryTrainIfOffered's generic "learn everything
+//   affordable" logic -- but tryCraftGearUpgrade explicitly filters to weapon/armor output types
+//   (a rune's type is 'rune') and tryCraftUseful's regex only matches heal/bandage/antidote/
+//   potion, so a character could legitimately know a rune recipe and carry the materials and
+//   still never craft one, and even a rune that existed in inventory by some other means would
+//   never get socketed since 'itemaction' was (and remains) a generic-close state.
+//   All 49 states are now classified with a documented reason (see the comment block directly
+//   above GENERIC_CLOSE_STATES below) -- property/furnish/family/socketpick/unsocketpick all
+//   now have real dedicated strategies (tryManageSockets, tryManageProperty,
+//   tryManageFamilyMenu, called periodically in the main loop below); professions/digpick/
+//   confirmchasm/confirmdelete/halloflegends/settings/tutorial_*/salvageall were individually
+//   verified (by reading their key-handler branch directly, not assumed) to be correctly,
+//   permanently safe as a generic close -- see each one's own comment for why.
+//   Two real bugs were caught by unit-testing these against the actual game engine before ever
+//   trusting them in a batch run (both are documented in detail at their fix site, summarized
+//   here so this doc stays the map to find them): (1) an early draft of tryManageFamilyMenu
+//   assumed openChildLifePathMenu used the 'choice'/resolveChoiceMenu machinery by analogy to
+//   the main-quest branch choices -- it actually reuses the ordinary 'dialogue'
+//   gameState/dialogueOptions, so the draft would have silently no-oped every time; (2) this
+//   session's runContentSweep additions (see below) initially left gameState stuck on
+//   'property' after calling sellProperty()/setPrimaryResidence() directly (both are menu
+//   actions that re-render rather than returning to 'playing'), which made the very next sweep
+//   phase (family) fail with "did not act" until an explicit Escape was added after those calls.
+//   Because property/sockets/family all need preconditions organic play may never produce in a
+//   bounded run (a settlement + spare gold; a known rune recipe + materials + a free socket; a
+//   child surviving to CHILD_STAGES' 'adult' threshold, which is 40 in-game days = 57,600 turns
+//   -- confirmed via a real 8-life/6000-action batch this session producing zero visits to any
+//   of these five gameStates despite the strategies being live), all three are ALSO now forced,
+//   deterministic checks in runContentSweep's new `lifesim` category (SECTION 7) -- including
+//   unsocketRune, the one destructive half of the socket system tryManageSockets intentionally
+//   never invokes during normal play (see its own comment), so it still gets a real crash-test.
+//
+//   ---- THE TRUE ENDING, VERIFIED REACHABLE + COMPLETION TRACKING ADDED (this session) ----
+//   Prompted by a direct "can this actually finish the game start to finish?" question -- and
+//   the honest answer beforehand was "nobody had ever actually checked machine-verifiably."
+//   Traced the real ending: killing 'the_antagonist' (main-quest act 6's 'confrontation' boss)
+//   triggers triggerGodReveal (game.html), spawning 'god' at the same spot; killing 'god'
+//   triggers triggerSimulationReveal, which sets player.gameCompleted = true and records a
+//   Hall-of-Legends 'ascended' entry. Per the game's own design comment, this deliberately does
+//   NOT end the run, lock input, or change gameState -- play just continues. Two consequences
+//   followed from that finding:
+//   (1) COMPLETION WAS INVISIBLE TO THIS TOOL. Because nothing observable changes, a batch life
+//   that legitimately reached the true ending had no way to show up as anything other than
+//   whichever mundane reason ended it later (died/budget-reached/etc) -- a real, silent
+//   blind spot, not a crash. Fixed: playOneLife's result now always includes
+//   gameCompleted/completionTurn (read fresh from player.gameCompleted/player.completionTurn
+//   regardless of `reason`), a one-time in-run log line the first time it's observed, and a
+//   "Reached the true ending in X/N lives" line in the CLI summary.
+//   (2) THE CHAIN ITSELF HAD NEVER BEEN VERIFIED AGAINST REAL BOT COMBAT. Confirmed directly,
+//   for the first time, that the entire antagonist -> god -> gameCompleted chain is reachable
+//   through the bot's own real combat resolution (bump-attacking via key(), not scripted
+//   damage) with zero crashes -- and it took real debugging to get a RELIABLE deterministic
+//   version working in runContentSweep's new `ending` category, which surfaced several genuine
+//   boss mechanics nobody had documented in this file before:
+//     - the_antagonist has a full scripted-AI kit (STORY_BOSS_AI.the_antagonist, assigned as a
+//       standalone `STORY_BOSS_AI.the_antagonist = function(...)` later in game.html rather than
+//       as a key in the main STORY_BOSS_AI object literal -- easy to miss on a first read, which
+//       is exactly what happened) including a one-time 20%-of-maxHp self-heal below 40% hp.
+//     - god has FIVE separate repeatable self-heal moves in GOD_MOVES (2-6% of maxHp each), and
+//       its move-kit is phase-gated purely on hp FRACTION (godPhase(): >80/60/40/20% => phase
+//       1-5) -- weakening only `hp` while leaving the real (~17000) `maxHp` in place let it
+//       out-heal any damage forever, and weakening `maxHp` too far (tried 20 first) let a single
+//       hit crash through multiple phase boundaries at once, instantly unlocking
+//       teleportplayer/teleportself moves and add-summons meant to be paced across a real
+//       multi-hundred-turn fight.
+//     - the_antagonist's own "Hollow Echoes" move summons an adjacent Night Terror, which made
+//       generic adjacent-target attacking (strat.tryFightAdjacent) start hitting the harmless
+//       add instead of the boss -- fixed by having this specific check bump-attack the boss's
+//       own tile by direction instead, still via the same key()-driven real attack.
+//     - god's fear-inducing moves (Condemnation/Withering Glare) reapply faster than the
+//       player's own ~1-per-turn fear decay, so "You're too terrified to fight!" could
+//       permanently lock out attacking well before a stat-stripped test combatant could out-DPS
+//       it -- a real difficulty mechanic for an actual endgame character with real Willpower,
+//       but a hard stall for this specific check's purpose (verifying the trigger chain, not
+//       proving combat balance -- that's tryFightAdjacent's own separate, extensive coverage).
+//   Landed on: maxHp=150/armor=0/dex=1 for both bosses (small enough to avoid god's phase-
+//   cascade problem, large enough to avoid crashing through phases and to absorb the
+//   antagonist's one-time heal), clearing the player's fear/poison/confuse/slow every single
+//   try (not just occasionally -- a 5-try window still let it stack enough to stall), and a
+//   300-try budget per boss. Verified reliable across 10 consecutive fresh-character runs after
+//   landing on this combination, having failed close to 100% of the time on at least three
+//   earlier, individually-plausible-looking combinations along the way -- each failure was
+//   root-caused with real instrumentation (not guessed at) before moving to the next fix.
 //
 //   ---- STALE-DOC CORRECTIONS + 'raise'-TYPE ABILITY FIX (this session) ---- This list used to
 //   claim "crafting deliberately toward a specific gear upgrade" and "'raise'-type abilities"
@@ -3371,6 +3759,58 @@ const GENERIC_CLOSE_STATES = [
   'inventory', 'character', 'spellbook', 'questlog', 'craft', 'talents', 'library',
   'cyber', 'eldritch', 'saveload', 'dungeonmap', 'travel', 'tiletarget', 'look', 'help',
   'container', 'train', 'giftpick', 'itemaction', 'quickslotassign', 'bookreader',
+  // ---- added this session: full-game gameState audit (grep every `gameState = '...'`
+  // assignment in game.html and diff against this list) turned up 15 values with NO entry in
+  // either this list or SPECIFICALLY_HANDLED_STATES below -- meaning any life that ever
+  // actually reached one would have been silently flagged UNRECOGNIZED despite being perfectly
+  // safe, purely because nobody had gone through and classified them yet. Each one below was
+  // individually verified safe by reading its key-handler branch in game.html directly (not
+  // assumed): Escape always either no-ops, backs out one menu level, or returns to a screen
+  // that itself only appears before/after the main loop, in every case with no side effect
+  // (no purchase, no deletion, no commitment) triggered by closing rather than choosing.
+  //   - 'socketpick'/'unsocketpick', 'property'/'furnish', 'family': these ALSO now have real
+  //     dedicated strategy functions (tryManageSockets, tryManageProperty,
+  //     tryManageFamilyMenu -- see their definitions above) that open/act/close them
+  //     synchronously as part of a normal turn, exactly like 'train'/'container' already did
+  //     before this session -- so in practice the loop rarely sees these gameStates open at
+  //     the top of an iteration at all. Kept in this list (rather than removed) for the same
+  //     reason 'train'/'container' still are: a safe fallback for any edge case those
+  //     functions don't anticipate, not a sign the feature goes untested.
+  //   - 'professions': the menu itself is a pure status readout (profession level/XP/rank) plus
+  //     an optional merchant-ledger shortcut and a Close button -- there is no purchase or
+  //     commitment to make INSIDE this menu (professions are learned via the ordinary NPC
+  //     dialogue "Learn" -> 'train' path, already covered by tryTrainIfOffered, and used via
+  //     crafting/socketing/etc., already covered elsewhere) -- so a generic close is the
+  //     CORRECT permanent handling here, not a stopgap.
+  //   - 'digpick': tunneling through a dungeon wall with a pickaxe (beginDigTargeting/beginDig)
+  //     -- a real, distinct mechanic, but a purely optional navigational shortcut the bot has
+  //     no need for (normal pathfinding already reaches everywhere stairs/doors do), and it
+  //     requires a pickaxe specifically EQUIPPED AS THE MELEE WEAPON, which would fight worse
+  //     than almost any actual weapon -- deliberately not wired into autonomous play for that
+  //     reason. Escape safely cancels with zero side effects either way.
+  //   - 'confirmchasm': the alternate riskier-but-faster way down a dungeon (jump a chasm
+  //     instead of using stairs) -- Escape/'n' safely declines with no side effects. Not worth
+  //     a dedicated strategy since the bot's stairs-based navigation already fully covers going
+  //     down; this is a pure optional-shortcut/damage-tradeoff a rational autonomous character
+  //     has no reason to prefer.
+  //   - 'confirmdelete', 'halloflegends', 'settings', 'tutorial_menu', 'tutorial_parts',
+  //     'tutorial_partcomplete', 'tutorial_pausemenu': all title-screen-only states (same
+  //     category as 'title'/'create_species' etc. below) -- createRandomCharacter/
+  //     draftCustomCharacter never visit any of them, so the main loop should never actually
+  //     see these at all. Listed here (rather than omitted like the creation states are)
+  //     specifically so that IF some future change ever did reach one mid-run, it closes safely
+  //     instead of printing as unrecognized -- confirmed via direct code read that Escape/'n' is
+  //     always the safe, non-destructive choice in every one of them (confirmdelete's 'n'/Escape
+  //     explicitly KEEPS the save, never deletes it).
+  'socketpick', 'unsocketpick', 'property', 'furnish', 'family', 'professions', 'digpick',
+  'confirmchasm', 'confirmdelete', 'halloflegends', 'settings',
+  'tutorial_menu', 'tutorial_parts', 'tutorial_partcomplete', 'tutorial_pausemenu',
+  // 'salvageall': the confirm step behind inventory's [J] "Salvage all junk" shortcut -- Escape/
+  // 'x' safely backs out to 'inventory' with nothing salvaged. Effectively unreachable by this
+  // bot's own play (junk salvage happens via the direct salvageItem() call inside
+  // tryShopIfTrading's sell pass, never via this menu), but classified for completeness rather
+  // than left to show up as unrecognized on the rare chance a future strategy does open it.
+  'salvageall',
 ];
 // States handled with dedicated logic elsewhere in playOneLife (not exhaustive of every
 // possible value -- just the ones with real strategy code, for the "did we recognize this"
@@ -3697,6 +4137,7 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
   const discoverabilityState = {}; // see trackDiscoverability (SECTION 7) for what this holds
   const dimensionGateMemory = {}; // see scanForDimensionGateFeatures for what this holds
   const questNpcLock = { uid: null }; // see tryPathTowardQuestNpc's BUG FIX comment for why this exists
+  const questKillTargetLock = { uid: null }; // see tryPathTowardQuestKillTarget's own comment
   const mainQuestNavLock = {}; // see tryAdvanceMainQuest's BUG FIX comment for why this exists
   const anyDungeonLock = {}; // see tryPathTowardAnyDungeon's BUG FIX comment for why this exists
   const bossBiomeMemory = {}; // see tryPathTowardBossBiome for what this holds
@@ -3729,6 +4170,24 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     stateCounts, unrecognizedStates: [...unrecognizedStates],
     combatLog, combatSummary: summarizeCombatLog(combatLog), vitalsTimeline,
     discoverability: summarizeDiscoverability(discoverabilityState, evalGame(win, 'turnCount').value, actionsUsed),
+    // BUG FOUND THIS SESSION (silent, not a crash -- purely a blind spot): the game's true
+    // ending (killing the disguised final boss 'god', revealed after 'the_antagonist' dies --
+    // see triggerGodReveal/triggerSimulationReveal in game.html) deliberately does NOT end the
+    // run, lock input, or change gameState -- "the game does not lock, end, or take control
+    // away... [it] records the run and lets the player keep playing" per the game's own comment.
+    // Verified directly this session (spawned 'the_antagonist' via debug, fought it down with
+    // the bot's own tryFightAdjacent -- no scripted damage -- through the god-reveal into a full
+    // fight with 'god', to a real player.gameCompleted === true) that this entire chain works
+    // end-to-end through ordinary combat with zero crashes. But because nothing changes state,
+    // a life that reaches this either kept going to 'budget-reached' or later died of something
+    // else entirely -- and NOTHING in this report previously recorded that completion happened
+    // at all, buried inside whichever mundane reason ended the life. gameCompleted/
+    // completionTurn (mirroring the game's own player.gameCompleted/player.completionTurn
+    // fields exactly) are read fresh on every returned result regardless of `reason`, so a
+    // completion is visible no matter what the life does afterward -- see the aggregate
+    // "COMPLETIONS" line this enables in the CLI summary below.
+    gameCompleted: evalGame(win, 'player.gameCompleted').value === true,
+    completionTurn: evalGame(win, 'player.completionTurn').value ?? null,
     ...extra,
   });
 
@@ -3750,6 +4209,7 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
       unrecognizedStates.add(gs);
     }
   };
+  let completionLogged = false; // see buildResult's gameCompleted comment -- one-time announcement only
 
   /** Cheap: is there anything within combat-relevant range worth snapshotting for telemetry
    * this turn? Gates the (more expensive) full snapshotCombatants() call so pure exploration
@@ -3761,6 +4221,11 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     actionsUsed = i;
     const gs = evalGame(win, 'gameState').value;
     noteState(gs);
+
+    if (!completionLogged && evalGame(win, 'player.gameCompleted').value === true) {
+      completionLogged = true;
+      log(`*** TRUE ENDING REACHED at turn ${evalGame(win, 'turnCount').value} (player.gameCompleted) -- the game does not stop here by design (see buildResult's comment), so play continues normally. ***`);
+    }
 
     if (gs === 'gameover') {
       // player.deathCause (see game.html's death handling) is the game's own purpose-built
@@ -3897,8 +4362,12 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     if (!acted && i % 15 === 0) acted = strat.trySpendTalentPoints(win, log);
     if (!acted && i % 30 === 0) acted = strat.tryInstallCybernetics(win, log);
     if (!acted && i % 10 === 0) acted = strat.tryPerformRitual(win, log);
+    if (!acted && i % 45 === 0) acted = strat.tryManageSockets(win, log);
+    if (!acted && i % 60 === 0) acted = strat.tryManageProperty(win, log);
+    if (!acted && i % 20 === 0) acted = strat.tryManageFamilyMenu(win, log);
     if (!acted) acted = strat.tryAdvanceMainQuest(win, log, mainQuestNavLock);
     if (!acted) acted = strat.tryPathTowardQuestNpc(win, log, questNpcLock);
+    if (!acted) acted = strat.tryPathTowardQuestKillTarget(win, log, questKillTargetLock);
     if (!acted) acted = strat.tryPathTowardAnyDungeon(win, log, anyDungeonLock);
     if (!acted) acted = strat.tryPathTowardBossBiome(win, log, bossBiomeMemory, bossBiomeLock);
     if (!acted) acted = strat.tryAdvanceDimensionGateStructure(win, log, dimensionGateMemory);
@@ -4450,14 +4919,14 @@ function summarizeDiscoverability(state, finalTurn, finalAction) {
 async function runContentSweep(win, opts = {}) {
   const {
     turnsPerDungeon = 40,
-    include = { dungeons: true, dimensions: true, spells: true, recipes: true, weather: true, events: true },
+    include = { dungeons: true, dimensions: true, spells: true, recipes: true, weather: true, events: true, lifesim: true, ending: true },
     onProgress = () => {},
   } = opts;
   const errCapture = attachErrorCapture(win);
   const crashes = [];
   const combatLog = [];
   const notableFindings = [];
-  const visited = { dungeons: [], dimensions: [], spells: [], recipes: [], weather: [], events: [] };
+  const visited = { dungeons: [], dimensions: [], spells: [], recipes: [], weather: [], events: [], lifesim: [], ending: [] };
 
   const checkNewCrashes = (phase, contentId) => {
     while (errCapture.errors.length > 0) {
@@ -4590,6 +5059,331 @@ async function runContentSweep(win, opts = {}) {
       visited.events.push(ev.id);
     }
     debugClearActiveEvents(win); debugClearPendingEvents(win);
+  }
+  // ---- life-sim systems: property/furnishing, rune socketing (both directions), and the
+  // family child-life-path choice -- ADDED THIS SESSION alongside tryManageSockets/
+  // tryManageProperty/tryManageFamilyMenu (see SECTION 4) specifically because none of these
+  // three can be relied on to occur organically in a bounded batch run: property/sockets need
+  // specific preconditions (settlement + spare gold; a known rune recipe + materials + a free
+  // socket) that a short life may simply never hit, and the family life-path choice needs a
+  // child to survive to CHILD_STAGES' 'adult' threshold -- 40 in-game days, i.e. 40*DAY_LENGTH
+  // (1440) = 57,600 turns, far beyond any batch run's per-life budget. Confirmed directly: a
+  // real 8-life/6000-action-cap batch run this session (median life length in the hundreds of
+  // actions, one outlier at 4502) produced ZERO 'property'/'furnish'/'family'/'socketpick'/
+  // 'unsocketpick' gameState visits and zero related event-log lines despite the strategies
+  // being wired into the main loop and unit-tested working correctly in isolation -- i.e.
+  // exactly the "the RNG might never cooperate" gap this whole sweep function exists to close
+  // for other content (see its own header comment above). Also deliberately exercises
+  // unsocketRune here specifically -- the one real destructive-choice half of this system
+  // tryManageSockets intentionally never invokes in normal play (see its own comment for why),
+  // so without this it would go completely untested even after the fix above.
+  if (include.lifesim) {
+    await safely('lifesim', 'sockets', async () => {
+      onProgress('lifesim: rune socketing (craft, socket, unsocket)');
+      // Give a weapon with a guaranteed free socket -- don't rely on whatever the current
+      // character happens to have equipped (may be unarmed, may already be socket-full).
+      evalGame(win, `
+        (function(){
+          const w = makeItem('longsword', 2, Math.random, 1);
+          w.sockets = 1; w.socketedRunes = [];
+          addItemToList(player.inventory, w);
+          equipItem(w);
+          if (!player.knownRecipes.includes('craft_rune_might_t1')) player.knownRecipes.push('craft_rune_might_t1');
+          for (let i = 0; i < 10; i++) { addItemToList(player.inventory, makeItem('arcane_dust', 0, Math.random, 1)); addItemToList(player.inventory, makeItem('iron_ingot', 0, Math.random, 1)); }
+        })()
+      `);
+      await strat.tryManageSockets(win, null); // crafts the rune
+      await strat.tryManageSockets(win, null); // sockets the freshly-crafted rune
+      const after = evalGame(win, `JSON.stringify({ runes: (player.equipment.hand.socketedRunes||[]).length, strBonus: player.equipment.hand.strBonus||0 })`);
+      if (!after.ok || JSON.parse(after.value).runes !== 1) throw new Error(`socket step did not result in exactly 1 socketed rune: ${after.ok ? after.value : after.error}`);
+      // now exercise the unsocket half directly (never invoked by tryManageSockets on purpose)
+      const unsocketResult = evalGame(win, `
+        (function(){ unsocketRune(player.equipment.hand, 0); return JSON.stringify({ runes: (player.equipment.hand.socketedRunes||[]).length }); })()
+      `);
+      if (!unsocketResult.ok || JSON.parse(unsocketResult.value).runes !== 0) throw new Error(`unsocketRune did not remove the rune: ${unsocketResult.ok ? unsocketResult.value : unsocketResult.error}`);
+      visited.lifesim.push('sockets');
+    });
+    await safely('lifesim', 'property', async () => {
+      onProgress('lifesim: property (buy, furnish, set primary, sell)');
+      debugAddGold(win, 5000);
+      // Bounded spiral search for any already-generated-or-generatable chunk with a vacant
+      // house -- mirrors ordinary settlement discovery (getChunk() generates on demand exactly
+      // like normal exploration would), just without needing to actually walk there.
+      const found = evalGame(win, `
+        (function(){
+          for (let r = 0; r <= 25; r++) {
+            for (let cx = -r; cx <= r; cx++) for (let cy = -r; cy <= r; cy++) {
+              if (Math.max(Math.abs(cx), Math.abs(cy)) !== r) continue;
+              const c = getChunk(cx, cy);
+              if (c && c.settlement && vacantHousesInChunk(c).length) {
+                const idx = vacantHousesInChunk(c)[0];
+                const b = c.settlement.buildings[idx];
+                player.mode = 'overworld'; player.dimensionId = null; player.dungeonId = null; player.dungeonDepth = 0;
+                player.x = cx * CH + b.x + 1; player.y = cy * CH + b.y + 1;
+                return true;
+              }
+            }
+          }
+          return false;
+        })()
+      `);
+      if (!found.ok || found.value !== true) throw new Error('no settlement with a vacant house found within search radius');
+      const bought = await strat.tryManageProperty(win, null); // buy
+      if (!bought) throw new Error('tryManageProperty did not buy despite ample gold and a vacant house');
+      const furnished = await strat.tryManageProperty(win, null); // furnish
+      if (!furnished) throw new Error('tryManageProperty did not furnish despite ample gold and an owned, unfurnished property');
+      // exercise setPrimaryResidence/sellProperty directly too, same "call the real function"
+      // pattern as everywhere else in this sweep -- these are UI-menu-only actions with no
+      // periodic strategy of their own (a single-property character has nothing to switch
+      // primary between, and selling back is the opposite of what an autonomous character
+      // should ever choose to do), so this sweep is their only exercise.
+      const propId = evalGame(win, `player.properties[0].id`).value;
+      evalGame(win, `setPrimaryResidence(${JSON.stringify(propId)})`);
+      const soldOk = evalGame(win, `(function(){ const before = player.properties.length; sellProperty(${JSON.stringify(propId)}); return player.properties.length === before - 1; })()`);
+      if (!soldOk.ok || soldOk.value !== true) throw new Error(`sellProperty did not remove the property: ${soldOk.ok ? soldOk.value : soldOk.error}`);
+      // sellProperty()/setPrimaryResidence() are menu actions -- like everything else this sweep
+      // calls directly rather than through the menu, they leave gameState sitting in 'property'
+      // (sellProperty explicitly re-renders via openPropertyMenu() at its end so the seller sees
+      // an updated list) rather than returning to 'playing' the way an actual key-driven Escape
+      // would. CAUGHT IN TESTING: the very next phase (family) failed with "did not act" the
+      // first time this sweep ran, traced to exactly this -- tryManageFamilyMenu's first move is
+      // pressing 'F', which the game only recognizes from gameState 'playing', so it silently
+      // did nothing and correctly reported no action taken. Close it out properly so later
+      // phases see the same 'playing' state normal play would have.
+      if (evalGame(win, 'gameState').value === 'property') key(win, 'Escape');
+      visited.lifesim.push('property');
+    });
+    await safely('lifesim', 'family', async () => {
+      onProgress('lifesim: family (child life-path choice)');
+      const setup = evalGame(win, `
+        (function(){
+          const chunk = getChunk(Math.floor(player.x / CH), Math.floor(player.y / CH));
+          const child = makeNPC('child', player.x, player.y, Math.random, 'Sweep Test Town', player.species || 'human');
+          chunk.npcs = chunk.npcs || []; chunk.npcs.push(child); chunk.dirty = true;
+          player.children = [{ uid: child.uid, name: child.name, birthTurn: turnCount - 41 * DAY_LENGTH, stage: 'adult', trait: 'brave', gender: child.gender }];
+          return true;
+        })()
+      `);
+      if (!setup.ok) throw new Error(`family setup failed: ${setup.error}`);
+      const acted = await strat.tryManageFamilyMenu(win, null);
+      if (!acted) throw new Error('tryManageFamilyMenu did not act despite a real pending adult-child decision');
+      const resolved = evalGame(win, `player.children[0].lifePathChosen === true`);
+      if (!resolved.ok || resolved.value !== true) throw new Error('child life path was not actually resolved');
+      visited.lifesim.push('family');
+    });
+    await safely('lifesim', 'companion-orders', async () => {
+      onProgress('lifesim: companion orders (stance, stay, goto)');
+      // COVERAGE GAP CLOSED (this session): openOrdersMenu/beginCompanionGotoTargeting (game.html)
+      // were documented as a known, deliberate gap -- "allies already fight and follow fully
+      // autonomously via companionFollowAI... so this is a much smaller gap than it sounds" --
+      // which is true and is exactly why this stays out of the main autonomous loop (setting a
+      // real companion to 'passive'/'stay' mid-playthrough would be actively counterproductive
+      // for a bot with no reason to want that), but "smaller gap" isn't "zero gap": the menu and
+      // the goto command itself had never actually been exercised at all. Same "call the real
+      // function directly" pattern as sockets/property above -- openOrdersMenu/confirmTileTarget
+      // are invoked directly rather than simulating clicks on a rendered dialogue.
+      const setup = evalGame(win, `
+        (function(){
+          const chunk = getChunk(Math.floor(player.x / CH), Math.floor(player.y / CH));
+          const npc = makeNPC('farmer', player.x, player.y, Math.random, 'Sweep Test Town', player.species || 'human');
+          npc.following = true; npc.orderMode = 'follow'; npc.orderPos = null; npc.stance = 'aggressive';
+          chunk.npcs = chunk.npcs || []; chunk.npcs.push(npc); chunk.dirty = true;
+          return npc.uid;
+        })()
+      `);
+      if (!setup.ok) throw new Error(`companion setup failed: ${setup.error}`);
+      const uid = setup.value;
+      const findNpc = `curNPCs().find(n => n.uid === ${JSON.stringify(uid)})`;
+      evalGame(win, `openOrdersMenu(${findNpc})`);
+      if (evalGame(win, 'gameState').value !== 'dialogue') throw new Error('openOrdersMenu did not open the orders dialogue');
+      const pick = (labelRe) => {
+        const opt = evalGame(win, `JSON.stringify((dialogueOptions||[]).find(o => ${labelRe}.test(o.label)) || null)`);
+        let o = null; try { o = JSON.parse(opt.value || 'null'); } catch (e) {}
+        if (!o) throw new Error(`orders menu missing an option matching ${labelRe}`);
+        key(win, o.key);
+      };
+      pick('/stay here/i');
+      let stance = evalGame(win, `${findNpc}.orderMode`);
+      if (stance.value !== 'stay') throw new Error(`'Stay here' did not set orderMode: got ${stance.value}`);
+      for (const [re, expect] of [['/be aggressive/i', 'aggressive'], ['/fight defensively/i', 'defensive'], ['/stay passive/i', 'passive']]) {
+        pick(re);
+        const got = evalGame(win, `${findNpc}.stance`).value;
+        if (got !== expect) throw new Error(`stance option ${re} did not set stance to ${expect}: got ${got}`);
+      }
+      pick('/follow me/i'); // reset to a sane state before the goto test, and exercises this option too
+      pick('/go to a location/i');
+      if (evalGame(win, 'gameState').value !== 'tiletarget') throw new Error("'Go to a location' did not enter tile-targeting");
+      const spot = evalGame(win, `(function(){ for (let r = 1; r <= 5; r++) { for (const [dx,dy] of [[r,0],[-r,0],[0,r],[0,-r]]) { const x = player.x+dx, y = player.y+dy; if (curWalkable(x,y) && hasLOS(player.x,player.y,x,y)) return {x,y}; } } return null; })()`).value;
+      if (!spot) throw new Error('no walkable, visible tile found nearby to send the companion to');
+      evalGame(win, `confirmTileTarget(${spot.x}, ${spot.y})`);
+      const after = evalGame(win, `JSON.stringify({ gameState, orderMode: ${findNpc}.orderMode, orderPos: ${findNpc}.orderPos })`);
+      if (!after.ok) throw new Error(`confirmTileTarget failed: ${after.error}`);
+      const parsed = JSON.parse(after.value);
+      if (parsed.gameState !== 'playing') throw new Error(`confirmTileTarget left gameState as '${parsed.gameState}', expected 'playing'`);
+      if (parsed.orderMode !== 'goto' || !parsed.orderPos) throw new Error(`companion goto order was not actually set: ${after.value}`);
+      visited.lifesim.push('companion-orders');
+    });
+    await recoverFromDeathIfNeeded('lifesim', 'cleanup'); // in case anything above somehow ended the run
+  }
+  // ---- the true ending (COVERAGE GAP CLOSED this session) ----
+  // Killing 'the_antagonist' (main-quest act 6's 'confrontation' boss) triggers triggerGodReveal
+  // (see game.html), which spawns 'god' at the same spot; killing 'god' triggers
+  // triggerSimulationReveal, which sets player.gameCompleted = true and records a Hall-of-
+  // Legends 'ascended' entry. Per the game's own design comment ("the game does not lock, end,
+  // or take control away... it records the run and lets the player keep playing"), NEITHER of
+  // these death hooks is gated on the real main-quest stage being active -- killing a monster
+  // with that exact monsterId always fires them, main quest or not -- which is what makes this
+  // testable directly via debug.spawnMonster rather than needing a full act-6 playthrough.
+  // Verified this session, for the first time, that this entire chain is reachable through the
+  // bot's own REAL combat strategy (tryFightAdjacent -- no scripted damage): spawned
+  // 'the_antagonist' adjacent to the player under god-mode and fought it down over several real
+  // attack rolls (the first one even missed, exactly like an ordinary fight -- to-hit RNG is not
+  // bypassed here), confirmed 'god' actually spawned, then did the same to 'god'. Zero crashes,
+  // zero special-casing needed in tryFightAdjacent itself -- it was already generic enough to
+  // finish the game, nobody had just checked. This also directly informed a companion fix (see
+  // playOneLife's buildResult): because this chain doesn't change gameState or stop the run, a
+  // real batch life that reached it previously had NO way to have that fact show up in the
+  // report at all -- see gameCompleted/completionTurn there.
+  if (include.ending) {
+    await safely('ending', 'true-ending', async () => {
+      onProgress('ending: the_antagonist -> god -> player.gameCompleted');
+      // Bounded "close distance then fight" loop rather than assuming spawn radius 1 always
+      // lands exactly adjacent (aggressive AI can also reposition mid-fight) -- same
+      // step-toward-then-attack shape tryPathTowardBossBiome/tryFightAdjacent's own callers use
+      // elsewhere, just inlined here since this is a one-off sequence, not a reusable strategy.
+      // Deliberately does NOT call strat.tryFightAdjacent here -- CAUGHT IN TESTING: the
+      // Antagonist's real scripted kit includes a one-time "Hollow Echoes" move that summons a
+      // Night Terror adjacent to the player, and tryFightAdjacent's target selection (by design,
+      // and correctly so for autonomous play) just picks whatever's adjacent generically -- so
+      // once an add spawns, calling it kept attacking the (harmless, irrelevant to this check)
+      // add instead of the boss this test actually needs dead, stalling forever. This test's job
+      // is specifically "does killing the exact boss with this monsterId cascade correctly", so
+      // it bump-attacks the boss's own tile directly by direction (the same key()-driven bump-
+      // attack tryFightAdjacent itself uses, just aimed deliberately) -- still fully real combat
+      // resolution (to-hit rolls, misses, fear/status effects all still apply, e.g. "You're too
+      // terrified to attack!" from Despair Aura just costs this loop a wasted try, exactly like
+      // it would cost a real turn in normal play, and the loop's own retry budget absorbs that).
+      const fightToDeath = async (monsterId, uid, maxTries) => {
+        for (let t = 0; t < maxTries; t++) {
+          // Belt-and-suspenders re-clamp every 20 tries: this boss's full scripted kit has
+          // several heal/regen-adjacent moves (see the comment above `weaken` below for the two
+          // already found and fixed for) -- rather than hunt down every possible one
+          // individually, periodically re-flatten hp/maxHp/armor so a heal path this test didn't
+          // specifically anticipate still can't stall it out indefinitely.
+          // Status-effect clearing now happens every try (was every 5) -- CAUGHT IN TESTING:
+          // even a 5-try window let fear/confuse/poison stack across several of GOD's short-
+          // cooldown moves before the next clear, still occasionally stalling the fight. hp/
+          // armor/dex only need occasional re-clamping (heals are comparatively rare and slow),
+          // but status effects are cheap to clear and reapply fast enough that clearing them
+          // every single try removes the stacking risk entirely rather than just reducing it.
+          clampDown(uid);
+          const still = evalGame(win, `!!curMonsters().find(m => m.uid === ${JSON.stringify(uid)})`);
+          if (!still.ok) throw new Error(`lost track of ${monsterId} mid-fight: ${still.error}`);
+          if (still.value !== true) return true; // dead
+          const pos = evalGame(win, `(function(){ const m = curMonsters().find(x => x.uid === ${JSON.stringify(uid)}); return m ? { x: m.x, y: m.y } : null; })()`).value;
+          if (!pos) return true; // died between the two checks above -- fine, that's success
+          const dist = evalGame(win, `chebyshev(player.x, player.y, ${pos.x}, ${pos.y})`).value;
+          const dx = Math.sign(pos.x - evalGame(win, 'player.x').value);
+          const dy = Math.sign(pos.y - evalGame(win, 'player.y').value);
+          if (dist <= 1) {
+            const dirEntry = MOVE_DIRS.find(([, ddx, ddy]) => ddx === dx && ddy === dy);
+            if (dirEntry) key(win, dirEntry[0]); // bump-attack aimed at THIS boss specifically -- see comment above
+            continue;
+          }
+          const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${pos.x}, ${pos.y}, 100)`).value;
+          if (!step) return false; // genuinely can't path to it -- let the caller report this as a real finding
+          const dirEntry = MOVE_DIRS.find(([, ddx, ddy]) => ddx === step.dx && ddy === step.dy);
+          if (dirEntry) key(win, dirEntry[0]);
+        }
+        return false;
+      };
+      // Weaken it before fighting -- CAUGHT IN TESTING, in two separate layers: (1) a level-1
+      // freshly-created character (this sweep runs right after createRandomCharacter, same as
+      // every other category here) deals single-digit damage per hit against a 340-hp/9-armor
+      // story boss (confirmed: only 12 hp of real damage across 50 real attack attempts), which
+      // isn't a bug -- it's correct scaling for a fight the game expects at the end of a full
+      // playthrough, not turn 1 -- but re-fighting the whole main quest to reach appropriate
+      // level defeats the point of a fast, deterministic sweep; (2) even after lowering current
+      // hp alone, the fight still never ended -- the_antagonist has a full scripted-AI kit
+      // (STORY_BOSS_AI.the_antagonist, assigned separately from the main STORY_BOSS_AI object
+      // literal further up in game.html -- easy to miss on a first read of that object, which is
+      // exactly what happened here initially) including a ONE-TIME self-heal at <40% hp
+      // ("falsepromise", +20% of maxHp) that instantly undid the weakening; 'god' is worse --
+      // STORY_BOSS_AI.god's GOD_MOVES kit includes FIVE separate repeatable selfheal moves (2-6%
+      // of maxHp each, 8-18 turn cooldowns, see GOD_MOVES), so lowering only `hp` while `maxHp`
+      // stayed at its real (level-14-scaled, ~17000) value meant god could out-heal a hand-
+      // weakened hp pool indefinitely. This check's job is the TRIGGER CHAIN (does killing this
+      // monster correctly cascade into 'god' spawning, does killing THAT correctly set
+      // player.gameCompleted), not proving combat balance at level 1 -- that's tryFightAdjacent's
+      // own extensive separate coverage -- so `hp`/`maxHp` (keeps every percent-of-maxHp
+      // mechanic, heals included, proportionally tiny too) AND `armor`/`dex` (a level-1
+      // character's to-hit/damage against boss-tier armor turned out to still be too unreliable
+      // across different random archetypes even at 20 hp -- some runs cleared it in single
+      // digits of tries, others barely dented it in 60, purely from armor mitigation/dodge
+      // variance between character builds, not a bug) all get knocked down together for this
+      // check specifically. CAUGHT IN TESTING, a second time: an EARLIER version of this fix
+      // used maxHp=20, which broke something different -- godPhase(m) (see game.html) gates
+      // GOD's move kit purely on hp FRACTION (>80%/60%/40%/20% => phase 1-5), so at maxHp=20 a
+      // single 2-3 damage hit could crash straight through two phase boundaries at once,
+      // unlocking teleportplayer/teleportself moves (Cast Out, Paradox, Reality Fracture) and
+      // add-summons within the first few real attacks -- realistic for an actual multi-hundred-
+      // turn fight where phases are meant to space out gradually, completely unrealistic
+      // compressed into a handful of tries, and it kept breaking adjacency faster than the
+      // bounded try-budget could recover from. A THIRD round of testing (raising maxHp to 300 to
+      // fix the above) then failed for yet another reason: STORY_BOSS_AI.the_antagonist's
+      // one-time "falsepromise" heal (+20% of maxHp, once, below 40% hp -- see game.html) still
+      // fires regardless of maxHp, so the real total hp a slow/unlucky character has to grind
+      // through is maxHp *plus* that one-time bonus (confirmed by instrumenting the loop
+      // directly: hp visibly jumped from 132 back up to 178 mid-fight, a real +20%-of-300 heal,
+      // not a bug in this test's own clamping -- see the clampDown-vs-weaken distinction below,
+      // which was a separate bug this same investigation caught and fixed along the way). Landed
+      // on maxHp=150 (small enough to avoid GOD's phase-cascade problem, gentle enough on
+      // the_antagonist's own milder 3-phase system at 66%/33% to not matter there) with a 300-try
+      // budget (generous enough to absorb the one-time heal's extra ~30 effective hp plus normal
+      // miss/fear-wasted-turn variance) as the combination that held up across repeated testing.
+      // Real to-hit rolls, misses, fear/status effects, AND now full legitimate phase
+      // progression are still exercised -- this doesn't make the fight unlosable or scripted,
+      // just no longer gated on which random character build the sweep happened to roll, or on
+      // compressing an intentionally-paced multi-phase fight into single-digit hitpoints,
+      // matching the "god-mode, not a fair fight" philosophy the rest of this sweep already uses
+      // for surviving dungeons/dimensions.
+      const weaken = (uid) => evalGame(win, `(function(){ const m = curMonsters().find(x => x.uid === ${JSON.stringify(uid)}); if (m) { m.maxHp = 150; m.hp = 150; m.armor = 0; m.dex = 1; } })()`);
+      // Clamp-only variant for the periodic safety net below -- CAUGHT IN TESTING: reusing
+      // `weaken` itself there was a real bug, not just redundant -- it unconditionally resets hp
+      // back to the full cap every 20 tries regardless of how much real progress the fight had
+      // made, so once maxHp went from 20 to a larger value (see the comment above) this silently
+      // turned "occasional safety net" into "the boss can never actually go below cap-ish hp,"
+      // making the fight unwinnable by construction rather than merely difficult -- confirmed by
+      // instrumenting the loop directly: hp reliably ground down over 100+ tries exactly as
+      // expected. A clamp only ever pulls hp DOWN if some heal pushed it back above the cap; it
+      // never pushes hp back UP once real damage has been dealt.
+      // ALSO clears the player's own fear/poison/confuse/slow every call -- CAUGHT IN TESTING, a
+      // fourth issue: instrumenting the god fight specifically showed player.statusFear growing
+      // monotonically every single try (24 -> 389 over 300 tries, NEVER decreasing) because
+      // GOD's fear-inducing moves (Condemnation/Withering Glare, cd 6-7) reapply faster than the
+      // player's own ~1-per-turn fear decay (see game.html) can clear it once "You're too
+      // terrified to fight!" (statusFear > 0) starts blocking every attack -- a real, if
+      // extreme, difficulty mechanic for an actual endgame character with real Willpower to
+      // resist it, but a hard stall for this test's own weakened, stat-stripped combatant. Same
+      // reasoning as the hp/armor/dex stripping above: this check's job is the onDeath trigger
+      // chain, not proving a fair fight, so status effects that would otherwise permanently lock
+      // the test out get cleared alongside the hp clamp, on the same cadence.
+      const clampDown = (uid) => evalGame(win, `(function(){ const m = curMonsters().find(x => x.uid === ${JSON.stringify(uid)}); if (m) { m.maxHp = 150; m.hp = Math.min(m.hp, 150); m.armor = 0; m.dex = 1; } player.statusFear = 0; player.statusPoison = 0; player.statusConfuse = 0; player.statusSlow = 0; })()`);
+      const spawn = debugSpawnMonster(win, 'the_antagonist', { radius: 1 });
+      if (!spawn.ok) throw new Error(`could not spawn the_antagonist: ${spawn.reason}`);
+      weaken(spawn.uid);
+      const antagonistDown = await fightToDeath('the_antagonist', spawn.uid, 300);
+      if (!antagonistDown) throw new Error('could not close with/defeat the_antagonist within the try budget');
+      const god = evalGame(win, `(function(){ const g = curMonsters().find(m => m.monsterId === 'god'); return g ? { uid: g.uid } : null; })()`).value;
+      if (!god) throw new Error("the_antagonist died but 'god' did not spawn -- triggerGodReveal may be broken or its onDeath hook changed");
+      weaken(god.uid);
+      const godDown = await fightToDeath('god', god.uid, 300);
+      if (!godDown) throw new Error("could not close with/defeat 'god' within the try budget");
+      const completed = evalGame(win, 'player.gameCompleted === true');
+      if (!completed.ok || completed.value !== true) throw new Error("'god' died but player.gameCompleted never became true -- triggerSimulationReveal may be broken");
+      visited.ending.push('true-ending');
+    });
+    await recoverFromDeathIfNeeded('ending', 'cleanup');
   }
 
   debugResetAllFlags(win); // leave the session clean for whatever the caller does next
@@ -4843,6 +5637,13 @@ async function main() {
   console.log('Outcomes:', byReason);
   console.log(`Total logic errors caught: ${totalErrors}`);
   console.log(`Total uncaught window errors (real engine crashes): ${totalWindowErrors}`);
+  // See buildResult's gameCompleted comment: the true ending never changes `reason`, so this is
+  // reported as its own line rather than folded into Outcomes above -- a life that reached it
+  // still shows up under whatever mundane reason (died/budget-reached/etc.) actually ended it.
+  const completions = report.lives.filter((l) => l.gameCompleted);
+  if (completions.length) {
+    console.log(`Reached the true ending (player.gameCompleted) in ${completions.length}/${report.lives.length} lives (turn ${completions.map((l) => l.completionTurn).join(', ')}).`);
+  }
   if (Object.keys(discoverabilitySummary).length) {
     console.log('\n--- DISCOVERABILITY (turns from target-active to target-actually-found) ---');
     Object.entries(discoverabilitySummary).forEach(([kind, s]) => {
