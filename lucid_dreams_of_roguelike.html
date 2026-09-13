@@ -518,7 +518,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.46.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.47.0-alpha</div>
     </div>
   </div>
 
@@ -1603,6 +1603,24 @@
 // a flag nothing ever read; `comfort` was tracked but never consumed; redundant tomes had no use).
 // Every piece verified with the Node playtest harness against real formulas, not just "doesn't
 // crash" -- full changelog and design rationale in-line near each system.
+//
+// v0.47.0 "Depths & Relics" itemization pass (player-requested). ~120 new unique items spanning
+// five power tiers (a 19-gold joke trinket through intentionally overtuned 1000+ gold legendaries)
+// and eight acquisition paths: boss drops, ordinary-monster luck (COMMON_UNIQUE_DROPS), tiered
+// vault rolls, faction kill-count milestones, gathered-material crafting, fusion crafting that
+// permanently consumes an existing unique, a guaranteed story-completion capstone, and a new
+// Growth Artifact framework (six genuinely different scaling shapes: capped/uncapped kill-count,
+// turns-equipped, boss-kill-only, player-level, and live mana-reactive). New reusable combat hooks
+// throughout doAttack/onDeath/movePlayer: knockback, chain, freeze/stun/bleed/ignite procs,
+// charge-up bursts (three payoff types), teleport-on-threshold, revive-once, dash boots, faction
+// dmg/resist. Also fixed several bugs found during the build and two dedicated audit passes: a
+// TDZ crash that silently broke Second Wind, a broken recipe-scroll item, crafting's
+// quality/material scaling inflating unique items 10x+ and breaking the power curve, a
+// material-save perk that could dodge a fusion recipe's sacrifice, grandmaster recipes leakable
+// through two unrelated random-teach mechanisms, and -- most importantly -- foundArtifacts/
+// milestoneRewardsGranted were Sets, which saveDataReplacer silently strips from every save,
+// meaning "once per playthrough" tracking reset on every single reload. Every mechanic verified
+// against real spawned monsters and a full save/load round trip, not just "doesn't crash."
 //
 // v0.41.0 Origin Quests: the gap this closes is the one flagged in v0.40.4's audit but left
 // unaddressed at the time -- START_SCENARIOS meaningfully changed where you start and (via
@@ -5138,6 +5156,9 @@ ITEM_BASES.push(
   { id:'egg', name:'Egg', type:'material', glyph:'"', color:'#e0e0c0', value:2 },
   { id:'milk', name:'Milk', type:'material', glyph:'"', color:'#f0f0f0', value:2 },
   { id:'flour', name:'Flour', type:'material', glyph:'"', color:'#e8e0c8', value:2 },
+  // BUG FIX (found during a full quality/integrity pass): mill_flour's only input, 'wheat', was
+  // never defined anywhere as an item -- the recipe existed but was permanently uncraftable.
+  { id:'wheat', name:'Wheat', type:'material', glyph:'"', color:'#d4c060', value:1 },
   { id:'sugar', name:'Sugar', type:'material', glyph:'"', color:'#f0f0e0', value:3 },
   { id:'salt', name:'Salt', type:'material', glyph:'"', color:'#e8e8e8', value:2 },
   { id:'spice', name:'Exotic Spice', type:'material', glyph:'"', color:'#c95a3a', value:8 },
@@ -5670,7 +5691,581 @@ const BOSS_UNIQUE_DROPS = {
   unburied_queen: { itemId: 'unburied_signet', chance: 0.35 },
   aurelith: { itemId: 'aurelith_fang', chance: 0.35 },
   umbroth: { itemId: 'umbroth_fang', chance: 0.4 }, // a bit higher than gate-boss uniques -- Umbroth is optional and rare to even find, so a whiffed drop after tracking it down for real is a harsher miss than a gate boss you were always going to fight anyway
+  // ---- THIRD ITEMIZATION PASS ("Depths & Relics"): the twelve OVERWORLD_BOSSES superbosses that
+  // had zero unique reward for the risk of a wandering, unscripted fight against them -- unlike
+  // the gate bosses above, these are all fully optional, so a decent chance here rewards actually
+  // going out of your way to hunt one down. Each item below exercises a genuinely different
+  // mechanic (see the ARTIFACT CATALOG a few hundred lines down, and the ARTIFACT FRAMEWORK parts
+  // 1-4 in doAttack/onDeath/movePlayer/EQUIP_FLAT_BONUS_KEYS for how each one is wired up) rather
+  // than being another flat-stat reskin, on purpose -- this pass is specifically about mechanical
+  // variety, not just more numbers.
+  ancient_wyrm: { itemId: 'vaelgrith_fang', chance: 0.4 },
+  frost_yeti_king: { itemId: 'krognar_frostfang', chance: 0.35 },
+  elder_treant: { itemId: 'groveheart_bark', chance: 0.35 },
+  desert_wyrm: { itemId: 'sandreaver_maw', chance: 0.35 },
+  bog_horror: { itemId: 'bogrot_gauntlets', chance: 0.35 },
+  alpha_direwolf: { itemId: 'fenrik_bloodfury_ring', chance: 0.35 },
+  thunderbird: { itemId: 'skarrow_talon_bow', chance: 0.35 },
+  corrupted_colossus: { itemId: 'colossus_unstable_plating', chance: 0.4 },
+  the_kraken: { itemId: 'kraken_grasp', chance: 0.4 },
+  megalodon: { itemId: 'megalodon_bite', chance: 0.35 },
+  sea_serpent: { itemId: 'coilfang_talisman', chance: 0.35 },
+  loch_devourer: { itemId: 'devourer_stride', chance: 0.35 },
 };
+// ---- BOSS_MATERIAL_DROPS (backlog pass 4: grandmaster crafting): unlike BOSS_UNIQUE_DROPS above
+// (a finished item), these are raw crafting REAGENTS that only ever come from one specific
+// superboss each -- the whole point being that a grandmaster recipe requiring several of these
+// can't be rushed by luck alone, only by repeatedly beating (or farming, if the player's strong
+// enough to make that viable) a genuinely hard optional fight. Separate roll from that boss's own
+// BOSS_UNIQUE_DROPS chance -- a single kill can produce both, or neither, or just one.
+const BOSS_MATERIAL_DROPS = {
+  ancient_wyrm: { itemId: 'wyrm_molten_core', chance: 0.3 },
+  the_kraken: { itemId: 'krakens_abyssal_pearl', chance: 0.3 },
+};
+// ---- ARTIFACT CATALOG: the twelve boss-bound uniques referenced by BOSS_UNIQUE_DROPS just above.
+// Every entry is isUnique+noAffixes (a fixed-stat, one-of-a-kind item, never rolled with random
+// prefixes/suffixes -- see the loot-pool exclusion near lootEligibleBaseIds) and carries at least
+// one ARTIFACT FRAMEWORK field so it does something a plain rare of the same value tier can't.
+const ARTIFACT_CATALOG_BOSS_ITEMS = [
+  { id:'vaelgrith_fang', name:"Vaelgrith's Last Breath", type:'weapon', slot:'hand', dmg:[12,22], str:16, fireDmg:6,
+    executeNovaChance:0.3, executeNovaRadius:2, executeNovaDmg:[6,14], glyph:')', color:'#2ac97a', value:540, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Torn loose from an ancient wyrm's own claw. A killing blow doesn't quite end there -- the last of its dragonfire goes off in a dying burst." },
+  { id:'krognar_frostfang', name:"Krognar's Frostfang", type:'weapon', slot:'hand', dmg:[10,19], str:14, frostDmg:5,
+    freezeProcChance:0.25, freezeProcTurns:3, glyph:')', color:'#dfe6ee', value:500, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A yeti-king\'s war-axe, edge perpetually rimed in frost that never quite finishes melting. Sometimes it just wins that fight outright.' },
+  { id:'groveheart_bark', name:"Groveheart's Bark", type:'armor', slot:'body', armor:9, conBonus:3, thornsPercent:0.15, regen:2,
+    glyph:'[', color:'#1f6b1f', value:480, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A breastplate of living bark stripped from an elder treant, still slowly knitting itself shut. Anything that cuts you gets cut back.' },
+  { id:'sandreaver_maw', name:"The Sand Reaver's Maw", type:'weapon', slot:'hand', dmg:[11,20], str:15, armorPierce:5, knockbackTiles:3,
+    glyph:')', color:'#c9a06a', value:470, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A curved fang the length of a short-sword, still carrying the sand-wyrm's full-body-slam momentum in the swing." },
+  { id:'bogrot_gauntlets', name:'Bogrot Gauntlets', type:'armor', slot:'gloves', armor:4, poisonDmgReduction:0.4, bleedResistChance:0.35,
+    glyph:'[', color:'#3a4a1a', value:420, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Hide gloves cured in bog-water for longer than should be possible. Poison slides off them, and wounds close before they can open." },
+  { id:'fenrik_bloodfury_ring', name:"Fenrik's Bloodfury", type:'armor', slot:'ring', armor:0, lowHpDmgBonus:0.35, dexBonus:2,
+    glyph:'=', color:'#c0c0c0', value:450, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A wolf-fang ring from the Father of Wolves himself. The worse hurt you are, the harder you hit back -- exactly the desperate-swing instinct it was cut from." },
+  { id:'skarrow_talon_bow', name:"Skarrow's Talon", type:'weapon', slot:'hand', dmg:[9,17], str:9, ranged:true,
+    chainProcChance:0.3, chainProcTargets:2, chainProcDmgPct:0.5, glyph:'}', color:'#e0c34a', value:480, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'Fletched with a thunderbird\'s own feathers. A landed shot has a real chance of arcing on to whatever else is standing nearby.' },
+  { id:'colossus_unstable_plating', name:'Corrupted Colossus Plating', type:'armor', slot:'body', armor:10, conBonus:2,
+    teleportOnBigHit:{ thresholdFrac:0.25, range:6, cooldown:20 }, glyph:'[', color:'#8a2a8a', value:520, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Salvaged plating from something that was never stable to begin with. Take a big enough hit while wearing it and reality simply misplaces you for a moment." },
+  { id:'kraken_grasp', name:"The Kraken's Grasp", type:'weapon', slot:'hand', dmg:[10,18], str:14, lifesteal:0.05,
+    chargeStacks:5, chargeRadius:2, chargeDmgMult:2, glyph:')', color:'#0a2a3a', value:510, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A barbed hook carved from a kraken\'s own beak. Land enough hits in a row and it erupts, dragging everything nearby into the blast.' },
+  { id:'megalodon_bite', name:"Megalodon's Bite", type:'weapon', slot:'hand', dmg:[13,23], str:17, critLifestealPct:0.5,
+    glyph:')', color:'#3a5a6a', value:490, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A single tooth the size of a dagger, set into a full grip. A clean, vicious hit feeds you back half of what it takes." },
+  { id:'coilfang_talisman', name:'Coilfang Talisman', type:'armor', slot:'amulet', armor:1, fearResistBonus:0.5, dodgeChance:0.05,
+    glyph:'"', color:'#1a6a5a', value:440, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A scale the size of a shield, still coiled into a loop. Wearing it, nothing quite manages to rattle you, and you're never quite where a blow expects." },
+  { id:'devourer_stride', name:"The Devourer's Stride", type:'armor', slot:'feet', armor:3, dexBonus:2, dashTiles:2,
+    glyph:'[', color:'#2a5a3a', value:460, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Webbed boots grown from something that never had to walk anywhere slowly. Every stride covers ground a normal step shouldn't." },
+];
+ITEM_BASES.push(...ARTIFACT_CATALOG_BOSS_ITEMS);
+// ---- ARTIFACT RELIQUARY: a second wave of unique artifacts that are NOT tied to any specific
+// boss. Instead, a sufficiently secured/deep vault chest (see openChest) has a modest independent
+// chance to hand over one of these, picked at random from whichever ones this playthrough hasn't
+// already turned up (player.foundArtifacts) -- so which relic you get, and behind which specific
+// locked/secret vault, is genuinely different every run, unlike the deterministic boss table
+// above. Same isUnique/noAffixes/ARTIFACT FRAMEWORK conventions as the boss-bound set.
+const ARTIFACT_RELIQUARY_POOL = [
+  'gravebloom_signet', 'the_plaguebringer', 'clearmind_circlet', 'windrunner_bow', 'prism_blade',
+  'executioners_toll', 'the_last_ember', 'stormbite_cleaver', 'bulwark_unbroken', 'nightfall_cowl',
+];
+// ---- Tiered reliquary pools (backlog pass 3: power/acquisition variety): openChest rolls
+// against ARTIFACT_RELIQUARY_POOLS[chestTier] instead of a single pool, so a tier-1 chest can
+// turn up a genuinely early-game-appropriate relic instead of nothing until the player reaches
+// max-tier secured vaults. Tier 4 aliases the pool above (unchanged); tiers 1-3 are populated
+// further down the file, right after the tier-appropriate items are defined, via the same
+// `.push(...ids)` pattern already used for ARTIFACT_RELIQUARY_POOL itself.
+const ARTIFACT_RELIQUARY_POOLS = { 1: [], 2: [], 3: [], 4: ARTIFACT_RELIQUARY_POOL };
+// ---- COMMON_UNIQUE_DROPS (see dropLoot): the low-tier, "ordinary monster" counterpart to
+// BOSS_UNIQUE_DROPS. Populated further down the file alongside the tier-1 items themselves.
+const COMMON_UNIQUE_DROPS = {};
+const ARTIFACT_CATALOG_RELIQUARY_ITEMS = [
+  { id:'gravebloom_signet', name:'Gravebloom Signet', type:'armor', slot:'ring', armor:0, healOnKill:8, poisonDmgReduction:0.2,
+    glyph:'=', color:'#6a1a4a', value:400, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A ring grown from something between a flower and a wound. Every kill feeds a little of itself back to you.' },
+  { id:'the_plaguebringer', name:'The Plaguebringer', type:'weapon', slot:'hand', dmg:[8,15], str:8, poisonDmg:6,
+    poisonNovaOnKill:{ radius:2, dmg:5 }, glyph:')', color:'#5a7a2a', value:460, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A rusted blade that never really stops weeping. Whatever it finally kills bursts, and the sickness spreads to anything standing close." },
+  { id:'clearmind_circlet', name:'Clearmind Circlet', type:'armor', slot:'head', armor:2, confuseResistBonus:0.6, fearResistBonus:0.4, intBonus:2,
+    glyph:'^', color:'#a0d0e0', value:380, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A thin band of cold, unmarked metal. Nothing gets a grip on your mind while it\'s on -- no panic, no static, just clarity.' },
+  { id:'windrunner_bow', name:"Windrunner's Bow", type:'weapon', slot:'hand', dmg:[8,16], str:9, ranged:true, rangedDmgBonus:0.2, dodgeChance:0.04,
+    glyph:'}', color:'#c9e0a0', value:430, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A bow that seems to lighten the moment you draw it, string humming even before the arrow leaves." },
+  { id:'prism_blade', name:'Prism Blade', type:'weapon', slot:'hand', dmg:[9,17], str:11, elementalDmgBonus:0.25, critBonus:0.06,
+    glyph:')', color:'#e0a0ff', value:450, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A translucent, faceted blade that seems to refract whatever elemental force it\'s already carrying into something sharper.' },
+  { id:'executioners_toll', name:"Executioner's Toll", type:'weapon', slot:'hand', dmg:[11,21], str:15, executeBonus:0.3, bossDmgBonus:0.2,
+    glyph:')', color:'#7a1a1a', value:470, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A heavy, unadorned cleaver, notched from finishing fights rather than starting them. It hits hardest exactly when it matters most.' },
+  { id:'the_last_ember', name:'The Last Ember', type:'armor', slot:'amulet', armor:1, reviveOnce:true, reviveHpFrac:0.4, reviveCooldown:600, conBonus:1,
+    glyph:'"', color:'#ff8a3a', value:600, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A single coal, always warm, never burning down. It only has to catch once -- right when it matters -- and it will, again, if you give it long enough." },
+  { id:'stormbite_cleaver', name:'Stormbite Cleaver', type:'weapon', slot:'hand', dmg:[13,24], str:18, knockbackTiles:2,
+    chainProcChance:0.2, chainProcTargets:2, chainProcDmgPct:0.4, glyph:')', color:'#c0c0e0', value:500, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A two-handed cleaver that doesn't so much cut as detonate on contact -- what it hits, it sends flying, and the shock keeps going." },
+  { id:'bulwark_unbroken', name:'Bulwark of the Unbroken Line', type:'armor', slot:'body', armor:11, thornsPercent:0.12, bleedResistChance:0.3, conBonus:2,
+    glyph:'[', color:'#6a6a8a', value:490, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'Layered plate from a line of soldiers who, as far as anyone can tell, never once broke formation.' },
+  { id:'nightfall_cowl', name:'Nightfall Cowl', type:'armor', slot:'head', armor:2, dodgeChance:0.06, critBonus:0.05, dexBonus:2,
+    glyph:'^', color:'#2a2a3a', value:410, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A hood cut from a shadow that forgot to leave when the light came back.' },
+];
+ITEM_BASES.push(...ARTIFACT_CATALOG_RELIQUARY_ITEMS);
+// ---- ARTIFACT CATALOG, BATCH 2 ("Depths & Relics" backlog pass): every mechanic here uses an
+// ARTIFACT FRAMEWORK field added in this same pass (see the on-hit/on-kill/defensive dispatch
+// blocks in doAttack/onDeath, the generalized fireChargeBurst, and the stunnedTurns status).
+// Split into the same acquisition split as batch 1: most go into ARTIFACT_RELIQUARY_POOL
+// (dynamic, vault-found, different every playthrough); six are dedicated rewards for hunting a
+// specific faction down in bulk, granted by MILESTONE_REWARDS/checkMilestoneRewards instead.
+const ARTIFACT_CATALOG_BATCH2_ITEMS = [
+  // -- Section 1: on-hit weapon procs --
+  { id:'gutting_hook', name:'Gutting Hook', type:'weapon', slot:'hand', dmg:[7,13], str:8,
+    onHitBleed:{chance:0.35, dmg:3, turns:4}, glyph:')', color:'#8a1a1a', value:360, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A wicked, backward-curved hook. It was never meant to kill in one stroke -- it was meant to keep bleeding long after.' },
+  { id:'shatterpoint', name:'Shatterpoint', type:'weapon', slot:'hand', dmg:[14,26], str:19,
+    freezeProcChance:0.2, freezeProcTurns:3, shatterBonus:0.5, glyph:')', color:'#bcd8ea', value:520, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A two-handed maul, cold enough to frost over on its own. Whatever it freezes, its own follow-up swing is built to break.' },
+  { id:'whiptail', name:'Whiptail', type:'weapon', slot:'hand', dmg:[5,11], str:7,
+    pullTiles:3, glyph:')', color:'#5a3a1a', value:340, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A barbed flail on a long chain. It doesn't push what it hits -- it reels it in." },
+  { id:'cinderfall_pike', name:'Cinderfall Pike', type:'weapon', slot:'hand', dmg:[9,16], str:12,
+    igniteProcChance:0.3, igniteProcTurns:4, glyph:')', color:'#e0621a', value:400, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A polearm forged in a fire that, if anyone ever put it out, nobody kept a record of when.' },
+  { id:'the_tide_breaker', name:'The Tide Breaker', type:'weapon', slot:'hand', dmg:[13,22], str:17,
+    knockbackTiles:4, glyph:')', color:'#1a5a7a', value:470, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A warhammer built like it was meant to move the tide itself, not just whatever stands in front of it.' },
+  { id:'widows_needle', name:"Widow's Needle", type:'weapon', slot:'hand', dmg:[6,10], str:6,
+    critBonus:0.12, critLifestealPct:0.4, glyph:')', color:'#2a1a2a', value:420, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A dagger thin enough to slip between ribs without the wearer ever feeling the first cut." },
+  { id:'barkskin_fists', name:'Barkskin Fists', type:'armor', slot:'gloves', armor:3, thornsPercent:0.1,
+    glyph:'[', color:'#4a3a1a', value:340, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Knuckle-wraps grown, not sewn, from something that used to be bark. Whatever hits them regrets it." },
+  { id:'auctioneers_gavel', name:"The Auctioneer's Gavel", type:'weapon', slot:'hand', dmg:[10,18], str:15,
+    stunProcChance:0.25, stunProcTurns:2, glyph:')', color:'#8a6a2a', value:410, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A ceremonial mallet, oversized well past ceremony. One good knock and the room goes quiet.' },
+  { id:'salt_of_the_earth', name:'Salt of the Earth', type:'weapon', slot:'hand', dmg:[9,16], str:11,
+    factionDmgBonus:{ faction:'undead', pct:0.4 }, glyph:')', color:'#d8d0b0', value:400, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A plain, unadorned blade, packed hilt-to-tip with consecrated salt. It has one job and does it very well.' },
+  { id:'grim_harvest', name:'Grim Harvest', type:'weapon', slot:'hand', dmg:[11,19], str:14,
+    executeBonus:0.25, onKillBonusLoot:0.4, glyph:')', color:'#3a1a3a', value:450, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A scythe that never seems to get used until a fight is already decided -- and every ending it collects on seems to leave something behind." },
+  { id:'the_long_reach', name:'The Long Reach', type:'weapon', slot:'hand', dmg:[8,14], str:10,
+    pierceTargets:{ dmgPct:0.6 }, glyph:')', color:'#6a6a4a', value:390, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A spear a full head taller than its wielder. A thrust that lands rarely stops at just the first thing in its way." },
+  // -- Section 2: charge-up variants --
+  { id:'cascade', name:'Cascade', type:'weapon', slot:'hand', dmg:[6,11], str:8,
+    chargeStacks:3, chargeRadius:1, chargeDmgMult:1.2, glyph:')', color:'#3a8ac0', value:380, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A light, fast blade that builds toward something small and frequent rather than one big payoff.' },
+  { id:'the_long_fuse', name:'The Long Fuse', type:'weapon', slot:'hand', dmg:[12,20], str:16,
+    chargeStacks:12, chargeRadius:3, chargeDmgMult:3, glyph:')', color:'#a03a1a', value:520, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A heavy weapon for a patient wielder. Twelve landed hits without release is a long fuse -- what's at the end of it is not small." },
+  { id:'thundercall_maul', name:'Thundercall Maul', type:'weapon', slot:'hand', dmg:[13,21], str:18,
+    chargeStacks:4, chargeRadius:2, chargeDmgMult:1.8, glyph:')', color:'#c0c040', value:460, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A storm-blessed maul that seems to gather static with every swing, whether or not it lands clean.' },
+  { id:'conductors_baton', name:"The Conductor's Baton", type:'weapon', slot:'hand', dmg:[7,12], str:9,
+    chargeStacks:4, chargeRadius:2, chargeEffectType:'confuse', glyph:')', color:'#a03ac0', value:420, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A slender wand more than a weapon. What it releases isn't force -- it's noise, right into everyone nearby's head at once." },
+  { id:'bloomstrike', name:'Bloomstrike', type:'weapon', slot:'hand', dmg:[7,13], str:9,
+    chargeStacks:4, chargeRadius:2, chargeEffectType:'heal', glyph:')', color:'#3ac07a', value:420, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A living branch, still growing where it was cut. What it draws from a fight it gives back to whoever carries it.' },
+  { id:'the_debt_collector', name:'The Debt Collector', type:'weapon', slot:'hand', dmg:[10,17], str:13,
+    chargeStacks:5, chargeMode:'escalating', chargeRadius:2, chargeDmgMult:1.3, glyph:')', color:'#2a2a2a', value:480, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"It doesn't stop building once it's full -- it just keeps a tab open. The longer you let it run, the worse the payoff, for someone." },
+  { id:'snowball', name:'Snowball', type:'weapon', slot:'hand', dmg:[8,14], str:10,
+    chargeStacks:4, chargeRadius:2, chargeDmgMult:1.4, freezeProcChance:0.15, freezeProcTurns:2, glyph:')', color:'#d0e8f0', value:440, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'Starts as a small, cold thing. By the fourth hit it very much is not.' },
+  { id:'the_choir_invisible', name:'The Choir Invisible', type:'weapon', slot:'hand', dmg:[9,15], str:12,
+    chargeStacks:6, chargeSource:'damageTaken', chargeRadius:2, chargeDmgMult:2, glyph:')', color:'#e0d090', value:460, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"It hums louder every time you're hurt, not every time you swing -- an instrument tuned to punishment, not aggression." },
+  // -- Section 3: on-kill effects --
+  { id:'the_undertaker', name:'The Undertaker', type:'armor', slot:'amulet', armor:1, healOnKill:10, bossDmgBonus:0.15,
+    glyph:'"', color:'#3a3a3a', value:430, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A funerary medallion worn backwards, facing the wearer instead of the world. Every death it presides over feeds it back to you.' },
+  { id:'contagions_seed', name:"Contagion's Seed", type:'armor', slot:'ring', armor:0, poisonNovaOnKill:{ radius:2, dmg:6 },
+    glyph:'=', color:'#4a6a1a', value:410, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A ring set with something that was never quite a gem. Every kill it presides over plants another one nearby.' },
+  { id:'vengeance_incarnate', name:'Vengeance Incarnate', type:'weapon', slot:'hand', dmg:[11,20], str:15,
+    executeNovaChance:0.35, executeNovaRadius:2, executeNovaDmg:[5,11], glyph:')', color:'#a01a1a', value:470, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"It doesn't consider a kill finished until everything standing nearby has felt it too." },
+  { id:'soul_coin', name:'Soul Coin', type:'armor', slot:'amulet', armor:0, goldOnKill:5,
+    glyph:'"', color:'#d0a020', value:350, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'An old coin, minted by no kingdom anyone recognizes. It seems to know the going rate for a life.' },
+  { id:'momentum', name:'Momentum', type:'armor', slot:'feet', armor:2, dexBonus:1, onKillMoveTiles:2,
+    glyph:'[', color:'#20a0a0', value:380, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Light boots that never quite let you stop once you've started. A kill is just an excuse to keep moving." },
+  // -- Section 4: defensive / status-resistance gear --
+  { id:'stonewall_plate', name:'Stonewall Plate', type:'armor', slot:'body', armor:12, thornsPercent:0.1,
+    glyph:'[', color:'#6a6a6a', value:440, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Plain, undecorated plate, built by someone who cared a great deal about not dying and not at all about looking impressive doing it." },
+  { id:'the_unbothered', name:'The Unbothered', type:'armor', slot:'amulet', armor:1, fearResistBonus:1.0, confuseResistBonus:0.5,
+    glyph:'"', color:'#909090', value:400, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A perfectly plain grey stone on a plain cord. Nothing about it explains why nothing gets in your head while you wear it.' },
+  { id:'serpents_ward', name:"Serpent's Ward", type:'armor', slot:'gloves', armor:4, poisonDmgReduction:0.6, poisonReflectChance:0.25,
+    glyph:'[', color:'#2a6a2a', value:410, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'Scaled gloves, cured in venom until the venom stopped taking. Whatever poisons you while you wear them regrets it.' },
+  { id:'numb', name:'Numb', type:'armor', slot:'feet', armor:3, bleedResistChance:0.5, bleedDmgReduction:0.5,
+    glyph:'[', color:'#8a2a2a', value:380, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Boots worn by someone who, by all accounts, stopped flinching a long time before they stopped fighting." },
+  { id:'weathered_hide', name:'The Weathered Hide', type:'armor', slot:'body', armor:9, factionResistBonus:{ faction:'dragon', pct:0.35 },
+    glyph:'[', color:'#7a5a2a', value:450, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A cloak stitched from hide that shrugged off dragonfire once already, whoever it originally belonged to.' },
+  { id:'iron_constitution', name:'Iron Constitution', type:'armor', slot:'ring', armor:0, regen:3, conBonus:1,
+    glyph:'=', color:'#9a9a9a', value:400, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A plain iron band. No trick to it -- it just refuses to let you stay hurt for long.' },
+  { id:'neural_static_ward', name:'Neural Static Ward', type:'armor', slot:'head', armor:2, dodgeChance:0.06, confuseResistBonus:0.4,
+    glyph:'^', color:'#40e0d0', value:390, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A thin circlet that hums faintly out of sync with everything around it. Attacks meant to land somehow keep finding the wrong frame entirely.' },
+  { id:'the_last_bastion', name:'The Last Bastion', type:'armor', slot:'body', armor:10, thornsPercent:0.08, lowHpDmgBonus:0.2,
+    glyph:'[', color:'#5a5a7a', value:460, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Battered, dented plate that's clearly been the last thing standing before. It hits back hardest exactly when that matters most." },
+  // -- Section 5: mobility --
+  { id:'windwalker_sandals', name:'Windwalker Sandals', type:'armor', slot:'feet', armor:1, dexBonus:1, dashTiles:1, dashIgnoresHazards:true,
+    glyph:'[', color:'#c0e0ff', value:390, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Barely-there sandals, light enough that whatever's underfoot doesn't quite get the chance to matter." },
+  { id:'blinkstep_anklet', name:'Blinkstep Anklet', type:'armor', slot:'ring', armor:0, autoBlinkBelowHpFrac:0.3, autoBlinkRange:5,
+    glyph:'=', color:'#a0a0ff', value:430, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A thin chain around the ankle that seems to know, better than you do, exactly when a fight has turned." },
+  { id:'the_ghost_line', name:'The Ghost Line', type:'armor', slot:'body', armor:6, dashTiles:2,
+    glyph:'[', color:'#c0c0e0', value:440, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A cloak that never quite catches the light right. Whoever wears it moves like they were already somewhere else a half-step ago.' },
+  { id:'cliffrunner_greaves', name:'Cliffrunner Greaves', type:'armor', slot:'feet', armor:3, dashTiles:2, dashIgnoresHazards:true,
+    glyph:'[', color:'#a08050', value:420, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Greaves scuffed from ground that was never meant to be run across. They don't seem to notice the difference." },
+  { id:'undertows_grace', name:"The Undertow's Grace", type:'armor', slot:'feet', armor:3, dashTiles:2, dashIgnoresHazards:true,
+    glyph:'[', color:'#1a5a6a', value:430, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'Webbed boots that move the same whether the ground underfoot is stone or open water.' },
+  // -- Section 7: risk / reward --
+  { id:'bloodprice_gauntlets', name:'Bloodprice Gauntlets', type:'weapon', slot:'hand', dmg:[9,15], str:10,
+    recoilDmgPerHit:1, critBonus:0.1, glyph:')', color:'#6a0a0a', value:400, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Iron-knuckled gauntlets that cut the wearer's own hands just enough, every single swing, to keep the edge honest." },
+  { id:'gamblers_coin_blade', name:"The Gambler's Blade", type:'weapon', slot:'hand', dmg:[8,14], str:10,
+    allOrNothingChance:0.3, glyph:')', color:'#d0b030', value:420, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A thin rapier with a coin fused into the pommel. Every so often, the hit that lands either counts twice or doesn't count at all." },
+  { id:'wailing_chain_necklace', name:'Wailing Chain Necklace', type:'armor', slot:'amulet', armor:0, critBonus:0.1, intBonus:2, strBonus:1,
+    selfDebuffChance:0.12, glyph:'"', color:'#2a2a4a', value:440, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A heavy iron chain that occasionally wails, quietly, right at the edge of hearing. It's a lot of power for something that clearly isn't happy about being worn." },
+  { id:'the_starving_blade', name:'The Starving Blade', type:'weapon', slot:'hand', dmg:[9,16], str:12,
+    starvationDmgBonus:0.15, glyph:')', color:'#3a2a1a', value:430, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"It hits harder the longer it's gone without a kill, and calms right back down the instant it gets one." },
+  { id:'the_widows_debt', name:"The Widow's Debt", type:'armor', slot:'ring', armor:0, critBonus:0.15, equipMaxHpPenalty:15,
+    glyph:'=', color:'#3a0a3a', value:410, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A mourning ring, cut down from something that used to be bigger. It sharpens every strike -- at a cost that never goes away while you wear it.' },
+  { id:'the_rally_banner', name:'The Rally Banner', type:'armor', slot:'amulet', armor:1, companionPowerBonus:0.2, conBonus:1,
+    glyph:'"', color:'#c0a030', value:450, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A small, folded standard worn like a medallion. Whoever's fighting alongside you fights better for it being there." },
+];
+ITEM_BASES.push(...ARTIFACT_CATALOG_BATCH2_ITEMS);
+ARTIFACT_RELIQUARY_POOL.push(...ARTIFACT_CATALOG_BATCH2_ITEMS.map(it => it.id));
+// ---- MILESTONE REWARD ITEMS: referenced by id from MILESTONE_REWARDS near checkMilestoneRewards
+// (onDeath). Deliberately NOT added to ARTIFACT_RELIQUARY_POOL -- these have their own dedicated,
+// skill/effort-gated acquisition path (hunt enough of one faction) and shouldn't also show up as
+// a random vault roll, or the milestone stops meaning anything.
+const ARTIFACT_CATALOG_MILESTONE_ITEMS = [
+  { id:'exterminators_brand', name:"Exterminator's Brand", type:'weapon', slot:'hand', dmg:[7,12], str:8,
+    factionDmgBonus:{ faction:'beast', pct:0.35 }, glyph:')', color:'#8a6a2a', value:380, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Awarded, in the only way that matters out here, to someone who's put down more beasts than most settlements see in a lifetime." },
+  { id:'graveward_seal', name:'Graveward Seal', type:'weapon', slot:'hand', dmg:[10,18], str:14,
+    factionDmgBonus:{ faction:'undead', pct:0.35 }, glyph:')', color:'#d8d0b0', value:400, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A mace consecrated by nothing official -- just by however many times it\'s already done this exact job.' },
+  { id:'wardens_last_word', name:"Warden's Last Word", type:'weapon', slot:'hand', dmg:[12,21], str:17,
+    factionDmgBonus:{ faction:'demonic', pct:0.4 }, glyph:')', color:'#7a1a1a', value:460, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Not a subtle weapon. It doesn't need to be, against what it's built for." },
+  { id:'the_decommissioner', name:'The Decommissioner', type:'weapon', slot:'hand', dmg:[11,19], str:15, armorPierce:4,
+    factionDmgBonus:{ faction:'construct', pct:0.4 }, glyph:')', color:'#6a7a8a', value:450, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A heavy pick, purpose-built for finding the seam in something that was never meant to be taken apart." },
+  { id:'wyrmscale_pauldron', name:'Wyrmscale Pauldron', type:'armor', slot:'body', armor:11, factionResistBonus:{ faction:'dragon', pct:0.3 },
+    glyph:'[', color:'#2a6a4a', value:440, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Armor plated in scale from more than one wyrm, by now. Earned the hard way, one kill at a time." },
+  { id:'unseeing_veil', name:'Unseeing Veil', type:'armor', slot:'head', armor:2, factionResistBonus:{ faction:'eldritch', pct:0.35 }, confuseResistBonus:0.3,
+    glyph:'^', color:'#3a1a5a', value:420, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A veil that keeps you from ever quite seeing what you're fighting clearly -- which, against these things, turns out to be the point." },
+];
+ITEM_BASES.push(...ARTIFACT_CATALOG_MILESTONE_ITEMS);
+// ---- ARTIFACT CATALOG, BATCH 3 ("Depths & Relics" backlog pass 3): power-tier and
+// acquisition-method variety. Everything before this point was valueTier:4 (legendary-only) and
+// reached almost entirely through boss drops or a top-tier vault roll. This batch deliberately
+// spans the full valueTier range (0-4: a genuinely weak trinket up through a couple of
+// intentionally overtuned endgame outliers) and adds three acquisition paths that didn't exist
+// before: COMMON_UNIQUE_DROPS (ordinary monsters, not bosses, can rarely turn one up), tiered
+// vault rolls (ARTIFACT_RELIQUARY_POOLS[1-3], so a modest early/mid chest can matter too, not
+// just max-tier secured ones), and real RECIPES entries (crafted from gathered materials, some
+// cheap and early, some gated behind rare late-game materials).
+
+// -- Tier 1 (valueTier 0-1, value ~15-45): early, low-power, found from ordinary common kills --
+const ARTIFACT_CATALOG_TIER1_ITEMS = [
+  { id:'farmers_grudge', name:"Farmer's Grudge", type:'weapon', slot:'hand', dmg:[3,6], str:3,
+    knockbackTiles:1, glyph:')', color:'#8a6a3a', value:25, isUnique:true, noAffixes:true, valueTier:1,
+    desc:"A pitchfork, still smelling faintly of hay. Whoever swings it clearly means it, but it's not built for much beyond one good shove." },
+  { id:'lucky_rabbits_foot', name:"Lucky Rabbit's Foot", type:'armor', slot:'ring', armor:0, dodgeChance:0.03,
+    glyph:'=', color:'#c0a0a0', value:19, isUnique:true, noAffixes:true, valueTier:0,
+    desc:"It's just a rabbit's foot on a bit of string. It probably doesn't do anything. It probably." },
+  { id:'cracked_buckler', name:'Cracked Buckler', type:'armor', slot:'offhand', armor:2, thornsPercent:0.03,
+    glyph:'(', color:'#7a5a30', value:22, isUnique:true, noAffixes:true, valueTier:1,
+    desc:'A small, dented shield that has clearly already stopped a few blows before you ever picked it up.' },
+  { id:'tarnished_locket', name:'Tarnished Locket', type:'armor', slot:'amulet', armor:0, regen:1,
+    glyph:'"', color:'#8a8a6a', value:18, isUnique:true, noAffixes:true, valueTier:0,
+    desc:"A cheap locket, hinge rusted shut, holding onto whatever picture used to be inside a little too tightly to let go of you either." },
+  { id:'apprentices_kindling_rod', name:"Apprentice's Kindling Rod", type:'weapon', slot:'hand', dmg:[2,5], str:2,
+    igniteProcChance:0.1, igniteProcTurns:2, glyph:')', color:'#c9762a', value:30, isUnique:true, noAffixes:true, valueTier:1,
+    desc:"A first-year fire-starting wand, kept as a keepsake long after its owner moved on to better spells. It still has one trick in it." },
+];
+ITEM_BASES.push(...ARTIFACT_CATALOG_TIER1_ITEMS);
+COMMON_UNIQUE_DROPS.bandit = { itemId: 'farmers_grudge', chance: 0.012 };
+COMMON_UNIQUE_DROPS.wolf = { itemId: 'lucky_rabbits_foot', chance: 0.012 };
+COMMON_UNIQUE_DROPS.goblin = { itemId: 'cracked_buckler', chance: 0.012 };
+COMMON_UNIQUE_DROPS.giantrat = { itemId: 'tarnished_locket', chance: 0.015 };
+COMMON_UNIQUE_DROPS.skeleton = { itemId: 'apprentices_kindling_rod', chance: 0.012 };
+ARTIFACT_RELIQUARY_POOLS[1].push(...ARTIFACT_CATALOG_TIER1_ITEMS.map(it => it.id));
+
+// -- Tier 2 (valueTier 2, value ~50-95): early-mid, modest power, low-tier vault rolls --
+const ARTIFACT_CATALOG_TIER2_ITEMS = [
+  { id:'roadwardens_cudgel', name:"Roadwarden's Cudgel", type:'weapon', slot:'hand', dmg:[5,9], str:6,
+    stunProcChance:0.1, stunProcTurns:1, glyph:')', color:'#7a6a4a', value:70, isUnique:true, noAffixes:true, valueTier:2,
+    desc:'A watch-issue truncheon, standard everywhere except for whatever charm is worked into the grip.' },
+  { id:'scavengers_ring', name:"Scavenger's Ring", type:'armor', slot:'ring', armor:0, goldOnKill:2,
+    glyph:'=', color:'#a08030', value:60, isUnique:true, noAffixes:true, valueTier:2,
+    desc:"A ring made from melted-down coin. Whoever wore it first clearly never left a body unsearched." },
+  { id:'huntsmans_bracer', name:"Huntsman's Bracer", type:'armor', slot:'gloves', armor:2,
+    factionDmgBonus:{ faction:'beast', pct:0.15 }, glyph:'[', color:'#5a4a2a', value:75, isUnique:true, noAffixes:true, valueTier:2,
+    desc:'A worn leather bracer, notched once for every beast it helped bring down.' },
+  { id:'tidewalker_sandals', name:'Tidewalker Sandals', type:'armor', slot:'feet', armor:1, dashTiles:1,
+    glyph:'[', color:'#4a8a9a', value:80, isUnique:true, noAffixes:true, valueTier:2,
+    desc:'Simple woven sandals that move a little quicker across open ground than they have any right to.' },
+  { id:'moth_eaten_standard', name:'Moth-Eaten Standard', type:'armor', slot:'amulet', armor:0, companionPowerBonus:0.08,
+    glyph:'"', color:'#9a8a5a', value:65, isUnique:true, noAffixes:true, valueTier:2,
+    desc:"A small banner, more hole than cloth by now, from a company that probably doesn't exist anymore. Whoever fights beside you still seems to stand a little straighter for it." },
+];
+ITEM_BASES.push(...ARTIFACT_CATALOG_TIER2_ITEMS);
+ARTIFACT_RELIQUARY_POOLS[2].push(...ARTIFACT_CATALOG_TIER2_ITEMS.map(it => it.id));
+
+// -- Tier 3 (valueTier 3, value ~100-190): mid-late, solid power, mid-tier vaults + crafting --
+const ARTIFACT_CATALOG_TIER3_ITEMS = [
+  { id:'ashwood_recurve', name:'Ashwood Recurve', type:'weapon', slot:'hand', dmg:[7,13], str:8, ranged:true,
+    rangedDmgBonus:0.12, chainProcChance:0.12, chainProcTargets:1, chainProcDmgPct:0.4,
+    glyph:'}', color:'#8a5a2a', value:150, isUnique:true, noAffixes:true, valueTier:3,
+    desc:'A recurve bow of dense, fire-hardened wood. A clean shot sometimes finds a second target on its own.' },
+  { id:'bulette_hide_vest', name:'Bulette Hide Vest', type:'armor', slot:'body', armor:7, bleedResistChance:0.25, thornsPercent:0.05,
+    glyph:'[', color:'#6a5a3a', value:170, isUnique:true, noAffixes:true, valueTier:3,
+    desc:'Thick, plated hide, cured whole rather than cut into panels. Bites just slide off it more often than not.' },
+  { id:'wardens_circlet', name:"Warden's Circlet", type:'armor', slot:'head', armor:3, fearResistBonus:0.4, confuseResistBonus:0.2,
+    glyph:'^', color:'#5a7a8a', value:140, isUnique:true, noAffixes:true, valueTier:3,
+    desc:'A watch-captain\'s circlet, standard-issue everywhere except for the steadiness it seems to lend the wearer.' },
+  { id:'miners_reckoning', name:"The Miner's Reckoning", type:'weapon', slot:'hand', dmg:[8,14], str:10, armorPierce:3,
+    factionDmgBonus:{ faction:'construct', pct:0.2 }, glyph:')', color:'#7a7a8a', value:180, isUnique:true, noAffixes:true, valueTier:3,
+    desc:'A mining pick, kept sharp for stone and, it turns out, for anything else that\'s more plating than flesh.' },
+];
+ITEM_BASES.push(...ARTIFACT_CATALOG_TIER3_ITEMS);
+ARTIFACT_RELIQUARY_POOLS[3].push('wardens_circlet', 'miners_reckoning'); // ashwood_recurve and bulette_hide_vest are craft-only, below -- kept out of the random vault pool so crafting them for real means something
+// Real crafting recipes for the two tier-3 items above -- gathered materials, not found/dropped.
+// Ironwood (a real, existing rare-but-gatherable material -- see craft_ironwood_bow for the
+// established cost baseline) keeps this an early-to-reach-but-not-trivial mid-game craft rather
+// than requiring the player to already be deep enough to find a vault.
+RECIPES.push(
+  { id: 'craft_ashwood_recurve', name: 'Craft Ashwood Recurve', category: 'crafting', inputs: [{ id: 'ironwood', qty: 2 }, { id: 'fang', qty: 2 }, { id: 'cloth', qty: 1 }], output: { id: 'ashwood_recurve', qty: 1 } },
+  { id: 'craft_bulette_vest', name: 'Craft Bulette Hide Vest', category: 'crafting', inputs: [{ id: 'pelt', qty: 4 }, { id: 'iron_ingot', qty: 2 }, { id: 'leather_scrap', qty: 2 }], output: { id: 'bulette_hide_vest', qty: 1 } },
+);
+
+// -- Tier 4 outliers (valueTier 4, value 500-700+): intentionally overtuned endgame builds,
+// same top-tier reliquary pool as batch 1/2 but pushed further in raw power on purpose -- these
+// are the "some OP" end of the requested range, not just more of the same strength as before.
+const ARTIFACT_CATALOG_TIER4_OUTLIERS = [
+  { id:'world_eaters_molar', name:"World-Eater's Molar", type:'weapon', slot:'hand', dmg:[16,30], str:22,
+    executeBonus:0.3, executeNovaChance:0.4, executeNovaRadius:3, executeNovaDmg:[10,20], bossDmgBonus:0.2,
+    glyph:')', color:'#4a1a1a', value:650, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"A single tooth, easily the length of a forearm, fitted with a grip. Whatever it came from, it was built to end things, not wound them." },
+  { id:'the_absolute_zero', name:'The Absolute Zero', type:'weapon', slot:'hand', dmg:[14,24], str:18,
+    freezeProcChance:0.4, freezeProcTurns:5, shatterBonus:0.8, chargeStacks:6, chargeRadius:3, chargeDmgMult:2.5,
+    glyph:')', color:'#a0e0ff', value:700, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Cold enough that the air around it stops behaving normally. It doesn't just freeze what it hits -- it builds toward something much worse." },
+  { id:'heartseeker_bane_of_kings', name:'Heartseeker, Bane of Kings', type:'weapon', slot:'hand', dmg:[15,26], str:20,
+    critBonus:0.2, critDmgBonus:0.5, critLifestealPct:0.6, bossDmgBonus:0.3,
+    glyph:')', color:'#d0a000', value:680, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'It has a very specific, very old reputation, and has never once needed a second name to be believed.' },
+  { id:'the_unmaking', name:'The Unmaking', type:'armor', slot:'ring', armor:0, allOrNothingChance:0.5, critBonus:0.15, equipMaxHpPenalty:30,
+    glyph:'=', color:'#1a0a1a', value:500, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Wearing it costs you something real, permanently, for as long as it's on. What it gives back in return is not subtle." },
+];
+ITEM_BASES.push(...ARTIFACT_CATALOG_TIER4_OUTLIERS);
+ARTIFACT_RELIQUARY_POOLS[4].push(...ARTIFACT_CATALOG_TIER4_OUTLIERS.map(it => it.id));
+
+// -- Grandmaster crafting tier (backlog pass 4): the "very hard to craft" end of the range --
+// four fusion recipes, each consuming an EXISTING unique item (permanently) plus several copies
+// of a reagent that only drops from one specific superboss. This is deliberately harder to reach
+// than anything else in the game: the player needs to have already found/earned a real legendary
+// through some other path, then farm a hard optional fight for materials, then have actually
+// found the recipe itself (see the recipe-scroll items below, tucked into the rarest vault pool
+// rather than taught by any ordinary trainer). Every output stays isUnique+noAffixes and is
+// deliberately left OUT of every drop table -- crafting is the only way to get one, full stop.
+const ARTIFACT_MATERIALS_GRANDMASTER = [
+  { id:'wyrm_molten_core', name:"Wyrm's Molten Core", type:'material', glyph:'*', color:'#ff6a1a', value:120,
+    desc:"A heart-sized ember, pulled still-glowing from an ancient wyrm's chest. It has not cooled once since." },
+  { id:'krakens_abyssal_pearl', name:"The Kraken's Abyssal Pearl", type:'material', glyph:'*', color:'#1a3a5a', value:120,
+    desc:'A pearl the size of a fist, grown in lightless water under more pressure than should be survivable.' },
+];
+ITEM_BASES.push(...ARTIFACT_MATERIALS_GRANDMASTER);
+
+const ARTIFACT_CATALOG_GRANDMASTER_ITEMS = [
+  { id:'godslayers_edge', name:"Godslayer's Edge", type:'weapon', slot:'hand', dmg:[20,36], str:26,
+    executeBonus:0.35, executeNovaChance:0.5, executeNovaRadius:3, executeNovaDmg:[14,26], bossDmgBonus:0.35, critBonus:0.1,
+    glyph:')', color:'#ffb020', value:1100, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Reforged from a molar that already ended things on its own, and fed three more wyrm-hearts since. It does not get better than this by luck." },
+  { id:'crown_of_the_devoured_god', name:'Crown of the Devoured God', type:'armor', slot:'head', armor:8, allOrNothingChance:0.55, critBonus:0.15, regen:3,
+    glyph:'^', color:'#2a0a2a', value:950, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'Reforged around whatever The Unmaking used to be, set with three pearls that never should have survived the trip to the surface intact.' },
+  { id:'the_ouroboros_band', name:'The Ouroboros Band', type:'armor', slot:'ring', armor:0, regen:4, autoBlinkBelowHpFrac:0.35, autoBlinkRange:6, dashTiles:1,
+    glyph:'=', color:'#c0b0ff', value:900, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Two older relics, melted down and folded back into each other along a seam that isn't supposed to exist. It doesn't wear like a ring that used to be two separate things." },
+  { id:'the_absolute_beginning', name:'The Absolute Beginning', type:'armor', slot:'body', armor:18, thornsPercent:0.18, bleedResistChance:0.4, regen:2,
+    glyph:'[', color:'#4a4a6a', value:980, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'Two of the sturdiest plates ever forged, melted down together into one. Whatever was true about either of them alone, this is more of it.' },
+];
+ITEM_BASES.push(...ARTIFACT_CATALOG_GRANDMASTER_ITEMS);
+
+RECIPES.push(
+  { id: 'craft_godslayers_edge', name: "Forge Godslayer's Edge", category: 'crafting',
+    inputs: [{ id: 'world_eaters_molar', qty: 1 }, { id: 'wyrm_molten_core', qty: 3 }, { id: 'starmetal_ore', qty: 3 }],
+    output: { id: 'godslayers_edge', qty: 1 } },
+  { id: 'craft_crown_of_the_devoured_god', name: 'Forge Crown of the Devoured God', category: 'crafting',
+    inputs: [{ id: 'the_unmaking', qty: 1 }, { id: 'krakens_abyssal_pearl', qty: 3 }, { id: 'arcane_dust', qty: 3 }],
+    output: { id: 'crown_of_the_devoured_god', qty: 1 } },
+  { id: 'craft_ouroboros_band', name: 'Forge The Ouroboros Band', category: 'crafting',
+    inputs: [{ id: 'iron_constitution', qty: 1 }, { id: 'blinkstep_anklet', qty: 1 }, { id: 'recursion_thread', qty: 2 }],
+    output: { id: 'the_ouroboros_band', qty: 1 } },
+  { id: 'craft_absolute_beginning', name: 'Forge The Absolute Beginning', category: 'crafting',
+    inputs: [{ id: 'stonewall_plate', qty: 1 }, { id: 'bulwark_unbroken', qty: 1 }, { id: 'corrupted_shard', qty: 3 }],
+    output: { id: 'the_absolute_beginning', qty: 1 } },
+);
+// These four are meant to be learnable ONLY through their dedicated scroll (see
+// ARTIFACT_GRANDMASTER_RECIPE_SCROLLS above, gated to the rarest vault roll) -- without this
+// exclusion, the two pre-existing ad-hoc "teach a random recipe" mechanisms elsewhere (a cabinet's
+// 30% chance, a chest's 15% chance) would pick from the entire RECIPES array and could just as
+// easily hand a grandmaster recipe to a brand-new character out of an ordinary desk drawer,
+// completely bypassing the intended rare-find gate.
+const RECIPES_EXCLUDED_FROM_RANDOM_TEACHING = new Set(['craft_godslayers_edge', 'craft_crown_of_the_devoured_god', 'craft_ouroboros_band', 'craft_absolute_beginning']);
+// Recipe-scroll items that TEACH the four grandmaster recipes above. Deliberately not taught by
+// any ordinary trainer (no blacksmith/alchemist/tailor allowlist entry) -- these only turn up in
+// the same top-tier Reliquary vault roll as the rarest found-not-crafted legendaries, so learning
+// a grandmaster recipe is itself a rare find, on top of everything else the recipe then demands.
+const ARTIFACT_GRANDMASTER_RECIPE_SCROLLS = [
+  { id:'scroll_godslayers_edge', recipeId:'craft_godslayers_edge', type:'recipe', name:"Recipe: Forge Godslayer's Edge", glyph:'?', color:'#ffb020', value:200, isUnique:true, noAffixes:true },
+  { id:'scroll_crown_of_the_devoured_god', recipeId:'craft_crown_of_the_devoured_god', type:'recipe', name:'Recipe: Forge Crown of the Devoured God', glyph:'?', color:'#2a0a2a', value:200, isUnique:true, noAffixes:true },
+  { id:'scroll_ouroboros_band', recipeId:'craft_ouroboros_band', type:'recipe', name:'Recipe: Forge The Ouroboros Band', glyph:'?', color:'#c0b0ff', value:200, isUnique:true, noAffixes:true },
+  { id:'scroll_absolute_beginning', recipeId:'craft_absolute_beginning', type:'recipe', name:'Recipe: Forge The Absolute Beginning', glyph:'?', color:'#4a4a6a', value:200, isUnique:true, noAffixes:true },
+];
+ITEM_BASES.push(...ARTIFACT_GRANDMASTER_RECIPE_SCROLLS);
+ARTIFACT_RELIQUARY_POOLS[4].push(...ARTIFACT_GRANDMASTER_RECIPE_SCROLLS.map(it => it.id));
+
+// -- Story capstone (backlog pass 5): guaranteed, not rolled -- see the onDeath hook near
+// triggerGodReveal/triggerSimulationReveal. The only item in the game not reachable any other
+// way, on purpose: it's a record of finishing the story, not a combat pick-up.
+const ARTIFACT_CAPSTONE_ITEMS = [
+  { id:'the_last_page', name:'The Last Page', type:'armor', slot:'amulet', armor:2,
+    critBonus:0.08, bossDmgBonus:0.15, regen:2, fearResistBonus:0.5, dodgeChance:0.04,
+    glyph:'"', color:'#e0e0e0', value:900, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"There's nothing written on it. There doesn't need to be -- you were there for all of it." },
+];
+ITEM_BASES.push(...ARTIFACT_CAPSTONE_ITEMS);
+
+// -- The Recursion's own unique (it had a key drop already, but no stat-item reward) --
+const ARTIFACT_RECURSION_ITEM = [
+  { id:'the_recursion_loop', name:'The Recursion Loop', type:'weapon', slot:'hand', dmg:[11,19], str:14,
+    chargeStacks:5, chargeMode:'escalating', chargeSource:'damageTaken', chargeRadius:2, chargeDmgMult:1.6,
+    glyph:')', color:'#b090ff', value:520, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"It seems to have already swung before you finish swinging it, and gets stronger the more times you've already been through this fight." },
+];
+ITEM_BASES.push(...ARTIFACT_RECURSION_ITEM);
+BOSS_UNIQUE_DROPS.the_recursion = { itemId: 'the_recursion_loop', chance: 0.35 };
+
+// -- Awakening gear (backlog pass 5): starts as a plain, modest item; permanently upgrades the
+// first time its wearer beats a boss while wearing it (see awakenItem). Found early/mid (a normal
+// vault roll, tier-2 pool), so a new character can genuinely find one and grow into it rather
+// than it only existing as another late-game vault result. -- exactly the "prove yourself" gear
+// the flat power-tier list above doesn't otherwise cover.
+const ARTIFACT_AWAKENING_ITEMS = [
+  { id:'unproven_blade', name:'Unproven Blade', type:'weapon', slot:'hand', dmg:[6,11], str:7,
+    critBonus:0.03, dormant:{ critBonus:0.1, critDmgBonus:0.3, bossDmgBonus:0.2, lowHpDmgBonus:0.15 },
+    glyph:')', color:'#8a8a8a', value:75, isUnique:true, noAffixes:true, valueTier:2,
+    desc:"A plain blade, well-made but unremarkable, with an inscription worn almost illegible: '...until it has actually seen one through.'" },
+];
+ITEM_BASES.push(...ARTIFACT_AWAKENING_ITEMS);
+ARTIFACT_RELIQUARY_POOLS[2].push(...ARTIFACT_AWAKENING_ITEMS.map(it => it.id));
+
+// -- More common-monster drops (backlog pass 5): broadens tier-1 acquisition beyond the original
+// five sources, plus two slot types (offhand/head) that were underused so far.
+const ARTIFACT_CATALOG_TIER1B_ITEMS = [
+  { id:'gravekeepers_token', name:"Gravekeeper's Token", type:'armor', slot:'ring', armor:0, factionResistBonus:{ faction:'undead', pct:0.15 },
+    glyph:'=', color:'#7a7a7a', value:35, isUnique:true, noAffixes:true, valueTier:1,
+    desc:'A cheap iron token, the kind left at a graveside more out of habit than belief. It seems to have picked up a little of that habit\'s weight.' },
+  { id:'web_silk_veil', name:'Web-Silk Veil', type:'armor', slot:'head', armor:1, confuseResistBonus:0.15, dodgeChance:0.02,
+    glyph:'^', color:'#4a2a4a', value:30, isUnique:true, noAffixes:true, valueTier:1,
+    desc:'Impossibly fine thread, woven into something almost like a veil. Wearing it feels like being slightly harder to pin down.' },
+  { id:'warcamp_buckler', name:'Warcamp Buckler', type:'armor', slot:'offhand', armor:3, factionDmgBonus:{ faction:'giantkin', pct:0.1 },
+    glyph:'(', color:'#5a7a3a', value:40, isUnique:true, noAffixes:true, valueTier:1,
+    desc:'A crude but sturdy shield, painted over an older, cruder crest. Whoever carried it clearly meant to keep carrying it.' },
+];
+ITEM_BASES.push(...ARTIFACT_CATALOG_TIER1B_ITEMS);
+COMMON_UNIQUE_DROPS.zombie = { itemId: 'gravekeepers_token', chance: 0.012 };
+COMMON_UNIQUE_DROPS.spider = { itemId: 'web_silk_veil', chance: 0.012 };
+COMMON_UNIQUE_DROPS.orc = { itemId: 'warcamp_buckler', chance: 0.012 };
+ARTIFACT_RELIQUARY_POOLS[1].push(...ARTIFACT_CATALOG_TIER1B_ITEMS.map(it => it.id));
+
+// -- Growth Artifacts (backlog pass 6): rare, named exceptions to "fixed stats forever." Each
+// uses a genuinely different growth shape on purpose -- see growthCurveValue/tickItemGrowth near
+// applyStatBonuses, and manaScalingSpellBonus near applyEffectToTarget -- rather than reskinning
+// the same curve six times. Progress lives on the item instance (item.growthProgress), so it's
+// the WEAPON that grows, not a player-level bonus that happens to be sourced from a weapon.
+const ARTIFACT_CATALOG_GROWTH_ITEMS = [
+  // Capped, linear, kill-count: fast, predictable, plateaus early -- a good first taste of the
+  // mechanic. 50 kills to cap (roughly a single dungeon floor or two of normal play).
+  { id:'the_hungry_blade', name:'The Hungry Blade', type:'weapon', slot:'hand', dmg:[7,13], str:9,
+    growthPerKill:{ stat:'critBonus', amount:0.005, cap:0.25 },
+    glyph:')', color:'#c94a4a', value:180, isUnique:true, noAffixes:true, valueTier:3,
+    desc:"It was dull the day you found it. It won't stay that way -- every kill wears it a little sharper, though a blade can only take so keen an edge before it's just the same edge, kept." },
+  // Uncapped, diminishing (sqrt), kill-count: the "grows forever, but slower and slower" item --
+  // genuinely rare, deliberately positioned as a long-playthrough reward rather than something
+  // reached through a single hard fight. 100 kills -> +10%; 10,000 kills -> +100%; no ceiling.
+  { id:'the_slow_reckoning', name:'The Slow Reckoning', type:'weapon', slot:'hand', dmg:[10,17], str:12,
+    growthPerKill:{ stat:'bossDmgBonus', amount:0.01, diminishing:true },
+    glyph:')', color:'#5a2a5a', value:520, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"No one has ever reported it stopping. Whether that's because it can't, or because no one's carried it long enough to find the end, isn't a settled question." },
+  // Capped, turns-equipped: rewards actually committing to one item instead of chasing every
+  // upgrade -- roughly 2000 turns (a solid, but not extreme, chunk of a playthrough) to cap.
+  { id:'the_steadfast_ward', name:'The Steadfast Ward', type:'armor', slot:'body', armor:9,
+    growthPerTurnsEquipped:{ stat:'thornsPercent', amount:0.01, perTurns:100, cap:0.2 },
+    glyph:'[', color:'#4a6a4a', value:210, isUnique:true, noAffixes:true, valueTier:3,
+    desc:"Armor settles into whoever wears it long enough without taking it off. This one settles further than most -- every stretch of road it's carried you through, unremoved, it holds a little firmer." },
+  // Uncapped, linear, BOSS-kill-count: bosses are rare, so even uncapped-linear grows slowly in
+  // practice -- a real "boss hunter's trophy" that keeps meaning something no matter how many
+  // you've already claimed, since there's no cap for a truly dedicated hunter to hit.
+  { id:'the_slayers_ledger', name:"The Slayer's Ledger", type:'weapon', slot:'hand', dmg:[9,16], str:11,
+    growthPerBossKill:{ stat:'executeBonus', amount:0.02 },
+    glyph:')', color:'#8a6a1a', value:480, isUnique:true, noAffixes:true, valueTier:4,
+    desc:'A tally is scratched into the tang under the grip, one mark for every named thing it\'s helped put down. There is, as far as anyone has found, still room for more.' },
+  // Capped, player-level: the "grows WITH you specifically" legendary -- tracks player.level
+  // directly rather than any combat counter, capped at level 40 (+20%) so it stays a strong
+  // mid-to-late piece without becoming a must-have at true endgame.
+  { id:'growing_light', name:'Growing Light', type:'armor', slot:'amulet', armor:1, regen:1,
+    growthByLevel:{ stat:'elementalDmgBonus', amountPerLevel:0.005, startLevel:1, cap:0.2 },
+    glyph:'"', color:'#ffe090', value:260, isUnique:true, noAffixes:true, valueTier:3,
+    desc:"It was barely a spark when you found it. It hasn't gotten any bigger to look at -- it's just started keeping better time with you." },
+  // Live/reversible, mana-based: not permanent growth at all, deliberately -- the "scales
+  // differently" case the whole framework is meant to allow for. Rewards mana management over
+  // mana spending, moment to moment, every single cast.
+  { id:'the_reservoir_band', name:'The Reservoir Band', type:'armor', slot:'ring', armor:0,
+    manaScaling:{ maxAmount:0.3 }, spellDmgBonus:0.02,
+    glyph:'=', color:'#3a8ac0', value:240, isUnique:true, noAffixes:true, valueTier:3,
+    desc:'A band of still water caught in metal, never quite settling flat. It gives back exactly as much as you haven\'t already spent, and not a drop more.' },
+];
+ITEM_BASES.push(...ARTIFACT_CATALOG_GROWTH_ITEMS);
+ARTIFACT_RELIQUARY_POOLS[3].push('the_hungry_blade', 'the_steadfast_ward', 'growing_light', 'the_reservoir_band');
+ARTIFACT_RELIQUARY_POOLS[4].push('the_slow_reckoning', 'the_slayers_ledger');
 // Chance for a boss/miniboss of a given faction to drop a random piece of that faction's set.
 // Rolled separately from (and in addition to) that boss's own unique-weapon roll above.
 const SET_DROP_FACTIONS = {
@@ -9582,7 +10177,7 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
   if (roleId === 'chef' || roleId === 'blacksmith' || roleId === 'alchemist' || roleId === 'tailor') {
     npc.teachRecipes = RECIPES.filter(r => {
       if (roleId === 'chef') return r.category === 'cooking';
-      if (roleId === 'blacksmith') return r.id === 'smelt_iron' || r.id === 'craft_leather' || r.id === 'craft_starmetal_blade' || r.id === 'craft_starmetal_warhammer' || r.id === 'craft_ironwood_bow' || r.id === 'craft_ironwood_staff' || ['rune_might','rune_warding','rune_ember','rune_frost'].some(id => r.id.startsWith('craft_'+id+'_'));
+      if (roleId === 'blacksmith') return r.id === 'smelt_iron' || r.id === 'craft_leather' || r.id === 'craft_starmetal_blade' || r.id === 'craft_starmetal_warhammer' || r.id === 'craft_ironwood_bow' || r.id === 'craft_ironwood_staff' || r.id === 'craft_ashwood_recurve' || r.id === 'craft_bulette_vest' || ['rune_might','rune_warding','rune_ember','rune_frost'].some(id => r.id.startsWith('craft_'+id+'_'));
       if (roleId === 'alchemist') return r.id === 'antidote' || ['rune_insight','rune_vitality','rune_precision'].some(id => r.id.startsWith('craft_'+id+'_'));
       if (roleId === 'tailor') return r.id === 'craft_gloves' || r.id === 'craft_boneamulet' || r.id.startsWith('craft_rune_swiftness_');
       return false;
@@ -12871,7 +13466,7 @@ function rollContainerLoot(rng, kind, tier) {
     }
     case 'cabinet': {
       for (let i = 0; i < n; i++) addItemToList(items, makeItem(choice(rng, ['herb','cloth','iron_ingot','leather_scrap']), 0, rng));
-      if (rng() < 0.3) { const rid = choice(rng, RECIPES).id; items.push({ uid:'i'+Math.random().toString(36).slice(2,9), id:rid, type:'recipe', name:'Recipe: '+RECIPES.find(r=>r.id===rid).name, glyph:'?', color:'#a0c9e0', value:0 }); }
+      if (rng() < 0.3) { const candidates = RECIPES.filter(r => !RECIPES_EXCLUDED_FROM_RANDOM_TEACHING.has(r.id)); const rid = choice(rng, candidates).id; items.push({ uid:'i'+Math.random().toString(36).slice(2,9), id:rid, recipeId:rid, type:'recipe', name:'Recipe: '+RECIPES.find(r=>r.id===rid).name, glyph:'?', color:'#a0c9e0', value:0 }); }
       break;
     }
     case 'desk': case 'bookshelf': default: {
@@ -14072,6 +14667,7 @@ function getActiveStatusEffects(e) {
   if (e.oiledTurns > 0) out.push({ label: 'Oil-Slicked', turns: e.oiledTurns, kind: 'debuff' });
   if (e.wetTurns > 0) out.push({ label: 'Soaked', turns: e.wetTurns, kind: 'neutral' });
   if (e.frozenSolidTurns > 0) out.push({ label: 'Frozen Solid', turns: e.frozenSolidTurns, kind: 'debuff' });
+  if (e.stunnedTurns > 0) out.push({ label: 'Stunned', turns: e.stunnedTurns, kind: 'debuff' });
   // ---- BODY & HEALTH OVERHAUL: wounds, bleeding, and active illness, all shown the same way
   // every other status is -- see the framework block near igniteTile. ----
   // bleedTurns is now just a "currently bleeding" flag/elapsed-turn counter (see the clotting
@@ -14566,7 +15162,15 @@ function totalStatBonus(it, stat) {
 // frostDmg, poisonDmg, lifesteal, armorPierce, antiUndead) are deliberately NOT in this list --
 // those are read directly off player.equipment.* at the point of use instead, so listing them
 // here would double-apply them. This list is only for stats with no other read site. ----
-const EQUIP_FLAT_BONUS_KEYS = ['dodgeChance', 'critBonus', 'critDmgBonus', 'eldritchDmgBonus', 'poisonDmgReduction', 'lifestealBonus', 'spellDmgBonus', 'techniqueDmgBonus', 'bleedDmgReduction', 'bleedResistChance'];
+// ARTIFACT FRAMEWORK, part 1 of 4 (see doAttack/onDeath/movePlayer for the other three): every
+// key here is an existing, already-combat-tested player accumulator that previously had no gear
+// path onto it at all (fearResistBonus/thornsPercent/executeBonus/bossDmgBonus/lowHpDmgBonus/
+// rangedDmgBonus/elementalDmgBonus/regen/confuseResistBonus were talent-or-racial-only). Adding a
+// new passive resistance/bonus item is now just "put the field on the item," nothing else --
+// applyStatBonuses/removeStatBonuses below already generically add/subtract every key in this
+// list on equip/unequip, and every read site already existed before this list touched it.
+const EQUIP_FLAT_BONUS_KEYS = ['dodgeChance', 'critBonus', 'critDmgBonus', 'eldritchDmgBonus', 'poisonDmgReduction', 'lifestealBonus', 'spellDmgBonus', 'techniqueDmgBonus', 'bleedDmgReduction', 'bleedResistChance',
+  'fearResistBonus', 'confuseResistBonus', 'thornsPercent', 'executeBonus', 'bossDmgBonus', 'lowHpDmgBonus', 'rangedDmgBonus', 'elementalDmgBonus', 'regen'];
 // Maps a mutation's `category` to the player field a specialization talent can set to boost just
 // that category's damage (see applyEffectToTarget's dmgMult). Deliberately data-driven: adding a
 // new specialization line for a category not listed here is a one-line addition, not a formula change.
@@ -14578,6 +15182,95 @@ function applyStatBonuses(it) {
   if (i) { player.int += i; const mpAdd = i * 2; player.maxMp += mpAdd; player.mp += mpAdd; }
   if (c) { player.con += c; const hpAdd = c * 3; player.maxHp += hpAdd; player.hp += hpAdd; }
   for (const key of EQUIP_FLAT_BONUS_KEYS) { if (it[key]) player[key] = (player[key] || 0) + it[key]; }
+  // ---- ARTIFACT FRAMEWORK, part 5 (backlog batch 2): two equip-time special cases that don't
+  // fit the generic flat-sum loop above. companionPowerBonus already exists as a talent-driven
+  // accumulator (Rallying Presence etc.), but talents apply it by directly calling
+  // scaleCompanionToPlayer() themselves -- gear granting the same bonus needs to do the same
+  // rescale, not just bump the number, or a companion's actual stats never reflect a banner
+  // picked up mid-run. equipMaxHpPenalty is the deliberate inverse of conBonus (used by
+  // risk/reward gear that costs real max HP while worn), so it gets the same clamping conBonus
+  // itself gets above, just subtracting instead of adding.
+  if (it.companionPowerBonus) { player.companionPowerBonus = (player.companionPowerBonus || 0) + it.companionPowerBonus; (player.companions || []).forEach(scaleCompanionToPlayer); }
+  if (it.equipMaxHpPenalty) { player.maxHp = Math.max(1, player.maxHp - it.equipMaxHpPenalty); player.hp = Math.min(player.hp, player.maxHp); }
+  if (it.dormant && it.awakened) { for (const key of EQUIP_FLAT_BONUS_KEYS) { if (it.dormant[key]) player[key] = (player[key] || 0) + it.dormant[key]; } }
+  // Growth Artifacts (see growthCurveValue/tickItemGrowth): kill/boss-kill/turns-equipped growth
+  // already accumulated on THIS item instance re-applies in full on equip (it never actually went
+  // away, the player just wasn't wearing it) -- level-based growth is computed fresh against the
+  // player's CURRENT level every time it's equipped instead, since it's meant to track "how
+  // strong are you right now while wearing this," not a total that keeps its old value forever.
+  const growthSpec = growthSpecFor(it);
+  if (growthSpec) player[growthSpec.stat] = (player[growthSpec.stat] || 0) + growthCurveValue(it.growthProgress || 0, growthSpec);
+  if (it.growthByLevel) {
+    const g = it.growthByLevel;
+    const amount = Math.min(g.cap !== undefined ? g.cap : Infinity, Math.max(0, player.level - (g.startLevel || 1)) * g.amountPerLevel);
+    player[g.stat] = (player[g.stat] || 0) + amount;
+    it._levelGrowthApplied = amount;
+  }
+}
+// ---- ARTIFACT FRAMEWORK backlog pass 5: "Awakening" gear. Unlike every other item so far, this
+// starts weaker than its listed valueTier and permanently upgrades exactly once, the first time
+// its wearer defeats a boss while it's equipped -- see the onDeath hook near checkMilestoneRewards
+// for where that trigger lives. Deliberately restricted to EQUIP_FLAT_BONUS_KEYS-compatible
+// fields (not armor/raw stats, which aren't simple accumulators) so awakening an already-equipped
+// item is just "add these bonuses now" rather than needing a full re-equip pass.
+function awakenItem(item) {
+  if (!item.dormant || item.awakened) return;
+  item.awakened = true;
+  for (const key of EQUIP_FLAT_BONUS_KEYS) { if (item.dormant[key]) player[key] = (player[key] || 0) + item.dormant[key]; }
+  log(`*** ${item.name} recognizes what you just did, and gives you the rest of what it had. ***`);
+}
+// ---- ARTIFACT FRAMEWORK: Growth Artifacts. Deliberately rare and deliberately varied -- most
+// gear in this game (and every unique added before this pass) has fixed stats for its entire
+// life, the same "found it, it's always this" contract everywhere from a common drop to a
+// hand-tuned legendary. A small number of named, lore-justified exceptions grow instead, and not
+// all the same way: growthPerKill/growthPerBossKill/growthPerTurnsEquipped share this one curve
+// function and differ only in what increments their counter and whether that counter is capped
+// or left to diminishing-returns growth (see `diminishing` below) -- growthByLevel is handled
+// separately in levelUp() since it's driven by an external stat rather than an internal counter,
+// and manaScaling above is handled separately again since it's fully live/reversible rather than
+// an accumulating counter at all. Every accumulating growth field stores its progress ON THE ITEM
+// INSTANCE itself (item.growthProgress), not on the player, so the growth belongs to that
+// specific weapon/ring/whatever and would (in principle) start over on a fresh copy.
+//
+// growthCurveValue(progress, g) turns raw progress into the current bonus amount: linear by
+// default (progress * amount), or sqrt-scaled ("diminishing") for the uncapped items -- every
+// early kill/turn matters a lot, the thousandth matters much less, so the number can keep
+// climbing indefinitely without ever being a realistic balance problem.
+function growthCurveValue(progress, g) {
+  // perTurns (only present on growthPerTurnsEquipped) converts raw turns-passed into "how many
+  // perTurns-sized chunks have elapsed" -- without this division, progress (which increments by
+  // 1 every single turn) was being used directly as growth units, capping the item in a handful
+  // of turns instead of the hundreds/thousands intended.
+  const units = g.perTurns ? Math.floor(progress / g.perTurns) : progress;
+  const raw = g.diminishing ? Math.sqrt(units) : units;
+  const amount = raw * g.amount;
+  return g.cap !== undefined ? Math.min(amount, g.cap) : amount;
+}
+function growthSpecFor(item) { return item.growthPerKill || item.growthPerBossKill || item.growthPerTurnsEquipped || null; }
+// Called once per relevant event (a kill, a boss kill, or a turn passing) for an EQUIPPED item
+// that has the matching growth field. Applies just the delta to the player's stat -- not the
+// full new total -- so this composes correctly with the base flat bonus already applied on
+// equip and doesn't need to touch applyStatBonuses/removeStatBonuses at all for the tick itself.
+function tickItemGrowth(item, kind) {
+  const g = kind === 'kill' ? item.growthPerKill : kind === 'bossKill' ? item.growthPerBossKill : item.growthPerTurnsEquipped;
+  if (!g) return;
+  const before = growthCurveValue(item.growthProgress || 0, g);
+  item.growthProgress = (item.growthProgress || 0) + 1;
+  const after = growthCurveValue(item.growthProgress, g);
+  if (after !== before) player[g.stat] = (player[g.stat] || 0) + (after - before);
+}
+// growthByLevel is recomputed from scratch on every level-up (called from levelUp()) rather than
+// ticked incrementally, since it tracks an external stat (player.level) instead of an internal
+// counter -- there's no "delta since last time" to apply cleanly if the player could somehow
+// change level by more than one at once, so recompute-from-zero is the robust approach.
+function refreshLevelGrowthItems() {
+  for (const item of Object.values(player.equipment)) {
+    if (!item || !item.growthByLevel) continue;
+    const g = item.growthByLevel;
+    const newAmount = Math.min(g.cap !== undefined ? g.cap : Infinity, Math.max(0, player.level - (g.startLevel || 1)) * g.amountPerLevel);
+    const oldAmount = item._levelGrowthApplied || 0;
+    if (newAmount !== oldAmount) { player[g.stat] = (player[g.stat] || 0) + (newAmount - oldAmount); item._levelGrowthApplied = newAmount; }
+  }
 }
 function removeStatBonuses(it) {
   const s = totalStatBonus(it,'str'), d = totalStatBonus(it,'dex'), i = totalStatBonus(it,'int'), c = totalStatBonus(it,'con');
@@ -14586,6 +15279,12 @@ function removeStatBonuses(it) {
   if (i) { player.int -= i; const mpSub = i * 2; player.maxMp = Math.max(1, player.maxMp - mpSub); player.mp = Math.min(player.mp, player.maxMp); }
   if (c) { player.con -= c; const hpSub = c * 3; player.maxHp = Math.max(1, player.maxHp - hpSub); player.hp = Math.min(player.hp, player.maxHp); }
   for (const key of EQUIP_FLAT_BONUS_KEYS) { if (it[key]) player[key] = (player[key] || 0) - it[key]; }
+  if (it.companionPowerBonus) { player.companionPowerBonus = Math.max(0, (player.companionPowerBonus || 0) - it.companionPowerBonus); (player.companions || []).forEach(scaleCompanionToPlayer); }
+  if (it.equipMaxHpPenalty) { player.maxHp += it.equipMaxHpPenalty; player.hp = Math.min(player.hp, player.maxHp); }
+  if (it.dormant && it.awakened) { for (const key of EQUIP_FLAT_BONUS_KEYS) { if (it.dormant[key]) player[key] = Math.max(0, (player[key] || 0) - it.dormant[key]); } }
+  const growthSpec = growthSpecFor(it);
+  if (growthSpec) player[growthSpec.stat] = Math.max(0, (player[growthSpec.stat] || 0) - growthCurveValue(it.growthProgress || 0, growthSpec));
+  if (it.growthByLevel && it._levelGrowthApplied) { player[it.growthByLevel.stat] = Math.max(0, (player[it.growthByLevel.stat] || 0) - it._levelGrowthApplied); it._levelGrowthApplied = 0; }
 }
 function equipItem(it) {
   if (it.type !== 'weapon' && it.type !== 'armor') { log("You can't equip that."); return; }
@@ -15690,7 +16389,7 @@ function allyAI(a) {
   if (a.duration > 0) { a.duration--; if (a.duration <= 0) { a.alive = false; log(`${a.name} crumbles to dust.`); return; } }
   processEntityStatus(a);
   if (!a.alive) return;
-  if (a.frozenSolidTurns > 0) return; // frozen solid -- can't act at all this turn (see freezeEntitySolid)
+  if (a.frozenSolidTurns > 0 || a.stunnedTurns > 0) return; // frozen solid or stunned -- can't act at all this turn (see freezeEntitySolid / ARTIFACT FRAMEWORK stunProcChance)
   // faction-aware target pick (see the Living World AI framework near monsterAI) -- an ally now
   // fights any hostile monster OR hostile NPC, not just whichever monster happens to be closest.
   const target = pickHostileTarget(a, 8);
@@ -15718,7 +16417,7 @@ function entityAt(x, y) {
 // ---- loot v2: species/role-appropriate drops + corpses + full shop drops ----
 const ROLE_DEATH_LOOT = {
   guard: ['dagger','shortsword','leather','cap'], watchman: ['dagger','leather'], captain: ['shortsword','chainmail'],
-  farmer: ['meat_raw','wood','herb'], hunter: ['pelt','meat_raw','fang'], ranger: ['pelt','herb'],
+  farmer: ['meat_raw','wood','herb','wheat'], hunter: ['pelt','meat_raw','fang'], ranger: ['pelt','herb'],
   miner: ['ore','iron_ingot'], fisherman: ['meat_raw'], baker: ['stew','meat_cooked'],
   noble: ['gem','ring'], elder: ['herb'], bandit: ['dagger','gold'], banditleader: ['axe','gold'],
 };
@@ -17588,6 +18287,7 @@ function levelUp() {
   if (player.level % 10 === 0) { player.statPoints += 3; msg += ' (Milestone: +3 bonus stat points!)'; }
   if (player.level >= LEVEL_CAP) msg = `*** You reached the maximum level, ${LEVEL_CAP}! You are as strong as this world can make you. ***`;
   (player.companions || []).filter(c => c.alive).forEach(scaleCompanionToPlayer);
+  refreshLevelGrowthItems();
   Sound.play('levelUp');
   log(msg);
 }
@@ -17684,14 +18384,34 @@ function craftRecipe(recipeId) {
   const saveChance = isSmithing ? blacksmithMaterialSaveChance(outputBase.type) : catInfo.key === 'tinkering' ? jewelerMaterialSaveChance() : 0;
   let saved = 0;
   for (const inp of r.inputs) {
-    if (((player.craftYieldChance || 0) > 0 && Math.random() < player.craftYieldChance) || (saveChance > 0 && Math.random() < saveChance)) { saved++; continue; }
+    // A material-save roll (Efficient Alchemist, blacksmith/jeweler save chance) is meant to
+    // stretch out mundane gathered materials -- it was never meant to apply to a fusion recipe's
+    // sacrificed unique item (see craft_godslayers_edge etc.), where the whole point is that it's
+    // permanently gone. isUnique inputs are always consumed, full stop, regardless of any
+    // material-save investment.
+    const inpBase = ITEM_BASES.find(x => x.id === inp.id);
+    const eligibleForSave = !(inpBase && inpBase.isUnique);
+    if (eligibleForSave && (((player.craftYieldChance || 0) > 0 && Math.random() < player.craftYieldChance) || (saveChance > 0 && Math.random() < saveChance))) { saved++; continue; }
     consumeMaterial(inp.id, inp.qty);
   }
   const quality = craftQualityRoll(r);
   const material = materialPropertyFor(r);
+  // isUnique crafted outputs (the fusion/grandmaster recipes, and the two tier-3 craft-only
+  // items) are meant to have exactly one fixed, canonical stat block -- the same "found it, it's
+  // always this" contract every other unique in the game has, whether it came from a boss drop,
+  // a vault roll, or a milestone. Quality/material scaling exists to reward a dedicated crafter's
+  // skill investment on ORDINARY gear, and can multiply a weapon's stats well over 10x at high
+  // level (see the BUG FIX comment on combinedPowerMult below) -- applying that same scaling to a
+  // deliberately power-tiered unique would let, say, a tier-3 item's crafted stats trivially
+  // exceed a hand-tuned tier-4 legendary's, wrecking the whole power curve this update was built
+  // around. Skipped entirely for isUnique outputs; they always craft at their base stats.
+  const outputBaseForUniqueCheck = ITEM_BASES.find(x => x.id === r.output.id);
+  const outputIsUnique = !!(outputBaseForUniqueCheck && outputBaseForUniqueCheck.isUnique);
   const qty = (r.output.qty || 1) + (r.category === 'cooking' ? ((player.cookingYieldBonus || 0) + chefYieldBonus()) : 0);
   let out = null;
   for (let i = 0; i < qty; i++) {
+    const effectiveQuality = outputIsUnique ? null : quality;
+    const effectiveMaterial = outputIsUnique ? null : material;
     // BUG FIX (v0.40.10): crafted weapons/armor had no connection to playerLevelPowerMult at all --
     // quality (Shoddy..Masterwork, capped at 1.28x) and material (Starmetal/Ironwood, capped at
     // ~1.18x) together cap out around 1.5x a base item's own stats, full stop, no matter how
@@ -17707,9 +18427,9 @@ function craftRecipe(recipeId) {
     // dedicated crafter's best work now legitimately competes with -- and with a good roll or
     // rare material, exceeds -- what the dungeon hands out, for the entire length of the game
     // rather than just the first dozen levels.
-    const combinedPowerMult = (quality ? quality.powerMult : 1) * (material ? material.powerMult : 1) * (quality ? playerLevelPowerMult(player.level) : 1);
-    const combinedRarity = Math.max(quality ? quality.rarity : 0, material ? 1 : 0);
-    out = makeItem(r.output.id, combinedRarity, Math.random, (quality || material) ? combinedPowerMult : undefined);
+    const combinedPowerMult = (effectiveQuality ? effectiveQuality.powerMult : 1) * (effectiveMaterial ? effectiveMaterial.powerMult : 1) * (effectiveQuality ? playerLevelPowerMult(player.level) : 1);
+    const combinedRarity = Math.max(effectiveQuality ? effectiveQuality.rarity : 0, effectiveMaterial ? 1 : 0);
+    out = makeItem(r.output.id, combinedRarity, Math.random, (effectiveQuality || effectiveMaterial) ? combinedPowerMult : undefined);
     // Runes are a data-driven recipe output (RUNE_TYPES/RECIPES.push, data-expansion section) --
     // makeItem doesn't need to know anything about rune tiers, since the tier lives on the
     // recipe itself (r.runeTier) rather than being rolled. Resolved here, the one place a rune
@@ -17725,18 +18445,18 @@ function craftRecipe(recipeId) {
     // Material name prefix goes BEFORE quality's (e.g. "Fine Starmetal Warhammer") -- reads as
     // "a fine [example of a] starmetal warhammer", material first, workmanship second, matching
     // how the same phrase would actually be said aloud.
-    if (material) out.name = material.label + ' ' + out.name;
-    if (quality && quality.name) out.name = quality.name + ' ' + out.name;
-    if (quality || material) {
+    if (effectiveMaterial) out.name = effectiveMaterial.label + ' ' + out.name;
+    if (effectiveQuality && effectiveQuality.name) out.name = effectiveQuality.name + ' ' + out.name;
+    if (effectiveQuality || effectiveMaterial) {
       if (out.maxDurability !== undefined && out.maxDurability !== Infinity) {
-        const durMult = (quality ? quality.durMult : 1) * (material ? material.durMult : 1);
+        const durMult = (effectiveQuality ? effectiveQuality.durMult : 1) * (effectiveMaterial ? effectiveMaterial.durMult : 1);
         out.maxDurability = Math.max(1, Math.round(out.maxDurability * durMult));
         out.durability = out.maxDurability;
       }
-      const valueMult = (quality ? quality.valueMult : 1) * (material ? material.valueMult : 1);
+      const valueMult = (effectiveQuality ? effectiveQuality.valueMult : 1) * (effectiveMaterial ? effectiveMaterial.valueMult : 1);
       out.value = Math.max(1, Math.round(out.value * valueMult));
-      if (quality) out.craftedQuality = quality.name || 'Standard';
-      if (material) out.craftedMaterial = material.label;
+      if (effectiveQuality) out.craftedQuality = effectiveQuality.name || 'Standard';
+      if (effectiveMaterial) out.craftedMaterial = effectiveMaterial.label;
     }
     out = addItemToList(player.inventory, out);
   }
@@ -19999,6 +20719,7 @@ const CALLED_SHOT_LABELS = { head: 'the head', legs: 'the legs', arms: 'the weap
 function beginCalledShot(target) {
   if (gameState !== 'playing') return;
   if (player.frozenSolidTurns > 0) { log("You're frozen solid and can't take aim!"); return; }
+  if (player.stunnedTurns > 0) { log("You're stunned and can't take aim!"); return; }
   if (!CALLED_SHOT_LABELS[target]) return;
   player.calledShotTarget = target;
   log(`You steady yourself, aiming for ${CALLED_SHOT_LABELS[target]} on your next strike -- it'll cost you some accuracy.`);
@@ -20446,9 +21167,41 @@ function openChest(chestItem) {
     const superIds = ITEM_BASES.filter(b => b.craftOnly).map(b => b.id);
     if (superIds.length) { const s = makeItem(choice(Math.random, superIds), tier, Math.random, powerMult); addItemToList(player.inventory, s); gotten.push(s.name); }
   }
+  // ---- ARTIFACT RELIQUARY (see ARTIFACT_RELIQUARY_POOL near BOSS_UNIQUE_DROPS): a separate,
+  // modest chance for a chest to hand over a non-boss-bound unique instead of/alongside its
+  // normal contents. Independent of the craftOnly roll just above -- a single reinforced vault
+  // could in principle produce both. player.foundArtifacts tracks what THIS playthrough has
+  // already turned up so the same relic can't roll twice in one run; which relic (if any) shows
+  // up, and behind which specific vault, is different every time.
+  //
+  // Originally tier>=4-secured-only (legendary vaults, legendary relics). Extended so every chest
+  // tier rolls against ITS OWN tier-appropriate pool (ARTIFACT_RELIQUARY_POOLS[1..4]) -- an early
+  // tier-1 chest can now turn up a genuinely early-game-appropriate unique, not just nothing until
+  // the player is already deep enough to find max-tier secured vaults. Chance scales down with
+  // tier since lower-tier chests are far more common (you'd otherwise drown in low-tier uniques).
+  {
+    const relicTier = Math.max(1, Math.min(4, tier));
+    const relicPool = ARTIFACT_RELIQUARY_POOLS[relicTier] || [];
+    const relicChance = chestItem.secured ? [0, 0.06, 0.08, 0.09, 0.10][relicTier] : [0, 0.015, 0.02, 0.025, 0.03][relicTier];
+    if (relicPool.length && Math.random() < relicChance) {
+      // Plain object, not a Set -- see the BUG FIX note on foundArtifacts' declaration comment
+      // near BOSS_UNIQUE_DROPS: saveDataReplacer strips every Set from save data, which would
+      // have silently reset this dedup tracker (and let already-found legendaries roll again) on
+      // every single save/reload.
+      player.foundArtifacts = player.foundArtifacts || {};
+      const remainingArtifacts = relicPool.filter(id => !player.foundArtifacts[id]);
+      if (remainingArtifacts.length) {
+        const relicId = choice(Math.random, remainingArtifacts);
+        player.foundArtifacts[relicId] = true;
+        const relic = makeItem(relicId, tier, Math.random, powerMult);
+        addItemToList(player.inventory, relic);
+        gotten.push(`*** ${relic.name} ***`);
+      }
+    }
+  }
   const gold = randInt(Math.random, 10, 30) * (tier+1) * powerMult;
   player.gold += Math.round(gold);
-  if (Math.random() < 0.15) { const rid = choice(Math.random, RECIPES).id; if (!player.knownRecipes.includes(rid)) { player.knownRecipes.push(rid); gotten.push('Recipe: ' + RECIPES.find(r=>r.id===rid).name); } }
+  if (Math.random() < 0.15) { const candidates = RECIPES.filter(r => !RECIPES_EXCLUDED_FROM_RANDOM_TEACHING.has(r.id)); const rid = choice(Math.random, candidates).id; if (!player.knownRecipes.includes(rid)) { player.knownRecipes.push(rid); gotten.push('Recipe: ' + RECIPES.find(r=>r.id===rid).name); } }
   if (Math.random() < 0.18) { const tome = makeTome(tier, Math.random); addItemToList(player.inventory, tome); gotten.push(tome.name); }
   log(`You break open the chest and find: ${gotten.join(', ')}, and ${gold} gold!`);
   updateSidebar();
@@ -20495,6 +21248,29 @@ function dropLoot(def) {
   // world boss) actually produced this instance.
   if (def.boss && BOSS_UNIQUE_DROPS[def.monsterId] && Math.random() < BOSS_UNIQUE_DROPS[def.monsterId].chance) {
     addItemToList(items, makeItem(BOSS_UNIQUE_DROPS[def.monsterId].itemId, 0, Math.random));
+  }
+  // Grandmaster-crafting reagent (see BOSS_MATERIAL_DROPS / RECIPES near craft_godslayers_edge):
+  // a separate roll from the unique-item chance just above, so a kill can produce a material, the
+  // finished unique, both, or neither.
+  if (def.boss && BOSS_MATERIAL_DROPS[def.monsterId] && Math.random() < BOSS_MATERIAL_DROPS[def.monsterId].chance) {
+    const mat = makeItem(BOSS_MATERIAL_DROPS[def.monsterId].itemId, 0, Math.random);
+    mat.amount = 1;
+    addItemToList(items, mat);
+  }
+  // ---- COMMON_UNIQUE_DROPS: the low-tier counterpart to BOSS_UNIQUE_DROPS above -- ordinary,
+  // non-boss monsters get their own (much rarer per-kill, since you kill hundreds of these)
+  // chance at a genuinely early-game-appropriate unique. This is the "just stumbled on it while
+  // clearing rats" acquisition path: no boss fight, no vault, no milestone -- just luck, the way
+  // an early find should feel. Deliberately separate from BOSS_UNIQUE_DROPS/dropLoot's dungeon
+  // depth gating: these are low valueTier items on purpose, so an early player finding one isn't
+  // a balance problem the way an early legendary would be.
+  if (!def.boss && COMMON_UNIQUE_DROPS[def.monsterId] && Math.random() < COMMON_UNIQUE_DROPS[def.monsterId].chance) {
+    player.foundArtifacts = player.foundArtifacts || {};
+    const commonItemId = COMMON_UNIQUE_DROPS[def.monsterId].itemId;
+    if (!player.foundArtifacts[commonItemId]) {
+      player.foundArtifacts[commonItemId] = true;
+      addItemToList(items, makeItem(commonItemId, 0, Math.random));
+    }
   }
   // Faction set-piece drop: any boss or miniboss belonging to one of the faction-set dimensions
   // (12 as of the second itemization pass -- see SET_DROP_FACTIONS) has a modest chance to drop a
@@ -20617,6 +21393,25 @@ function isPlayerOwnedKiller(killer) {
 }
 function onDeath(def, killer) {
   if (def === player) {
+    // ---- ARTIFACT FRAMEWORK, part 3 of 4 (see doAttack for parts 1-2, movePlayer for part 4):
+    // a phoenix-style relic that unmakes the killing blow itself, once, on its own cooldown --
+    // checked ahead of Second Wind/Recursion Thread below since those are talent/consumable
+    // saves and this is gear the player chose to wear, but the outcome is deliberately the same
+    // shape (land at a fraction of max HP, wound cleared, same "you got saved" sound/log beat) so
+    // it doesn't need its own bespoke death-prevention path. The charge lives on the equipped
+    // item instance itself (reviveSpentAtTurn), not a player-level accumulator, so swapping to a
+    // second copy of the same relic (vanishingly rare, but the framework should still be
+    // correct) doesn't inherit the first one's cooldown.
+    const phoenix = Object.values(player.equipment).find(it => it && it.reviveOnce);
+    if (phoenix && !(phoenix.reviveSpentAtTurn && turnCount - phoenix.reviveSpentAtTurn < (phoenix.reviveCooldown || 500))) {
+      phoenix.reviveSpentAtTurn = turnCount;
+      player.hp = Math.max(1, Math.round((player.maxHp || 30) * (phoenix.reviveHpFrac || 0.5)));
+      stanchBleed(player);
+      Sound.play('secondWind');
+      log(`*** ${phoenix.name} shatters the moment of your death and pulls you back! ***`);
+      updateSidebar();
+      return;
+    }
     if ((player.secondWindCharges || 0) > 0) {
       player.secondWindCharges--;
       player.hp = 1;
@@ -20674,6 +21469,77 @@ function onDeath(def, killer) {
   }
   def.alive = false; def.hp = 0;
   Sound.play(def.kind === 'npc' ? 'npcDeath' : 'monsterDeath');
+  // ---- ARTIFACT FRAMEWORK, part 3 of 4 continued: on-KILL procs, checked across every equipped
+  // slot (not just the weapon -- healOnKill/poisonNovaOnKill/executeNovaChance are just as much a
+  // ring or amulet's territory as a blade's) belonging to whoever actually landed the kill. Only
+  // meaningful for the player or something the player owns (a companion/summon), since only they
+  // carry itemized equipment with these fields at all -- see isPlayerOwnedKiller above.
+  if (killer && isPlayerOwnedKiller(killer) && killer.equipment) {
+    for (const relicItem of Object.values(killer.equipment)) {
+      if (!relicItem) continue;
+      // Growth Artifacts: kill-count and boss-kill-count growth tick here, off whoever actually
+      // landed the kill (matching every other on-kill proc in this loop) -- see
+      // growthCurveValue/tickItemGrowth near applyStatBonuses for the shared curve logic.
+      if (killer === player) {
+        if (relicItem.growthPerKill) tickItemGrowth(relicItem, 'kill');
+        if (def.boss && relicItem.growthPerBossKill) tickItemGrowth(relicItem, 'bossKill');
+      }
+      if (relicItem.healOnKill) {
+        killer.hp = Math.min(killer.maxHp, killer.hp + relicItem.healOnKill);
+        if (killer === player) log(`${relicItem.name} draws vitality from the kill (+${relicItem.healOnKill} HP).`);
+      }
+      if (relicItem.goldOnKill && killer === player) {
+        player.gold += relicItem.goldOnKill;
+        log(`${relicItem.name} turns the kill into ${relicItem.goldOnKill} gold.`);
+      }
+      if (relicItem.onKillMoveTiles && killer === player) {
+        // Consumed by movePlayer's dash dispatch (part 4) alongside dashTiles -- stacks with an
+        // equipped dash-boots charge rather than replacing it, so a kill mid-dash-boots-sprint is
+        // extra momentum, not a wasted proc.
+        player.bonusMoveTiles = (player.bonusMoveTiles || 0) + relicItem.onKillMoveTiles;
+      }
+      if (relicItem.onKillBonusLoot && Math.random() < relicItem.onKillBonusLoot && killer === player) {
+        const eligible = ITEM_BASES.filter(b => !b.setId && !b.isUnique && !b.craftOnly && (b.valueTier || 0) <= 2);
+        if (eligible.length) {
+          const bonusItem = makeItem(choice(Math.random, eligible).id, 1, Math.random, 1);
+          addItemToList(player.inventory, bonusItem);
+          if (posVisibleToPlayer(def.x, def.y)) realLog(`${relicItem.name} turns up an extra find on the corpse: ${bonusItem.name}.`);
+        }
+      }
+      if (relicItem.poisonNovaOnKill) {
+        const cloud = relicItem.poisonNovaOnKill;
+        const caught = hostilesWithinRadius(def.x, def.y, cloud.radius || 2).filter(h => h !== def && h.alive !== false);
+        caught.forEach(h => { h.statusPoison = (h.statusPoison || 0) + cloud.dmg; });
+        if (caught.length && posVisibleToPlayer(def.x, def.y)) realLog(`${relicItem.name} bursts into a cloud of poison over the corpse!`);
+      }
+      if (relicItem.executeNovaChance && Math.random() < relicItem.executeNovaChance) {
+        const burst = hostilesWithinRadius(def.x, def.y, relicItem.executeNovaRadius || 2).filter(h => h !== def && h.alive !== false);
+        const [novaLo, novaHi] = relicItem.executeNovaDmg || [4, 9];
+        burst.forEach(h => {
+          const novaDmg = randInt(Math.random, novaLo, novaHi);
+          h.hp -= novaDmg;
+          if (posVisibleToPlayer(h.x, h.y)) realLog(`${relicItem.name}'s death-burst sears ${h.name} for ${novaDmg}!`);
+          if (h.hp <= 0) onDeath(h, killer);
+        });
+      }
+    }
+    // Starvation weapons (see the on-hit dispatch in doAttack) track "kills since I last got one"
+    // per weapon instance. Whichever equipped item actually has starvationDmgBonus resets to
+    // well-fed; every OTHER starvation weapon the player owns ages up by one kill's worth, so
+    // switching weapons mid-run doesn't quietly reset one that's been sitting in the bag. Run
+    // once per kill (outside the per-equipped-item loop above), not once per equipped slot.
+    if (killer === player) {
+      player.weaponStarvation = player.weaponStarvation || {};
+      const justFedItem = Object.values(player.equipment).find(it => it && it.starvationDmgBonus);
+      const justFedKey = justFedItem ? (justFedItem.uid || justFedItem.id) : null;
+      for (const invItem of player.inventory) {
+        if (!invItem.starvationDmgBonus) continue;
+        const key = invItem.uid || invItem.id;
+        if (key === justFedKey) player.weaponStarvation[key] = 0;
+        else player.weaponStarvation[key] = (player.weaponStarvation[key] || 0) + 1;
+      }
+    }
+  }
   // ---- Life Sim overhaul tie-in: losing a spouse or child to death shouldn't be a silent stat
   // cleanup the player only notices later in the Family menu -- it gets acknowledged here,
   // unconditionally (not gated by posVisibleToPlayer below), since it's always something the
@@ -20707,9 +21573,17 @@ function onDeath(def, killer) {
   // Message Log Overhaul: the player's own death is handled above (always shown, obviously) --
   // this is specifically the "every death in the world" complaint: an NPC or monster dying
   // somewhere the player couldn't see or hear it happen used to get logged unconditionally too.
-  const log = posVisibleToPlayer(def.x, def.y) ? realLog : () => {};
-  log(`${def.name} dies!`);
-  if (def.deathLine) log(`${def.name}: "${def.deathLine}"`);
+  // BUG FIX: this used to be declared as `const log`, silently shadowing the real global log()
+  // for the ENTIRE onDeath function body (a let/const's temporal dead zone covers its whole
+  // enclosing scope from the top, not just the lines after its declaration) -- meaning every
+  // bare log(...) call earlier in this function (Second Wind, the Fourth Corridor's Recursion
+  // Thread, and any artifact on-death/on-kill proc) threw "Cannot access 'log' before
+  // initialization" the instant it actually ran, rather than logging anything. Renamed to
+  // visLog and every call site below updated accordingly; earlier log(...) calls now correctly
+  // resolve to the real global log() function instead of this local, visibility-gated one.
+  const visLog = posVisibleToPlayer(def.x, def.y) ? realLog : () => {};
+  visLog(`${def.name} dies!`);
+  if (def.deathLine) visLog(`${def.name}: "${def.deathLine}"`);
   if (def.monsterId === 'archdemon_malphegor') unlockAbyssalWastes(def);
   if (def.monsterId === 'seraphiel') unlockGildedChoir(def);
   if (def.monsterId === 'fathom_mother') unlockTheUndertow(def);
@@ -20721,9 +21595,29 @@ function onDeath(def, killer) {
   if (def.monsterId === 'aurelith') unlockWyrmreach(def);
   if (def.monsterId === 'the_antagonist') triggerGodReveal(def);
   if (def.monsterId === 'god') triggerSimulationReveal(def);
+  // ---- Capstone reward: unlike every other unique in the game, this is GUARANTEED, not a
+  // chance roll -- 'the_antagonist' and 'god' are the one-time, scripted end of the main story,
+  // not a repeatable optional superboss, so a coin-flip miss right at the climax would feel
+  // terrible in a way it doesn't for an overworld superboss you can go fight again. Tracked via
+  // player.foundArtifacts so beating both fights in one playthrough (if the story allows it)
+  // doesn't hand out two copies.
+  if ((def.monsterId === 'the_antagonist' || def.monsterId === 'god') && isPlayerOwnedKiller(killer)) {
+    player.foundArtifacts = player.foundArtifacts || {};
+    if (!player.foundArtifacts['the_last_page']) {
+      player.foundArtifacts['the_last_page'] = true;
+      const capstone = makeItem('the_last_page', 0, Math.random);
+      addItemToList(player.inventory, capstone);
+      log(`*** As the dust settles, something is left behind: ${capstone.name}. ***`);
+    }
+  }
   if (isPlayerOwnedKiller(killer) || def.harmedByPlayer) {
     gainXP(def.xp || 1);
-    if (def.kind === 'monster') { player.killCounts[def.monsterId] = (player.killCounts[def.monsterId] || 0) + 1; checkBountyQuests(def.monsterId); checkChoirDiscord(def); checkInfernalDominance(def); checkWyrmreachHunter(def); checkGuardianCollection(def); }
+    if (def.kind === 'monster') { player.killCounts[def.monsterId] = (player.killCounts[def.monsterId] || 0) + 1; checkBountyQuests(def.monsterId); checkChoirDiscord(def); checkInfernalDominance(def); checkWyrmreachHunter(def); checkGuardianCollection(def); checkMilestoneRewards(def); }
+    // "Awakening" gear (see awakenItem near applyStatBonuses): defeating a boss while wearing one
+    // permanently upgrades it. Checked here rather than in the doAttack proc dispatch since it
+    // only makes sense to fire once the boss is actually, fully dead -- not on the hit that
+    // merely brought it to 0.
+    if (killer === player && def.boss) { for (const equipped of Object.values(player.equipment)) { if (equipped && equipped.dormant) awakenItem(equipped); } }
     // ---- WORLD MEMORY: killing the Bounty Hunter your own bounty summoned (see
     // maybeSpawnBountyHunter near decayBounties) is self-defense against a pursuer, not a fresh
     // crime -- committing another one here would perversely double-punish the player for the
@@ -20733,7 +21627,7 @@ function onDeath(def, killer) {
       player.bounties = player.bounties || {};
       const before = player.bounties[region] || 0;
       player.bounties[region] = Math.max(0, before - 25);
-      log('One less person hunting you. Word of this will get around too, in its own way.');
+      visLog('One less person hunting you. Word of this will get around too, in its own way.');
     }
     else if (def.kind === 'npc' && !curIsDungeon() && !isInActiveWar(def)) { commitCrime(getRegionKey(def.x, def.y), bountyValueFor(def)); }
     // ---- WORLD MEMORY, part 3: the positive counterpart to the crime branch right above --
@@ -20784,7 +21678,7 @@ function onDeath(def, killer) {
     const n = Math.min(player.plagueSpreadOnKill, spreadTargets.length);
     for (let i = 0; i < n; i++) {
       spreadTargets[i].statusPoison = (spreadTargets[i].statusPoison || 0) + Math.min(4, def.statusPoison);
-      log(`The infection leaps from ${def.name}'s corpse to ${spreadTargets[i].name}!`);
+      visLog(`The infection leaps from ${def.name}'s corpse to ${spreadTargets[i].name}!`);
     }
     if (n > 0) player.hp = Math.min(player.maxHp, player.hp + n); // "walking epidemic" thrives on its own spread
   }
@@ -20801,7 +21695,7 @@ function onDeath(def, killer) {
       addMonsterToWorld(child);
       spawned++;
     }
-    if (spawned > 0) log(`${def.name} splits apart into smaller oozes!`);
+    if (spawned > 0) visLog(`${def.name} splits apart into smaller oozes!`);
   }
   dropLoot(def);
   removeDeadEntity(def);
@@ -20927,9 +21821,9 @@ const AMBIENT_NPC_LINES = [
   '{a} laughs at something {b} said.',
 ];
 function npcAI(n) {
-  if (n.statusPoison || n.wetTurns || n.oiledTurns || n.burningTurns || n.frozenSolidTurns || n.bleedTurns) processEntityStatus(n);
+  if (n.statusPoison || n.wetTurns || n.oiledTurns || n.burningTurns || n.frozenSolidTurns || n.bleedTurns || n.stunnedTurns) processEntityStatus(n);
   if (!n.alive || n.hp <= 0) return;
-  if (n.frozenSolidTurns > 0) return; // frozen solid -- can't act at all this turn (see freezeEntitySolid)
+  if (n.frozenSolidTurns > 0 || n.stunnedTurns > 0) return; // frozen solid or stunned -- can't act at all this turn (see freezeEntitySolid / ARTIFACT FRAMEWORK stunProcChance)
   if (n.immobile) return; // injured/rescuable dungeon NPCs (see makeInjuredCaptive) never move or act
   if (n.following) { companionFollowAI(n); return; }
   regenEntityAIPools(n);
@@ -23564,12 +24458,24 @@ function paySpellCost(ability) {
 
 // ---- extended effect application: confuse status, blinklike (shared by phantom step / time skip /
 // cyber blink implants / mutation warp step), and environment destruction on fire-flagged abilities ----
+// ---- ARTIFACT FRAMEWORK: Growth Artifacts, mana-scaling variant. Unlike every other growth
+// mechanic (which accumulates permanently over kills/turns/levels), this one is fully live and
+// reversible -- it reads current mana every single cast, so it rewards actually managing your
+// mana pool rather than rewarding time played. A caster who burns their reserves down loses the
+// bonus immediately, then gets it back the moment they rest and refill. Deliberately the "some
+// should scale differently" case: not growth at all in the permanent sense, just a real-time
+// resource-tension mechanic that happens to live in the same family of ideas.
+function manaScalingSpellBonus() {
+  const relic = Object.values(player.equipment).find(it => it && it.manaScaling);
+  if (!relic || !player.maxMp) return 0;
+  return relic.manaScaling.maxAmount * (player.mp / player.maxMp);
+}
 function applyEffectToTarget(spell, t) {
   // Category-specific mutation damage bonuses (Predatory/Symbiotic/etc talent lines) live in this
   // lookup rather than as hardcoded per-category branches, so a future category (Plague, Void/
   // Cosmic, ...) just needs an entry here plus a talent that sets the field -- no formula changes.
   const catBonusField = (abilityPoolOf(spell.id) === 'mutation' && spell.category) ? MUTATION_CATEGORY_DMG_FIELD[spell.category] : null;
-  const dmgMult = (1 + (player.spellDmgBonus || 0) + (abilityPoolOf(spell.id) === 'technique' ? (player.techniqueDmgBonus || 0) : 0) + (abilityPoolOf(spell.id) === 'mutation' ? (player.mutationDmgBonus ? player.mutationDmgBonus/20 : 0) + (player.eldritchDmgBonus || 0) + (catBonusField ? (player[catBonusField] || 0) : 0) : 0)) * abilityPenaltyFactor(abilityRequirementDeficit(spell)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell, t);
+  const dmgMult = (1 + (player.spellDmgBonus || 0) + manaScalingSpellBonus() + (abilityPoolOf(spell.id) === 'technique' ? (player.techniqueDmgBonus || 0) : 0) + (abilityPoolOf(spell.id) === 'mutation' ? (player.mutationDmgBonus ? player.mutationDmgBonus/20 : 0) + (player.eldritchDmgBonus || 0) + (catBonusField ? (player[catBonusField] || 0) : 0) : 0)) * abilityPenaltyFactor(abilityRequirementDeficit(spell)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell, t);
   // martial techniques push the wielded weapon far past normal use -- unlike plain attacks,
   // these do chip away at durability (see doAttack() for the equivalent crit-only weapon wear).
   if (abilityPoolOf(spell.id) === 'technique' && ['damage','execute','smite','drain'].includes(spell.type) && player.equipment.hand) {
@@ -23709,6 +24615,7 @@ function castSpell(spellId) {
   const spell = findAbilityById(spellId);
   if (!spell || !isAbilityKnown(spellId)) { log("You don't know that ability."); return; }
   if (player.frozenSolidTurns > 0) { log("You're frozen solid and can't cast anything!"); endTurn(); return; }
+  if (player.stunnedTurns > 0) { log("You're stunned and can't cast anything!"); endTurn(); return; }
   // BUG FIX (v0.40.21): Fear already blocks melee (doMove's attack branch) and fireRangedWeapon
   // with the exact same "too terrified to fight" message -- the game's own established rule is
   // "feared means you can't fight back," not "feared means no melee specifically." Attack spells
@@ -23743,7 +24650,7 @@ function castSpell(spellId) {
     const t = nearestHostile(spell.range);
     if (!t) { log('No target in range.'); return; }
     player.hp -= selfCost;
-    const dmg = Math.round(randInt(Math.random, spell.power[0], spell.power[1]) * (1 + (player.spellDmgBonus||0)) * playerLevelPowerMult(player.level));
+    const dmg = Math.round(randInt(Math.random, spell.power[0], spell.power[1]) * (1 + (player.spellDmgBonus||0) + manaScalingSpellBonus()) * playerLevelPowerMult(player.level));
     t.hp -= dmg;
     log(`You tap your own life force! ${t.name} takes ${dmg} dark damage (-${selfCost} HP).`);
     if (t.hp <= 0) onDeath(t, player);
@@ -23908,7 +24815,7 @@ function castSpell(spellId) {
     if (!hit.length) { log('No foes near the corpse to harm.'); return; }
     if (!paySpellCost(spell)) { log('Not enough mana.'); return; }
     removeItemAt(corpse.x, corpse.y, corpse.item.uid);
-    const dmgMult = (1 + (player.spellDmgBonus || 0)) * playerLevelPowerMult(player.level);
+    const dmgMult = (1 + (player.spellDmgBonus || 0) + manaScalingSpellBonus()) * playerLevelPowerMult(player.level);
     hit.forEach(t => {
       const dmg = Math.round(randInt(Math.random, spell.power[0], spell.power[1]) * dmgMult);
       t.hp -= dmg;
@@ -24057,7 +24964,7 @@ function resolveSpellAtTile(spell, wx, wy) {
     log(hitCount ? `${spell.name} erupts, catching ${hitCount} in the blast!` : `${spell.name} erupts against empty ground.`);
     if (spell.knockback) hitEntities.forEach(e => knockbackEntity(e, wx, wy, spell.knockback));
     if (spell.gravityPull) hitEntities.forEach(e => gravityPullEntity(e, wx, wy, spell.gravityPull));
-    if (spell.chainLightning && hitEntities.length) chainLightningFrom(spell, hitEntities[0].x, hitEntities[0].y, new Set(hitEntities), 3, (1 + (player.spellDmgBonus||0)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell, hitEntities[0]) * 0.65);
+    if (spell.chainLightning && hitEntities.length) chainLightningFrom(spell, hitEntities[0].x, hitEntities[0].y, new Set(hitEntities), 3, (1 + (player.spellDmgBonus||0) + manaScalingSpellBonus()) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell, hitEntities[0]) * 0.65);
     return;
   }
   if (spell.pierceLine) {
@@ -24079,7 +24986,7 @@ function resolveSpellAtTile(spell, wx, wy) {
     if (e.alive !== false && e.hp > 0) {
       if (spell.knockback) knockbackEntity(e, player.x, player.y, spell.knockback);
       if (spell.gravityPull) gravityPullEntity(e, player.x, player.y, spell.gravityPull);
-      if (spell.chainLightning) chainLightningFrom(spell, e.x, e.y, new Set([e]), 3, (1 + (player.spellDmgBonus||0)) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell, e) * 0.65);
+      if (spell.chainLightning) chainLightningFrom(spell, e.x, e.y, new Set([e]), 3, (1 + (player.spellDmgBonus||0) + manaScalingSpellBonus()) * playerLevelPowerMult(player.level) * weatherElementMultiplier(spell, e) * 0.65);
     }
   }
   else log(`${spell.name} strikes empty ground.`);
@@ -24192,6 +25099,31 @@ function getArmorOf(e) {
     return a;
   }
   return (e.armor || 0) + (e.buffArmorBonus || 0) + (e.talentArmor || 0);
+}
+// ---- ARTIFACT FRAMEWORK: charge-up payoff, factored out of doAttack's chargeStacks dispatch so
+// both the on-hit path (part 2) and the damage-taken path (chargeSource:'damageTaken', checked
+// near teleportOnBigHit below) can trigger the same burst. chargeEffectType picks what the burst
+// actually does on top of the shared "hit everything in chargeRadius" targeting: 'dmg' (default)
+// deals damage, 'heal' heals the wielder per enemy caught instead of hurting them, 'confuse'
+// applies statusConfuse instead of damage. escalationMult (only ever >1 in chargeMode:'escalating'
+// weapons) scales the payoff for every extra full charge held past the first.
+function fireChargeBurst(weapon, att, def, escalationMult) {
+  const mult = escalationMult || 1;
+  const burstTargets = hostilesWithinRadius(def.x, def.y, weapon.chargeRadius || 2);
+  const effectType = weapon.chargeEffectType || 'dmg';
+  log(`*** ${weapon.name} reaches full charge and erupts! ***`);
+  if (settings.showDamageNumbers) spawnFloatingText(def.x, def.y, 'CHARGE!', '#ffdd55');
+  if (effectType === 'heal') {
+    const healAmt = Math.max(1, Math.round((weapon.chargeDmgMult || 1.5) * 4 * mult));
+    burstTargets.forEach(h => { att.hp = Math.min(att.maxHp, att.hp + healAmt); });
+    if (burstTargets.length && att === player) log(`You draw ${healAmt * burstTargets.length} HP from the burst.`);
+  } else if (effectType === 'confuse') {
+    burstTargets.forEach(h => { h.statusConfuse = (h.statusConfuse || 0) + Math.round(3 * mult); if (posVisibleToPlayer(h.x, h.y)) realLog(`${h.name} reels, caught in the burst!`); });
+  } else {
+    const dmgRangeLocal = (att.equipment && att.equipment.hand && att.equipment.hand.dmg) || [4, 8];
+    const burstDmg = Math.max(1, Math.round((dmgRangeLocal[0] + dmgRangeLocal[1]) / 2 * (weapon.chargeDmgMult || 1.5) * mult));
+    burstTargets.forEach(h => { h.hp -= burstDmg; if (posVisibleToPlayer(h.x, h.y)) realLog(`${h.name} is caught in the burst for ${burstDmg}!`); if (h.hp <= 0) onDeath(h, att); });
+  }
 }
 function doAttack(att, def, skipDuplicate) {
   const isPlayer = att === player;
@@ -24314,6 +25246,13 @@ function doAttack(att, def, skipDuplicate) {
   // Rites (a multi-turn, interruptible ritual), not combat or resources. See performLastRites().
   if (def === player && curIsDimension() && player.dimensionId === 'the_boneyard') {
     dmg = Math.round(dmg * (1 - vigilsPeaceReduction()));
+  }
+  // ARTIFACT FRAMEWORK backlog batch 2: a generalized, gear-driven version of the two
+  // dimension-specific faction resists just above -- any equipped item can grant "take less
+  // damage from faction X" instead of it only existing as a hardcoded dimension mechanic.
+  if (def === player) {
+    const resistRelic = Object.values(player.equipment).find(it => it && it.factionResistBonus && it.factionResistBonus.faction === att.faction);
+    if (resistRelic) dmg = Math.round(dmg * (1 - resistRelic.factionResistBonus.pct));
   }
   // Wyrmreach's unique mechanic payoff: Restraint, earned by burying gold instead of carrying it.
   // See useBuriedHoard()/tickWyrmreachGreed().
@@ -24484,6 +25423,172 @@ function doAttack(att, def, skipDuplicate) {
     att.hp -= reflect; log(`Thorns lash back at ${att.name} for ${reflect}.`);
     if (att.hp <= 0) onDeath(att, player);
   }
+  // ============================================================================
+  // ---- ARTIFACT FRAMEWORK, part 2 of 4: hit-triggered unique weapon procs. Kept in one block
+  // (rather than scattered inline special-cases like Stack Overflow's own duplicate-swing check
+  // further down) so a future mechanic is "add a field to an item + one branch here," not a hunt
+  // through doAttack for where the last one went. Every field here is read directly off the
+  // player's equipped weapon -- see the ARTIFACT CATALOG section near BOSS_UNIQUE_DROPS for the
+  // items that set them, and part 3 (onDeath) for the on-KILL counterparts (healOnKill,
+  // poisonNovaOnKill, executeNovaChance) and revive-on-death, and part 4 (movePlayer) for
+  // dashTiles. Gated on def.hp > 0 -- a corpse doesn't get knocked around, frozen, or arced
+  // through -- and isPlayer, since monsters never carry player-only equipment fields.
+  // ============================================================================
+  if (isPlayer && weapon && def.hp > 0) {
+    // Captured before the freeze proc below can change it -- shatterBonus is meant to reward a
+    // follow-up hit against a target that was ALREADY frozen, not the same swing that freezes it
+    // (the item's own flavor text says "its own follow-up swing"). Checking frozenSolidTurns
+    // after the freeze proc ran would let a single lucky hit both freeze AND shatter at once.
+    const wasAlreadyFrozen = def.frozenSolidTurns > 0;
+    if (weapon.knockbackTiles) knockbackEntity(def, att.x, att.y, weapon.knockbackTiles);
+    if (weapon.pullTiles) knockbackEntity(def, def.x + (def.x - att.x), def.y + (def.y - att.y), weapon.pullTiles); // reuses displaceEntity's push logic, aimed at a point BEHIND the attacker so the target gets dragged toward att instead of away from it
+    if (weapon.freezeProcChance && Math.random() < weapon.freezeProcChance && freezeEntitySolid(def, weapon.freezeProcTurns || 3)) {
+      log(`${weapon.name} locks ${defName} in ice!`);
+    }
+    if (weapon.stunProcChance && Math.random() < weapon.stunProcChance && !(def.frozenSolidTurns > 0)) {
+      def.stunnedTurns = Math.max(def.stunnedTurns || 0, weapon.stunProcTurns || 2);
+      log(`${weapon.name} rings ${defName} senseless!`);
+    }
+    if (weapon.shatterBonus && wasAlreadyFrozen) {
+      const shatterDmg = Math.max(1, Math.round(dmg * weapon.shatterBonus));
+      def.hp -= shatterDmg;
+      if (posVisibleToPlayer(def.x, def.y)) realLog(`${weapon.name} shatters the ice for ${shatterDmg} extra damage!`);
+    }
+    if (weapon.igniteProcChance && Math.random() < weapon.igniteProcChance) { igniteEntity(def, weapon.igniteProcTurns || 3); log(`${weapon.name} sets ${defName} alight!`); }
+    if (weapon.onHitBleed && Math.random() < weapon.onHitBleed.chance) {
+      def.bleedTurns = Math.max(def.bleedTurns || 0, weapon.onHitBleed.turns || 4);
+      def.bleedDmg = Math.max(def.bleedDmg || 0, weapon.onHitBleed.dmg || 2);
+      if (posVisibleToPlayer(def.x, def.y)) realLog(`${weapon.name} opens a deep gash on ${defName}!`);
+    }
+    // Faction-specific bonus damage: applied as extra damage layered on top of the already-landed
+    // hit (same shape as the chain/charge procs above) rather than folded into the core damage
+    // formula, so it's a one-line addition here instead of a change to how every hit is computed.
+    if (weapon.factionDmgBonus && def.faction === weapon.factionDmgBonus.faction) {
+      const bonusDmg = Math.max(1, Math.round(dmg * weapon.factionDmgBonus.pct));
+      def.hp -= bonusDmg;
+      if (posVisibleToPlayer(def.x, def.y)) realLog(`${weapon.name} bites especially deep into ${defName}!`);
+    }
+    // "Line pierce" -- a second, weaker hit against whatever's directly behind the primary target
+    // along the same swing direction. Deliberately a straight line (dx/dy sign of the swing) not
+    // a radius, so it reads as a thrust punching through rather than an AOE.
+    if (weapon.pierceTargets) {
+      const pdx = Math.sign(def.x - att.x), pdy = Math.sign(def.y - att.y);
+      const behind = entityAt(def.x + pdx, def.y + pdy);
+      if (behind && behind.alive !== false && (behind.kind === 'monster' || (behind.kind === 'npc' && behind.hostile))) {
+        const pierceDmg = Math.max(1, Math.round(dmg * (weapon.pierceTargets.dmgPct || 0.6)));
+        behind.hp -= pierceDmg;
+        if (posVisibleToPlayer(behind.x, behind.y)) realLog(`${weapon.name} punches through into ${behind.name} for ${pierceDmg}!`);
+        if (behind.hp <= 0) onDeath(behind, att);
+      }
+    }
+    // All-or-nothing gear: rather than reworking the core hit-chance/crit roll, this corrects the
+    // damage that's ALREADY landed -- half the time doubling it (refunding the extra half back
+    // onto the target), half the time fully refunding it to the target (net zero damage this
+    // swing). Functionally identical to gating the original roll, with none of the risk of
+    // touching the shared crit/hit-chance formula every other weapon in the game also uses. Not
+    // weapon-only -- checked across every equipped slot, since "the hit that just landed" is as
+    // much a ring's business as a blade's.
+    const aonRelic = weapon.allOrNothingChance ? weapon : Object.values(player.equipment).find(it => it && it.allOrNothingChance);
+    if (aonRelic && Math.random() < aonRelic.allOrNothingChance) {
+      if (Math.random() < 0.5) { def.hp -= dmg; if (posVisibleToPlayer(def.x, def.y)) realLog(`${aonRelic.name} comes down TWICE as hard!`); }
+      else { def.hp = Math.min(def.maxHp, def.hp + dmg); if (posVisibleToPlayer(def.x, def.y)) realLog(`${aonRelic.name} glances off -- no damage this time.`); }
+    }
+    // Starvation scaling: damage grows the longer it's been since this weapon's last kill,
+    // tracked per-weapon-instance (same uid-keyed pattern as chargeStacks) and reset to zero the
+    // instant it kills something -- checked in the on-kill dispatch in onDeath below.
+    if (weapon.starvationDmgBonus) {
+      player.weaponStarvation = player.weaponStarvation || {};
+      const starveKey = weapon.uid || weapon.id;
+      const turnsSinceKill = player.weaponStarvation[starveKey] || 0;
+      if (turnsSinceKill > 0) {
+        const starveDmg = Math.max(1, Math.round(dmg * Math.min(1.5, turnsSinceKill * weapon.starvationDmgBonus)));
+        def.hp -= starveDmg;
+        if (posVisibleToPlayer(def.x, def.y)) realLog(`${weapon.name}, starved for a fight, tears in for ${starveDmg} extra!`);
+      }
+    }
+    // Recoil weapons: a real, unavoidable self-cost per landed hit -- not a proc chance, always
+    // applies, which is what makes it a genuine trade-off rather than a free bonus with a catch.
+    if (weapon.recoilDmgPerHit) {
+      att.hp -= weapon.recoilDmgPerHit;
+      if (att === player) log(`${weapon.name} bites back at you for ${weapon.recoilDmgPerHit}.`);
+      if (att.hp <= 0) onDeath(att, null);
+    }
+    if (weapon.critLifestealPct && crit) att.hp = Math.min(att.maxHp, att.hp + Math.round(dmg * weapon.critLifestealPct));
+    if (weapon.chainProcChance && Math.random() < weapon.chainProcChance) {
+      const chainTargets = hostilesWithinRadius(def.x, def.y, 2).filter(h => h !== def && h.alive !== false).slice(0, weapon.chainProcTargets || 2);
+      if (chainTargets.length) {
+        const chainDmg = Math.max(1, Math.round(dmg * (weapon.chainProcDmgPct || 0.5)));
+        chainTargets.forEach(h => { h.hp -= chainDmg; if (posVisibleToPlayer(h.x, h.y)) realLog(`${weapon.name} arcs to ${h.name} for ${chainDmg}!`); if (h.hp <= 0) onDeath(h, att); });
+      }
+    }
+    // Charge-up artifacts: a weapon's own hits fill a per-weapon-instance meter (keyed by uid so
+    // two copies of the same charge weapon, however unlikely, track separately) until it reaches
+    // chargeStacks, at which point it erupts around the current target and resets -- UNLESS
+    // chargeMode is 'escalating', in which case it keeps building past the threshold instead of
+    // resetting, with every full multiple of chargeStacks past the first triggering a bigger
+    // burst (real risk/reward: hold the charge longer, get a bigger payoff, but you're still
+    // taking hits the whole time you're not cashing it in). chargeSource:'damageTaken' reads off
+    // a separate counter fed from the defender-side block near teleportOnBigHit below instead of
+    // off landed hits, for gear that wants to reward getting hit rather than hitting.
+    if (weapon.chargeStacks && weapon.chargeSource !== 'damageTaken') {
+      player.weaponCharges = player.weaponCharges || {};
+      const chargeKey = weapon.uid || weapon.id;
+      player.weaponCharges[chargeKey] = (player.weaponCharges[chargeKey] || 0) + 1;
+      const stacks = player.weaponCharges[chargeKey];
+      const escalating = weapon.chargeMode === 'escalating';
+      if (stacks >= weapon.chargeStacks && (escalating ? stacks % weapon.chargeStacks === 0 : true)) {
+        if (!escalating) player.weaponCharges[chargeKey] = 0;
+        const escalationMult = escalating ? Math.floor(stacks / weapon.chargeStacks) : 1;
+        fireChargeBurst(weapon, att, def, escalationMult);
+      }
+    }
+  }
+  // Unstable artifacts: teleport the WEARER away once a single blow crosses a fraction of their
+  // max HP, on its own cooldown (tracked per-item so two different unstable relics don't share a
+  // clock) so it can't machine-gun-teleport every hit of a sustained beatdown. Checked off
+  // whichever equipped item (any slot, not just weapon -- this is armor/accessory territory)
+  // carries teleportOnBigHit, same "any slot, one field" pattern as the on-kill procs below.
+  if (def === player && dmg > 0) {
+    const relic = Object.values(player.equipment).find(it => it && it.teleportOnBigHit);
+    if (relic) {
+      player.artifactCooldowns = player.artifactCooldowns || {};
+      const readyAt = player.artifactCooldowns[relic.id] || 0;
+      if (dmg >= (player.maxHp || 30) * relic.teleportOnBigHit.thresholdFrac && turnCount >= readyAt) {
+        player.artifactCooldowns[relic.id] = turnCount + (relic.teleportOnBigHit.cooldown || 15);
+        log(`*** ${relic.name} flares -- reality lets go of you for a moment! ***`);
+        blinkPlayer(relic.teleportOnBigHit.range || 5);
+      }
+    }
+    // Emergency per-encounter blink: distinct from teleportOnBigHit above -- this triggers on
+    // crossing a low-HP fraction (not a single big hit) and its "cooldown" is combat itself
+    // ending, not a turn timer, tracked via autoBlinkUsedThisEncounter and cleared wherever
+    // combat state resets to idle (see runCombatState).
+    const emergencyRelic = Object.values(player.equipment).find(it => it && it.autoBlinkBelowHpFrac);
+    if (emergencyRelic && !player.autoBlinkUsedThisEncounter && player.hp <= player.maxHp * emergencyRelic.autoBlinkBelowHpFrac) {
+      player.autoBlinkUsedThisEncounter = true;
+      log(`*** ${emergencyRelic.name} yanks you to safety! ***`);
+      blinkPlayer(emergencyRelic.autoBlinkRange || 6);
+    }
+    // chargeSource:'damageTaken' weapons: fed here instead of on-hit, off whatever the player is
+    // currently wielding (a charge weapon that charges off punishment rather than off swinging).
+    const dtWeapon = player.equipment.hand;
+    if (dtWeapon && dtWeapon.chargeStacks && dtWeapon.chargeSource === 'damageTaken') {
+      player.weaponCharges = player.weaponCharges || {};
+      const dtKey = dtWeapon.uid || dtWeapon.id;
+      player.weaponCharges[dtKey] = (player.weaponCharges[dtKey] || 0) + 1;
+      if (player.weaponCharges[dtKey] >= dtWeapon.chargeStacks) {
+        player.weaponCharges[dtKey] = 0;
+        fireChargeBurst(dtWeapon, player, player, 1);
+      }
+    }
+    // Poison-reflex gear: getting hit while you're already poisoned has a chance to pass a bit of
+    // it straight to whoever just hit you.
+    const reflexRelic = Object.values(player.equipment).find(it => it && it.poisonReflectChance);
+    if (reflexRelic && (player.statusPoison || 0) > 0 && !isPlayer && att && att.hp !== undefined && Math.random() < reflexRelic.poisonReflectChance) {
+      att.statusPoison = (att.statusPoison || 0) + Math.min(4, player.statusPoison);
+      log(`${reflexRelic.name} passes some of the poison right back to ${att.name}!`);
+    }
+  }
   // Monster-inflicted status effects, generalized off whoever's actually defending (def) instead of
   // hardcoded to the player -- so a hostile NPC or ally caught in a monster's fire/poison/fear also
   // gets hit AND gets the benefit of their own species' resistances (Skarath cold-blood fear
@@ -24500,7 +25605,7 @@ function doAttack(att, def, skipDuplicate) {
   }
   if (!isPlayer && att.poison && (!defIsPlayer || getBuff('resistpoison') <= 0) && (def.poisonDmgReduction || 0) < 1 && Math.random() < 0.4) { def.statusPoison = (def.statusPoison || 0) + (def.poisonDmgReduction ? Math.round(att.poison * (1-def.poisonDmgReduction)) : att.poison); log(`${defYouAre} poisoned!`); }
   if (!isPlayer && att.causesFear && Math.random() < 0.35 * (1 - (def.fearResistBonus || 0))) { def.statusFear = (def.statusFear || 0) + 3; log(defIsPlayer ? 'Terror grips you!' : `Terror grips ${def.name}!`); }
-  if (!isPlayer && att.causesConfuse && Math.random() < 0.35) { def.statusConfuse = (def.statusConfuse || 0) + 3; log(defIsPlayer ? 'Your mind reels in confusion!' : `${def.name}'s mind reels in confusion!`); }
+  if (!isPlayer && att.causesConfuse && Math.random() < 0.35 * (1 - (def.confuseResistBonus || 0))) { def.statusConfuse = (def.statusConfuse || 0) + 3; log(defIsPlayer ? 'Your mind reels in confusion!' : `${def.name}'s mind reels in confusion!`); }
   if (isPlayer && def !== player && (player.eldritchConfuseChance || 0) > 0 && Math.random() < player.eldritchConfuseChance) { def.statusConfuse = (def.statusConfuse || 0) + 3; log(`${def.name} reels in confusion at your unnatural touch!`); }
   if (isPlayer && def !== player && (player.eldritchFearChance || 0) > 0 && Math.random() < player.eldritchFearChance) { def.statusFear = (def.statusFear || 0) + 3; log(`${def.name} recoils in primal terror!`); }
   // ---- Living World AI framework: a grudge. Whoever actually gets struck fights back against
@@ -24596,6 +25701,24 @@ function processEntityStatus(e) {
   if (e.frozenSolidTurns > 0) {
     e.frozenSolidTurns--;
     if (e.frozenSolidTurns <= 0 && posVisibleToPlayer(e.x, e.y)) log(`${e === player ? 'You thaw' : e.name + ' thaws'} out.`);
+  }
+  // ---- ARTIFACT FRAMEWORK backlog batch 2: a genuine stun distinct from frozenSolidTurns (no
+  // shatter-bonus interaction, no ice visuals/thaw flavor) for weapons that want a hard-CC proc
+  // without being another ice reskin. Ticks down the same way; every skip-turn gate that checks
+  // frozenSolidTurns below also checks this.
+  if (e.stunnedTurns > 0) {
+    e.stunnedTurns--;
+    if (e.stunnedTurns <= 0 && posVisibleToPlayer(e.x, e.y)) log(`${e === player ? 'You shake off the stun' : e.name + ' shakes off the stun'} and can act again.`);
+  }
+  // ARTIFACT FRAMEWORK backlog batch 2: risk/reward gear that periodically debuffs its OWN
+  // wearer (e.g. a big stat package with a real drawback) -- only meaningful for the player,
+  // since only the player carries itemized equipment with this field.
+  if (e === player) {
+    const cursedRelic = Object.values(player.equipment).find(it => it && it.selfDebuffChance);
+    if (cursedRelic && Math.random() < cursedRelic.selfDebuffChance) {
+      player.statusFear = Math.max(player.statusFear || 0, 2);
+      if (posVisibleToPlayer(player.x, player.y)) log(`${cursedRelic.name} wails, and a chill of dread runs through you.`);
+    }
   }
   if (e.burningTurns > 0) {
     const dmg = Math.max(1, e.fireDmgReduction ? Math.round(3 * (1 - e.fireDmgReduction)) : 3);
@@ -25471,9 +26594,9 @@ function runCombatState(m, vision) {
 function monsterAI(m) {
   // Message Log Overhaul: see runCombatState's comment -- monster-only function, gate on m's position.
   const log = posVisibleToPlayer(m.x, m.y) ? realLog : () => {};
-  if (m.statusPoison || m.regen || m.statusSlow || m.wetTurns || m.oiledTurns || m.burningTurns || m.frozenSolidTurns || m.bleedTurns) processEntityStatus(m);
+  if (m.statusPoison || m.regen || m.statusSlow || m.wetTurns || m.oiledTurns || m.burningTurns || m.frozenSolidTurns || m.bleedTurns || m.stunnedTurns) processEntityStatus(m);
   if (!m.alive || m.hp <= 0) return;
-  if (m.frozenSolidTurns > 0) return; // frozen solid -- can't act at all this turn (see freezeEntitySolid)
+  if (m.frozenSolidTurns > 0 || m.stunnedTurns > 0) return; // frozen solid or stunned -- can't act at all this turn (see freezeEntitySolid / ARTIFACT FRAMEWORK stunProcChance)
   regenEntityAIPools(m);
   if (m.statusSlow > 0 && Math.random() < 0.5) return;
   if (m.statusConfuse > 0) { m.statusConfuse--; wander(m); return; }
@@ -28425,6 +29548,39 @@ function offerDimensionErrand(npc, dimId) {
 const ALL_TRAIL_GUARDIAN_IDS = ['cinder_marshal', 'sovereign_who_dreams_twice', 'discordant_note', 'wake_keeper',
   'the_unrepeated', 'last_cantor', 'regulator_prime', 'seed_mother', 'root_process_zero', 'admin_zero',
   'unmarked_warden', 'hoardkeeper'];
+// ---- ARTIFACT FRAMEWORK / backlog Section 8: a generic, data-driven counterpart to the bespoke
+// milestone rewards above (grantAllGuardiansReward etc.) -- "kill N of faction X" rather than a
+// hand-wired story beat, so a new milestone item is a table row, not a new function. Tracked
+// separately per faction in player.factionKillCounts (fed here, off the same faction tag every
+// factionDmgBonus/factionResistBonus item already reads) and granted exactly once per playthrough
+// via player.milestoneRewardsGranted, mirroring player.foundArtifacts' dedup pattern for the
+// Reliquary vault.
+const MILESTONE_REWARDS = [
+  { id: 'exterminator', faction: 'beast', count: 150, itemId: 'exterminators_brand' },
+  { id: 'undead_hunter', faction: 'undead', count: 120, itemId: 'graveward_seal' },
+  { id: 'demon_hunter', faction: 'demonic', count: 80, itemId: 'wardens_last_word' },
+  { id: 'construct_hunter', faction: 'construct', count: 80, itemId: 'the_decommissioner' },
+  { id: 'dragon_hunter', faction: 'dragon', count: 10, itemId: 'wyrmscale_pauldron' },
+  { id: 'eldritch_hunter', faction: 'eldritch', count: 60, itemId: 'unseeing_veil' },
+];
+function checkMilestoneRewards(def) {
+  if (!def.faction) return;
+  player.factionKillCounts = player.factionKillCounts || {};
+  player.factionKillCounts[def.faction] = (player.factionKillCounts[def.faction] || 0) + 1;
+  // Plain object, not a Set -- saveDataReplacer strips every Set from save data (see the matching
+  // fix on player.foundArtifacts above), which would have let a milestone reward be re-granted
+  // after every single save/reload instead of once per playthrough.
+  player.milestoneRewardsGranted = player.milestoneRewardsGranted || {};
+  for (const m of MILESTONE_REWARDS) {
+    if (m.faction !== def.faction || player.milestoneRewardsGranted[m.id]) continue;
+    if (player.factionKillCounts[def.faction] >= m.count) {
+      player.milestoneRewardsGranted[m.id] = true;
+      const reward = makeItem(m.itemId, 0, Math.random);
+      addItemToList(player.inventory, reward);
+      log(`*** You've hunted ${m.count} of ${def.faction}'s kind. Word of it has earned you ${reward.name}. ***`);
+    }
+  }
+}
 function checkGuardianCollection(def) {
   if (!ALL_TRAIL_GUARDIAN_IDS.includes(def.monsterId)) return;
   ensureStory();
@@ -30533,6 +31689,10 @@ function movePlayer(dx, dy, forceAttack) {
     log("You're frozen solid and can't move!");
     endTurn(); return;
   }
+  if (player.stunnedTurns > 0) {
+    log("You're stunned and can't move!");
+    endTurn(); return;
+  }
   const intendedTarget = entityAt(player.x + dx, player.y + dy);
   const intendedTile = curTileAt(player.x + dx, player.y + dy);
   const isAttackAttempt = (intendedTarget && intendedTarget !== player && (intendedTarget.kind === 'monster' || (intendedTarget.kind === 'npc' && intendedTarget.hostile)))
@@ -30787,6 +31947,39 @@ function movePlayer(dx, dy, forceAttack) {
   // advancing (and costing further turns -- monsters keep acting) in the same direction until
   // something solid stops you or you drift back out into a biome with actual footing.
   const enteringDrift = curIsDimension() && player.dimensionId === 'the_drift' && t && t.biome === 'the_null';
+  // ---- ARTIFACT FRAMEWORK, part 4 of 4 (see doAttack for parts 1-3): dash boots. Deliberately
+  // simple -- open floor only, stops at the first obstacle/entity/hidden trap -- rather than
+  // replaying every water/lever/shrine/hazard branch above for each extra tile; a bonus burst of
+  // speed is extra distance in the same beat as a normal step, not a second full interaction
+  // pass. Skipped entirely while already drifting (the_drift's zero-G already owns movement for
+  // this step) to avoid two different "extra movement" systems fighting over the same turn.
+  if (!enteringDrift && player.alive && player.hp > 0) {
+    // Not strictly feet-only -- any slot can carry dashTiles (a body-slot "unstable momentum"
+    // relic is just as valid a mobility item as boots), so this scans everything equipped rather
+    // than assuming the feet slot.
+    const dashBoots = Object.values(player.equipment).find(it => it && it.dashTiles);
+    // onKillMoveTiles (see onDeath) banks a transient burst of free movement that isn't tied to
+    // any equipped boots -- consumed here alongside dashTiles rather than given its own separate
+    // movement pass, so a kill-triggered burst and a dash-boots burst compose instead of fighting
+    // over who gets to move the player first.
+    const totalDashTiles = (dashBoots && dashBoots.dashTiles ? dashBoots.dashTiles : 0) + (player.bonusMoveTiles || 0);
+    const ignoresHazards = !!(dashBoots && dashBoots.dashIgnoresHazards);
+    if (totalDashTiles > 0) {
+      player.bonusMoveTiles = 0;
+      let dashed = 0;
+      for (let i = 0; i < totalDashTiles; i++) {
+        const dnx = player.x + dx, dny = player.y + dy;
+        const dt2 = curTileAt(dnx, dny);
+        const hiddenTrapBlocks = curIsDungeon() && dt2 && dt2.hiddenTrap && !dt2.trapTriggered && !ignoresHazards;
+        if (!dt2 || !dt2.walkable || entityAt(dnx, dny) || hiddenTrapBlocks) break;
+        player.x = dnx; player.y = dny; dashed++;
+      }
+      if (dashed > 0) {
+        const label = dashBoots ? dashBoots.name : 'A burst of momentum';
+        log(`${label} carries you ${dashed} extra tile${dashed > 1 ? 's' : ''} in a burst of speed!`);
+      }
+    }
+  }
   endTurn();
   if (enteringDrift && player.alive && player.hp > 0) continueDriftSlide(dx, dy);
 }
@@ -30870,6 +32063,14 @@ function reconcileEntityChunk(e, arrayKey) {
 }
 function endTurn() {
   turnCount++;
+  // ARTIFACT FRAMEWORK: autoBlinkBelowHpFrac gear's charge is "per encounter," not a turn-cooldown
+  // -- reset once nothing hostile is close enough to be a threat, rather than tracking a formal
+  // combat-state transition this codebase doesn't otherwise have.
+  if (player.autoBlinkUsedThisEncounter && hostilesWithinRadius(player.x, player.y, 8).length === 0) player.autoBlinkUsedThisEncounter = false;
+  // Growth Artifacts: turns-equipped growth ticks once per turn for whatever's currently worn --
+  // deliberately NOT ticked for items sitting in the inventory, so "growth" here specifically
+  // means time spent worn, not time spent owned.
+  for (const equipped of Object.values(player.equipment)) { if (equipped && equipped.growthPerTurnsEquipped) tickItemGrowth(equipped, 'turn'); }
   markPlayerAreaDirty();
   trackVisitAndMaybeRepopulate();
   if (curIsDungeon()) trySearchAdjacentSecrets(false);
@@ -31287,6 +32488,7 @@ function beginThrowTargeting(it, fromSlot) {
   // the inventory, rather than after targeting resolves, so a frozen player doesn't lose the item
   // to a blocked action the way a later check would risk.
   if (player.frozenSolidTurns > 0) { log("You're frozen solid and can't throw anything!"); return; }
+  if (player.stunnedTurns > 0) { log("You're stunned and can't throw anything!"); return; }
   const range = throwRangeFor(it);
   beginTileTargeting('throw', { item: it, fromSlot: fromSlot || null, range, aoeRadius: it.radius || 0 });
   log(`Throw ${it.name} (range ${range}) — click a tile, or press Enter/Space to snap to the nearest foe. Esc to cancel.`);
@@ -31812,6 +33014,7 @@ function useItem(it) {
     // -- otherwise a player encased solid could still detonate a grenade at their own feet even
     // though the equivalent aim-and-throw-elsewhere action was correctly blocked.
     if (player.frozenSolidTurns > 0) { log("You're frozen solid and can't use that!"); return; }
+    if (player.stunnedTurns > 0) { log("You're stunned and can't use that!"); return; }
     resolveThrowAtTile(it, player.x, player.y, null);
     updateSidebar();
     endTurn();
@@ -32152,6 +33355,78 @@ function describeItem(it) {
     else if (it.id === 'compass') lines.push('While carried, shows the direction to the nearest known dungeon in your status panel.');
     else lines.push('A valuable trinket.');
   }
+  // ---- ARTIFACT FRAMEWORK tooltip support (found during a full quality/integrity pass): every
+  // unique item in the game -- the six original gate-boss uniques as much as anything added
+  // since -- carries a hand-written `desc` flavor line, and many carry one or more special
+  // mechanic fields (knockback, procs, on-kill effects, auras, etc.), but describeItem() never
+  // showed either one anywhere. A player equipping a legendary saw the same generic
+  // damage/armor/durability lines as any mundane item, with the actual reason it's special
+  // completely invisible outside of remembering what a wiki-style writeup might have said. Fixed
+  // by surfacing both here: the flavor text first (quoted, so it visually reads as lore rather
+  // than a stat line), then a concrete mechanical breakdown for every ARTIFACT FRAMEWORK field
+  // present, in the same "+X thing" style the rest of this function already uses.
+  if (it.isUnique && it.desc) lines.push(`<i>"${it.desc}"</i>`);
+  const mech = [];
+  if (it.knockbackTiles) mech.push(`Knocks the target back ${it.knockbackTiles} tile(s) on hit`);
+  if (it.pullTiles) mech.push(`Pulls the target ${it.pullTiles} tile(s) toward you on hit`);
+  if (it.freezeProcChance) mech.push(`${Math.round(it.freezeProcChance*100)}% chance to freeze the target solid for ${it.freezeProcTurns||3} turns on hit`);
+  if (it.stunProcChance) mech.push(`${Math.round(it.stunProcChance*100)}% chance to stun the target for ${it.stunProcTurns||2} turns on hit`);
+  if (it.shatterBonus) mech.push(`+${Math.round(it.shatterBonus*100)}% bonus damage against an already-frozen target`);
+  if (it.igniteProcChance) mech.push(`${Math.round(it.igniteProcChance*100)}% chance to set the target alight for ${it.igniteProcTurns||3} turns on hit`);
+  if (it.onHitBleed) mech.push(`${Math.round(it.onHitBleed.chance*100)}% chance to inflict a bleed (${it.onHitBleed.dmg} dmg/turn, ${it.onHitBleed.turns} turns) on hit`);
+  if (it.factionDmgBonus) mech.push(`+${Math.round(it.factionDmgBonus.pct*100)}% damage against ${it.factionDmgBonus.faction}`);
+  if (it.factionResistBonus) mech.push(`-${Math.round(it.factionResistBonus.pct*100)}% damage taken from ${it.factionResistBonus.faction}`);
+  if (it.pierceTargets) mech.push(`Hits also strike through to whatever's directly behind the target, for ${Math.round((it.pierceTargets.dmgPct||0.6)*100)}% damage`);
+  if (it.critLifestealPct) mech.push(`Critical hits drain ${Math.round(it.critLifestealPct*100)}% of the damage dealt as HP`);
+  if (it.allOrNothingChance) mech.push(`${Math.round(it.allOrNothingChance*100)}% chance for a landed hit to either double its damage or deal none at all`);
+  if (it.starvationDmgBonus) mech.push(`Deals more damage the longer it's been since this weapon's own last kill (resets on kill)`);
+  if (it.recoilDmgPerHit) mech.push(`Costs you ${it.recoilDmgPerHit} HP every time it lands a hit`);
+  if (it.chainProcChance) mech.push(`${Math.round(it.chainProcChance*100)}% chance to arc to ${it.chainProcTargets||2} nearby enem${(it.chainProcTargets||2)===1?'y':'ies'} for ${Math.round((it.chainProcDmgPct||0.5)*100)}% damage`);
+  if (it.chargeStacks) mech.push(`Every ${it.chargeStacks} landed hit${it.chargeStacks===1?'':'s'}${it.chargeSource==='damageTaken'?' you take':''} unleashes a burst around ${it.chargeSource==='damageTaken'?'you':'the target'}${it.chargeEffectType==='heal'?' that heals you':it.chargeEffectType==='confuse'?' that disorients enemies':' for extra damage'}${it.chargeMode==='escalating'?' (keeps building the longer you hold it)':''}`);
+  if (it.healOnKill) mech.push(`Kills heal you ${it.healOnKill} HP`);
+  if (it.goldOnKill) mech.push(`Kills grant ${it.goldOnKill} bonus gold`);
+  if (it.onKillMoveTiles) mech.push(`Kills grant ${it.onKillMoveTiles} extra tile(s) of free movement`);
+  if (it.onKillBonusLoot) mech.push(`${Math.round(it.onKillBonusLoot*100)}% chance for a kill to drop an extra item`);
+  if (it.poisonNovaOnKill) mech.push(`Kills release a poison cloud (${it.poisonNovaOnKill.dmg} dmg, radius ${it.poisonNovaOnKill.radius})`);
+  if (it.executeNovaChance) mech.push(`${Math.round(it.executeNovaChance*100)}% chance for a kill to trigger a damaging burst on anything nearby`);
+  if (it.teleportOnBigHit) mech.push(`Teleports you away when a single hit deals ${Math.round(it.teleportOnBigHit.thresholdFrac*100)}% of your max HP or more (cooldown ${it.teleportOnBigHit.cooldown||15} turns)`);
+  if (it.autoBlinkBelowHpFrac) mech.push(`Automatically teleports you to safety, once per encounter, when you drop below ${Math.round(it.autoBlinkBelowHpFrac*100)}% HP`);
+  if (it.reviveOnce) mech.push(`Prevents a fatal blow once, healing you to ${Math.round((it.reviveHpFrac||0.5)*100)}% HP (long cooldown before it can again)`);
+  if (it.dashTiles) mech.push(`Moving in a clear direction carries you ${it.dashTiles} extra tile(s)${it.dashIgnoresHazards ? ', ignoring hidden hazards along the way' : ''}`);
+  if (it.poisonReflectChance) mech.push(`${Math.round(it.poisonReflectChance*100)}% chance to reflect your own poison onto whoever hits you`);
+  if (it.selfDebuffChance) mech.push(`${Math.round(it.selfDebuffChance*100)}% chance each turn to frighten yourself`);
+  if (it.equipMaxHpPenalty) mech.push(`-${it.equipMaxHpPenalty} max HP while equipped`);
+  if (it.companionPowerBonus) mech.push(`+${Math.round(it.companionPowerBonus*100)}% companion power`);
+  if (it.dormant) mech.push(it.awakened ? `Awakened -- its full power is active.` : `Dormant -- defeat a boss while wearing it to unlock its full power.`);
+  // The flat-accumulator fields (EQUIP_FLAT_BONUS_KEYS) -- by far the most common fields on any
+  // given piece of gear, unique or not, and until now shown nowhere at all.
+  if (it.critBonus) mech.push(`+${Math.round(it.critBonus*100)}% critical hit chance`);
+  if (it.critDmgBonus) mech.push(`+${Math.round(it.critDmgBonus*100)}% critical hit damage`);
+  if (it.dodgeChance) mech.push(`+${Math.round(it.dodgeChance*100)}% dodge chance`);
+  if (it.thornsPercent) mech.push(`Reflects ${Math.round(it.thornsPercent*100)}% of melee damage taken back at the attacker`);
+  if (it.executeBonus) mech.push(`+${Math.round(it.executeBonus*100)}% damage against low-HP enemies`);
+  if (it.bossDmgBonus) mech.push(`+${Math.round(it.bossDmgBonus*100)}% damage against bosses`);
+  if (it.lowHpDmgBonus) mech.push(`+${Math.round(it.lowHpDmgBonus*100)}% damage dealt, scaling up the lower your own HP is`);
+  if (it.rangedDmgBonus) mech.push(`+${Math.round(it.rangedDmgBonus*100)}% ranged damage`);
+  if (it.elementalDmgBonus) mech.push(`+${Math.round(it.elementalDmgBonus*100)}% elemental damage`);
+  if (it.eldritchDmgBonus) mech.push(`+${Math.round(it.eldritchDmgBonus*100)}% eldritch damage`);
+  if (it.spellDmgBonus) mech.push(`+${Math.round(it.spellDmgBonus*100)}% spell damage`);
+  if (it.techniqueDmgBonus) mech.push(`+${Math.round(it.techniqueDmgBonus*100)}% technique damage`);
+  if (it.lifestealBonus) mech.push(`+${Math.round(it.lifestealBonus*100)}% lifesteal`);
+  if (it.regen) mech.push(`Regenerates ${it.regen} HP per turn`);
+  if (it.poisonDmgReduction) mech.push(`-${Math.round(it.poisonDmgReduction*100)}% damage taken from poison`);
+  if (it.bleedResistChance) mech.push(`${Math.round(it.bleedResistChance*100)}% chance to resist being bled entirely`);
+  if (it.bleedDmgReduction) mech.push(`-${Math.round(it.bleedDmgReduction*100)}% damage taken from bleeds`);
+  if (it.fearResistBonus) mech.push(`${Math.round(it.fearResistBonus*100)}% resistance to fear`);
+  if (it.confuseResistBonus) mech.push(`${Math.round(it.confuseResistBonus*100)}% resistance to confusion`);
+  // Growth Artifacts -- shows both the mechanic and, where the item has actually been carried a
+  // while, its current progress, so a player can tell at a glance how close to any cap they are.
+  if (it.growthPerKill) mech.push(`Grows stronger with every kill made while equipped: +${it.growthPerKill.amount}${it.growthPerKill.diminishing ? ' (diminishing)' : ''} ${it.growthPerKill.stat} per kill${it.growthPerKill.cap !== undefined ? `, capped at ${it.growthPerKill.cap}` : ' -- no cap'}. Current: +${growthCurveValue(it.growthProgress||0, it.growthPerKill).toFixed(2)} (${it.growthProgress||0} kills so far)`);
+  if (it.growthPerBossKill) mech.push(`Grows stronger with every BOSS killed while equipped: +${it.growthPerBossKill.amount}${it.growthPerBossKill.diminishing ? ' (diminishing)' : ''} ${it.growthPerBossKill.stat} per boss kill${it.growthPerBossKill.cap !== undefined ? `, capped at ${it.growthPerBossKill.cap}` : ' -- no cap'}. Current: +${growthCurveValue(it.growthProgress||0, it.growthPerBossKill).toFixed(2)} (${it.growthProgress||0} boss kills so far)`);
+  if (it.growthPerTurnsEquipped) mech.push(`Grows stronger the longer it stays equipped: +${it.growthPerTurnsEquipped.amount} ${it.growthPerTurnsEquipped.stat} per ${it.growthPerTurnsEquipped.perTurns||10} turns worn${it.growthPerTurnsEquipped.cap !== undefined ? `, capped at ${it.growthPerTurnsEquipped.cap}` : ''}. Current: +${growthCurveValue(it.growthProgress||0, it.growthPerTurnsEquipped).toFixed(2)}`);
+  if (it.growthByLevel) mech.push(`Grows with your own level while worn: +${it.growthByLevel.amountPerLevel} ${it.growthByLevel.stat} per level past ${it.growthByLevel.startLevel||1}${it.growthByLevel.cap !== undefined ? `, capped at ${it.growthByLevel.cap}` : ''}`);
+  if (it.manaScaling) mech.push(`Spell damage bonus scales live with your current mana: up to +${Math.round(it.manaScaling.maxAmount*100)}% at full mana, none when empty`);
+  if (mech.length) lines.push(...mech);
   if (it.bonuses) {
     const b = it.bonuses;
     const parts = [];
@@ -35450,7 +36725,7 @@ function tutorialDeathRespawn() {
   player.alive = true;
   player.hp = player.maxHp; player.mp = player.maxMp; player.stamina = player.maxStamina;
   player.statusPoison = 0; player.statusFear = 0; player.statusConfuse = 0; player.bleedTurns = 0;
-  player.frozenSolidTurns = 0; player.legInjuryPenalty = 0; player.buffs = {};
+  player.frozenSolidTurns = 0; player.stunnedTurns = 0; player.legInjuryPenalty = 0; player.buffs = {};
   const start = (lvl && lvl.tutorialStart) ? lvl.tutorialStart : { x: player.x, y: player.y };
   player.x = start.x; player.y = start.y;
   log('You catch your breath. Nothing in a tutorial is worth losing sleep over -- try again.');
