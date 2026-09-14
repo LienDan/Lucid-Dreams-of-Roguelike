@@ -518,7 +518,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.47.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.48.0-alpha</div>
     </div>
   </div>
 
@@ -1621,6 +1621,27 @@
 // milestoneRewardsGranted were Sets, which saveDataReplacer silently strips from every save,
 // meaning "once per playthrough" tracking reset on every single reload. Every mechanic verified
 // against real spawned monsters and a full save/load round trip, not just "doesn't crash."
+//
+// v0.48.0 Engineering & Culinary overhaul (player-requested). A full second crafting discipline:
+// scrap/circuit/alloy materials, 4-tier guns, and three permanent-companion lines (turrets, combat
+// bots, cyborgs) plus a standalone Repair Drone support archetype -- deployed via craftable cores
+// through a new Construct Power Grid (capacity grows via Engineering practice/INT/craftable
+// Auxiliary Reactors; each construct drains its own charge every turn and goes inert without a
+// Power Cell), replacing an initial flat headcount cap. Cybersmiths now sell real gear/materials
+// and their buildings get a proper Workbench loot container. Cooking gained five permanent
+// one-time milestone feasts and four repeatable exotic dishes (temporary flight, borrowed
+// detection, a one-time extra Second Wind, and a fully random Chaos Stew table), all schematic/
+// cookbook-discoverable via trainers, boss drops, workbench loot, or the top vault pool. Sidebar
+// and tooltips now surface grid capacity/charge live so the mechanic is actually visible in play.
+// Five bug-hunting passes followed the build itself: fixed three wrong buff keys (confuse/invis/
+// evasion scale) in the new Chaos Stew effect, a dead ally never being excluded from power-draw
+// accounting (so a killed construct could permanently squat on grid capacity forever), the new
+// bump-to-scrap action bypassing the game's real death-cleanup pipeline, a Repair Drone stat pair
+// that only worked by coincidence because it was never in the field-copy list, and cookingDurBonus
+// being ignored by Chaos Stew and (pre-existing, fixed anyway) foodspell-effect items. Verified via
+// direct engine calls, not just play-testing: every recipe crafted, every construct deployed/
+// killed/scrapped/recharged, a full save/load round trip with a live construct, and Chaos Stew's
+// random table exercised ~100 times with zero failures.
 //
 // v0.41.0 Origin Quests: the gap this closes is the one flagged in v0.40.4's audit but left
 // unaddressed at the time -- START_SCENARIOS meaningfully changed where you start and (via
@@ -6162,6 +6183,368 @@ const ARTIFACT_GRANDMASTER_RECIPE_SCROLLS = [
 ITEM_BASES.push(...ARTIFACT_GRANDMASTER_RECIPE_SCROLLS);
 ARTIFACT_RELIQUARY_POOLS[4].push(...ARTIFACT_GRANDMASTER_RECIPE_SCROLLS.map(it => it.id));
 
+// =====================================================================================
+// ===================== ENGINEERING & CULINARY OVERHAUL ==============================
+// =====================================================================================
+// A full second crafting discipline (Engineering) plus a deep late-cooking tier, built on
+// existing primitives rather than inventing new ones:
+//   - Deployable turrets/robots/cyborg companions are just ITEM_BASES consumables with a new
+//     'summonconstruct' effect that calls the existing spawnAlly() (same primitive every summon
+//     spell in the game already uses) with duration 0 (permanent, exactly like Raise Dead).
+//   - Turrets reuse the existing 'turret' monster behavior (monsterAI already has a full,
+//     working stationary-ranged-attacker branch for it -- see turret_sentry) -- allyAI() below
+//     gets the equivalent branch so a player-built turret stays put and shoots instead of
+//     following you around like a dog.
+//   - Discovery reuses the exact scroll/NPC-teach/vault-gating machinery the grandmaster fusion
+//     recipes above already use: ordinary tiers are learnable from a trainer or found loose,
+//     artifact tiers are schematic-only, excluded from random teaching, and live in the same
+//     top-tier ARTIFACT_RELIQUARY_POOLS[4] vault pool as the game's rarest finds.
+//   - Cooking gets a genuinely new mechanic: milestone feasts that grant a small PERMANENT stat
+//     gain the first time you eat that specific dish (tracked per-dish so it can't be stacked by
+//     just cooking the same recipe over and over), gated behind ingredients that are themselves
+//     rare/boss-gated. Every one of the five is a real, if small, permanent character choice.
+// =====================================================================================
+
+// ===================== CONSTRUCT POWER GRID =====================
+// Replaces a flat "you may field N constructs" headcount with something an engineer can
+// actually invest in and expand. Every deployed construct has a powerDraw (see MONSTER_BASES
+// above); the player has a powerCapacity computed from four independent sources so there's more
+// than one viable way to grow it. Deployment is gated on draw fitting inside capacity, same
+// shape as an MP/mana check, not a hard item-count wall.
+//
+// Sources of capacity (see computeConstructPowerCapacity):
+//   - CONSTRUCT_BASE_CAPACITY: everyone starts here, no investment required.
+//   - Engineering practice: player.craftSkill.engineering (the same practice counter that drives
+//     craftQualityRoll for every OTHER discipline) grants +1 capacity per
+//     ENGINEERING_PRACTICE_PER_CAPACITY points, capped -- getting good at the trade lets you run
+//     more of what you build, exactly like a real skill tree would.
+//   - INT: a small passive bonus, same "smart enough to manage more moving parts" logic the
+//     game already uses for spell slots elsewhere.
+//   - Auxiliary Reactors: a genuine crafted, permanent upgrade (see craft_aux_reactor_t1/2/3
+//     below) -- each installed reactor is +1 capacity forever, capped at MAX_AUX_REACTORS so
+//     it's a real, bounded investment rather than an unlimited buy-your-way-out.
+//
+// Constructs aren't free to run once deployed, either: each one drains its own powerDraw from a
+// per-construct charge meter EVERY TURN it's active (see the isPlayerConstruct branch in
+// allyAI()), whether or not it's fighting -- it's upkeep, not ammo. At 0 charge it goes inert
+// (poweredDown: stops acting, but doesn't disappear or free up its grid slot) until a Power Cell
+// recharges it (see the 'rechargeconstructs' case in useItem()). A serious engineer therefore
+// needs both the capacity to field a squad AND a supply line of Power Cells to keep it running --
+// which is the actual "electricity requirement, constantly recharged" mechanic requested, not
+// just a bigger flat number.
+const CONSTRUCT_BASE_CAPACITY = 2;
+const ENGINEERING_PRACTICE_PER_CAPACITY = 8;
+const MAX_ENGINEERING_PRACTICE_CAPACITY_BONUS = 4;
+const MAX_AUX_REACTORS = 3;
+const CONSTRUCT_MAX_CHARGE = 300; // turns of runtime per full charge for a powerDraw:1 construct
+function computeConstructPowerCapacity() {
+  const skillBonus = Math.min(MAX_ENGINEERING_PRACTICE_CAPACITY_BONUS, Math.floor(((player.craftSkill && player.craftSkill.engineering) || 0) / ENGINEERING_PRACTICE_PER_CAPACITY));
+  const intBonus = Math.floor((player.int || 10) / 10);
+  const reactorBonus = player.auxReactorsInstalled || 0;
+  return CONSTRUCT_BASE_CAPACITY + skillBonus + intBonus + reactorBonus;
+}
+function currentConstructPowerDraw() {
+  // BUG FIX (found in QA pass): dead entities are never spliced out of player.allies (see
+  // curAllies()'s own .filter(a=>a.alive) pattern, used everywhere else allies are read) -- this
+  // was missing the same alive check, so a construct that died in combat, or was deliberately
+  // scrapped via the new bump-to-scrap action, would silently keep occupying its grid capacity
+  // forever with no way to ever free it back up. Matches curAllies()'s filter exactly now.
+  return (player.allies || []).filter(a => a.isPlayerConstruct && a.alive).reduce((sum, a) => sum + (a.powerDraw || 1), 0);
+}
+
+// ---- Engineering & rare culinary materials ----
+ITEM_BASES.push(
+  // ---- engineering: common-to-uncommon (found scattered, sold by cybersmiths, or salvaged) ----
+  { id:'scrap_metal', name:'Scrap Metal', type:'material', glyph:'*', color:'#8a8a8a', value:4,
+    desc:'Twisted plating and bent rebar, still worth something to anyone who knows how to straighten it.' },
+  { id:'salvaged_circuit', name:'Salvaged Circuit', type:'material', glyph:'*', color:'#4ae0d0', value:14,
+    desc:'A board of intact wiring pulled from something that used to think, a little.' },
+  { id:'ancient_gearwork', name:'Ancient Gearwork', type:'material', glyph:'*', color:'#c9a06a', value:40,
+    desc:'Clockwork so precisely cut it could have been made yesterday or a thousand years ago. No one can tell which.' },
+  { id:'arc_capacitor', name:'Arc Capacitor', type:'material', glyph:'*', color:'#e0e050', value:45,
+    desc:'Still holds a charge. Handle it like it remembers that.' },
+  // ---- engineering: refined (crafted, not found) ----
+  { id:'refined_alloy', name:'Refined Alloy', type:'material', glyph:'*', color:'#b6bcc4', value:26,
+    desc:'Scrap metal, smelted and worked back into something you could actually build a weapon from.' },
+  // ---- engineering: boss-gated (grandmaster-tier fusion reagents, same design as
+  // ARTIFACT_MATERIALS_GRANDMASTER above -- one specific superboss each, nowhere else) ----
+  { id:'reactor_core_shard', name:'Reactor Core Shard', type:'material', glyph:'*', color:'#e03aa0', value:180,
+    desc:"A fragment of whatever the Core Overmind used for a heart. It hasn't gone cold." },
+  { id:'sovereign_chassis_plate', name:'Sovereign Chassis Plate', type:'material', glyph:'*', color:'#c0c0d0', value:220,
+    desc:'A single plate stripped from the Iron Sovereign. Still holds its shape better than anything a forge makes new.' },
+  // ---- rare culinary ingredients ----
+  { id:'ember_truffle', name:'Ember Truffle', type:'material', glyph:'"', color:'#e0785a', value:30,
+    desc:'Grows only where the ground stays warm. Smells like a hearth that never goes out.' },
+  { id:'frostpearl_barley', name:'Frostpearl Barley', type:'material', glyph:'"', color:'#c0e8f0', value:28,
+    desc:'Grain that only ripens under frost. Each kernel is faintly, permanently cold.' },
+  { id:'starfruit', name:'Starfruit', type:'material', glyph:'"', color:'#e0d060', value:35,
+    desc:'Cut it open and the inside genuinely looks like a night sky, tiny points of light and all.' },
+  { id:'dream_nectar', name:'Dream Nectar', type:'material', glyph:'"', color:'#c0a0ff', value:45,
+    desc:"Harvested from flowers that only bloom while something nearby is asleep. Don't ask how it's collected." },
+  { id:'chaos_pepper', name:'Chaos Pepper', type:'material', glyph:'"', color:'#e03a3a', value:32,
+    desc:'Every bite tastes different, and none of them are quite what the last one was.' },
+  // ---- rare culinary: boss-gated ----
+  { id:'leviathan_fat', name:'Leviathan Fat', type:'material', glyph:'"', color:'#1a6a5a', value:60,
+    desc:"Rendered from something Coilfang the Endless Serpent didn't need anymore. Slow to melt, never quite cold." },
+  { id:'worldroot', name:'Worldroot', type:'material', glyph:'"', color:'#1f6b1f', value:70,
+    desc:"A root torn from Groveheart's own trunk. It's still growing, very slowly, in your pack." },
+);
+// Refined Alloy and the two boss-gated engineering plates carry real material properties the
+// same way Starmetal/Ironwood do above (see MATERIAL_PROPERTIES/materialPropertyFor, wired in
+// right after that table is declared, further down this file) -- a gun or turret core built
+// with one imprints that bonus onto the finished item automatically, no per-recipe wiring
+// required.
+// Two more superboss reagent drops, same table/mechanism as ancient_wyrm/the_kraken above.
+BOSS_MATERIAL_DROPS.core_overmind = { itemId: 'reactor_core_shard', chance: 0.35 };
+BOSS_MATERIAL_DROPS.iron_sovereign = { itemId: 'sovereign_chassis_plate', chance: 0.35 };
+BOSS_MATERIAL_DROPS.sea_serpent = { itemId: 'leviathan_fat', chance: 0.3 };
+BOSS_MATERIAL_DROPS.elder_treant = { itemId: 'worldroot', chance: 0.3 };
+
+// ---- Engineering companions: turrets (stationary), combat bots (mobile construct), and
+// cyborg guardians (mobile flesh-and-metal hybrid) -- three parallel 3-tier lines plus one
+// artifact-tier fusion apiece for the turret and bot lines. All are player-summon-only (no
+// dtier on the tier-3/artifact entries keeps them out of ordinary wild spawn tables, exactly
+// the same convention the grandmaster items above use for "craft-only, never just found").
+// The tier-1/2 entries DO carry a dtier -- like Clay Golem/Stone Golem above, it's thematically
+// fine for a "Scrap Walker" to also just be found guarding a junk heap, and it lets
+// depthScaleForPlayerLevel size a freshly-built one sensibly when spawnAlly creates it.
+// Every companion carries a powerDraw (see the CONSTRUCT POWER GRID system below) -- how much of
+// the player's grid capacity it costs to keep running. Bigger/stronger units draw more, which is
+// what actually paces "how many can I field" now instead of a flat headcount cap.
+MONSTER_BASES.turret_scraploader = { name:'Scrap Loader Turret', glyph:'T', color:'#8a8a6a', hp:20, str:8, dex:4, atk:[3,7], armor:4, xp:0, behavior:'turret', range:5, dtier:2, faction:'construct', powerDraw:1 };
+MONSTER_BASES.turret_autocannon  = { name:'Autocannon Turret', glyph:'T', color:'#c9702a', hp:38, str:12, dex:5, atk:[6,13], armor:6, xp:0, behavior:'turret', range:6, dtier:3, faction:'construct', powerDraw:2 };
+MONSTER_BASES.turret_flakbattery = { name:'Flak Battery Turret', glyph:'T', color:'#e0503a', hp:62, str:16, dex:5, atk:[10,19], armor:9, xp:0, behavior:'turret', range:7, dtier:4, faction:'construct', powerDraw:3 };
+MONSTER_BASES.turret_sentinel_prime = { name:'Sentinel Prime', glyph:'T', color:'#ffb020', hp:95, str:22, dex:6, atk:[16,30], armor:13, xp:0, behavior:'turret', range:8, faction:'construct', powerDraw:4 };
+
+MONSTER_BASES.bot_scrapwalker  = { name:'Scrap Walker', glyph:'d', color:'#8a8a6a', hp:30, str:9, dex:8, atk:[3,8], armor:3, xp:0, behavior:'aggressive', dtier:2, faction:'construct', powerDraw:1 };
+MONSTER_BASES.bot_combatdrone  = { name:'Combat Drone', glyph:'d', color:'#4ae0d0', hp:52, str:13, dex:12, atk:[6,14], armor:5, xp:0, behavior:'aggressive', dtier:3, faction:'construct', powerDraw:2 };
+MONSTER_BASES.bot_warchassis   = { name:'War Chassis', glyph:'d', color:'#c0c0d0', hp:88, str:19, dex:11, atk:[11,21], armor:9, xp:0, behavior:'aggressive', dtier:4, faction:'construct', powerDraw:3 };
+MONSTER_BASES.bot_prometheuscore = { name:'Prometheus Core', glyph:'d', color:'#ff6a1a', hp:150, str:27, dex:15, atk:[19,34], armor:14, regen:3, xp:0, behavior:'aggressive', faction:'construct', powerDraw:4 };
+
+MONSTER_BASES.cyborg_augmentedvagrant = { name:'Augmented Vagrant', glyph:'@', color:'#7a8a9a', hp:26, str:9, dex:10, atk:[3,8], armor:2, xp:0, behavior:'aggressive', dtier:2, faction:'cyber', powerDraw:1 };
+MONSTER_BASES.cyborg_graftedmercenary = { name:'Grafted Mercenary', glyph:'@', color:'#4ae0d0', hp:48, str:13, dex:13, atk:[7,15], armor:4, xp:0, behavior:'aggressive', dtier:3, faction:'cyber', powerDraw:2 };
+MONSTER_BASES.cyborg_apexunit         = { name:'Apex Unit', glyph:'@', color:'#e03aa0', hp:82, str:17, dex:17, atk:[11,20], armor:7, xp:0, behavior:'aggressive', dtier:4, faction:'cyber', lifesteal:true, powerDraw:3 };
+// A fourth, standalone support archetype rather than a fourth tier on any one line -- a genuinely
+// different job (healing, not fighting) instead of just more numbers. behavior:'support' is a
+// new AI archetype, handled in allyAI() alongside 'turret' and the default aggressive/mobile
+// branch -- see the new branch there.
+MONSTER_BASES.bot_repairdrone = { name:'Repair Drone', glyph:'d', color:'#5ae0a0', hp:34, str:4, dex:14, atk:[1,3], armor:2, xp:0, behavior:'support', dtier:3, faction:'construct', powerDraw:2, healPower:[4,9], healRange:6 };
+
+// ---- Engineering-crafted guns (real equippable weapons, not companions) ----
+ITEM_BASES.push(
+  { id:'pipe_pistol', name:'Pipe Pistol', type:'weapon', slot:'hand', dmg:[3,8], str:5, glyph:'}', color:'#8a8a6a', value:28, ranged:true,
+    desc:'Held together with wire and hope. Fires anyway.' },
+  { id:'repeater_rifle', name:'Repeater Rifle', type:'weapon', slot:'hand', dmg:[6,14], str:9, glyph:'}', color:'#7a8a5a', value:85, ranged:true,
+    desc:'A proper barrel and a real feed mechanism. A significant step up from the pipe pistol.' },
+  { id:'arc_rifle', name:'Arc Rifle', type:'weapon', slot:'hand', dmg:[10,20], str:13, armorPierce:4, critBonus:0.05, glyph:'}', color:'#4ae0d0', value:180, ranged:true,
+    desc:'Fires a bolt that finds the gap in armor plating almost on its own.' },
+  { id:'gauss_cannon', name:'The Gauss Sovereign', type:'weapon', slot:'hand', dmg:[24,42], str:24, armorPierce:10, critBonus:0.12, glyph:'}', color:'#ffb020', value:1050,
+    ranged:true, isUnique:true, noAffixes:true, valueTier:4,
+    desc:"Built around a still-warm reactor shard and a plate torn from a walking fortress. It shouldn't be possible to hand-carry this. It is." },
+);
+
+// ---- Deployable construct cores: consumables that, when used, permanently summon their
+// companion via spawnAlly(id, 0, ...) -- see the new 'summonconstruct' case in useItem(). ----
+ITEM_BASES.push(
+  { id:'turret_core_t1', name:'Sentry Core Mk.I', type:'consumable', effect:'summonconstruct', summonId:'turret_scraploader', glyph:'(', color:'#8a8a6a', value:40, craftOnly:true,
+    desc:'Plant it and it plants itself. Deploys a stationary Scrap Loader Turret to fight at your side.' },
+  { id:'turret_core_t2', name:'Sentry Core Mk.II', type:'consumable', effect:'summonconstruct', summonId:'turret_autocannon', glyph:'(', color:'#c9702a', value:95, craftOnly:true,
+    desc:'Deploys a stationary Autocannon Turret.' },
+  { id:'turret_core_t3', name:'Sentry Core Mk.III', type:'consumable', effect:'summonconstruct', summonId:'turret_flakbattery', glyph:'(', color:'#e0503a', value:220, craftOnly:true,
+    desc:'Deploys a stationary Flak Battery Turret.' },
+  { id:'turret_core_sentinel', name:'Sentinel Prime Core', type:'consumable', effect:'summonconstruct', summonId:'turret_sentinel_prime', glyph:'(', color:'#ffb020', value:900, craftOnly:true, isUnique:true, noAffixes:true,
+    desc:'Deploys Sentinel Prime, the single strongest gun anyone can plant in the ground and walk away from.' },
+  { id:'bot_core_t1', name:'Chassis Core Mk.I', type:'consumable', effect:'summonconstruct', summonId:'bot_scrapwalker', glyph:'(', color:'#8a8a6a', value:45, craftOnly:true,
+    desc:'Builds and permanently deploys a Scrap Walker to fight alongside you.' },
+  { id:'bot_core_t2', name:'Chassis Core Mk.II', type:'consumable', effect:'summonconstruct', summonId:'bot_combatdrone', glyph:'(', color:'#4ae0d0', value:110, craftOnly:true,
+    desc:'Deploys a mobile Combat Drone.' },
+  { id:'bot_core_t3', name:'Chassis Core Mk.III', type:'consumable', effect:'summonconstruct', summonId:'bot_warchassis', glyph:'(', color:'#c0c0d0', value:240, craftOnly:true,
+    desc:'Deploys a War Chassis, a walking bulwark of a companion.' },
+  { id:'bot_core_prometheus', name:'Prometheus Core', type:'consumable', effect:'summonconstruct', summonId:'bot_prometheuscore', glyph:'(', color:'#ff6a1a', value:950, craftOnly:true, isUnique:true, noAffixes:true,
+    desc:'Deploys the strongest combat chassis anyone has ever gotten to walk on its own.' },
+  { id:'cyborg_core_t1', name:'Graft Kit Mk.I', type:'consumable', effect:'summonconstruct', summonId:'cyborg_augmentedvagrant', glyph:'(', color:'#7a8a9a', value:42, craftOnly:true,
+    desc:'Wakes an Augmented Vagrant, bound to fight at your side.' },
+  { id:'cyborg_core_t2', name:'Graft Kit Mk.II', type:'consumable', effect:'summonconstruct', summonId:'cyborg_graftedmercenary', glyph:'(', color:'#4ae0d0', value:105, craftOnly:true,
+    desc:'Wakes a Grafted Mercenary.' },
+  { id:'cyborg_core_t3', name:'Graft Kit Mk.III', type:'consumable', effect:'summonconstruct', summonId:'cyborg_apexunit', glyph:'(', color:'#e03aa0', value:230, craftOnly:true,
+    desc:'Wakes an Apex Unit, more graft than person by now, and glad of it.' },
+  { id:'repairdrone_core', name:'Repair Drone Core', type:'consumable', effect:'summonconstruct', summonId:'bot_repairdrone', glyph:'(', color:'#5ae0a0', value:90, craftOnly:true,
+    desc:"Deploys a Repair Drone -- it won't throw a punch, but it'll keep everyone else swinging." },
+);
+
+// ---- Engineering recipes: smelting, guns, and all three companion lines. Tier-1/2 are
+// ordinary trainer/found recipes (see cybersmith teachRecipes below); tier-3 and the artifact
+// fusions are excluded from random teaching and only ever come from their dedicated schematic
+// (see ENGINEERING_SCHEMATICS below), same gating as the grandmaster weapon fusions above. ----
+RECIPES.push(
+  { id:'craft_refined_alloy', name:'Smelt Refined Alloy', category:'engineering', inputs:[{id:'scrap_metal',qty:4},{id:'iron_ingot',qty:1}], output:{id:'refined_alloy',qty:1} },
+  { id:'craft_pipe_pistol', name:'Assemble Pipe Pistol', category:'engineering', inputs:[{id:'scrap_metal',qty:3},{id:'salvaged_circuit',qty:1}], output:{id:'pipe_pistol',qty:1} },
+  { id:'craft_repeater_rifle', name:'Assemble Repeater Rifle', category:'engineering', inputs:[{id:'refined_alloy',qty:2},{id:'salvaged_circuit',qty:2}], output:{id:'repeater_rifle',qty:1} },
+  { id:'craft_arc_rifle', name:'Assemble Arc Rifle', category:'engineering', inputs:[{id:'refined_alloy',qty:3},{id:'arc_capacitor',qty:2},{id:'ancient_gearwork',qty:1}], output:{id:'arc_rifle',qty:1} },
+  { id:'craft_gauss_cannon', name:'Forge The Gauss Sovereign', category:'engineering',
+    inputs:[{id:'reactor_core_shard',qty:1},{id:'sovereign_chassis_plate',qty:1},{id:'refined_alloy',qty:4},{id:'arc_capacitor',qty:3}], output:{id:'gauss_cannon',qty:1} },
+
+  { id:'craft_turret_core_t1', name:'Build Sentry Core Mk.I', category:'engineering', inputs:[{id:'scrap_metal',qty:5},{id:'salvaged_circuit',qty:1}], output:{id:'turret_core_t1',qty:1} },
+  { id:'craft_turret_core_t2', name:'Build Sentry Core Mk.II', category:'engineering', inputs:[{id:'refined_alloy',qty:3},{id:'salvaged_circuit',qty:2}], output:{id:'turret_core_t2',qty:1} },
+  { id:'craft_turret_core_t3', name:'Build Sentry Core Mk.III', category:'engineering', inputs:[{id:'refined_alloy',qty:5},{id:'arc_capacitor',qty:2},{id:'ancient_gearwork',qty:1}], output:{id:'turret_core_t3',qty:1} },
+  { id:'craft_turret_core_sentinel', name:'Build Sentinel Prime Core', category:'engineering',
+    inputs:[{id:'reactor_core_shard',qty:1},{id:'refined_alloy',qty:6},{id:'arc_capacitor',qty:3}], output:{id:'turret_core_sentinel',qty:1} },
+
+  { id:'craft_bot_core_t1', name:'Build Chassis Core Mk.I', category:'engineering', inputs:[{id:'scrap_metal',qty:6},{id:'salvaged_circuit',qty:2}], output:{id:'bot_core_t1',qty:1} },
+  { id:'craft_bot_core_t2', name:'Build Chassis Core Mk.II', category:'engineering', inputs:[{id:'refined_alloy',qty:4},{id:'salvaged_circuit',qty:3},{id:'ancient_gearwork',qty:1}], output:{id:'bot_core_t2',qty:1} },
+  { id:'craft_bot_core_t3', name:'Build Chassis Core Mk.III', category:'engineering', inputs:[{id:'refined_alloy',qty:6},{id:'arc_capacitor',qty:3},{id:'ancient_gearwork',qty:2}], output:{id:'bot_core_t3',qty:1} },
+  { id:'craft_bot_core_prometheus', name:'Build Prometheus Core', category:'engineering',
+    inputs:[{id:'reactor_core_shard',qty:1},{id:'sovereign_chassis_plate',qty:1},{id:'refined_alloy',qty:8},{id:'arc_capacitor',qty:4}], output:{id:'bot_core_prometheus',qty:1} },
+
+  { id:'craft_cyborg_core_t1', name:'Build Graft Kit Mk.I', category:'engineering', inputs:[{id:'scrap_metal',qty:4},{id:'herb',qty:2},{id:'salvaged_circuit',qty:1}], output:{id:'cyborg_core_t1',qty:1} },
+  { id:'craft_cyborg_core_t2', name:'Build Graft Kit Mk.II', category:'engineering', inputs:[{id:'refined_alloy',qty:3},{id:'troll_blood',qty:1},{id:'salvaged_circuit',qty:2}], output:{id:'cyborg_core_t2',qty:1} },
+  { id:'craft_cyborg_core_t3', name:'Build Graft Kit Mk.III', category:'engineering', inputs:[{id:'refined_alloy',qty:5},{id:'arc_capacitor',qty:2},{id:'eldritch_essence',qty:1}], output:{id:'cyborg_core_t3',qty:1} },
+  { id:'craft_repairdrone_core', name:'Build Repair Drone Core', category:'engineering', inputs:[{id:'refined_alloy',qty:3},{id:'salvaged_circuit',qty:3},{id:'herb',qty:3}], output:{id:'repairdrone_core',qty:1} },
+);
+// Artifact-tier engineering fusions are exactly as hard to reach as the four weapon/armor
+// fusions above -- rare boss reagents plus a schematic that only the top vault roll can hand
+// you -- so they're excluded from the same random-teaching mechanisms by the same set.
+['craft_gauss_cannon', 'craft_turret_core_sentinel', 'craft_bot_core_prometheus'].forEach(id => RECIPES_EXCLUDED_FROM_RANDOM_TEACHING.add(id));
+
+// ---- Power Cell: cheap, repeatable fuel. Recharges EVERY active player construct to full at
+// once (see 'rechargeconstructs' in useItem()) -- the ongoing supply-line half of the power grid.
+ITEM_BASES.push(
+  { id:'power_cell', name:'Power Cell', type:'consumable', effect:'rechargeconstructs', glyph:'*', color:'#e0e050', value:18, craftOnly:true,
+    desc:'A dense little battery. Tops every construct you have deployed back up to full charge.' },
+);
+RECIPES.push(
+  { id:'craft_power_cell', name:'Assemble Power Cell', category:'engineering', inputs:[{id:'arc_capacitor',qty:1},{id:'scrap_metal',qty:2}], output:{id:'power_cell',qty:1} },
+);
+// ---- Auxiliary Reactors: permanent, one-time capacity upgrades for the construct power grid
+// (see CONSTRUCT POWER GRID above / 'installreactor' in useItem()). Three of them, each pricier
+// than the last (escalating reagent cost is the intentional diminishing-returns curve, same
+// design language as the milestone foods above), capped at MAX_AUX_REACTORS total installs. This
+// is the single biggest lever a dedicated engineer has to legitimately field more than the base
+// two constructs -- entirely earned through crafting investment, not a difficulty setting.
+ITEM_BASES.push(
+  { id:'aux_reactor_t1', name:'Auxiliary Reactor Mk.I', type:'consumable', effect:'installreactor', glyph:'*', color:'#e0e050', value:80, craftOnly:true, isUnique:true, noAffixes:true,
+    desc:'Wire it into your grid and it just... stays there, quietly adding capacity. Permanent, one-time.' },
+  { id:'aux_reactor_t2', name:'Auxiliary Reactor Mk.II', type:'consumable', effect:'installreactor', glyph:'*', color:'#ffb020', value:220, craftOnly:true, isUnique:true, noAffixes:true,
+    desc:'A denser core, a bigger permanent boost to how much you can run at once.' },
+  { id:'aux_reactor_t3', name:'Auxiliary Reactor Mk.III', type:'consumable', effect:'installreactor', glyph:'*', color:'#e03aa0', value:480, craftOnly:true, isUnique:true, noAffixes:true,
+    desc:'Built around a fragment of something that used to think. The last capacity upgrade you can install.' },
+);
+RECIPES.push(
+  { id:'craft_aux_reactor_t1', name:'Build Auxiliary Reactor Mk.I', category:'engineering', inputs:[{id:'refined_alloy',qty:4},{id:'arc_capacitor',qty:2},{id:'salvaged_circuit',qty:2}], output:{id:'aux_reactor_t1',qty:1} },
+  { id:'craft_aux_reactor_t2', name:'Build Auxiliary Reactor Mk.II', category:'engineering', inputs:[{id:'refined_alloy',qty:7},{id:'arc_capacitor',qty:4},{id:'ancient_gearwork',qty:2}], output:{id:'aux_reactor_t2',qty:1} },
+  { id:'craft_aux_reactor_t3', name:'Build Auxiliary Reactor Mk.III', category:'engineering', inputs:[{id:'reactor_core_shard',qty:1},{id:'refined_alloy',qty:10},{id:'arc_capacitor',qty:6}], output:{id:'aux_reactor_t3',qty:1} },
+);
+// The Mk.III reactor is exactly as hard to reach as the artifact fusions (needs a reactor core
+// shard, so it's boss-gated the same way), so it's excluded from random teaching the same way;
+// Mk.I/II are ordinary cybersmith-taught recipes, no gating needed.
+RECIPES_EXCLUDED_FROM_RANDOM_TEACHING.add('craft_aux_reactor_t3');
+
+// ---- Engineering schematics: same "scroll that teaches a recipe" item shape the grandmaster
+// weapons use (type:'recipe', recipeId:X). Tier-1/2 are ALSO taught directly by a cybersmith (see
+// the teachRecipes patch near makeNPC), so a schematic drop is a bonus shortcut, not the only
+// path, for those; the three artifact tiers are schematic-only and live in the top vault pool. ----
+const ENGINEERING_SCHEMATICS_COMMON = [
+  { id:'schem_pipe_pistol', recipeId:'craft_pipe_pistol', type:'recipe', name:'Schematic: Pipe Pistol', glyph:'?', color:'#8a8a6a', value:20 },
+  { id:'schem_repeater_rifle', recipeId:'craft_repeater_rifle', type:'recipe', name:'Schematic: Repeater Rifle', glyph:'?', color:'#7a8a5a', value:45 },
+  { id:'schem_arc_rifle', recipeId:'craft_arc_rifle', type:'recipe', name:'Schematic: Arc Rifle', glyph:'?', color:'#4ae0d0', value:90 },
+  { id:'schem_turret_t1', recipeId:'craft_turret_core_t1', type:'recipe', name:'Schematic: Sentry Core Mk.I', glyph:'?', color:'#8a8a6a', value:25 },
+  { id:'schem_turret_t2', recipeId:'craft_turret_core_t2', type:'recipe', name:'Schematic: Sentry Core Mk.II', glyph:'?', color:'#c9702a', value:55 },
+  { id:'schem_turret_t3', recipeId:'craft_turret_core_t3', type:'recipe', name:'Schematic: Sentry Core Mk.III', glyph:'?', color:'#e0503a', value:100 },
+  { id:'schem_bot_t1', recipeId:'craft_bot_core_t1', type:'recipe', name:'Schematic: Chassis Core Mk.I', glyph:'?', color:'#8a8a6a', value:28 },
+  { id:'schem_bot_t2', recipeId:'craft_bot_core_t2', type:'recipe', name:'Schematic: Chassis Core Mk.II', glyph:'?', color:'#4ae0d0', value:60 },
+  { id:'schem_bot_t3', recipeId:'craft_bot_core_t3', type:'recipe', name:'Schematic: Chassis Core Mk.III', glyph:'?', color:'#c0c0d0', value:110 },
+  { id:'schem_cyborg_t1', recipeId:'craft_cyborg_core_t1', type:'recipe', name:'Schematic: Graft Kit Mk.I', glyph:'?', color:'#7a8a9a', value:26 },
+  { id:'schem_cyborg_t2', recipeId:'craft_cyborg_core_t2', type:'recipe', name:'Schematic: Graft Kit Mk.II', glyph:'?', color:'#4ae0d0', value:58 },
+  { id:'schem_cyborg_t3', recipeId:'craft_cyborg_core_t3', type:'recipe', name:'Schematic: Graft Kit Mk.III', glyph:'?', color:'#e03aa0', value:105 },
+  { id:'schem_power_cell', recipeId:'craft_power_cell', type:'recipe', name:'Schematic: Power Cell', glyph:'?', color:'#e0e050', value:18 },
+  { id:'schem_aux_reactor_t1', recipeId:'craft_aux_reactor_t1', type:'recipe', name:'Schematic: Auxiliary Reactor Mk.I', glyph:'?', color:'#e0e050', value:70 },
+  { id:'schem_aux_reactor_t2', recipeId:'craft_aux_reactor_t2', type:'recipe', name:'Schematic: Auxiliary Reactor Mk.II', glyph:'?', color:'#ffb020', value:180 },
+  { id:'schem_repairdrone', recipeId:'craft_repairdrone_core', type:'recipe', name:'Schematic: Repair Drone Core', glyph:'?', color:'#5ae0a0', value:95 },
+];
+ITEM_BASES.push(...ENGINEERING_SCHEMATICS_COMMON);
+const ENGINEERING_SCHEMATICS_ARTIFACT = [
+  { id:'schem_gauss_cannon', recipeId:'craft_gauss_cannon', type:'recipe', name:'Schematic: The Gauss Sovereign', glyph:'?', color:'#ffb020', value:200, isUnique:true, noAffixes:true },
+  { id:'schem_turret_sentinel', recipeId:'craft_turret_core_sentinel', type:'recipe', name:'Schematic: Sentinel Prime', glyph:'?', color:'#ffb020', value:200, isUnique:true, noAffixes:true },
+  { id:'schem_bot_prometheus', recipeId:'craft_bot_core_prometheus', type:'recipe', name:'Schematic: Prometheus Core', glyph:'?', color:'#ff6a1a', value:200, isUnique:true, noAffixes:true },
+  { id:'schem_aux_reactor_t3', recipeId:'craft_aux_reactor_t3', type:'recipe', name:'Schematic: Auxiliary Reactor Mk.III', glyph:'?', color:'#e03aa0', value:200, isUnique:true, noAffixes:true },
+];
+ITEM_BASES.push(...ENGINEERING_SCHEMATICS_ARTIFACT);
+ARTIFACT_RELIQUARY_POOLS[4].push(...ENGINEERING_SCHEMATICS_ARTIFACT.map(it => it.id));
+// Construct/cyber-faction bosses have a real shot at dropping a mid-tier schematic outright, on
+// top of the vault-only path for the three artifact ones -- gives the Overmind/Sovereign fight a
+// reason to matter to a player who's never even found the Reliquary yet.
+const ENGINEERING_BOSS_SCHEMATIC_DROPS = { core_overmind: 'schem_arc_rifle', iron_sovereign: 'schem_bot_t3', stone_titan: 'schem_turret_t2' };
+
+// ---- Legendary cooking tier: milestone feasts. Each grants a small PERMANENT stat gain the
+// FIRST time it's eaten (tracked in player.milestoneFoodsEaten, keyed by item id) -- see the new
+// 'milestonefood' case in useItem(). Cooking the same dish again after that is just a good meal;
+// this is deliberately not stackable, so the five of these are five genuine one-time character
+// choices rather than a grind. Every ingredient is itself rare or boss-gated, so even without the
+// no-restack rule, supply alone caps how much of this a player could ever lean on. ----
+ITEM_BASES.push(
+  { id:'starfruit_ambrosia_cake', name:'Starfruit Ambrosia Cake', type:'consumable', effect:'milestonefood', power:20,
+    statGain:{ int:1 }, milestoneDesc:'Your mind feels clearer. Permanently.', glyph:'%', color:'#ffe0a0', value:120, foodFlavor:true },
+  { id:'frostpearl_barley_risotto', name:'Frostpearl Barley Risotto', type:'consumable', effect:'milestonefood', power:20,
+    statGain:{ con:1 }, milestoneDesc:'Your body feels hardier. Permanently.', glyph:'%', color:'#c0e8f0', value:120, foodFlavor:true },
+  { id:'chaos_pepper_hellbroth', name:"Chaos Pepper Hellbroth", type:'consumable', effect:'milestonefood', power:20,
+    statGain:{ str:1 }, milestoneDesc:'Something in your blood runs hotter now. Permanently.', glyph:'%', color:'#e03a3a', value:120, foodFlavor:true },
+  { id:'dream_nectar_custard', name:'Dream Nectar Custard', type:'consumable', effect:'milestonefood', power:20,
+    statGain:{ dex:1 }, milestoneDesc:'Your reflexes feel sharper. Permanently.', glyph:'%', color:'#c0a0ff', value:120, foodFlavor:true },
+  { id:'worldroot_communion_stew', name:'Worldroot Communion Stew', type:'consumable', effect:'milestonefood', power:30,
+    statGain:{ maxHp:8, maxMp:8 }, milestoneDesc:'You feel fundamentally more whole. Permanently.', glyph:'%', color:'#1f6b1f', value:260, foodFlavor:true },
+);
+RECIPES.push(
+  { id:'cook_starfruit_ambrosia_cake', name:'Bake Starfruit Ambrosia Cake', category:'cooking', inputs:[{id:'starfruit',qty:2},{id:'dream_nectar',qty:1},{id:'honey',qty:2}], output:{id:'starfruit_ambrosia_cake',qty:1} },
+  { id:'cook_frostpearl_risotto', name:'Simmer Frostpearl Barley Risotto', category:'cooking', inputs:[{id:'frostpearl_barley',qty:2},{id:'milk',qty:2}], output:{id:'frostpearl_barley_risotto',qty:1} },
+  { id:'cook_chaos_hellbroth', name:'Cook Chaos Pepper Hellbroth', category:'cooking', inputs:[{id:'chaos_pepper',qty:2},{id:'meat_raw',qty:2},{id:'salamander_blood',qty:1}], output:{id:'chaos_pepper_hellbroth',qty:1} },
+  { id:'cook_dream_nectar_custard', name:'Bake Dream Nectar Custard', category:'cooking', inputs:[{id:'dream_nectar',qty:2},{id:'egg',qty:2},{id:'sugar',qty:1}], output:{id:'dream_nectar_custard',qty:1} },
+  { id:'cook_worldroot_communion_stew', name:'Prepare Worldroot Communion Stew', category:'cooking', inputs:[{id:'worldroot',qty:1},{id:'leviathan_fat',qty:1},{id:'ember_truffle',qty:1}], output:{id:'worldroot_communion_stew',qty:1} },
+);
+// These five read the ingredients (worldroot/leviathan_fat especially) and are meant to feel like
+// a real destination, not a starter recipe -- excluded from the ordinary random-teach roll the
+// same way the grandmaster fusions are; a cookbook found on a specific NPC/location is the
+// intended path (see LEGENDARY_COOKBOOKS below), same design as the engineering schematics.
+['cook_starfruit_ambrosia_cake','cook_frostpearl_risotto','cook_chaos_hellbroth','cook_dream_nectar_custard','cook_worldroot_communion_stew'].forEach(id => RECIPES_EXCLUDED_FROM_RANDOM_TEACHING.add(id));
+const LEGENDARY_COOKBOOKS = [
+  { id:'cookbook_ambrosia_cake', recipeId:'cook_starfruit_ambrosia_cake', type:'recipe', name:'Cookbook: Starfruit Ambrosia Cake', glyph:'?', color:'#ffe0a0', value:150, isUnique:true, noAffixes:true },
+  { id:'cookbook_frostpearl_risotto', recipeId:'cook_frostpearl_risotto', type:'recipe', name:'Cookbook: Frostpearl Barley Risotto', glyph:'?', color:'#c0e8f0', value:150, isUnique:true, noAffixes:true },
+  { id:'cookbook_chaos_hellbroth', recipeId:'cook_chaos_hellbroth', type:'recipe', name:'Cookbook: Chaos Pepper Hellbroth', glyph:'?', color:'#e03a3a', value:150, isUnique:true, noAffixes:true },
+  { id:'cookbook_dream_nectar_custard', recipeId:'cook_dream_nectar_custard', type:'recipe', name:'Cookbook: Dream Nectar Custard', glyph:'?', color:'#c0a0ff', value:150, isUnique:true, noAffixes:true },
+  { id:'cookbook_worldroot_stew', recipeId:'cook_worldroot_communion_stew', type:'recipe', name:'Cookbook: Worldroot Communion Stew', glyph:'?', color:'#1f6b1f', value:150, isUnique:true, noAffixes:true },
+];
+ITEM_BASES.push(...LEGENDARY_COOKBOOKS);
+ARTIFACT_RELIQUARY_POOLS[4].push(...LEGENDARY_COOKBOOKS.map(it => it.id));
+// A chef-trainer NPC has a small chance to know ONE legendary cookbook regardless of tier --
+// meeting the right chef can hand you a shortcut past the vault entirely, mirroring how the
+// engineering schematics above can also drop straight off a construct/cyber boss.
+const LEGENDARY_COOKBOOK_MASTER_CHEF_CHANCE = 0.12;
+
+// ---- Exotic (non-permanent) cooking tier: unlike the five milestone feasts above, these grant a
+// strong TEMPORARY effect every time, not a one-time permanent stat -- so they're worth cooking
+// repeatedly once you have the ingredients, and lean on genuinely different mechanics (movement,
+// borrowed spellcraft, a safety net, and pure chance) rather than just bigger numbers. Ordinary
+// chef-taught/randomly-found recipes -- no vault gating needed, these aren't meant to be the
+// rarest thing in the game, just the most INTERESTING.
+ITEM_BASES.push(
+  { id:'levitation_loaf', name:'Levitation Loaf', type:'consumable', effect:'foodbuff', power:10,
+    statBuff:'flight', buffAmt:1, dur:60, glyph:'%', color:'#c0e8f0', value:70, foodFlavor:true,
+    desc:"Dense, impossibly light, and it makes YOU impossibly light for a while too. Cross water, chasms, lava -- all the same to you now." },
+  { id:'starlight_consomme', name:'Starlight Consommé', type:'consumable', effect:'foodspell', grantSpell:'detect',
+    dur:80, glyph:'%', color:'#c0a0ff', value:65, foodFlavor:true,
+    desc:'Clear as glass and faintly luminous. For a while afterward, you can feel every living thing nearby, right through the walls.' },
+  { id:'voidtouched_ration', name:'Void-Touched Ration', type:'consumable', effect:'foodextralife', power:15,
+    glyph:'%', color:'#3a1a4a', value:90, foodFlavor:true,
+    desc:"Eating it feels like a held breath. It won't stop death from finding you, but it makes sure it doesn't, this once." },
+  { id:'chaos_stew', name:'Chaos Stew', type:'consumable', effect:'chaosstew', glyph:'%', color:'#e03aa0', value:55, foodFlavor:true,
+    desc:"Nobody has ever cooked this the same way twice, including you. There is genuinely no telling what it's about to do." },
+);
+RECIPES.push(
+  { id:'cook_levitation_loaf', name:'Bake Levitation Loaf', category:'cooking', inputs:[{id:'dream_nectar',qty:1},{id:'frostpearl_barley',qty:2},{id:'honey',qty:1}], output:{id:'levitation_loaf',qty:1} },
+  { id:'cook_starlight_consomme', name:'Simmer Starlight Consommé', category:'cooking', inputs:[{id:'starfruit',qty:1},{id:'milk',qty:1},{id:'honey',qty:1}], output:{id:'starlight_consomme',qty:1} },
+  { id:'cook_voidtouched_ration', name:'Prepare Void-Touched Ration', category:'cooking', inputs:[{id:'chaos_pepper',qty:1},{id:'leviathan_fat',qty:1},{id:'ember_truffle',qty:1}], output:{id:'voidtouched_ration',qty:1} },
+  { id:'cook_chaos_stew', name:'Cook Chaos Stew', category:'cooking', inputs:[{id:'chaos_pepper',qty:3},{id:'meat_raw',qty:1},{id:'egg',qty:1}], output:{id:'chaos_stew',qty:1} },
+);
+
 // -- Story capstone (backlog pass 5): guaranteed, not rolled -- see the onDeath hook near
 // triggerGodReveal/triggerSimulationReveal. The only item in the game not reachable any other
 // way, on purpose: it's a record of finishing the story, not a combat pick-up.
@@ -9540,6 +9923,14 @@ const MONSTER_EXTRA_FIELDS = [
   // ---- Living World AI framework (see Part A above / Part B near monsterAI) ----
   'abilities', 'usesMp', 'usesCharge', 'thrower', 'speciesId', 'predator', 'prey',
   'fearless', 'fleeHpPct', 'sleeper', 'patrolRadius', 'visionRange', 'intelligent',
+  // ---- ENGINEERING & CULINARY OVERHAUL (Repair Drone) -- QUALITY PASS FIX: these were being read
+  // directly off ally instances by allyAI()'s 'support' branch but were never actually in this
+  // list, so they never copied from MONSTER_BASES onto the live spawned entity at all. It worked
+  // by pure coincidence -- allyAI's own fallback defaults (4-9 healing, range 6) happened to
+  // exactly match bot_repairdrone's authored healPower/healRange -- but tuning either number on
+  // the base would have silently done nothing. Added properly rather than left as a "works by
+  // accident" landmine for whoever adjusts Repair Drone balance next.
+  'healPower', 'healRange',
   // ---- BODY MECHANICS EXTENSION (see the classification loop near isBloodlessMonster below) ----
   'bloodless', 'diseaseImmune', 'noBodyParts',
 ];
@@ -10174,12 +10565,17 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
     const n = randInt(rng, spellCountRange[0], spellCountRange[1]);
     for (let i = 0; i < n && poolCopy.length; i++) { const s = poolCopy.splice(Math.floor(rng()*poolCopy.length), 1)[0]; if (s) npc.teachSpells.push(s.id); }
   }
-  if (roleId === 'chef' || roleId === 'blacksmith' || roleId === 'alchemist' || roleId === 'tailor') {
+  if (roleId === 'chef' || roleId === 'blacksmith' || roleId === 'alchemist' || roleId === 'tailor' || roleId === 'cybersmith') {
     npc.teachRecipes = RECIPES.filter(r => {
-      if (roleId === 'chef') return r.category === 'cooking';
+      if (roleId === 'chef') return r.category === 'cooking' && !RECIPES_EXCLUDED_FROM_RANDOM_TEACHING.has(r.id);
       if (roleId === 'blacksmith') return r.id === 'smelt_iron' || r.id === 'craft_leather' || r.id === 'craft_starmetal_blade' || r.id === 'craft_starmetal_warhammer' || r.id === 'craft_ironwood_bow' || r.id === 'craft_ironwood_staff' || r.id === 'craft_ashwood_recurve' || r.id === 'craft_bulette_vest' || ['rune_might','rune_warding','rune_ember','rune_frost'].some(id => r.id.startsWith('craft_'+id+'_'));
       if (roleId === 'alchemist') return r.id === 'antidote' || ['rune_insight','rune_vitality','rune_precision'].some(id => r.id.startsWith('craft_'+id+'_'));
       if (roleId === 'tailor') return r.id === 'craft_gloves' || r.id === 'craft_boneamulet' || r.id.startsWith('craft_rune_swiftness_');
+      // Cybersmith teaches the ENTIRE engineering tree except the three artifact fusions
+      // (schematic-only, see RECIPES_EXCLUDED_FROM_RANDOM_TEACHING) -- a master cybersmith is a
+      // real one-stop shop for guns and every companion-core line, same role a master
+      // blacksmith/chef already plays for their own discipline.
+      if (roleId === 'cybersmith') return r.category === 'engineering' && !RECIPES_EXCLUDED_FROM_RANDOM_TEACHING.has(r.id);
       return false;
     }).map(r => r.id);
     // NPC overhaul: a still-learning novice craftsperson hasn't picked up everything yet, and for
@@ -10187,6 +10583,14 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
     // master-only, so there's a reason to seek out a specialist once you can afford better runes.
     if (npc.tier !== 'master') npc.teachRecipes = npc.teachRecipes.filter(id => !/_t[23]$/.test(id));
     if (npc.tier === 'novice' && npc.teachRecipes.length > 1) npc.teachRecipes = npc.teachRecipes.slice(0, Math.ceil(npc.teachRecipes.length / 2));
+    // A master chef additionally has a small independent chance to already know one legendary
+    // cookbook recipe outright (see LEGENDARY_COOKBOOK_MASTER_CHEF_CHANCE) -- these are excluded
+    // above like every other RECIPES_EXCLUDED_FROM_RANDOM_TEACHING entry, so this is the ONE
+    // deliberate, hand-rolled exception, not a loophole in the exclusion itself.
+    if (roleId === 'chef' && npc.tier === 'master' && typeof LEGENDARY_COOKBOOKS !== 'undefined' && rng() < LEGENDARY_COOKBOOK_MASTER_CHEF_CHANCE) {
+      const pick = choice(rng, LEGENDARY_COOKBOOKS);
+      npc.teachRecipes.push(pick.recipeId);
+    }
   }
   if (roleId === 'fisherman') { npc.teachRecipes = ['craft_raft']; }
   return npc;
@@ -10277,6 +10681,16 @@ function generateShopInventory(roleId, rng, npc) {
   else if (roleId === 'fletcher') pool = ITEM_BASES.filter(b => b.type === 'weapon' && b.ranged && eligible.has(b.id));
   else if (roleId === 'fisherman' || roleId === 'fishmonger') pool = ITEM_BASES.filter(b => ['meat_cooked','stew','holy_water','cooked_fish','honeyed_salmon','fishing_rod'].includes(b.id));
   else if (roleId === 'guildclerk' || roleId === 'fence' || roleId === 'quartermaster') pool = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor' || b.type === 'consumable') && eligible.has(b.id));
+  // A cybersmith deals in exactly what a real hardware shop would: the ordinary (non-artifact)
+  // guns, Power Cells to keep your constructs running, and the raw engineering materials
+  // themselves -- materials are excluded from the generic `eligible` set everywhere else in the
+  // game (see lootEligibleBaseIds' default excludeTypes), so they're listed explicitly here
+  // rather than falling through to the generic branch below, which would sell none of them.
+  else if (roleId === 'cybersmith') pool = ITEM_BASES.filter(b =>
+    (b.type === 'weapon' && eligible.has(b.id) && ['pipe_pistol', 'repeater_rifle', 'arc_rifle'].includes(b.id)) ||
+    (b.type === 'consumable' && b.id === 'power_cell') ||
+    (b.type === 'material' && ['scrap_metal', 'salvaged_circuit', 'ancient_gearwork', 'arc_capacitor', 'refined_alloy'].includes(b.id))
+  );
   else pool = ITEM_BASES.filter(b => eligible.has(b.id));
   if (!pool.length) pool = ITEM_BASES.filter(b => b.type === 'consumable' && !b.craftOnly); // safety net; shouldn't ever trigger
   const n = randInt(rng, 5, 9);
@@ -13381,6 +13795,7 @@ const CONTAINER_KINDS = {
   coffin:     { name: 'Coffin',      glyph: '=', color: '#5a5a5a', capacity: 10 },
   reliquary:  { name: 'Reliquary',   glyph: 'n', color: '#e0c060', capacity: 8 },
   vault:      { name: 'Vault Case',  glyph: '=', color: '#4ae0d0', capacity: 16 },
+  workbench:  { name: 'Workbench',   glyph: '#', color: '#8a8a6a', capacity: 16 },
 };
 const WILDERNESS_CONTAINER_FLAVOR = [
   'Someone made camp here once and never came back for their things.',
@@ -13469,6 +13884,18 @@ function rollContainerLoot(rng, kind, tier) {
       if (rng() < 0.3) { const candidates = RECIPES.filter(r => !RECIPES_EXCLUDED_FROM_RANDOM_TEACHING.has(r.id)); const rid = choice(rng, candidates).id; items.push({ uid:'i'+Math.random().toString(36).slice(2,9), id:rid, recipeId:rid, type:'recipe', name:'Recipe: '+RECIPES.find(r=>r.id===rid).name, glyph:'?', color:'#a0c9e0', value:0 }); }
       break;
     }
+    case 'workbench': {
+      // A cybersmith's own workshop furniture -- raw engineering materials plus a real shot at
+      // one of the curated, flavorful schematic items (see ENGINEERING_SCHEMATICS_COMMON) rather
+      // than the generic ad-hoc "Recipe: X" scroll the plain cabinet case above rolls. Only
+      // ever the common (non-artifact) schematics -- the artifact ones stay vault/boss-gated.
+      const engMatIds = ['scrap_metal', 'salvaged_circuit', 'ancient_gearwork', 'arc_capacitor', 'refined_alloy'];
+      for (let i = 0; i < n; i++) { const it = makeItem(choice(rng, engMatIds), 0, rng); it.amount = randInt(rng, 1, 4); addItemToList(items, it); }
+      if (rng() < 0.25 && typeof ENGINEERING_SCHEMATICS_COMMON !== 'undefined' && ENGINEERING_SCHEMATICS_COMMON.length) {
+        addItemToList(items, makeItem(choice(rng, ENGINEERING_SCHEMATICS_COMMON.map(s => s.id)), 0, rng));
+      }
+      break;
+    }
     case 'desk': case 'bookshelf': default: {
       // handled by placeContainersInBuilding/placeContainersInRoom, which layer books on top of
       // (or instead of) whatever this rolls -- desks/bookshelves that come through here with no
@@ -13502,7 +13929,7 @@ const ROLE_CONTAINER_PROFILES = {
   storagekeeper: ['chest','vault'], dealer: ['crate','cabinet'], guildclerk: ['weaponrack','desk'],
   lumberjack: ['crate','sack'], carpenter: ['crate'], brewer: ['barrel','crate'],
   gladiator: ['weaponrack','sack'], dockhand: ['crate','barrel'], healer: ['cabinet','desk'],
-  house: ['chest','cabinet'],
+  house: ['chest','cabinet'], cybersmith: ['workbench','crate'],
 };
 function settlementTierNum(tier) { return { hamlet:0, village:1, town:2, city:3, capital:4 }[tier] || 0; }
 // Called once per building, right after it's laid out and its NPC assigned -- places 1-2
@@ -16390,8 +16817,63 @@ function allyAI(a) {
   processEntityStatus(a);
   if (!a.alive) return;
   if (a.frozenSolidTurns > 0 || a.stunnedTurns > 0) return; // frozen solid or stunned -- can't act at all this turn (see freezeEntitySolid / ARTIFACT FRAMEWORK stunProcChance)
+  // ---- CONSTRUCT POWER GRID: a player-built construct drains its own powerDraw from its charge
+  // meter every single turn it's deployed, whether or not it acts this turn -- it's upkeep, not
+  // ammo (see CONSTRUCT POWER GRID above). At 0 it goes inert (poweredDown) and skips its turn
+  // entirely until a Power Cell tops it back up (see 'rechargeconstructs' in useItem()). This
+  // check runs before EVERY other branch below (turret or normal), so a depowered construct
+  // truly does nothing -- it doesn't even hold its ground and take potshots.
+  if (a.isPlayerConstruct) {
+    if (a.charge === undefined) a.charge = a.maxCharge || CONSTRUCT_MAX_CHARGE;
+    if (!a.poweredDown) {
+      a.charge -= (a.powerDraw || 1);
+      if (a.charge <= 0) {
+        a.charge = 0; a.poweredDown = true;
+        log(`${a.name} runs out of power and shuts down where it stands. A Power Cell will bring it back online.`);
+      } else if (!a.lowChargeWarned && a.charge <= (a.maxCharge || CONSTRUCT_MAX_CHARGE) * 0.2) {
+        a.lowChargeWarned = true;
+        log(`${a.name}'s charge is running low.`);
+      }
+    }
+    if (a.poweredDown) return;
+  }
   // faction-aware target pick (see the Living World AI framework near monsterAI) -- an ally now
   // fights any hostile monster OR hostile NPC, not just whichever monster happens to be closest.
+  // Player-built turrets (craft_turret_core_* -> spawnAlly) never move, exactly like the
+  // hostile Turret Sentry's own monsterAI branch -- see behavior:'turret' there. Checked before
+  // the ordinary follow/chase logic below so a turret ally never steps off its deployed tile
+  // chasing a target out of range, and never "follows" the player around like a pet either.
+  if (a.behavior === 'turret') {
+    const t = pickHostileTarget(a, a.range || 6);
+    a.target = t;
+    if (t && chebyshev(a.x, a.y, t.x, t.y) <= (a.range || 6)) doAttack(a, t);
+    return;
+  }
+  // Repair Drone (bot_repairdrone) and any future support-archetype construct: doesn't fight at
+  // all -- every turn it looks for whichever the player OR another ally most needs healing
+  // (lowest HP%) within healRange, and heals them for healPower, no adjacency required (it's a
+  // drone, not a medic crawling across the battlefield). If nothing's hurt in range it just
+  // stays near the player like an ordinary ally, ready for the moment it IS needed.
+  if (a.behavior === 'support') {
+    const candidates = [player, ...curAllies().filter(al => al !== a)];
+    let best = null, bestPct = 1;
+    for (const t of candidates) {
+      if (t !== player && !t.alive) continue;
+      if (t.hp >= t.maxHp) continue;
+      if (chebyshev(a.x, a.y, t.x, t.y) > (a.healRange || 6)) continue;
+      const pct = t.hp / t.maxHp;
+      if (pct < bestPct) { bestPct = pct; best = t; }
+    }
+    if (best) {
+      const amt = randInt(Math.random, (a.healPower && a.healPower[0]) || 4, (a.healPower && a.healPower[1]) || 9);
+      best.hp = Math.min(best.maxHp, best.hp + amt);
+      log(`${a.name} patches up ${best === player ? 'you' : best.name} for ${amt} HP.`);
+    } else {
+      const dPlayer = chebyshev(a.x, a.y, player.x, player.y);
+      if (dPlayer > 3) stepToward(a, player.x, player.y);
+    }
+    return;
+  }
   const target = pickHostileTarget(a, 8);
   a.target = target;
   if (target) {
@@ -18327,6 +18809,12 @@ const CRAFT_QUALITY_TIERS = [
 ];
 function craftingCategoryFor(recipe) {
   if (recipe.category === 'cooking') return { key: 'cooking', stat: 'con' };
+  // Engineering (guns/turret-bot-cyborg cores) is its own discipline, governed by INT --
+  // building a working gun or chassis is closer to alchemy's precision than a blacksmith's
+  // brute-force forging. Tagged by recipe.category rather than inferred from the output item's
+  // type so a deployable construct core (itself just a 'consumable') doesn't get miscategorized
+  // into 'alchemy' the way the generic output.type fallback below would put it.
+  if (recipe.category === 'engineering') return { key: 'engineering', stat: 'int' };
   const base = ITEM_BASES.find(b => b.id === recipe.output.id);
   if (!base) return { key: 'tinkering', stat: 'dex' };
   if (base.type === 'consumable' || base.type === 'scroll') return { key: 'alchemy', stat: 'int' };
@@ -18366,6 +18854,12 @@ function craftQualityRoll(recipe) {
 const MATERIAL_PROPERTIES = {
   starmetal_ore: { label: 'Starmetal', powerMult: 1.18, durMult: 1.4, valueMult: 1.6, color: '#8ad0e0' },
   ironwood:      { label: 'Ironwood',  powerMult: 1.12, durMult: 1.6, valueMult: 1.4, color: '#5a4a2a' },
+  // Engineering materials (see ENGINEERING & CULINARY OVERHAUL, further up this file) plug into
+  // the exact same table -- a gun or turret/bot/cyborg core built with one of these imprints its
+  // bonus the same way a Starmetal weapon does, no separate mechanism needed.
+  refined_alloy: { label: 'Refined-Alloy', powerMult: 1.10, durMult: 1.35, valueMult: 1.3, color: '#b6bcc4' },
+  reactor_core_shard: { label: 'Reactor-Cored', powerMult: 1.30, durMult: 1.5, valueMult: 2.0, color: '#e03aa0' },
+  sovereign_chassis_plate: { label: 'Sovereign-Plated', powerMult: 1.24, durMult: 1.8, valueMult: 1.9, color: '#c0c0d0' },
 };
 // Returns the property entry for the first input on `recipe` that has one, or null. First-match
 // (not "richest match") is intentional: a recipe listing a special material at all means the
@@ -21256,6 +21750,12 @@ function dropLoot(def) {
     const mat = makeItem(BOSS_MATERIAL_DROPS[def.monsterId].itemId, 0, Math.random);
     mat.amount = 1;
     addItemToList(items, mat);
+  }
+  // Engineering schematic shortcut (see ENGINEERING & CULINARY OVERHAUL): a separate, independent
+  // roll from the material drop above, so a construct/cyber boss kill can hand you the reagent,
+  // the recipe to use it, both, or neither in a single fight.
+  if (def.boss && typeof ENGINEERING_BOSS_SCHEMATIC_DROPS !== 'undefined' && ENGINEERING_BOSS_SCHEMATIC_DROPS[def.monsterId] && Math.random() < 0.25) {
+    addItemToList(items, makeItem(ENGINEERING_BOSS_SCHEMATIC_DROPS[def.monsterId], 0, Math.random));
   }
   // ---- COMMON_UNIQUE_DROPS: the low-tier counterpart to BOSS_UNIQUE_DROPS above -- ordinary,
   // non-boss monsters get their own (much rarer per-kill, since you kill hundreds of these)
@@ -31752,6 +32252,38 @@ function movePlayer(dx, dy, forceAttack) {
       openDialogue(target);
       return;
     }
+    // Player-built constructs (see CONSTRUCT POWER GRID) are the first PERMANENT ally the base
+    // game can produce outside the rare Necromancer capstone, backed by a genuinely finite grid
+    // capacity -- and the base game has no "dismiss an ally" command anywhere, because every
+    // other summon just expires on its own. That's a real gap here specifically: a construct that's
+    // run out of charge with no Power Cell in reach, or one you've simply outgrown, would
+    // otherwise permanently squat on grid capacity with no way to free it up short of getting it
+    // killed. Bumping into your own construct now offers a real choice instead of a silent swap.
+    if (target.kind === 'ally' && target.isPlayerConstruct) {
+      const draw = target.powerDraw || 1;
+      presentChoice(`${target.name} (${Math.max(0,target.hp)}/${target.maxHp} HP${target.poweredDown ? ', POWERED DOWN' : `, ⚡${Math.round(100*(target.charge||0)/(target.maxCharge||CONSTRUCT_MAX_CHARGE))}%`}):`, [
+        { label: 'Swap places', action: () => { const tx=target.x, ty=target.y; target.x=player.x; target.y=player.y; player.x=tx; player.y=ty; endTurn(); } },
+        { label: `Scrap it (frees ${draw} grid capacity, +${Math.max(2, draw*3)} scrap metal)`, action: () => {
+            target.alive = false;
+            // QUALITY PASS FIX: this used to just flip target.alive without calling
+            // removeDeadEntity(), unlike every other death path in the game (see onDeath() ->
+            // removeDeadEntity() for combat deaths, and its own kind==='ally' branch that splices
+            // player.allies and sets player.lastFallenAlly). Left as a bare flag flip, the scrapped
+            // construct would linger in player.allies forever, uncounted only because
+            // currentConstructPowerDraw()/rechargeconstructs already defensively filter on .alive --
+            // any future code that reads player.allies directly (the way three call sites already
+            // legitimately do) would have silently seen a dead entity again. Routed through the
+            // real removeDeadEntity() so scrapping cleans up exactly like every other kind of death.
+            removeDeadEntity(target);
+            const scrap = makeItem('scrap_metal', 0, Math.random); scrap.amount = Math.max(2, draw * 3);
+            addItemToList(player.inventory, scrap);
+            log(`You break ${target.name} down for parts. Grid capacity freed: ${draw}.`);
+            updateSidebar(); endTurn();
+          } },
+        { label: 'Never mind', action: () => {} },
+      ]);
+      return;
+    }
     const tx = target.x, ty = target.y;
     target.x = player.x; target.y = player.y;
     player.x = tx; player.y = ty;
@@ -33166,6 +33698,88 @@ function useItem(it) {
       break;
     }
     case 'scrollsummon': { const a = spawnAlly(it.summonId, it.duration || 40); if (a) log(`You conjure ${a.name} to fight at your side!`); break; }
+    case 'summonconstruct': {
+      // Player-built turrets/bots/cyborgs (see ENGINEERING & CULINARY OVERHAUL) are PERMANENT
+      // allies -- duration 0 is spawnAlly's existing "never expires" contract, the exact same
+      // value Raise Dead/Pull Back the Fallen already use above. Gated on the CONSTRUCT POWER
+      // GRID (see above) rather than a flat headcount: total powerDraw of everything already
+      // deployed plus this one's draw must fit inside the player's current capacity, which
+      // itself grows with Engineering practice, INT, and installed Auxiliary Reactors -- so a
+      // committed engineer can genuinely field more than the base two, just not for free.
+      const baseMon = MONSTER_BASES[it.summonId];
+      const newDraw = (baseMon && baseMon.powerDraw) || 1;
+      const activeDraw = currentConstructPowerDraw();
+      const capacity = computeConstructPowerCapacity();
+      if (activeDraw + newDraw > capacity) {
+        log(`Your power grid can't support that -- ${activeDraw}/${capacity} capacity already committed, and this needs ${newDraw} more. Boost capacity with an Auxiliary Reactor, more Engineering practice, or higher INT, or free up draw by retiring a construct first.`);
+        consumed = false; break;
+      }
+      const a = spawnAlly(it.summonId, 0, it.summonName);
+      if (a) {
+        a.isPlayerConstruct = true;
+        a.powerDraw = newDraw;
+        a.maxCharge = CONSTRUCT_MAX_CHARGE;
+        a.charge = CONSTRUCT_MAX_CHARGE;
+        log(`${it.name} unfolds and boots up -- ${a.name} is online and fighting at your side (grid: ${activeDraw + newDraw}/${capacity}).`);
+      } else consumed = false;
+      break;
+    }
+    case 'installreactor': {
+      // Permanent capacity upgrade for the CONSTRUCT POWER GRID -- see computeConstructPowerCapacity
+      // above. Capped at MAX_AUX_REACTORS so this is a real, bounded investment, not an unlimited
+      // buy-your-way-out; installing past the cap just refunds the item as scrap value instead of
+      // silently vanishing it.
+      player.auxReactorsInstalled = player.auxReactorsInstalled || 0;
+      if (player.auxReactorsInstalled >= MAX_AUX_REACTORS) {
+        const refund = Math.max(5, Math.round((it.value || 50) * 0.5));
+        player.gold += refund;
+        log(`Your grid already has ${MAX_AUX_REACTORS} auxiliary reactors installed -- there's no room for another. You strip it for parts instead (+${refund}g).`);
+        break;
+      }
+      player.auxReactorsInstalled++;
+      log(`${it.name} wires cleanly into your grid. Construct capacity is now ${computeConstructPowerCapacity()} (${player.auxReactorsInstalled}/${MAX_AUX_REACTORS} reactors installed).`);
+      Sound.play('levelup');
+      break;
+    }
+    case 'rechargeconstructs': {
+      const constructs = (player.allies || []).filter(al => al.isPlayerConstruct && al.alive);
+      if (!constructs.length) { log("You don't have any constructs deployed to recharge."); consumed = false; break; }
+      let refreshed = 0;
+      for (const c of constructs) {
+        if (c.charge < (c.maxCharge || CONSTRUCT_MAX_CHARGE)) refreshed++;
+        c.charge = c.maxCharge || CONSTRUCT_MAX_CHARGE;
+        c.poweredDown = false;
+        c.lowChargeWarned = false;
+      }
+      log(refreshed ? `${it.name} tops every construct you have deployed back up to full charge (${constructs.length} recharged).` : `Everything's already at full charge -- ${it.name} isn't needed yet.`);
+      break;
+    }
+    case 'milestonefood': {
+      // One-time PERMANENT stat gain per distinct dish -- see ENGINEERING & CULINARY OVERHAUL
+      // above. Re-eating the same dish after the first time is just a good, ordinary meal (with
+      // maybeGrantCookingBonusEffect's existing random bonus still in play) rather than a no-op,
+      // so it's never a wasted craft even once you've already banked the permanent gain.
+      player.milestoneFoodsEaten = player.milestoneFoodsEaten || {};
+      if (player.milestoneFoodsEaten[it.id]) {
+        const healMultC = 1 + (player.cookingHealBonus || 0);
+        player.hp = Math.min(player.maxHp, player.hp + Math.round((it.power || 15) * healMultC));
+        log(`${it.name} is still a fine meal, but you've already taken everything permanent it had to give.`);
+        maybeGrantCookingBonusEffect(it);
+        break;
+      }
+      player.milestoneFoodsEaten[it.id] = true;
+      if (it.statGain) {
+        for (const statKey of Object.keys(it.statGain)) {
+          const amt = it.statGain[statKey];
+          if (statKey === 'maxHp') { player.maxHp += amt; player.hp += amt; }
+          else if (statKey === 'maxMp') { player.maxMp += amt; player.mp += amt; }
+          else player[statKey] = (player[statKey] || 10) + amt;
+        }
+      }
+      log(`${it.name}: ${it.milestoneDesc || 'Something in you changes, permanently.'}`);
+      Sound.play('levelup');
+      break;
+    }
     case 'foodbuff': {
       const healMultC = 1 + (player.cookingHealBonus || 0);
       const durMultC = 1 + (player.cookingDurBonus || 0);
@@ -33176,7 +33790,12 @@ function useItem(it) {
       break;
     }
     case 'foodspell': {
-      applyBuff('grant_' + it.grantSpell, 1, it.dur || 40);
+      // QUALITY PASS FIX: this was missing the cookingDurBonus talent scaling that every sibling
+      // food-buff case (foodbuff/buffstr/buffdex/etc.) already applies -- pre-existing gap, not
+      // unique to the new Starlight Consommé, but caught while auditing food effects for
+      // consistency and worth fixing everywhere rather than only for new content.
+      const durMultC = 1 + (it.foodFlavor ? (player.cookingDurBonus || 0) : 0);
+      applyBuff('grant_' + it.grantSpell, 1, Math.round((it.dur || 40) * durMultC));
       const granted = findAbilityById(it.grantSpell);
       log(`${it.name} fills you with strange knowledge - you can now cast ${granted ? granted.name : it.grantSpell} for a while!`);
       break;
@@ -33185,6 +33804,68 @@ function useItem(it) {
       player.secondWindMax = (player.secondWindMax || 0) + 1;
       player.secondWindCharges = (player.secondWindCharges || 0) + 1;
       log(`${it.name} settles warmly in your chest - you feel death itself will have to wait.`);
+      break;
+    }
+    case 'foodextralife': {
+      // Void-Touched Ration: a TEMPORARY safety net, distinct from the Phoenix Ash Biscuit's
+      // PERMANENT extra Second Wind slot above -- this just tops up your current charges by one,
+      // capped at whatever your max already is, so it can't be stacked into extra permanent lives.
+      const healMultC = 1 + (player.cookingHealBonus || 0);
+      player.hp = Math.min(player.maxHp, player.hp + Math.round((it.power || 15) * healMultC));
+      if ((player.secondWindCharges || 0) < (player.secondWindMax || 0)) {
+        player.secondWindCharges = (player.secondWindCharges || 0) + 1;
+        log(`${it.name} settles like held breath -- your next brush with death won't be the last one.`);
+      } else {
+        log(`${it.name} is a fine meal, but your last stand is already fully charged.`);
+      }
+      maybeGrantCookingBonusEffect(it);
+      break;
+    }
+    case 'chaosstew': {
+      // True kitchen-table randomness, on request -- every bowl rolls one of several genuinely
+      // different outcomes, good and bad, instead of a guaranteed effect. Table is intentionally
+      // weighted toward net-positive (this is still food someone chose to eat), but the self-harm
+      // and confusion outcomes are real, not cosmetic -- that's what makes eating it a choice
+      // instead of a strictly-better version of any other feast. Add more entries here freely;
+      // this is a flat weighted array by design so extending the table is a one-line change.
+      // QUALITY PASS FIX: like foodspell above, this was ignoring cookingDurBonus entirely, unlike
+      // every other duration-based food effect in the game. Applied to every BENEFICIAL buff
+      // below; deliberately NOT applied to the confusion downside a few branches down --
+      // extending your own bad-luck roll because you invested in a chef talent would be a
+      // backwards reward for player investment.
+      const durMultC = 1 + (it.foodFlavor ? (player.cookingDurBonus || 0) : 0);
+      const roll = Math.random();
+      if (roll < 0.20) {
+        player.hp = player.maxHp; player.mp = player.maxMp;
+        log(`${it.name} floods through you like a held-in scream finally let out -- fully healed, fully restored.`);
+      } else if (roll < 0.38) {
+        // str/dex/armor/evasion are the four buff keys the combat math actually reads (see
+        // effStr/effDex/getBuff call sites) -- picked deliberately over int/con, which the base
+        // game's own buffint/buffcon item effects already apply but nothing downstream ever
+        // consumes, so a chaos-stew "supercharged" roll should feel like it, not fizzle quietly.
+        const d = Math.round(30 * durMultC);
+        applyBuffQuiet('str', 4, d); applyBuffQuiet('dex', 4, d); applyBuffQuiet('armor', 4, d); applyBuffQuiet('evasion', 0.15, d);
+        log(`${it.name} makes you feel briefly, thunderously capable of anything.`);
+      } else if (roll < 0.56) {
+        applyBuffQuiet('flight', 1, Math.round(30 * durMultC)); applyBuffQuiet('invis', 1, Math.round(25 * durMultC));
+        log(`${it.name} makes the world go quiet and far away -- you're barely here, and barely bound to the ground.`);
+      } else if (roll < 0.72) {
+        player.mp = player.maxMp;
+        applyBuff('grant_' + choice(Math.random, ['detect','flight']), 1, Math.round(40 * durMultC));
+        log(`${it.name} floods your mind with mana and half a stranger's memory of a spell.`);
+      } else if (roll < 0.86) {
+        // Confusion isn't part of the applyBuff() stat-buff system -- like every other confuse
+        // source in the game (hallucinogenic gas, Warp Mind, wild fae magic above), it's a direct
+        // additive counter on player.statusConfuse (see the many other examples of this pattern).
+        player.statusConfuse = (player.statusConfuse || 0) + 3;
+        log(`${it.name} was a mistake. The room will stop spinning shortly.`);
+      } else {
+        const dmg = Math.max(1, Math.round(player.maxHp * 0.08));
+        player.hp = Math.max(1, player.hp - dmg);
+        applyBuffQuiet('str', 7, Math.round(20 * durMultC)); applyBuffQuiet('crit', 0.15, Math.round(20 * durMultC));
+        log(`${it.name} costs you ${dmg} HP on the way down, but whatever's left of you feels dangerous.`);
+      }
+      maybeGrantCookingBonusEffect(it);
       break;
     }
     case 'ambrosia': {
@@ -33321,8 +34002,33 @@ function describeItem(it) {
       throwdmg:'Thrown weapon — damages the nearest foe', escape:'Blinks you away and grants brief invisibility',
       placewaypoint:'Plants a permanent, nameable waystone at your feet, linking it to your travel network',
       repair:'Repairs whichever equipped weapon/armor piece needs it most',
-      recall:'Opens the waystone network from anywhere — even inside a dungeon — consumed once you travel' }[it.effect];
+      recall:'Opens the waystone network from anywhere — even inside a dungeon — consumed once you travel',
+      summonconstruct:'Permanently deploys a construct ally, powered by your Construct Power Grid',
+      installreactor:'Permanently increases your Construct Power Grid capacity by 1 (once installed)',
+      rechargeconstructs:'Instantly refills every deployed construct back to full charge',
+      milestonefood:'The first bite of this specific dish grants a permanent gift; after that, just a good meal',
+      foodextralife:'Refills one used Second Wind charge, if you have one to refill',
+      chaosstew:'A different, unpredictable effect every time you eat it' }[it.effect];
     lines.push(eff || 'A consumable item.');
+    // Dynamic, live-computed context for the CONSTRUCT POWER GRID items -- static flavor text
+    // can't tell the player whether THIS deploy will actually fit their CURRENT grid, so it's
+    // computed fresh every time the tooltip is drawn instead of baked into the item.
+    if (it.effect === 'summonconstruct') {
+      const baseMon = MONSTER_BASES[it.summonId];
+      const draw = (baseMon && baseMon.powerDraw) || 1;
+      const cur = currentConstructPowerDraw(), cap = computeConstructPowerCapacity();
+      lines.push(`Grid draw: ${draw} (currently ${cur}/${cap} committed${cur + draw > cap ? ' — NOT ENOUGH ROOM to deploy this right now' : ''})`);
+    }
+    if (it.effect === 'installreactor') {
+      lines.push(`Reactors installed: ${player.auxReactorsInstalled || 0}/${MAX_AUX_REACTORS}${(player.auxReactorsInstalled||0) >= MAX_AUX_REACTORS ? ' — grid is already maxed; installing this refunds gold instead' : ''}`);
+    }
+  } else if (it.type === 'recipe') {
+    const r = RECIPES.find(x => x.id === it.recipeId);
+    if (r) {
+      const already = player.knownRecipes.includes(r.id);
+      const inputList = r.inputs.map(i => `${i.qty}x ${(ITEM_BASES.find(b=>b.id===i.id)||{name:i.id}).name}`).join(', ');
+      lines.push(already ? `You already know this recipe (${r.name}).` : `Teaches: ${r.name} — requires ${inputList}.`);
+    } else lines.push('A recipe, teaching some craft or another.');
   } else if (it.type === 'material') {
     lines.push('Crafting/cooking ingredient.');
   } else if (it.type === 'rune') {
@@ -33540,8 +34246,25 @@ function updateSidebar() {
   updateMainQuestTracker();
   const allies = curAllies();
   const companions = player.companions.filter(c => c.alive);
-  let allyHtml = allies.length ? allies.map(a => `${a.name} (${Math.max(0,a.hp)}/${a.maxHp})`).join('<br>') : '';
+  // Player-built constructs get their power state shown inline (⚡charge%, or a clear POWERED
+  // DOWN flag) right next to their HP -- the whole CONSTRUCT POWER GRID mechanic is invisible to
+  // the player otherwise, which would make "why did my turret stop shooting" a total mystery.
+  // Non-construct allies (spell summons, raised dead) are untouched, exactly as before.
+  let allyHtml = allies.length ? allies.map(a => {
+    const hpPart = `${a.name} (${Math.max(0,a.hp)}/${a.maxHp})`;
+    if (!a.isPlayerConstruct) return hpPart;
+    if (a.poweredDown) return `${hpPart} <span class="dim">[POWERED DOWN]</span>`;
+    const pct = Math.round(100 * (a.charge || 0) / (a.maxCharge || CONSTRUCT_MAX_CHARGE));
+    return `${hpPart} <span class="dim">[⚡${pct}%]</span>`;
+  }).join('<br>') : '';
   if (companions.length) allyHtml += (allyHtml ? '<br>' : '') + companions.map(c => `${c.name} ♥ (${Math.max(0,c.hp)}/${c.maxHp})`).join('<br>');
+  // Grid capacity/draw summary appended once at the end, only when the player actually has (or
+  // has ever had reason to have) constructs -- so a pure fantasy playthrough that never touches
+  // Engineering never sees this line at all.
+  const constructDraw = currentConstructPowerDraw();
+  if (constructDraw > 0 || (player.auxReactorsInstalled || 0) > 0) {
+    allyHtml += (allyHtml ? '<br>' : '') + `<span class="dim">Grid: ${constructDraw}/${computeConstructPowerCapacity()}</span>`;
+  }
   document.getElementById('ally-text').innerHTML = allyHtml || '<span class="dim">none</span>';
   const propCount = (player.properties || []).length;
   const primaryProp = propCount ? (player.properties.find(p => p.id === player.primaryResidenceId) || player.properties[0]) : null;
