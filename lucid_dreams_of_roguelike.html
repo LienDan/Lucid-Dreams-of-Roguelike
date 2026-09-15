@@ -203,6 +203,9 @@
   .barfill.hp{ background:linear-gradient(to right, #7a1f19, var(--hp)); }
   .barfill.mp{ background:linear-gradient(to right, #1c3f6b, var(--mp)); }
   .barfill.stamina{ background:linear-gradient(to right, #6b5a1c, #b0932f); }
+  .barfill.stamina.sprinting{ background:linear-gradient(to right, #7a2a1c, #e0602f); animation:sprintpulse 0.9s ease-in-out infinite; }
+  @keyframes sprintpulse{ 0%,100%{ opacity:1; } 50%{ opacity:0.72; } }
+  .bar-text.sprinting{ color:#e0824a; }
   .barfill.charge{ background:linear-gradient(to right, #1c5a6b, #2fb0a0); }
   .bar-text{ font-size:1.1rem; color:var(--text-dim); margin-bottom:8px; }
   .keyhint{ color:var(--text-dim); font-size:1.1rem; line-height:1.6; }
@@ -487,6 +490,7 @@
         <b>p</b> property &amp; housing &nbsp; <b>F</b> family<br>
         <b>O</b> professions<br>
         <b>t</b> talk &nbsp; <b>x</b> look &nbsp; <b>r</b> rest<br>
+        <b>v</b> toggle sprint<br>
         <b>G</b> auto-travel &nbsp; <b>H</b> auto-home<br>
         <b>X</b> auto-explore &nbsp; <b>M</b> dungeon map<br>
         <b>&gt;</b> enter/descend &nbsp; <b>&lt;</b> ascend<br>
@@ -518,7 +522,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.48.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.49.0-alpha</div>
     </div>
   </div>
 
@@ -1715,6 +1719,116 @@
 //   - Playtest-bot compatible without any changes to the bot itself: START_SCENARIOS.length is read
 //     dynamically by the bot's character-creation step, so the 3 new letters just work.
 //
+// v0.49.0 Player-requested MOVEMENT/STAMINA/ACTION SPEED overhaul. Two separate complaints:
+// stamina never seemed to increase no matter what, and running from (or chasing down) something
+// your own exact speed was effectively impossible.
+//   - Root cause of the first complaint: maxStamina was set once, flatly, in newPlayer() and never
+//     touched again -- unlike maxHp/maxMp, neither spendStat() (leveling up) nor levelUp() itself
+//     had ANY stamina-growth line at all. CON/DEX investment for the rest of the game did nothing
+//     for it. Fixed at all three sites (recalcVitalsFromStats/spendStat/levelUp), tied to CON
+//     (primary, mirrors its existing maxHp role) and DEX (secondary). No save migration for this --
+//     player-confirmed old saves don't need to carry the fix forward; a fresh character (or one
+//     that's since leveled/spent points post-patch) gets the corrected numbers going forward.
+//   - New Action Speed Framework (computeBonusActionsDetailed/refillBonusActions/consumeBonusAction,
+//     all near worldTick): every player action already funneled through one endTurn() call site (85+
+//     of them) -- gated bonus actions there instead of touching any of them individually. A banked
+//     bonus action skips worldTick() (the world/monsters/allies don't advance) entirely for that one
+//     action; once the bank is empty the next endTurn() call runs a real round and refills the bank
+//     for the next one. Sources: a manual Sprint toggle (key v, drains Stamina/round, sprintStamina-
+//     CostThisRound scales UP with however many OTHER sources are already stacked -- see below),
+//     permanent DEX breakpoints (20/34/50, effDex-based so gear/buffs count), the new 5-tier Fleetfoot
+//     talent line (capping in Windwalker, a permanent +1), a Sandevistan-style cybernetic (burst
+//     window costed against the existing Charge economy), and an eldritch mutation (Moment Thief,
+//     paid in raw HP + a steep corruption requirement). Monsters/allies use the identical DEX-
+//     threshold logic (entityBonusActions) -- a handful of already-existing high-DEX bosses (34-65
+//     DEX) automatically qualify with zero data changes, and allies near a sprinting player keep
+//     pace instead of getting left behind.
+//   - Player-requested design constraint: no hard cap on stacking. Balance is entirely per-source
+//     (real Stamina/HP/MP/Charge cost, a steep stat/level requirement, or genuine rarity) rather
+//     than an arbitrary ceiling silently discarding value a player paid for.
+//   - Swept the same "does this ability's flavor text match what it mechanically does" lens (see
+//     v0.40.22-31 above) specifically for anything already claiming a speed/haste effect: Accelerate
+//     ("your own time flows faster") was a flat DEX buff with no connection to actions-per-turn --
+//     now a real actionspeed buff. Time Stop ("everything... nearly stops moving") only ever
+//     slowed enemies -- added a selfBuff field so the caster's own turn speeds up too, the other
+//     half of its own premise. Blood Pact ("grants great strength and speed") faked the speed half
+//     with a hardcoded +3 DEX special case -- replaced with a data-driven bonusBuff field granting
+//     the real thing.
+//   - doRest()'s "already at full strength" gate (and the rest loop's own copy of it) only ever
+//     checked HP/MP -- harmless before Stamina had any real recovery pressure of its own, but with
+//     Sprint now able to drain it while HP/MP sit untouched, resting did nothing at all in that
+//     state. Both checks now include Stamina.
+//   - QUALITY PASS FIXES found re-auditing the above rather than assuming it shipped correctly:
+//     (1) entityBonusActions' DEX-threshold rule alone would have made "wolves are fast" pure
+//     flavor text -- checked the actual bestiary and every wolf/assassin variant sits at DEX 11-16,
+//     nowhere near the 20 breakpoint. Added a dedicated swiftMover flag (MONSTER_BASES) instead of
+//     inflating their combat DEX as a workaround. (2) swiftMover initially did nothing at all when
+//     spawned -- MONSTER_EXTRA_FIELDS is an explicit allowlist makeMonster() copies from base
+//     template onto the live instance, the same landmine class as the healPower/healRange fix
+//     above, caught this time by tracing the field all the way through instead of assuming a base-
+//     template tag automatically reaches gameplay. (3) staminaDrainReduction had one contributor
+//     (the Wanderer talent) with no clamp while its three siblings all capped theirs -- not
+//     currently exploitable (no respec system, and every source is a one-time pick totaling well
+//     under 100% today), but the pre-existing swimCost formula had no floor either, so a future
+//     stacking source pushing the total to/past 100% would've made swimming generate stamina.
+//     Fixed at the point of use instead (effStaminaDrainReduction(), applied by both swimCost and
+//     Sprint's own cost) so no future contributor can reopen this regardless of whether it
+//     remembers to clamp itself. (4) consumeBonusAction() was calling updateSidebar() AND render()
+//     every single bonus action, when render() already calls updateSidebar() internally.
+//   - QUALITY PASS FIX, more serious than the above: monsterAI()/allyAI() each bundle TWO things
+//     into one function -- the entity's actual action (move/attack/cast), and ROUND-scoped upkeep
+//     that has nothing to do with acting at all (processEntityStatus's poison/burn/bleed/slow/wet
+//     damage-and-duration ticks, regenEntityAIPools' ability-cooldown decrements and mp/charge/
+//     stamina regen, an ally's summon-duration countdown, a construct's per-round power drain).
+//     The bonus-action loop above was calling the WHOLE function again for an entity's extra
+//     action, which meant a swift monster or an ally keeping pace with a sprinting player took
+//     poison/burn/bleed damage twice, regenerated resources twice, and cooled its abilities down
+//     twice as fast per real round -- and, worse, a summoned ally's duration counter (and a
+//     construct's charge) would burn out in HALF the intended time, meaning sprinting near your
+//     own summons made them die faster, the exact opposite of the feature's intent. Both functions
+//     now take an isBonusAction flag; the round-scoped upkeep is skipped on a bonus call while the
+//     actual behavior dispatch (movement/attacks/abilities) still runs every time. Traced the
+//     player's own equivalent path to confirm it doesn't share this bug: the player's bonus
+//     actions skip worldTick() ENTIRELY rather than re-running a function that bundles per-round
+//     ticking inside it, which is why this asymmetry existed in the first place.
+//   - The earlier "does this ability's name match what it does" pass wasn't actually complete
+//     despite being described that way -- a full re-sweep of SPELLS/TECHNIQUES/CYBERNETICS/
+//     MUTATIONS/TALENTS_V2/items turned up two more real misses: the "Haste" spell itself (the
+//     single most obvious candidate, somehow missed the first time) was a flat +5 DEX with zero
+//     connection to actions-per-turn; converted to a real, deliberately modest actionspeed buff
+//     (weaker than Chronomancy's own Accelerate/Time Stop, since Haste is cheap and school-less).
+//     Potion/Scroll of Haste shared a generic 'buffdex' item-effect handler with plain, non-haste-
+//     named agility potions -- split off a new 'buffhaste' effect so only the actually-named-Haste
+//     consumables get the real thing, leaving Potion of Agility exactly what it says it is. The
+//     Sandevistan-Rig-adjacent "Overdrive Sprint" cybernetic literally shared the word "Sprint"
+//     with the player's own new Sprint mechanic and was described as "a brief, unnatural burst of
+//     speed" -- also just flat DEX; converted to a cheaper, longer-duration, single-action sibling
+//     to Sandevistan Rig (real choice between the two, not a strict upgrade either way). Deliberately
+//     did NOT touch passive/generic speed-flavored content (Reflex Booster, Swift Reflexes, Boots
+//     of Haste/Swiftness/Fleetfoot, Rune of Swiftness, Quick Draw/Stab/Cast/Fingers/Study) -- these
+//     either never claim "you act again" in the first place (they're about single-action speed or
+//     efficiency, which their existing numbers already deliver), or are permanent/cheap/passive
+//     stat items where granting free action economy would trivialize Windwalker's steep 5-tier
+//     investment cost. That's a deliberate scope boundary, not an oversight.
+//   - Fourth quality-pass round, checking angles unrelated to the naming-mismatch bug class above:
+//     (1) bonusActionCharges is plain saved/restored JSON -- a save made mid-round with charges
+//     banked would hand the player a few genuinely free actions the instant they loaded, no world-
+//     tick or cost behind them. Same issue existed in the tutorial's death-respawn and a debug
+//     full-restore helper (both wipe player.buffs, which stale bonusActionCharges wouldn't reflect).
+//     All three now call refillBonusActions() afterward. (2) applyBuff/applyBuffQuiet always
+//     OVERWRITE a stat's buff slot outright, which is harmless for a single-source stat like
+//     Strength but backwards for actionspeed specifically, since it can come from several different-
+//     powered sources (Accelerate +1, Sandevistan Rig +2) -- casting a weaker one while a stronger
+//     one is still running would've downgraded the player for spending a resource. Scoped narrowly
+//     to just this stat rather than changing buff behavior everyone else relies on. (3) THE REAL
+//     ONE: sprint's stamina cost is deliberately skipped while swimming (swimming already has its
+//     own separate cost), but the bonus-action GRANT wasn't checking water at all -- meaning
+//     toggling Sprint on and then entering water got its +1 action completely free, indefinitely,
+//     since neither cost path was actually charging for it. The nearby-ally "keeps pace with a
+//     sprinting player" bonus had the identical gap. Both now gate on the same isPlayerInWater()
+//     check the cost side already uses, so a swum, cost-free sprint no longer grants anything
+//     either -- consistent instead of one half of the mechanic silently not applying.
+//
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
 // external audio files. This keeps the game a single portable HTML file and
@@ -2609,7 +2723,7 @@ const MONSTER_BASES = {
   gull:    { name:'Gull', glyph:'v', color:'#dfe6ee', hp:3, str:2, dex:10, atk:[1,1], armor:0, xp:2, behavior:'flee' },
   crab:    { name:'Crab', glyph:'c', color:'#c9704a', hp:6, str:4, dex:5, atk:[1,3], armor:2, xp:3, behavior:'aggressive' },
   boar:    { name:'Wild Boar', glyph:'b', color:'#8a6a3d', hp:14, str:8, dex:6, atk:[2,5], armor:1, xp:7, behavior:'aggressive' },
-  wolf:    { name:'Wolf', glyph:'w', color:'#9a9a9a', hp:12, str:7, dex:11, atk:[2,5], armor:0, xp:8, behavior:'aggressive' },
+  wolf:    { name:'Wolf', glyph:'w', color:'#9a9a9a', hp:12, str:7, dex:11, atk:[2,5], armor:0, xp:8, behavior:'aggressive', swiftMover:true },
   spider:  { name:'Giant Spider', glyph:'s', color:'#5a3a5a', hp:10, str:6, dex:12, atk:[1,4], armor:1, xp:8, behavior:'aggressive', poison:2 },
   bear:    { name:'Bear', glyph:'B', color:'#6a4a2a', hp:28, str:14, dex:7, atk:[4,9], armor:2, xp:16, behavior:'aggressive' },
   bandit:  { name:'Bandit', glyph:'p', color:'#c95a5a', hp:16, str:9, dex:9, atk:[2,6], armor:2, xp:12, behavior:'aggressive', dropGold:true },
@@ -2694,7 +2808,13 @@ const SPELLS = [
   { id:'heal', name:'Heal', mp:6, type:'heal', power:[12,22], range:0, desc:'Mends your wounds.' },
   { id:'regen', name:'Regeneration', mp:8, type:'buff', stat:'regen', power:3, dur:8, range:0, desc:'Steady healing over time.' },
   { id:'shield', name:'Arcane Shield', mp:6, type:'buff', stat:'armor', power:5, dur:10, range:0, desc:'Wraps you in a protective ward.' },
-  { id:'haste', name:'Haste', mp:7, type:'buff', stat:'dex', power:5, dur:10, range:0, desc:'Quickens your reflexes.' },
+  // BUG FIX (Action Speed Framework): a spell literally named "Haste" was a flat DEX buff with no
+  // connection to actions-per-turn whatsoever -- the single most direct miss of the whole "does
+  // this ability's name match what it does" pass (see Accelerate/Time Stop/Blood Pact elsewhere).
+  // Kept weaker than Accelerate/Time Stop on purpose: this is a cheap, school-less generic spell
+  // available to far more builds than Chronomancy's own dedicated speed line, so it gets a shorter
+  // taste of the real effect rather than matching their power for a fraction of the investment.
+  { id:'haste', name:'Haste', mp:7, type:'buff', stat:'actionspeed', power:1, dur:6, range:0, desc:'Quickens your reflexes.' },
   { id:'strength', name:'Bull Strength', mp:5, type:'buff', stat:'str', power:4, dur:12, range:0, desc:'Bolsters your might.' },
   { id:'poisoncloud', name:'Poison Cloud', mp:6, type:'debuff', stat:'poison', power:3, dur:5, range:5, desc:'Envelops a foe in toxic vapor.' },
   { id:'slow', name:'Slow', mp:5, type:'debuff', stat:'dex', power:-5, dur:8, range:5, desc:'Saps a foe\'s speed.', slowStatus:4 },
@@ -2917,7 +3037,7 @@ MONSTER_BASES.spiderqueen = { name:'Spider Queen', glyph:'S', color:'#3a1a3a', h
 
 // bosses, tiered
 MONSTER_BASES.banditchief = { name:'Bandit Chief', glyph:'p', color:'#e05a5a', hp:34, str:12, dex:11, atk:[3,8], armor:2, xp:24, behavior:'aggressive', dtier:1, boss:true, bossTier:'common', dropGold:true };
-MONSTER_BASES.alphawolf = { name:'Alpha Wolf', glyph:'w', color:'#e0e0e0', hp:30, str:11, dex:14, atk:[3,7], armor:0, xp:22, behavior:'aggressive', dtier:1, boss:true, bossTier:'common' };
+MONSTER_BASES.alphawolf = { name:'Alpha Wolf', glyph:'w', color:'#e0e0e0', hp:30, str:11, dex:14, atk:[3,7], armor:0, xp:22, behavior:'aggressive', dtier:1, boss:true, bossTier:'common', swiftMover:true };
 Object.assign(MONSTER_BASES.orcwarlord, { bossTier:'uncommon' });
 MONSTER_BASES.vampire = { name:'Vampire', glyph:'V', color:'#8a1a2a', hp:55, str:15, dex:16, atk:[5,10], armor:2, xp:60, behavior:'aggressive', dtier:3, boss:true, bossTier:'uncommon', lifesteal:true };
 Object.assign(MONSTER_BASES.lich, { bossTier:'rare' });
@@ -4042,7 +4162,7 @@ SPELLS.push(
   { id:'temporalslow', name:'Temporal Slow', mp:10, type:'debuff', stat:'dex', power:-6, dur:10, range:5, aoe:true, aoeRadius:2, school:'Chronomancy', desc:'Time itself drags around your foes.', slowStatus:5 },
   { id:'rewindwounds', name:'Rewind Wounds', mp:11, type:'heal', power:[20,32], range:0, school:'Chronomancy', desc:'Unwinds the last few moments of harm done to you.' },
   { id:'foresight', name:'Foresight', mp:9, type:'buff', stat:'crit', power:0.15, dur:15, range:0, school:'Chronomancy', desc:'You glimpse a foe\'s next move a heartbeat early.' },
-  { id:'accelerate', name:'Accelerate', mp:8, type:'buff', stat:'dex', power:6, dur:15, range:0, school:'Chronomancy', desc:'Your own time flows faster than the world around you.' },
+  { id:'accelerate', name:'Accelerate', mp:14, type:'buff', stat:'actionspeed', power:1, dur:10, range:0, school:'Chronomancy', desc:'Your own time flows faster than the world around you.' },
   { id:'timeskip', name:'Time Skip', mp:14, type:'blinklike', power:30, range:0, school:'Chronomancy', desc:'You step sideways out of the flow of time and back in elsewhere.' }
 );
 
@@ -4225,8 +4345,21 @@ const CYBERNETICS = [
   { id:'boostedlegs', name:'Boosted Legs', category:'Mobility', activation:'passive', desc:'Hydraulic tendons replace your calves.', apply:()=>{ player.maxStamina=(player.maxStamina||100)+25; player.stamina=(player.stamina||100)+25; }, remove:()=>{ player.maxStamina-=25; player.stamina=Math.min(player.stamina,player.maxStamina); } },
   { id:'grapplelauncher', name:'Grapple Hook Launcher', category:'Mobility', activation:'active', resource:'charge', mp:12, type:'blinklike', power:6, range:0, desc:'Fires a hookline and reels you toward open ground.' },
   { id:'microthrusters', name:'Micro-Thrusters', category:'Mobility', activation:'active', resource:'charge', mp:18, type:'buff', stat:'flight', power:1, dur:20, range:0, desc:'Ankle-mounted thrusters let you skim over obstacles — and water.' },
+  // ACTION SPEED FRAMEWORK: the Cyberpunk-style "Sandevistan" burst -- everything else crawls while
+  // you don't. Balanced entirely through cost and brevity rather than a cap: 35 Charge is well over
+  // half a base 60 Charge pool, so at ~3/turn base regen this is a genuine ~10+ turn wait to use
+  // again even back-to-back, and the window itself is short (5 rounds) -- a real "pop it when it
+  // counts" cooldown fight, not a state you can just live in.
+  { id:'sandevistanrig', name:'Sandevistan Rig', category:'Mobility', activation:'active', resource:'charge', mp:35, type:'buff', stat:'actionspeed', power:2, dur:5, range:0, tier:4, desc:'A spinal rig that floods your nervous system with stimulant and stolen milliseconds -- for a few heartbeats, the whole world slows to a crawl.' },
   { id:'kinestheticbalance', name:'Kinesthetic Balance', category:'Mobility', activation:'passive', desc:'An inner-ear implant for perfect balance.', apply:()=>{ player.dex+=2; }, remove:()=>{ player.dex-=2; } },
-  { id:'overdrivesprint', name:'Overdrive Sprint', category:'Mobility', activation:'active', resource:'charge', mp:14, type:'buff', stat:'dex', power:8, dur:10, range:0, desc:'A brief, unnatural burst of speed.' },
+  // BUG FIX (Action Speed Framework): literally named "Overdrive SPRINT," described as "a brief,
+  // unnatural burst of speed" -- yet mechanically just +8 DEX, zero connection to the actual Sprint
+  // mechanic or actions-per-turn whatsoever, sharing vocabulary with the player-facing Sprint
+  // toggle almost by accident. Converted to a cheaper, longer, single-action-bonus sibling to
+  // Sandevistan Rig above: 14 Charge for +1 action/8 turns vs. Sandevistan's 35 Charge for +2
+  // actions/5 turns -- a real efficient-sustain-vs-expensive-burst choice between the two, not one
+  // strictly outclassing the other.
+  { id:'overdrivesprint', name:'Overdrive Sprint', category:'Mobility', activation:'active', resource:'charge', mp:14, type:'buff', stat:'actionspeed', power:1, dur:8, range:0, desc:'A brief, unnatural burst of speed.' },
 
   { id:'smartlinktargeting', name:'Smartlink Targeting', category:'Sensory', activation:'passive', desc:'A targeting overlay wired directly into your optic nerve.', apply:()=>{ player.critBonus=(player.critBonus||0)+0.06; }, remove:()=>{ player.critBonus-=0.06; } },
   { id:'threatscanner', name:'Threat Scanner', category:'Sensory', activation:'active', resource:'charge', mp:10, type:'detectability', range:0, desc:'Pings the area for hostile signatures.' },
@@ -4408,6 +4541,12 @@ MUTATIONS.push(
   { id:'entropytouch', name:'Entropy Touch', category:'Void/Cosmic', activation:'active', corruptionReq:35, resource:'hp', selfCost:13, type:'execute', power:[20,32], range:1, desc:'Your touch accelerates decay by several thousand years in an instant.' },
   { id:'cosmicinsight', name:'Cosmic Insight', category:'Void/Cosmic', activation:'passive', corruptionReq:30, desc:'You perceive threads of causality other minds cannot.', apply:()=>{ player.critBonus=(player.critBonus||0)+0.08; player.int+=2; } },
   { id:'blackholesingularity', name:'Black Hole Singularity', category:'Void/Cosmic', activation:'active', corruptionReq:65, resource:'hp', selfCost:24, type:'damage', power:[40,62], range:5, aoe:true, aoeRadius:3, gravityPull:3, desc:'A pinprick singularity you tear open and immediately close, dragging everything nearby toward it first.' },
+  // ACTION SPEED FRAMEWORK: the eldritch answer to Sprint/Sandevistan/Accelerate -- balanced not by
+  // any cap but by being genuinely dangerous to use. 20 HP is a real chunk of most characters' pool
+  // at the corruption level this unlocks, paid in full before the benefit even starts, with zero
+  // safety check beyond paySpellCost's own "can't afford it" refusal -- reckless casting at low HP
+  // can and will kill you. That, plus a steep corruptionReq, is the entire balance case for it.
+  { id:'momentthief', name:'Moment Thief', category:'Void/Cosmic', activation:'active', corruptionReq:45, resource:'hp', selfCost:20, type:'buff', stat:'actionspeed', power:1, dur:8, range:0, desc:'You reach past the skin of the world and steal a few seconds that were never yours to take. The wound it leaves behind is real.' },
   { id:'starcollapse', name:'Star Collapse', category:'Void/Cosmic', activation:'active', corruptionReq:75, resource:'hp', selfCost:30, type:'damage', power:[60,90], range:6, aoe:true, aoeRadius:3, destructive:true, igniteGround:true, gravityPull:2, desc:'For one impossible instant, you channel the death throes of a dying star.' },
   // ---- Predatory (new category: beast-like traits) ----
   { id:'sharpenedsenses', name:'Sharpened Senses', category:'Predatory', activation:'passive', corruptionReq:5, desc:'Your senses have sharpened well past human norms.', apply:()=>{ player.dex+=2; } },
@@ -4558,7 +4697,7 @@ TALENTS_V2.push(
   { id:'ironwill', name:'Iron Will', category:'magic', desc:'+2 INT', tier:1, requires:null, apply:()=>{ player.int+=2; } },
   { id:'stonemight', name:'Stone Might', category:'combat', desc:'+2 STR', tier:1, requires:null, apply:()=>{ player.str+=2; } },
   { id:'hardy', name:'Hardy', category:'survival', desc:'+2 CON, +10 Max HP', tier:1, requires:null, apply:()=>{ player.con+=2; player.maxHp+=10; player.hp+=10; } },
-  { id:'wanderer', name:'Wanderer', category:'survival', desc:'Stamina drains 15% slower while exploring', tier:1, requires:null, apply:()=>{ player.staminaDrainReduction=(player.staminaDrainReduction||0)+0.15; } },
+  { id:'wanderer', name:'Wanderer', category:'survival', desc:'Stamina drains 15% slower while exploring', tier:1, requires:null, apply:()=>{ player.staminaDrainReduction=Math.min(0.9,(player.staminaDrainReduction||0)+0.15); } },
   { id:'whisperer', name:'Whisperer', category:'eldritch', desc:'+10% damage from eldritch abilities', tier:1, requires:null, apply:()=>{ player.eldritchDmgBonus=(player.eldritchDmgBonus||0)+0.1; } },
   { id:'gunslinger', name:'Gunslinger', category:'cyber', desc:'+10% damage with ranged weapons', tier:1, requires:null, apply:()=>{ player.rangedDmgBonus=(player.rangedDmgBonus||0)+0.1; } },
   // ---- Cyber, rounded out: before this pass the only categorized cyber talent was Gunslinger,
@@ -4852,6 +4991,24 @@ TALENTS_V2.push(
   { id:'emperorsransom9', name:'A Legend Beyond Measure', category:'survival', desc:'+25% more gold from loot; +20% more XP', tier:9, requires:{level:90, talent:'emperorsransom8'}, apply:()=>{ player.goldBonus=(player.goldBonus||0)+0.25; player.xpBonus=(player.xpBonus||0)+0.2; } }
 );
 
+// ==================== FLEETFOOT: mobility/action-speed talent line (movement/stamina overhaul) ====================
+// A dedicated line for the Action Speed Framework (see computeBonusActions()/worldTick() near
+// endTurn) -- stamina efficiency and DEX early, a real payoff for playing dangerously (Adrenaline
+// Surge) in the middle, and a capstone that makes "a little faster than everyone else" a permanent
+// part of who this character is, not just something sprint can rent by the round. Deliberately
+// stops at tier 5 rather than getting a tiers-6-9 ascension extension like the pure-damage lines
+// above: a second source of a PERMANENT bonus action would let a character skip needing sprint or
+// DEX investment at all to sit at the action-speed cap, which would make those other systems feel
+// pointless at endgame. One permanent action from Windwalker, stacked with situational ones from
+// sprint/DEX/spells, keeps every source meaningfully in play at every level.
+TALENTS_V2.push(
+  { id:'fleetfoot', name:'Fleetfoot', category:'mobility', desc:'+15 Max Stamina; sprinting and swimming cost 20% less stamina', tier:1, requires:null, apply:()=>{ player.maxStamina=(player.maxStamina||90)+15; player.stamina=(player.stamina||90)+15; player.staminaDrainReduction=Math.min(0.9,(player.staminaDrainReduction||0)+0.2); } },
+  { id:'quickstep', name:'Quickstep', category:'mobility', desc:'+3 DEX; Stamina regenerates noticeably faster', tier:2, requires:{level:5, talent:'fleetfoot'}, apply:()=>{ player.dex+=3; player.staminaRegenBonus=true; } },
+  { id:'adrenalsurge', name:'Adrenaline Surge', category:'mobility', desc:'+2 DEX; while below 30% HP, your body finds another gear -- gain +1 action per round', tier:3, requires:{level:10, talent:'quickstep'}, apply:()=>{ player.dex+=2; } },
+  { id:'windsprint', name:'Wind Sprint', category:'mobility', desc:'+30 Max Stamina, +3 DEX', tier:4, requires:{level:15, talent:'adrenalsurge'}, apply:()=>{ player.maxStamina=(player.maxStamina||90)+30; player.stamina=(player.stamina||90)+30; player.dex+=3; } },
+  { id:'windwalker', name:'Windwalker', category:'mobility', desc:'You are permanently a half-step ahead of the world: +1 action per round, always active, no stamina cost', tier:5, requires:{level:20, talent:'windsprint'}, apply:()=>{ player.permaBonusAction=(player.permaBonusAction||0)+1; } }
+);
+
 // ---- vessels: a data-driven water-travel framework. A "vessel" is just a carryable item (like
 // any other piece of gear) whose id also appears as a key in the VESSELS table below, describing
 // what owning it does: it grants free water crossing (see canSwim), a combat DEX bonus while
@@ -5110,7 +5267,7 @@ ITEM_BASES.push(
 
   // ---- consumables: potions ----
   { id:'potion_invisibility', name:'Potion of Invisibility', type:'consumable', effect:'invisibility', dur:15, glyph:'!', color:'#c0c0e0', value:60 },
-  { id:'potion_haste', name:'Potion of Haste', type:'consumable', effect:'buffdex', power:4, dur:15, glyph:'!', color:'#e0e05a', value:50 },
+  { id:'potion_haste', name:'Potion of Haste', type:'consumable', effect:'buffhaste', power:4, dur:15, glyph:'!', color:'#e0e05a', value:50 },
   { id:'potion_fireres', name:'Potion of Fire Resistance', type:'consumable', effect:'resistfire', dur:25, glyph:'!', color:'#e0785a', value:30 },
   { id:'potion_frostres', name:'Potion of Frost Resistance', type:'consumable', effect:'resistfrost', dur:25, glyph:'!', color:'#8ad0e0', value:30 },
   { id:'potion_poisonres', name:'Potion of Poison Resistance', type:'consumable', effect:'resistpoison', dur:25, glyph:'!', color:'#5ac95a', value:30 },
@@ -5150,7 +5307,7 @@ ITEM_BASES.push(
   // ---- scrolls ----
   { id:'scroll_lightning', name:'Scroll of Lightning', type:'scroll', effect:'scrollfire', power:16, dtype:'lightning', glyph:'?', color:'#e0e05a', value:32 },
   { id:'scroll_shield', name:'Scroll of Shielding', type:'scroll', effect:'buffarmor', power:8, dur:12, glyph:'?', color:'#5a9ae0', value:26 },
-  { id:'scroll_haste', name:'Scroll of Haste', type:'scroll', effect:'buffdex', power:3, dur:12, glyph:'?', color:'#e0e05a', value:28 },
+  { id:'scroll_haste', name:'Scroll of Haste', type:'scroll', effect:'buffhaste', power:3, dur:12, glyph:'?', color:'#e0e05a', value:28 },
   { id:'scroll_summonwolf', name:'Scroll of Summon Wolf', type:'scroll', effect:'scrollsummon', summonId:'wolf', duration:40, glyph:'?', color:'#c0c0c0', value:35 },
   { id:'scroll_detect', name:'Scroll of Detection', type:'scroll', effect:'reveal', radius:20, glyph:'?', color:'#e0d6a0', value:18 },
   { id:'scroll_invisibility', name:'Scroll of Invisibility', type:'scroll', effect:'invisibility', dur:12, glyph:'?', color:'#c0c0e0', value:40 },
@@ -6731,7 +6888,7 @@ SPELLS.push(
   { id:'summonfireelemental', name:'Summon Fire Elemental', mp:14, type:'summon', summonId:'fireelemental', duration:50, range:0, school:'Summoning', desc:'Conjures a burning elemental ally.' },
   { id:'summonspirit', name:'Summon Spirit', mp:6, type:'summon', summonId:'spirit', duration:40, range:0, school:'Summoning', desc:'Summons a fast, fragile spirit scout.' },
   // Blood Magic
-  { id:'bloodpact', name:'Blood Pact', mp:0, selfCostPct:0.15, type:'bloodbuff', stat:'str', power:6, dur:15, range:0, school:'Blood Magic', desc:'Costs a portion of your current HP; grants great strength and speed.' },
+  { id:'bloodpact', name:'Blood Pact', mp:0, selfCostPct:0.15, type:'bloodbuff', stat:'str', power:6, dur:15, range:0, school:'Blood Magic', desc:'Costs a portion of your current HP; grants great strength and speed.', bonusBuff:{ stat:'actionspeed', power:1 } },
   { id:'hemorrhage', name:'Hemorrhage', mp:8, type:'execute', power:[5,10], range:5, school:'Blood Magic', desc:'Wounds bleed worse the closer to death the target already is.' },
   { id:'sanguinearmor', name:'Sanguine Armor', mp:0, selfCost:10, type:'bloodarmor', power:10, dur:12, range:0, school:'Blood Magic', desc:'Costs HP; turns your own blood into a hardened ward.' },
   // Holy / Divine
@@ -6820,7 +6977,16 @@ SPELLS.push(
   { id:'worldtreeblessing', name:"World Tree's Blessing", mp:55, type:'heal', power:[45,68], range:0, school:'Nature', tier:5, desc:'A blessing drawn from the roots of the oldest tree in the world.' },
   { id:'summondrake', name:'Summon Drake', mp:38, type:'summon', summonId:'wyrmling', duration:70, range:0, school:'Nature', tier:4, desc:'A young dragon answers the call of the wild.' },
   // ---- Chronomancy: more tiers ----
-  { id:'timestop', name:'Time Stop', mp:50, type:'debuff', stat:'dex', power:-20, dur:8, range:6, aoe:true, aoeRadius:3, school:'Chronomancy', tier:5, desc:'For a handful of heartbeats, everything around you nearly stops moving.', slowStatus:6 },
+  // BUG FIX / ACTION SPEED FRAMEWORK: Time Stop's entire premise -- and Accelerate's, right above
+  // in the tier-1 list -- was "you move through time faster than everything else," but neither
+  // spell ever actually touched actions-per-turn; Time Stop was just a big AOE slow, Accelerate
+  // just a flat DEX buff. Both now carry a real payoff via the actionspeed buff stat (see
+  // computeBonusActions() near worldTick()): Accelerate grants a modest +1 action for a fairly
+  // low mana cost as an early, spammable option; Time Stop's selfBuff grants +2 -- stacked on top
+  // of whatever AOE-slowing everyone around you is suffering through -- for a genuinely
+  // spell's-namesake moment, gated behind a 50 mana, tier-5 cost that makes it a rare burst rather
+  // than a sustainable state.
+  { id:'timestop', name:'Time Stop', mp:50, type:'debuff', stat:'dex', power:-20, dur:8, range:6, aoe:true, aoeRadius:3, school:'Chronomancy', tier:5, desc:'For a handful of heartbeats, everything around you nearly stops moving -- except you.', slowStatus:6, selfBuff:{ stat:'actionspeed', power:2 } },
   { id:'agereversal', name:'Age Reversal', mp:32, type:'heal', power:[30,46], range:0, school:'Chronomancy', tier:4, desc:'You unwind your own wounds back to a moment before they existed.' },
   { id:'temporalrift', name:'Temporal Rift', mp:22, type:'blinklike', power:12, range:0, school:'Chronomancy', tier:3, desc:'You step through a fold where a moment ago and a moment from now briefly touch.' },
   // ---- Golem Magic: more tiers ----
@@ -9193,7 +9359,7 @@ MONSTER_BASES.broodmother_spider = { name:'Broodmother', glyph:'S', color:'#2a0a
 MONSTER_BASES.giant_centipede = { name:'Giant Centipede', glyph:'c', color:'#8a6a2a', hp:12, str:7, dex:11, atk:[2,4], armor:1, xp:9, behavior:'aggressive', dtier:1, faction:'beast', poison:2 };
 MONSTER_BASES.tunnel_worm = { name:'Tunnel Worm', glyph:'w', color:'#a08050', hp:26, str:10, dex:4, atk:[3,6], armor:2, xp:17, behavior:'aggressive', dtier:2, faction:'beast', burrower:true };
 MONSTER_BASES.razor_bat_swarm = { name:'Razor Bat Swarm', glyph:'b', color:'#5a2a5a', hp:7, str:4, dex:15, atk:[1,3], armor:0, xp:5, behavior:'swarm', dtier:1, faction:'beast' };
-MONSTER_BASES.dire_wolf = { name:'Dire Wolf', glyph:'w', color:'#c0c0c0', hp:24, str:12, dex:14, atk:[3,7], armor:0, xp:18, behavior:'aggressive', dtier:2, faction:'beast' };
+MONSTER_BASES.dire_wolf = { name:'Dire Wolf', glyph:'w', color:'#c0c0c0', hp:24, str:12, dex:14, atk:[3,7], armor:0, xp:18, behavior:'aggressive', dtier:2, faction:'beast', swiftMover:true };
 
 // ---- dragonkin (dragons_lair) — note non-boss dragons still get real breath weapons & multi-tile charges ----
 MONSTER_BASES.wyrmling = { name:'Dragon Wyrmling', glyph:'d', color:'#4ac97a', hp:34, str:13, dex:10, atk:[3,8], armor:2, xp:32, behavior:'charger', multiTile:2, dtier:2, faction:'dragon', breathWeapon:'fire' };
@@ -9249,7 +9415,7 @@ MONSTER_BASES.rogue_ai_core = { name:'Rogue AI Core', glyph:'@', color:'#e03aa0'
 MONSTER_BASES.bandit_archer = { name:'Bandit Archer', glyph:'p', color:'#c9703a', hp:12, str:7, dex:11, atk:[2,5], armor:0, xp:9, behavior:'ranged', dtier:1, faction:'human' };
 MONSTER_BASES.bandit_thug = { name:'Bandit Thug', glyph:'p', color:'#c9503a', hp:16, str:9, dex:7, atk:[2,6], armor:1, xp:10, behavior:'aggressive', dtier:1, faction:'human' };
 MONSTER_BASES.mercenary = { name:'Mercenary', glyph:'p', color:'#8a8a3a', hp:24, str:11, dex:9, atk:[3,7], armor:3, xp:17, behavior:'aggressive', dtier:2, faction:'human' };
-MONSTER_BASES.rogue_assassin = { name:'Rogue Assassin', glyph:'p', color:'#2a2a2a', hp:16, str:9, dex:16, atk:[3,7], armor:0, xp:20, behavior:'aggressive', dtier:2, faction:'human', ambush:true, ambushRange:2 };
+MONSTER_BASES.rogue_assassin = { name:'Rogue Assassin', glyph:'p', color:'#2a2a2a', hp:16, str:9, dex:16, atk:[3,7], armor:0, xp:20, behavior:'aggressive', dtier:2, faction:'human', ambush:true, ambushRange:2, swiftMover:true };
 MONSTER_BASES.war_priest = { name:'War Priest', glyph:'p', color:'#e0d0a0', hp:22, str:9, dex:8, atk:[2,6], armor:2, xp:19, behavior:'ranged', dtier:2, faction:'human', regen:2 };
 MONSTER_BASES.knight_captain = { name:'Knight Captain', glyph:'p', color:'#c0c0d0', hp:56, str:16, dex:9, atk:[4,10], armor:6, xp:50, behavior:'aggressive', dtier:3, faction:'human', miniboss:true };
 
@@ -9933,6 +10099,13 @@ const MONSTER_EXTRA_FIELDS = [
   'healPower', 'healRange',
   // ---- BODY MECHANICS EXTENSION (see the classification loop near isBloodlessMonster below) ----
   'bloodless', 'diseaseImmune', 'noBodyParts',
+  // ---- ACTION SPEED FRAMEWORK -- QUALITY PASS FIX: same landmine as healPower/healRange above.
+  // swiftMover was being tagged onto wolf/dire_wolf/alphawolf/rogue_assassin's MONSTER_BASES
+  // entries so entityBonusActions() (near worldTick) would give them a bonus action, but wasn't in
+  // this allowlist -- so it never actually copied onto a spawned instance, and every one of those
+  // monsters would have moved at normal speed regardless of the tag. Caught by tracing makeMonster()
+  // end-to-end rather than assuming a field on a base template automatically reaches the live entity.
+  'swiftMover',
 ];
 // ---- v3 balance pass: overworld monsters now scale with distance from the origin ----
 // Previously every overworld spawn passed a flat depthScale of 1 no matter how far you'd
@@ -11586,7 +11759,7 @@ function beginFishing(x, y) {
           log('Something yanks the line hard and lunges out of the water!');
           const m = makeMonster(choice(Math.random, pool), x, y, depthScaleForPlayerLevel(player.level), Math.random);
           addMonsterToWorld(m);
-          autoRunActive = false; clearInterval(interval); endTurn(); return;
+          autoRunActive = false; clearInterval(interval); endTurn({forceFull:true}); return;
         }
       }
       const catchId = Math.random() < (0.03 + fishermanRareBonus()) ? 'gem' : choice(Math.random, FISH_CATCH_TABLE);
@@ -11598,13 +11771,17 @@ function beginFishing(x, y) {
       // a real catch is the strain that matters, same "meaningful use, not busywork" spirit as
       // the crit-only wear rule combat weapons already follow.
       if (rod) wearItem(rod, 1);
-      autoRunActive = false; clearInterval(interval); endTurn(); return;
+      autoRunActive = false; clearInterval(interval); endTurn({forceFull:true}); return;
     }
     ticks++;
-    if (ticks >= maxTicks) { log('Nothing bites. You reel your line back in.'); autoRunActive = false; clearInterval(interval); endTurn(); return; }
-    endTurn();
+    if (ticks >= maxTicks) { log('Nothing bites. You reel your line back in.'); autoRunActive = false; clearInterval(interval); endTurn({forceFull:true}); return; }
+    endTurn({forceFull:true});
   }, 20);
 }
+// NOTE (Action Speed Framework): every endTurn() call in this fishing loop, and in doRest/beginDig/
+// runAutoLoop's callers below, passes {forceFull:true} -- these are automated, multi-turn
+// conveniences rather than tactical player actions, so they always advance the world for real and
+// never spend or benefit from banked sprint/haste bonus actions (see worldTick()'s header comment).
 // Called once, wherever a destructible feature tile is first placed (world gen), so it starts
 // with an HP pool matching its type instead of every call site having to remember to set one.
 function initDestructibleFeature(t) {
@@ -15015,7 +15192,13 @@ function applyBiomeEnvironmentalEffect() {
 // Small helper: apply a timed buff without the standalone "You feel the effects of..." log line
 // applyBuff() always prints -- biome effects want to fold their own flavor message in above
 // instead of stacking a second, more generic one right after it.
-function applyBuffQuiet(stat, power, turns) { player.buffs[stat] = { power, turns: Math.max((player.buffs[stat] && player.buffs[stat].turns) || 0, turns) }; }
+// Same actionspeed downgrade-protection as applyBuff() above (see its comment) -- not currently
+// hit by any content (nothing calls this with 'actionspeed' today), but this is the kind of gap
+// that only gets found the hard way once something new does, so it's closed at the same time.
+function applyBuffQuiet(stat, power, turns) {
+  if (stat === 'actionspeed' && player.buffs.actionspeed) power = Math.max(power, player.buffs.actionspeed.power);
+  player.buffs[stat] = { power, turns: Math.max((player.buffs[stat] && player.buffs[stat].turns) || 0, turns) };
+}
 
 function hasLOS(x0, y0, x1, y1) {
   if (DEBUG.xrayVision) return true; // X-Ray Vision (debug): ignore wall/obstacle occlusion entirely
@@ -15066,6 +15249,7 @@ const STATUS_LABELS = {
   resistpoison: () => 'Poison Resistant',
   resistbleed: () => 'Clotting (bleed-resistant)',
   waterbreathing: () => 'Waterbreathing',
+  actionspeed: (p) => `Hastened (+${p} action${p===1?'':'s'}/round)`,
 };
 function getActiveStatusEffects(e) {
   e = e || player;
@@ -15113,7 +15297,24 @@ function getActiveStatusEffects(e) {
   if (e.burrowed) out.push({ label: 'Burrowed underground', turns: e.burrowTimer || null, kind: 'buff' });
   return out;
 }
-function applyBuff(stat, power, turns) { player.buffs[stat] = { power, turns }; log(`You feel the effects of ${stat === 'armor' ? 'a protective ward' : stat === 'regen' ? 'regeneration' : stat + ' magic'}.`); }
+function applyBuff(stat, power, turns) {
+  // ACTION SPEED FRAMEWORK: every buff in this game shares one slot per stat and a fresh
+  // application always overwrites it outright (see applyBuffQuiet's power-overwrite/turns-max split
+  // just above, which is the same pattern) -- normally harmless, since re-casting your own Strength
+  // buff before it expires is just refreshing it. But actionspeed specifically can come from
+  // multiple DIFFERENT sources at different power levels (Accelerate +1, Sandevistan Rig +2, Time
+  // Stop +2), and a blind overwrite means casting a WEAKER one while a stronger one is still
+  // running would downgrade the player for spending a resource, which is backwards -- punishing
+  // exactly the kind of stacking the whole framework is built to reward. Scoped narrowly to just
+  // this stat rather than changing the universal buff behavior everyone else still relies on.
+  if (stat === 'actionspeed' && player.buffs.actionspeed) {
+    power = Math.max(power, player.buffs.actionspeed.power);
+    turns = Math.max(turns, player.buffs.actionspeed.turns);
+  }
+  player.buffs[stat] = { power, turns };
+  log(stat === 'actionspeed' ? 'Time seems to slow around you as your own moments quicken!' : `You feel the effects of ${stat === 'armor' ? 'a protective ward' : stat === 'regen' ? 'regeneration' : stat + ' magic'}.`);
+  if (stat === 'actionspeed') refillBonusActions();
+}
 function isPlayerInWater() {
   if (curIsDungeon()) return false;
   const t = curTileAt(player.x, player.y);
@@ -16273,13 +16474,13 @@ function renderCharacterSheet() {
   const sp = getSpecies(player.species || 'human');
   let html = `<div class="charstats">`;
   html += `<div>Level ${player.level} ${sp.name} Adventurer &nbsp; XP ${player.xp}/${player.xpNext}${player.gameCompleted ? ' &nbsp; <span style="color:#ffd700">&#9733; Completed</span>' : ''}</div>`;
-  html += `<div>HP ${player.hp}/${player.maxHp} &nbsp; MP ${player.mp}/${player.maxMp} &nbsp; Gold ${player.gold}</div>`;
+  html += `<div>HP ${player.hp}/${player.maxHp} &nbsp; MP ${player.mp}/${player.maxMp} &nbsp; Stamina ${Math.round(player.stamina)}/${player.maxStamina} &nbsp; Gold ${player.gold}</div>`;
   html += `<div class="dim">Species: ${sp.name} — ${sp.traits.map(t => t.name).join(', ')}</div><hr>`;
   const stats = [
     ['str','STR','melee damage, weapon/armor STR requirements'],
-    ['dex','DEX','to-hit chance and evasion'],
+    ['dex','DEX','to-hit chance, evasion, and (from 20 DEX) permanent extra actions per round'],
     ['int','INT','Max MP, spellcasting reliability'],
-    ['con','CON','Max HP'],
+    ['con','CON','Max HP, Max Stamina, and faster Stamina recovery'],
     ['wil','WIL','resist poison/fear/confuse/slow, faster HP/MP regen'],
     ['cha','CHA','stronger allies/summons/companions, better prices'],
   ];
@@ -16287,6 +16488,13 @@ function renderCharacterSheet() {
     html += `<div class="modal-opt">${label}: ${player[k]}${player.statPoints>0?` <span class="dim">[press ${i+1} to +1]</span>`:''} <span class="dim" style="font-style:italic">— ${tip}</span></div>`;
   });
   html += `<div style="margin-top:6px">Unspent points: ${player.statPoints}</div><hr>`;
+  // ACTION SPEED FRAMEWORK: sourced directly from computeBonusActionsDetailed() -- the exact same
+  // function worldTick() and sprintStaminaCostThisRound() use -- rather than re-deriving the list
+  // of conditions here. Keeps this readout honest by construction: it can't silently drift out of
+  // sync with the real logic the way Accelerate/Time Stop/Blood Pact's flavor text once did.
+  const asInfo = computeBonusActionsDetailed();
+  const asBreakdown = asInfo.breakdown.map(b => `${b.amount >= 0 ? '+' : ''}${b.amount} from ${b.label}`);
+  html += `<div>Action Speed: ${asBreakdown.length ? asBreakdown.join(', ') : 'no bonus actions active'} <span class="dim" style="font-style:italic">— extra actions before the world moves; no cap, but every source has a real cost</span></div><hr>`;
   html += `<div>Racial traits (${sp.name}):</div>`;
   sp.traits.forEach(t => { html += `<div class="modal-opt dim">${t.name} — ${t.desc}</div>`; });
   html += `<hr><div>Equipped:</div>`;
@@ -16308,8 +16516,15 @@ function spendStat(idx) {
   const k = keys[idx];
   if (!k) return;
   player[k]++; player.statPoints--;
-  if (k === 'con') { player.maxHp += 3; player.hp += 3; }
+  // STAMINA FIX: previously ONLY con->maxHp and int->maxMp existed here, so no stat point spent
+  // after character creation ever grew your stamina pool -- it sat frozen at its starting value
+  // for the entire game no matter how you built. CON (endurance) gets the primary bump, mirroring
+  // its existing maxHp role; DEX (a real, if smaller, contributor -- quick/efficient movement taxes
+  // your wind less) gets a secondary one, matching recalcVitalsFromStats' formula above so a
+  // fresh character and one built up one point at a time land on the same numbers.
+  if (k === 'con') { player.maxHp += 3; player.hp += 3; player.maxStamina = (player.maxStamina||90) + 4; player.stamina = Math.min(player.maxStamina, player.stamina + 4); }
   if (k === 'int') { player.maxMp += 3; player.mp += 3; }
+  if (k === 'dex') { player.maxStamina = (player.maxStamina||90) + 2; player.stamina = Math.min(player.maxStamina, player.stamina + 2); }
   renderCharacterSheet();
   updateSidebar();
 }
@@ -16811,10 +17026,16 @@ function floatingTextAnimStep() {
 // ---- allies (summons / raised dead / spectral companions) ----
 function curAllies() { return player.allies.filter(a => a.alive); }
 
-function allyAI(a) {
+function allyAI(a, isBonusAction) {
   if (!a.alive) return;
-  if (a.duration > 0) { a.duration--; if (a.duration <= 0) { a.alive = false; log(`${a.name} crumbles to dust.`); return; } }
-  processEntityStatus(a);
+  // ACTION SPEED FRAMEWORK: same isBonusAction distinction as monsterAI() just above -- a temporary
+  // summon's duration counter, ongoing status effects, and (for player constructs) their per-round
+  // power draw are all ROUND-scoped upkeep, not ACTION-scoped. Without this guard, an ally that
+  // gets a bonus action for keeping pace with a sprinting player would have its summon duration
+  // burn out and its construct charge drain in HALF the intended time -- sprinting would kill your
+  // own summons faster, the opposite of "allies keep pace instead of getting left behind."
+  if (!isBonusAction && a.duration > 0) { a.duration--; if (a.duration <= 0) { a.alive = false; log(`${a.name} crumbles to dust.`); return; } }
+  if (!isBonusAction) processEntityStatus(a);
   if (!a.alive) return;
   if (a.frozenSolidTurns > 0 || a.stunnedTurns > 0) return; // frozen solid or stunned -- can't act at all this turn (see freezeEntitySolid / ARTIFACT FRAMEWORK stunProcChance)
   // ---- CONSTRUCT POWER GRID: a player-built construct drains its own powerDraw from its charge
@@ -16825,7 +17046,7 @@ function allyAI(a) {
   // truly does nothing -- it doesn't even hold its ground and take potshots.
   if (a.isPlayerConstruct) {
     if (a.charge === undefined) a.charge = a.maxCharge || CONSTRUCT_MAX_CHARGE;
-    if (!a.poweredDown) {
+    if (!isBonusAction && !a.poweredDown) {
       a.charge -= (a.powerDraw || 1);
       if (a.charge <= 0) {
         a.charge = 0; a.poweredDown = true;
@@ -18760,7 +18981,12 @@ function levelUp() {
   // now scales far more steeply at high depthScale too (see makeMonster's new exponential curve).
   player.maxHp += Math.round(6 + player.con * 0.3 + player.level * 0.9);
   player.maxMp += Math.round(3 + player.int * 0.3 + player.level * 0.45);
-  player.hp = player.maxHp; player.mp = player.maxMp;
+  // STAMINA FIX: this per-level growth curve used to only touch maxHp/maxMp -- maxStamina had no
+  // equivalent line at all, so it never grew from leveling either (only from the rare flat-bonus
+  // talent/cybernetic). Mirrors the HP curve's shape (CON-weighted, plus a flat per-level trickle)
+  // scaled down to roughly match maxStamina's smaller starting pool relative to maxHp.
+  player.maxStamina = (player.maxStamina || 90) + Math.round(4 + player.con * 0.25 + player.level * 0.5);
+  player.hp = player.maxHp; player.mp = player.maxMp; player.stamina = player.maxStamina;
   player.statPoints += 2;
   let msg = `*** You reached level ${player.level}! (+2 stat points) ***`;
   if (player.level % 3 === 0) { player.talentPoints++; msg += ' A new talent is available (press T).'; }
@@ -20879,7 +21105,7 @@ function autoTravelToStairs() {
     const nx = player.x+step.dx, ny = player.y+step.dy;
     if (entityAt(nx,ny)) return false;
     player.x = nx; player.y = ny;
-    endTurn();
+    endTurn({forceFull:true});
     if (player.x === goal.x && player.y === goal.y) { if (curIsDungeon()) useStairs(); return false; }
     return true;
   });
@@ -20906,7 +21132,7 @@ function autoExplore() {
     const nx = player.x+step.dx, ny = player.y+step.dy;
     if (entityAt(nx,ny)) return false;
     player.x = nx; player.y = ny;
-    endTurn();
+    endTurn({forceFull:true});
     return true;
   });
 }
@@ -21244,7 +21470,14 @@ const REST_SAFETY_CAP_TURNS = 6000; // generous; a real full-HP rest at any leve
 const REST_TURNS_PER_BATCH = 8; // turns processed per 20ms tick, keeps real-time wait reasonable
 function doRest() {
   if (gameState !== 'playing') return;
-  if (player.hp >= player.maxHp && player.mp >= player.maxMp) { log('You are already at full strength.'); return; }
+  if (player.sprinting) { player.sprinting = false; log('You stop sprinting to rest.'); }
+  // BUG FIX (Action Speed Framework): this "already full" gate -- and the rest loop's own copy of
+  // it just below -- only ever checked HP/MP, never Stamina. Before stamina had any real recovery
+  // pressure of its own (see recalcVitalsFromStats/spendStat's stamina fix), that was harmless;
+  // now that sprinting can meaningfully drain it while HP/MP sit untouched, resting with full
+  // HP/MP but empty Stamina silently did nothing at all -- exactly the case a stamina-focused
+  // build would hit constantly.
+  if (player.hp >= player.maxHp && player.mp >= player.maxMp && player.stamina >= player.maxStamina) { log('You are already at full strength.'); return; }
   // BUG FIX (v0.40.18): doRest() never checked bleedTurns at all. Bleed is intentionally designed
   // to not fade on its own (see doAttack/applyBleed's own comments -- it requires a Bandage or
   // equivalent cure), so a bleeding player who rested would just keep losing HP through the rest
@@ -21260,7 +21493,7 @@ function doRest() {
   const interval = setInterval(() => {
     if (gameState !== 'playing' || !autoRunActive) { autoRunActive = false; clearInterval(interval); render(); return; }
     for (let i = 0; i < REST_TURNS_PER_BATCH; i++) {
-      const full = player.hp >= player.maxHp && player.mp >= player.maxMp;
+      const full = player.hp >= player.maxHp && player.mp >= player.maxMp && player.stamina >= player.maxStamina;
       if (full) {
         player.secondWindCharges = player.secondWindMax || 0; Sound.play('restComplete');
         grantDiseaseCureProgress('restCure', 3);
@@ -21275,7 +21508,7 @@ function doRest() {
       }
       const threat = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 6 && hasLOS(player.x,player.y,m.x,m.y));
       if (threat) { log('Your rest is interrupted!'); autoRunActive = false; clearInterval(interval); render(); return; }
-      endTurn();
+      endTurn({forceFull:true});
       turnsElapsed++;
       if (gameState !== 'playing' || !player.alive) { clearInterval(interval); return; }
     }
@@ -21335,10 +21568,10 @@ function beginDig(dx, dy) {
       Sound.play('door');
       markPlayerAreaDirty();
       autoRunActive = false; digState = null; clearInterval(interval);
-      endTurn(); render();
+      endTurn({forceFull:true}); render();
       return;
     }
-    endTurn(); render();
+    endTurn({forceFull:true}); render();
   }, 20);
 }
 
@@ -24193,7 +24426,7 @@ function autoTravelHome() {
       if (!step) { log('No path found.'); return false; }
       const nx = player.x+step.dx, ny = player.y+step.dy;
       if (entityAt(nx,ny)) return false;
-      player.x = nx; player.y = ny; endTurn();
+      player.x = nx; player.y = ny; endTurn({forceFull:true});
       if (player.x === goal.x && player.y === goal.y) { useStairsUp(); return false; }
       return true;
     });
@@ -24206,7 +24439,7 @@ function autoTravelHome() {
       if (!step) { log('No path found.'); return false; }
       const nx = player.x+step.dx, ny = player.y+step.dy;
       if (entityAt(nx,ny)) return false;
-      player.x = nx; player.y = ny; endTurn();
+      player.x = nx; player.y = ny; endTurn({forceFull:true});
       return player.x !== found.x || player.y !== found.y;
     });
   }
@@ -25162,7 +25395,14 @@ function castSpell(spellId) {
     if (cost > 0) player.hp -= cost;
     else if (!paySpellCost(spell)) { log('Not enough stamina.'); return; }
     applyBuff(spell.stat, spell.power, spell.dur);
-    if (spell.id === 'bloodpact') applyBuff('dex', Math.round(spell.power/2), spell.dur);
+    // BUG FIX (Action Speed Framework): Blood Pact's own description explicitly promises "great
+    // strength AND speed," but that second half only ever delivered a hardcoded +3 DEX bump --
+    // nowhere close to this game's real speed payoff (the 20/34/50 DEX breakpoints in
+    // computeBonusActions, near worldTick()). Replaced the one-off spell.id==='bloodpact' special
+    // case with a data-driven bonusBuff field so Blood Pact -- and any future dual-effect buff --
+    // can grant a second stat (here, actionspeed itself) the same declarative way spell.selfBuff
+    // already does for resolveSpellAtTile.
+    if (spell.bonusBuff) applyBuff(spell.bonusBuff.stat, spell.bonusBuff.power, spell.bonusBuff.dur || spell.dur);
     log(cost > 0 ? `You pay ${cost} HP in a dark pact, and feel powerful.` : `You feel a surge of ${spell.stat}.`);
     endTurn(); return;
   }
@@ -25450,6 +25690,12 @@ function displaceEntity(e, originX, originY, maxTiles, pull) {
 function gravityPullEntity(e, towardX, towardY, maxTiles) { displaceEntity(e, towardX, towardY, maxTiles, true); }
 function knockbackEntity(e, fromX, fromY, maxTiles) { displaceEntity(e, fromX, fromY, maxTiles, false); }
 function resolveSpellAtTile(spell, wx, wy) {
+  // Data-driven self-buff hook (Action Speed Framework): some spells affect the CASTER in
+  // addition to whatever they hit at the target tile -- Time Stop's whole premise is "everything
+  // else slows down while you don't," so it needs to buff the player, not just debuff the target.
+  // Declared once here as a plain {stat,power[,dur]} field rather than a one-off spell.id special
+  // case, so any future spell needing the same "also affects me" hook just declares selfBuff too.
+  if (spell.selfBuff) applyBuff(spell.selfBuff.stat, spell.selfBuff.power, spell.selfBuff.dur || spell.dur);
   const dmgSpell = ['damage','drain','debuff','execute','smite','lifetap'].includes(spell.type);
   if (spell.aoe) {
     const tiles = tilesInRadius(wx, wy, spell.aoeRadius || 1);
@@ -25579,13 +25825,23 @@ function newPlayer() {
 // finished custom build has set the character's final starting stats, so a warrior's higher CON and
 // a mage's higher INT actually produce a tankier warrior and a mana-rich mage from turn one instead
 // of every class sharing an identical flat HP/MP pool.
+// STAMINA FIX (movement/stamina overhaul): maxStamina used to be a flat 90 set once in newPlayer()
+// and NEVER recalculated anywhere -- not here, not in spendStat() (see below) -- so no matter how
+// much CON or DEX a build stacked, stamina-based playstyles (techniques, sprinting, swimming) were
+// permanently stuck at the level-1 starting pool. CON is this game's closest thing to an "Endurance"
+// stat (it already drives HP), so it's the primary driver here too, with DEX (nimble, efficient
+// movement) as a real secondary contributor -- which also matters later for the Action Speed system,
+// where DEX investment is a legitimate path to extra actions per turn, not just combat stats.
 function recalcVitalsFromStats() {
   const newMaxHp = Math.max(10, Math.round(10 + player.con * 2.2));
   const newMaxMp = Math.max(5, Math.round(2 + player.int * 1.8));
+  const newMaxStamina = Math.max(30, Math.round(46 + player.con * 4 + player.dex * 1.5));
   const hpWasFull = player.hp >= player.maxHp, mpWasFull = player.mp >= player.maxMp;
-  player.maxHp = newMaxHp; player.maxMp = newMaxMp;
+  const stamWasFull = player.stamina >= (player.maxStamina || newMaxStamina);
+  player.maxHp = newMaxHp; player.maxMp = newMaxMp; player.maxStamina = newMaxStamina;
   player.hp = hpWasFull ? player.maxHp : Math.min(player.hp, player.maxHp);
   player.mp = mpWasFull ? player.maxMp : Math.min(player.mp, player.maxMp);
+  player.stamina = stamWasFull ? player.maxStamina : Math.min(player.stamina, player.maxStamina);
 }
 
 // ---- combat v6: cybernetic/mutation armor & damage bonuses ----
@@ -27091,13 +27347,21 @@ function runCombatState(m, vision) {
   else stepToward(m, target.x, target.y);
 }
 
-function monsterAI(m) {
+function monsterAI(m, isBonusAction) {
   // Message Log Overhaul: see runCombatState's comment -- monster-only function, gate on m's position.
   const log = posVisibleToPlayer(m.x, m.y) ? realLog : () => {};
-  if (m.statusPoison || m.regen || m.statusSlow || m.wetTurns || m.oiledTurns || m.burningTurns || m.frozenSolidTurns || m.bleedTurns || m.stunnedTurns) processEntityStatus(m);
+  // ACTION SPEED FRAMEWORK: isBonusAction is true when this call is an EXTRA action within the same
+  // round (see entityBonusActions()/worldTick()'s AI loop), not a second round passing. Status
+  // damage ticks (poison/burn/bleed/etc, via processEntityStatus) and per-round pool/cooldown
+  // upkeep (regenEntityAIPools -- ability cooldowns, buff-timer decrements, mp/charge/stamina
+  // regen) are ROUND-scoped, not ACTION-scoped: a swift monster acting twice in one round should
+  // get to move/attack twice, not take double poison damage and cool its abilities down twice as
+  // fast in the same span of time everyone else only experiences once. Skipped entirely on a bonus
+  // call; the monster's actual behavior dispatch below still runs every time.
+  if (!isBonusAction && (m.statusPoison || m.regen || m.statusSlow || m.wetTurns || m.oiledTurns || m.burningTurns || m.frozenSolidTurns || m.bleedTurns || m.stunnedTurns)) processEntityStatus(m);
   if (!m.alive || m.hp <= 0) return;
   if (m.frozenSolidTurns > 0 || m.stunnedTurns > 0) return; // frozen solid or stunned -- can't act at all this turn (see freezeEntitySolid / ARTIFACT FRAMEWORK stunProcChance)
-  regenEntityAIPools(m);
+  if (!isBonusAction) regenEntityAIPools(m);
   if (m.statusSlow > 0 && Math.random() < 0.5) return;
   if (m.statusConfuse > 0) { m.statusConfuse--; wander(m); return; }
   if (m.statusFear > 0) { m.statusFear--; const away = (m.target && m.target.alive) ? m.target : player; stepAway(m, away.x, away.y); return; }
@@ -32378,7 +32642,7 @@ function movePlayer(dx, dy, forceAttack) {
       if ((player.stamina || 0) > 0) {
         player.x = nx; player.y = ny;
         applyGroundHazardsOnEnter(player, t, nx, ny, dx, dy);
-        const swimCost = Math.round(8 * (1 - (player.staminaDrainReduction || 0)) * (1 + (player.waterStaminaPenalty || 0)));
+        const swimCost = Math.max(1, Math.round(8 * (1 - effStaminaDrainReduction()) * (1 + (player.waterStaminaPenalty || 0))));
         player.stamina = Math.max(0, player.stamina - swimCost);
         Sound.play('splash');
         if (player.waterEntryDmg) {
@@ -32593,7 +32857,154 @@ function reconcileEntityChunk(e, arrayKey) {
   getChunk(cx, cy)[arrayKey].push(e);
   e.homeChunkKey = newKey;
 }
-function endTurn() {
+// ==================== ACTION SPEED FRAMEWORK (movement/stamina/action overhaul) ====================
+// Every player action in this game -- move, attack, cast, swing a pickaxe, swim a step -- funnels
+// through endTurn(), which used to unconditionally advance the whole world once per call: turn
+// counter, every buff/status tick, weather/events, and one full AI pass for every monster/ally/NPC.
+// That's exactly the choke point needed to add "act more than once before the world responds"
+// (sprinting, Sandevistan-style cybernetics, DEX-bred quickness, a real Haste spell) WITHOUT
+// touching any of the ~85 call sites that already call endTurn() -- they keep meaning exactly what
+// they always meant ("my action is over"), it's endTurn() itself that now decides whether that
+// action also costs the world its turn, or whether the player has a banked bonus action to spend
+// on it instead.
+//
+// Lifecycle, once per real round:
+//   1. worldTick() runs (the old endTurn() body, renamed) -- monsters/allies/NPCs each act once,
+//      turnCount advances, every per-turn system ticks. At the very end it calls
+//      refillBonusActions(), which banks player.bonusActionCharges for the round about to start.
+//   2. The player takes an action -> endTurn() is called. If a bonus charge is banked, it's spent
+//      and worldTick() is SKIPPED ENTIRELY -- the player just acted again with the world frozen in
+//      place around them, exactly like moving twice before a monster gets to move once.
+//   3. Once charges run out, the next endTurn() call runs worldTick() for real, closing the round
+//      and refilling charges for the next one based on whatever's active NOW (sprint might have run
+//      out of stamina mid-round, a haste buff might have expired, etc. -- always re-evaluated fresh).
+//
+// A handful of call sites are deliberately excluded (doRest/beginDig/fishing/auto-travel/auto-
+// explore's own setInterval loops) via endTurn({forceFull:true}) -- those are automated, multi-turn
+// conveniences, not tactical player actions, and letting sprint accelerate or drain into them would
+// be confusing rather than fun. See each call site for why.
+// Deliberately NO hard cap on how many bonus actions can stack -- a flat ceiling is the cheap way
+// to "balance" this, and it punishes a player who legitimately built and paid for five different
+// sources exactly the same as one who got lucky with two. Instead, every source below is balanced
+// on its OWN terms -- a real stamina/mana/charge cost, a cooldown, a steep stat requirement, or a
+// genuine downside -- and sprinting specifically gets MORE expensive the more OTHER bonus actions
+// you're already stacking (see sprintStaminaCostThisRound() below), so piling everything on at once
+// burns through your stamina pool fast rather than being a free permanent state. Stack hard and
+// you'll get a real burst of extra actions; sustaining that stack is the actual cost.
+const SPRINT_STAMINA_COST = 9; // base stamina spent per ROUND while sprinting (not per bonus action -- see worldTick's regen block)
+// Sprint: a manual toggle (key 'v') that trades stamina for an extra action every round, so
+// closing distance on a fleeing target or -- just as often -- putting distance between yourself
+// and something you'd rather not fight is finally something a player can actively choose to do,
+// instead of movement speed being a fixed, un-buildable constant every entity in the game shares.
+function toggleSprint() {
+  if (gameState !== 'playing') return;
+  if (!player.sprinting) {
+    if ((player.stamina || 0) <= 0) { log("You're too exhausted to sprint."); return; }
+    if (player.frozenSolidTurns > 0 || player.stunnedTurns > 0) { log("You can't sprint right now."); return; }
+    player.sprinting = true;
+    log('You break into a sprint, burning stamina for speed.');
+  } else {
+    player.sprinting = false;
+    log('You drop out of your sprint.');
+  }
+  refillBonusActions();
+  updateSidebar();
+}
+// Raw DEX breakpoints: permanent, no toggle, no resource cost -- a pure payoff for committing hard
+// to DEX, all the way from "meaningfully quick" to "faster than should be possible." Deliberately
+// steep (starting DEX is ~8-12) so each rung is a genuine build milestone, not something every
+// character drifts into -- and since nothing here is capped, pushing DEX further always keeps
+// paying off, which is the whole point of not having a ceiling. effDex() is used so gear/buffs
+// pushing you over a threshold counts too, same as every other DEX-gated check in this game.
+const DEX_ACTION_SPEED_THRESHOLDS = [ { dex: 20, bonus: 1 }, { dex: 34, bonus: 1 }, { dex: 50, bonus: 1 } ]; // cumulative: 20=+1, 34=+2, 50=+3
+function dexActionSpeedBonus() {
+  let bonus = 0;
+  const dex = effDex(player);
+  for (const t of DEX_ACTION_SPEED_THRESHOLDS) if (dex >= t.dex) bonus += t.bonus;
+  return bonus;
+}
+// Sums every source of "extra actions per round" the player currently qualifies for, AND labels
+// each one that's actually contributing right now. This is the single source of truth for the
+// Action Speed Framework -- worldTick()'s refillBonusActions(), sprintStaminaCostThisRound(), and
+// the Character Sheet's own readout all pull from THIS function rather than each re-deriving the
+// same list of conditions independently, which is exactly the kind of drift ("the character sheet
+// says one thing, the actual game logic does another") that bit Accelerate/Time Stop/Blood Pact
+// before this pass fixed them. Adding a new source (a talent, a piece of gear, a spell) means
+// adding one line here -- everything downstream (the pool itself, the UI, sprint's own cost
+// scaling) picks it up automatically.
+// Called once per worldTick() to bank the pool for the upcoming round -- deliberately NOT called
+// mid-round for that purpose (the pool is fixed for the round once banked), so spending your last
+// bonus action can't somehow refund itself by re-checking conditions that changed as a side effect
+// of the action you just took. (sprintStaminaCostThisRound and the Character Sheet DO call it
+// mid-round, but only to describe/react to current state, never to change the already-banked pool.)
+function computeBonusActionsDetailed() {
+  const breakdown = [];
+  if (!player.alive || player.hp <= 0) return { total: 0, breakdown };
+  // Frozen/stunned: you're not getting extra actions if you can barely get one.
+  if (player.frozenSolidTurns > 0 || player.stunnedTurns > 0) return { total: 0, breakdown };
+  const dexBonus = dexActionSpeedBonus();
+  if (dexBonus) breakdown.push({ amount: dexBonus, label: `DEX ${effDex(player)}` });
+  // BUG FIX (Action Speed Framework): sprint's STAMINA COST is deliberately skipped while swimming
+  // (see worldTick's regen block -- swimming already has its own distinct, differently-scaled
+  // stamina cost, and the two weren't meant to combine), but this grant wasn't checking water at
+  // all -- meaning toggling Sprint on and then jumping in water got the +1 bonus action completely
+  // free, forever, since neither cost path was actually charging for it. Gated on the same
+  // isPlayerInWater() check the cost side already uses, so the grant and the cost stay consistent
+  // with each other instead of one half of the mechanic silently not applying.
+  if (player.sprinting && (player.stamina || 0) > 0 && !isPlayerInWater()) breakdown.push({ amount: 1, label: 'Sprinting' });
+  const hasteBuff = Math.round(getBuff('actionspeed')); // Accelerate/Time Stop, Sandevistan-style cybernetics, haste consumables -- each with its own MP/Charge cost and cooldown, see their definitions
+  if (hasteBuff) breakdown.push({ amount: hasteBuff, label: 'an active haste effect' });
+  if (player.permaBonusAction) breakdown.push({ amount: player.permaBonusAction, label: 'Windwalker' }); // Windwalker capstone (see TALENTS_V2) -- a full talent chain's worth of investment for one permanent point
+  // Adrenaline Surge (Fleetfoot line, see TALENTS_V2): a surge of speed when badly hurt -- the
+  // "wounded and fleeing" fantasy the user specifically asked for. Self-limiting by its very
+  // nature: it only helps once you're already in real danger, which is its own real cost.
+  if (player.talents && player.talents.adrenalsurge && player.hp / player.maxHp < 0.3) breakdown.push({ amount: 1, label: 'Adrenaline Surge (low HP)' });
+  const total = Math.max(0, breakdown.reduce((sum, b) => sum + b.amount, 0));
+  return { total, breakdown };
+}
+// Thin convenience wrapper for the many call sites that only need the number, not the breakdown.
+function computeBonusActions() { return computeBonusActionsDetailed().total; }
+// How much stamina sprinting costs THIS round -- scales up with however many other bonus-action
+// sources are already stacked (DEX breakpoints, Windwalker, an active haste buff), so sprinting on
+// top of an already-fast build is a real, escalating stamina tax rather than a free extra layer.
+// This is the actual balance lever for stacking, in place of a flat cap: pile everything on and
+// your stamina bar empties in a handful of rounds instead of forty.
+// BUG FIX: staminaDrainReduction is written by several independent sources (Fleet-Footed heritage,
+// the heritageBoost origin, the Wanderer and Fleetfoot talents) -- most clamp their OWN
+// contribution against a cap, but Wanderer's never did, and nothing enforced a ceiling on the
+// TOTAL across all of them together. Under today's content that can't actually exceed 1.0 (every
+// source is a one-time, non-repeatable pick, and the realistic max stack is 0.75), but a value at
+// or above 1.0 would make (1 - reduction) go zero or negative -- silently turning "drains stamina
+// more slowly" into "drains no stamina" or, worse, "swimming/sprinting GENERATES stamina." Rather
+// than trust every future writer to remember to clamp correctly (the actual root cause here),
+// every reader now clamps at the point of use instead -- a single, permanent guarantee regardless
+// of how many sources get added later.
+function effStaminaDrainReduction() { return Math.min(0.9, player.staminaDrainReduction || 0); }
+function sprintStaminaCostThisRound() {
+  const stackedElsewhere = Math.max(0, computeBonusActions() - (player.sprinting ? 1 : 0));
+  const scaled = SPRINT_STAMINA_COST * (1 + stackedElsewhere * 0.6);
+  return Math.max(1, Math.round(scaled * (1 - effStaminaDrainReduction())));
+}
+// Recomputes and banks the bonus-action pool for the round about to start. Called once, at the very
+// end of worldTick() (see below), so it reflects the state the world is in AFTER this round's
+// monsters/status ticks/etc. resolved -- not stale state from before them.
+function refillBonusActions() {
+  player.bonusActionCharges = computeBonusActions();
+}
+// Spends one banked charge if available. Returns true if it did (meaning the caller should skip
+// worldTick() entirely for this action) -- see endTurn() below.
+function consumeBonusAction() {
+  if ((player.bonusActionCharges || 0) <= 0) return false;
+  player.bonusActionCharges--;
+  render(); // render() already calls updateSidebar() internally -- no need to call it separately here
+  return true;
+}
+function endTurn(opts) {
+  opts = opts || {};
+  if (!opts.forceFull && player.alive && player.hp > 0 && consumeBonusAction()) return;
+  worldTick();
+}
+function worldTick() {
   turnCount++;
   // ARTIFACT FRAMEWORK: autoBlinkBelowHpFrac gear's charge is "per encounter," not a turn-cooldown
   // -- reset once nothing hostile is close enough to be a threat, rather than tracking a formal
@@ -32681,8 +33092,24 @@ function endTurn() {
   // that the player can actually stand in it, treading water should suppress stamina regen the
   // same way it does in the overworld, rather than dungeon water silently acting like dry floor. ----
   const playerInWater = isWaterTile(curT);
-  if (!playerInWater) {
-    const staminaRegen = Math.max(1, (player.staminaRegenBonus ? 6 : 3) - (player.staminaRegenPenalty || 0));
+  const sprintActuallyDraining = player.sprinting && player.frozenSolidTurns <= 0 && player.stunnedTurns <= 0;
+  if (!playerInWater && sprintActuallyDraining) {
+    // SPRINT: costs stamina once per ROUND (not per bonus action spent -- see the Action Speed
+    // Framework above), same "pay per round, not per swing" pattern armor upkeep already uses
+    // elsewhere. sprintStaminaCostThisRound() (not a flat number -- see its own definition above)
+    // is the real balance lever for a build stacking sprint on top of DEX breakpoints/Windwalker/a
+    // haste buff: the more of those you're already running, the faster sprinting on top of them
+    // burns through your stamina bar, instead of a hard cap silently discarding the extra value.
+    const sprintCost = sprintStaminaCostThisRound();
+    player.stamina = Math.max(0, (player.stamina || 0) - sprintCost);
+    if (player.stamina <= 0) { player.sprinting = false; log("You're too exhausted to keep sprinting."); }
+  } else if (!playerInWater) {
+    // STAMINA FIX: regen used to be a flat 3 (or 6 with the Battle Trance-style bonus) no matter
+    // what -- CON (this game's Endurance stat) now speeds it up too, mirroring how WIL already
+    // quickens HP/MP regen (wilRegenSpeedup, below) so an endurance build actually recovers
+    // stamina noticeably faster, not just has a bigger pool to draw from.
+    const conRegenBonus = Math.floor(Math.max(0, player.con - 8) / 4);
+    const staminaRegen = Math.max(1, (player.staminaRegenBonus ? 6 : 3) + conRegenBonus - (player.staminaRegenPenalty || 0));
     // wearing armor heavier than your STR supports means you're spending some of every turn's
     // recovery just fighting the weight of your own gear instead of actually resting.
     const encumbranceDrag = Math.min(staminaRegen, Math.ceil(armorStrDeficit() * 0.4));
@@ -32745,15 +33172,61 @@ function endTurn() {
   // (rather than, say, zeroing monster damage) also means no monster ever repositions, notices,
   // or loses track of the player while frozen -- which is what "freeze time" should feel like.
   if (!DEBUG.freezeTime) {
-    for (const a of curAllies().slice()) { if (!player.alive || player.hp <= 0) break; allyAI(a); }
-    for (const m of curMonsters().slice()) { if (!player.alive || player.hp <= 0) break; if (m.alive) { monsterAI(m); reconcileEntityChunk(m, 'monsters'); } }
+    // ACTION SPEED PARITY: the player isn't the only one who can act more than once per round --
+    // see entityBonusActions() just above worldTick(). A dex-bred monster (thresholds match the
+    // player's own DEX_ACTION_SPEED_THRESHOLDS) gets the same extra-swing/extra-step advantage a
+    // fast player build does, and an ally standing near a SPRINTING player keeps pace with them
+    // instead of getting left in the dust mid-chase. No hard cap here either -- a monster earns
+    // its extra actions the exact same way the player does (real DEX investment, or proximity to
+    // an active sprint), never from an arbitrary ceiling.
+    for (const a of curAllies().slice()) {
+      if (!player.alive || player.hp <= 0) break;
+      allyAI(a);
+      for (let i = 0, extra = entityBonusActions(a); i < extra && a.alive && player.alive; i++) allyAI(a, true);
+    }
+    for (const m of curMonsters().slice()) {
+      if (!player.alive || player.hp <= 0) break;
+      if (m.alive) {
+        monsterAI(m); reconcileEntityChunk(m, 'monsters');
+        for (let i = 0, extra = entityBonusActions(m); i < extra && m.alive && player.alive; i++) { monsterAI(m, true); reconcileEntityChunk(m, 'monsters'); }
+      }
+    }
     if (!player.alive || player.hp <= 0) { gameOver(); return; }
     for (const n of curNPCs().slice()) { if (n.alive) { npcAI(n); reconcileEntityChunk(n, 'npcs'); } }
     if (!player.alive || player.hp <= 0) { gameOver(); return; }
   }
+  // Bank the player's bonus-action pool for the round that's about to start (see the Action Speed
+  // Framework header above worldTick()) -- deliberately the last thing this function does, so it
+  // reflects sprint/stamina/buff state exactly as it stands after everything above has resolved.
+  refillBonusActions();
   markSeen();
   render();
   if (player.isTutorial) tutorialTurnHook();
+}
+// Shared by monsters AND allies -- see the player-facing computeBonusActions() above worldTick()
+// for the full framework writeup. Any entity whose raw DEX crosses the same breakpoints the player
+// benefits from gets the same extra-action advantage (uncapped, same as the player -- a dex:65
+// final-boss-tier monster earning 3 extra actions from that alone is exactly the kind of genuinely
+// terrifying, rarity-gated payoff this system is meant to allow). Separately, a handful of
+// thematically fast species (wolf/dire wolf/alpha wolf, rogue assassins -- see swiftMover in
+// MONSTER_BASES) get a flat bonus even though their raw DEX sits well under the 20 breakpoint --
+// checked, deliberately, DEX values across the whole bestiary top out around 20-22 outside of
+// named bosses, so a pure DEX-threshold rule alone would have made "wolves are fast" purely
+// aspirational flavor text with zero mechanical backing, the exact kind of gap this whole update
+// exists to close. Allies additionally get a temporary bonus while actively keeping pace with a
+// sprinting player, so sprint speeds up your whole party's escape/chase, not just you.
+function entityBonusActions(e) {
+  if (!e || e.alive === false || (e.hp !== undefined && e.hp <= 0)) return 0;
+  if (e.frozenSolidTurns > 0 || e.stunnedTurns > 0) return 0;
+  let bonus = 0;
+  const dex = e.dex || 0;
+  for (const t of DEX_ACTION_SPEED_THRESHOLDS) if (dex >= t.dex) bonus += t.bonus;
+  if (e.swiftMover) bonus += 1;
+  // Same water-gating as the player's own sprint bonus in computeBonusActionsDetailed() -- sprint
+  // is inert while swimming (no cost, no benefit to the player), so an ally "keeping pace" with it
+  // shouldn't get a free action out of a sprint that isn't actually doing anything right now either.
+  if (e.kind === 'ally' && player.sprinting && (player.stamina || 0) > 0 && !isPlayerInWater() && chebyshev(e.x, e.y, player.x, player.y) <= 6) bonus += 1;
+  return Math.max(0, bonus);
 }
 
 // ---- cybernetics management ('Y'): install/uninstall within slot limit ----
@@ -33619,6 +34092,13 @@ function useItem(it) {
     case 'mana': { const potencyMult = 1 + (it.foodFlavor ? (player.cookingHealBonus||0) : (player.alchemyPotencyBonus||0)); const amt = Math.round(it.power * potencyMult * playerLevelPowerMult(player.level)); player.mp = Math.min(player.maxMp, player.mp + amt); log(`You consume ${it.name} and recover ${amt} MP.`); break; }
     case 'buffstr': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('str', it.power, Math.round((it.dur||40)*durMult)); break; }
     case 'buffdex': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('dex', it.power, Math.round((it.dur||40)*durMult)); break; }
+    // BUG FIX (Action Speed Framework): same "does the name match the mechanic" pass that fixed
+    // Accelerate/Time Stop/Blood Pact -- Potion of Haste and Scroll of Haste were routed through
+    // the exact same generic 'buffdex' handler as Potion of Agility, which never claimed anything
+    // about speed. A separate effect id so the merely-dex items stay exactly what they say they
+    // are, while anything actually named "Haste" delivers a real (if modest -- these are common,
+    // gold-buyable consumables, not a rare talent/cybernetic/tier-5 spell) taste of the real thing.
+    case 'buffhaste': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); const dur = Math.round((it.dur||12)*durMult); applyBuff('dex', it.power, dur); applyBuff('actionspeed', 1, dur); break; }
     case 'buffint': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('int', it.power, Math.round((it.dur||40)*durMult)); break; }
     case 'buffarmor': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('armor', it.power, Math.round((it.dur||30)*durMult)); break; }
     case 'buffcrit': { const durMult = 1 + (it.foodFlavor ? (player.cookingDurBonus||0) : 0); applyBuff('crit', it.power, Math.round((it.dur||30)*durMult)); break; }
@@ -34163,9 +34643,17 @@ function updateSidebar() {
   document.getElementById('hp-bar').style.width = hpPct + '%';
   document.getElementById('mp-bar').style.width = mpPct + '%';
   document.getElementById('stamina-bar').style.width = stPct + '%';
+  document.getElementById('stamina-bar').classList.toggle('sprinting', !!player.sprinting);
   document.getElementById('hp-text').textContent = `HP ${Math.max(0,player.hp)}/${player.maxHp}`;
   document.getElementById('mp-text').textContent = `MP ${player.mp}/${player.maxMp}`;
-  document.getElementById('stamina-text').textContent = `Stamina ${Math.round(player.stamina)}/${player.maxStamina}${player.freeSwim?' (Waterborn)':''}`;
+  // Action Speed Framework: surfaces both the toggle state (SPRINTING) and, whenever the player
+  // has a banked bonus action (from sprint, DEX breakpoints, Fleetfoot talents, a Sandevistan-style
+  // cybernetic, or a haste spell), exactly how many extra actions are queued up right now -- so the
+  // player always knows before they act again whether it'll cost the world a turn or not.
+  const stEl = document.getElementById('stamina-text');
+  stEl.classList.toggle('sprinting', !!player.sprinting);
+  const bonusTxt = (player.bonusActionCharges || 0) > 0 ? ` ⚡+${player.bonusActionCharges} action${player.bonusActionCharges === 1 ? '' : 's'}` : '';
+  stEl.textContent = `Stamina ${Math.round(player.stamina)}/${player.maxStamina}${player.freeSwim?' (Waterborn)':''}${player.sprinting?' — SPRINTING (v)':''}${bonusTxt}`;
   const chargeRow = document.getElementById('charge-row');
   if (player.knownCyberIds.length || player.installedCyber.length) {
     document.getElementById('charge-bar').style.width = chPct + '%';
@@ -34447,6 +34935,13 @@ function applyLoadedSave(data) {
     }
   }
   gameState = 'playing';
+  // ACTION SPEED FRAMEWORK: bonusActionCharges is plain saved/restored JSON like everything else on
+  // player, but it's meant to represent "charges banked for the round in progress when the game was
+  // saved" -- trusting that literal number back would let a save made mid-round with charges banked
+  // hand the player a few genuinely free actions the instant they load, with no world-tick, no
+  // stamina spent, nothing behind them. Recomputed fresh from the actually-restored CON/DEX/talents/
+  // sprint-state/buffs instead, exactly like a normal round would.
+  refillBonusActions();
   document.getElementById('title-screen').classList.add('hidden');
   document.getElementById('modal').classList.add('hidden');
   log('Game loaded. Welcome back.');
@@ -34747,6 +35242,7 @@ function debugFullRestore() {
   player.hp = player.maxHp; player.mp = player.maxMp; player.stamina = player.maxStamina || 100;
   player.charge = player.maxCharge || 60;
   player.statusPoison = 0; player.statusFear = 0; player.statusConfuse = 0; player.buffs = {};
+  refillBonusActions(); // buffs (including any actionspeed haste) were just wiped -- keep the banked pool consistent with that
   debugLog('Fully restored HP/MP/Stamina/Charge and cleared status effects.');
   updateSidebar();
 }
@@ -35841,6 +36337,7 @@ const GUIDE_SECTIONS = [
       ['y u b n','Diagonal movement (matches the hjkl layout).'],
       ['. or 5','Wait one turn in place.'],
       ['r','Rest — recovers HP/MP/Stamina over time if it\'s safe to do so.'],
+      ['v','Toggle Sprint — spends Stamina every round for an extra action before the world advances. See the paragraph below.'],
       ['+ / − or mouse wheel','Zoom in or out (9 zoom levels).'],
     ])}
     ${guideKeyTable('Actions', [
@@ -35883,6 +36380,13 @@ const GUIDE_SECTIONS = [
     <div class="modal-opt">Arrows / WASD / hjkl (+ yubn diagonals) — move, or attack if a hostile is adjacent. Bumping a
     friendly ally/companion/NPC swaps places with them instead of blocking you; use <b>t</b> to deliberately talk.</div>
     <div class="modal-opt">+ / − or mouse wheel — zoom. g — pick up/open chest. . or 5 — wait. r — rest.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>v — Sprint.</b> Burns Stamina every round to grant an extra
+    action before the world moves again — outrun (or run down) something that would otherwise match your pace tile
+    for tile. Auto-cancels when Stamina hits 0 or you sit down to rest. DEX has its own permanent version of this
+    (20/34/50 DEX are real, no-toggle-needed breakpoints — check your Character sheet), and several talents,
+    cybernetics, and spells layer on top. None of it is capped — stack as much as you can afford, but each extra
+    source costs real Stamina/HP/Mana/Charge or a steep stat/level requirement to get, and sprinting on top of an
+    already-fast build drains your Stamina bar noticeably faster than sprinting alone does.</div>
     <div class="modal-opt"><b>V</b> opens Fast Travel to any settlement/dungeon/waypoint you've visited — free at a
     waystone (in town, on a waypoint, or a dungeon exit-waystone), or via a Recall Stone/Teleport spell/Warp Relay
     Implant/The Ninth Door mutation from anywhere. <b>m</b> plants a Waystone Shard as a named waypoint. <b>G</b>/<b>H</b> auto-walk to
@@ -36928,6 +37432,7 @@ function handleKey(e) {
     if (key === 'a') { openCalledShotMenu(); return; }
     if (key === 'S') { doSearch(); return; }
     if (key === 'D') { beginDigTargeting(); return; }
+    if (key === 'v') { toggleSprint(); return; }
     return;
   }
 
@@ -37449,6 +37954,8 @@ function tutorialDeathRespawn() {
   player.hp = player.maxHp; player.mp = player.maxMp; player.stamina = player.maxStamina;
   player.statusPoison = 0; player.statusFear = 0; player.statusConfuse = 0; player.bleedTurns = 0;
   player.frozenSolidTurns = 0; player.stunnedTurns = 0; player.legInjuryPenalty = 0; player.buffs = {};
+  player.sprinting = false; // don't respawn mid-sprint, silently draining stamina before the player's even taken a step
+  refillBonusActions(); // buffs were just wiped on respawn -- keep the banked pool consistent with that
   const start = (lvl && lvl.tutorialStart) ? lvl.tutorialStart : { x: player.x, y: player.y };
   player.x = start.x; player.y = start.y;
   log('You catch your breath. Nothing in a tutorial is worth losing sleep over -- try again.');
