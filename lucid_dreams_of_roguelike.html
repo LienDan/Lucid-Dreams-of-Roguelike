@@ -38,6 +38,17 @@
   body.font-body-pixel{ --font-body:'VT323', 'Silkscreen', monospace; }
   body.font-body-blocky{ --font-body:'Silkscreen', 'VT323', monospace; }
   body.font-body-serif{ --font-body:'IM Fell English', Georgia, 'Times New Roman', serif; }
+  /* Every <kbd> in the game represents a literal key to press, and several of the display fonts
+     above (VT323 and Silkscreen especially -- both genuine pixel/blocky styles) don't render
+     upper- and lowercase letters distinctly enough to tell 'g' from 'G' at a glance. Since which
+     case a key hint is matters here (lowercase vs Shift+lowercase are different, real bindings),
+     pin every <kbd> to a system font that always draws them differently, regardless of whichever
+     body font the player has chosen -- this is also just standard practice for <kbd> on the web,
+     so it doesn't read as visually inconsistent, only as "this bit represents a physical key."
+     This is the belt to the "Shift+X" written-out convention's suspenders (see keyRef()/the
+     sidebar Controls panel/the guide's key tables): the wording alone already disambiguates even
+     if a font somehow still renders the two cases identically. */
+  kbd{ font-family: ui-monospace, 'SF Mono', Consolas, monospace; background:#1a1610; border:1px solid var(--line); border-radius:3px; padding:0 4px; color:var(--amber-bright); font-size:12px; }
   body.font-body-sans{ --font-body:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
   body.font-body-fantasy{ --font-body:'MedievalSharp', 'Cinzel', serif; }
   body.font-body-typewriter{ --font-body:'Special Elite', 'Courier New', monospace; }
@@ -488,21 +499,21 @@
         <b>+/−</b> or scroll wheel zoom<br>
         <b>g</b> pick up/chest &nbsp; <b>i</b> inventory<br>
         <b>c</b> character &nbsp; <b>z</b> spells<br>
-        <b>K</b> craft &nbsp; <b>T</b> talents &nbsp; <b>q</b> quests<br>
-        <b>Y</b> cyberware &nbsp; <b>U</b> eldritch<br>
-        <b>V</b> fast travel &nbsp; <b>m</b> mark spot<br>
-        <b>p</b> property &amp; housing &nbsp; <b>F</b> family<br>
-        <b>O</b> professions<br>
+        <b>Shift+K</b> craft &nbsp; <b>Shift+T</b> talents &nbsp; <b>q</b> quests<br>
+        <b>Shift+Y</b> cyberware &nbsp; <b>Shift+U</b> eldritch<br>
+        <b>Shift+V</b> fast travel &nbsp; <b>m</b> mark spot<br>
+        <b>p</b> property &amp; housing &nbsp; <b>Shift+F</b> family<br>
+        <b>Shift+O</b> professions<br>
         <b>t</b> talk &nbsp; <b>x</b> look &nbsp; <b>r</b> rest<br>
-        <b>a</b> take aim (called shot) &nbsp; <b>L</b> library<br>
+        <b>a</b> take aim (called shot) &nbsp; <b>Shift+L</b> library<br>
         <b>v</b> toggle sprint<br>
-        <b>G</b> auto-travel &nbsp; <b>H</b> auto-home<br>
-        <b>X</b> auto-explore &nbsp; <b>M</b> dungeon map<br>
+        <b>Shift+G</b> auto-travel &nbsp; <b>Shift+H</b> auto-home<br>
+        <b>Shift+X</b> auto-explore &nbsp; <b>Shift+M</b> dungeon map<br>
         <b>&gt;</b> enter/descend &nbsp; <b>&lt;</b> ascend<br>
-        <b>S</b> search for secrets &nbsp; <b>D</b> dig (pickaxe in hand)<br>
-        <b>P</b> or <b>Esc</b> menu (save/load/settings)<br>
+        <b>Shift+S</b> search for secrets &nbsp; <b>Shift+D</b> dig (pickaxe in hand)<br>
+        <b>Shift+P</b> or <b>Esc</b> menu (save/load/settings)<br>
         <b>?</b> full guide &nbsp; click map to examine<br>
-        <span class="dim">capitals need Shift — they're shown exactly as typed</span>
+        <span class="dim">"Shift+" above always means hold Shift and press that letter -- written out in full rather than relying on capitalization, since some display fonts don't render upper/lowercase distinctly enough to tell apart at a glance.</span>
       </div>
     </div>
   </div>
@@ -529,7 +540,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.49.1-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.49.2-alpha</div>
     </div>
   </div>
 
@@ -16431,7 +16442,7 @@ function openContainer(container) {
 function renderContainer() {
   const c = containerTarget;
   const list = containerMode === 'take' ? c.contents : player.inventory.filter(i => i.type !== 'corpse');
-  let html = `<div class="npcline dim">[Tab] switch to ${containerMode === 'take' ? 'store' : 'take'} &nbsp; [S] sort this ${c.name.toLowerCase()} &nbsp; ${containerMode==='take' ? '[A] take all' : ''}</div>`;
+  let html = `<div class="npcline dim">[Tab] switch to ${containerMode === 'take' ? 'store' : 'take'} &nbsp; [Shift+S] sort this ${c.name.toLowerCase()} &nbsp; ${containerMode==='take' ? '[Shift+A] take all' : ''}</div>`;
   html += `<div class="trade-col-title">${containerMode === 'take' ? `Inside the ${c.name} (${c.contents.length}/${c.capacity}):` : 'Your inventory (store):'}</div>`;
   const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
   if (containerPage >= totalPages) containerPage = totalPages - 1;
@@ -16648,11 +16659,21 @@ const MOVE_KEYS = {
   y: [-1,-1], u: [1,-1], b: [-1,1], n: [1,1],
 };
 // Letters MOVE_KEYS also uses that already have their own dedicated Shift+letter meaning
-// elsewhere in the 'playing' keydown handler (Craft/Library/Cybernetics/Eldritch/auto-travel-home)
-// -- excluded from the Shift-movement fallback above so force-attack via Shift+direction can't
-// silently steal them. WASD has no such conflicts, which is why it's the keyset the user actually
-// wants Shift-force-attack to work with.
-const SHIFT_MOVE_UNSAFE_KEYS = new Set(['h', 'k', 'l', 'y', 'u']);
+// elsewhere in the 'playing' keydown handler (Search/Dig/Craft/Library/Cybernetics/Eldritch/
+// auto-travel-home) -- excluded from the blanket Shift-movement fallback below so force-attack
+// via Shift+direction can't silently steal them outright. See handleKey's shiftUnsafeMove block:
+// each of these still supports Shift+letter as a force-attack IF an NPC is actually standing in
+// that direction, and only falls back to its own normal meaning when nothing's there to attack.
+// BUG FIX: this set previously only listed the vi-keys (h/k/l/y/u), on the assumption -- stated
+// outright in an earlier version of this very comment, and never actually checked -- that "WASD
+// has no such conflicts." It does: 's' is WASD-south and 'd' is WASD-east, and Search/Dig are
+// bound to capital S/D. A player told to "press [S] (capital)" to search (see the Dungeon
+// Exploration tutorial) who did exactly that got silently moved south instead, every single time,
+// with Search never firing at all -- capital S is exactly what typing Shift+s produces, so this
+// wasn't an edge case, it was the only way to ever press the key. Adding 's'/'d' here routes them
+// through the same NPC-check as h/k/l/y/u already get, which is the correct fix rather than a
+// special case: nothing about Search or Dig is actually different from Craft/Library/etc. here.
+const SHIFT_MOVE_UNSAFE_KEYS = new Set(['h', 'k', 'l', 'y', 'u', 's', 'd']);
 
 
 // ---------------- settings / QoL system ----------------
@@ -24358,7 +24379,7 @@ function generateQuestRumorNote(stage) {
 // people, reading things they find out in the world, or exploring -- see hasQuestLead() /
 // markQuestLeadKnown() above.
 function spawnStarterRumorNote() {
-  const tutNote = makeNoteItem('how_to_read', 'A Crumpled Note', 'Someone left this here. Press [g] to pick up items you\'re standing on, then open your inventory [i] and press [u] on any readable item to read it.\n\nPress [L] anytime to reread anything you\'ve already read, even after you\'ve dropped it.');
+  const tutNote = makeNoteItem('how_to_read', 'A Crumpled Note', 'Someone left this here. Press [g] to pick up items you\'re standing on, then open your inventory [i] and press [u] on any readable item to read it.\n\nPress [Shift+L] anytime to reread anything you\'ve already read, even after you\'ve dropped it.');
   placeItemAt(player.x, player.y, tutNote);
 }
 // Called by rollContainerLoot for certain containers (desks, sacks, crates) with a small chance
@@ -33154,7 +33175,7 @@ function worldTick() {
     delete player._pendingTutorialNudge;
     const adj = findAdjacentNPC();
     if (adj) log(`Tip: press [t] to talk to ${adj.name} nearby — they may know something useful.`);
-    else log(`Tip: look for settlements nearby — press [H] to auto-walk toward the nearest one, or check your quest log [q] for direction.`);
+    else log(`Tip: look for settlements nearby — press [Shift+H] to auto-walk toward the nearest one, or check your quest log [q] for direction.`);
   }
   if (activeDecoys.length) { for (const d of activeDecoys) d.turns--; activeDecoys = activeDecoys.filter(d => d.turns > 0); }
   for (const stat in player.buffs) {
@@ -34680,7 +34701,7 @@ function describeItem(it) {
   } else if (it.type === 'book') {
     lines.push(`${it.categoryLabel || 'Book'} by ${it.author}, ${it.date}. ${it.manual ? '' : '(one of many unique volumes scattered across the world)'}`);
   } else if (it.type === 'note') {
-    lines.push(`A scrap of writing. Press [u] to read it. Whatever it says, your Library [L] will remember it.`);
+    lines.push(`A scrap of writing. Press [u] to read it. Whatever it says, your Library [Shift+L] will remember it.`);
   } else if (it.type === 'misc') {
     if (it.id === 'gold') lines.push('Currency.');
     else if (it.id === 'compass') lines.push('While carried, shows the direction to the nearest known dungeon in your status panel.');
@@ -36452,10 +36473,13 @@ function generateMutationGuideHTML() {
 function actionKey(k) { return `[${k}]`; }
 function keyRef(k, where) {
   const ctx = where ? ` (${where})` : '';
-  return `<kbd style="background:#1a1610;border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--amber-bright);font-size:12px">${k}</kbd>${ctx}`;
+  // Visual styling now lives on the global `kbd{...}` rule (font-family/background/border/color/
+  // size) so every <kbd> in the game -- this one, the guide's key tables, the one bare mention
+  // left in the intro paragraph above -- looks and behaves identically with no per-call duplication.
+  return `<kbd>${k}</kbd>${ctx}`;
 }
 function guideKeyTable(title, rows) {
-  const body = rows.map(([key, desc]) => `<tr><td style="padding:3px 14px 3px 0;white-space:nowrap;vertical-align:top;"><kbd style="background:#1a1610;border:1px solid var(--line);border-radius:3px;padding:1px 6px;color:var(--amber-bright);font-size:12px;">${key}</kbd></td><td style="padding:3px 0;">${desc}</td></tr>`).join('');
+  const body = rows.map(([key, desc]) => `<tr><td style="padding:3px 14px 3px 0;white-space:nowrap;vertical-align:top;"><kbd style="padding:1px 6px;">${key}</kbd></td><td style="padding:3px 0;">${desc}</td></tr>`).join('');
   return `<div class="modal-opt" style="margin-top:10px"><b>${title}</b></div>
     <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:2px;">${body}</table>`;
 }
@@ -36498,13 +36522,14 @@ const GUIDE_SECTIONS = [
   { id:'controls', label:'Controls', category:'Getting Started', html: () => `
     <div class="modal-opt">Every key below works while you're out in the world. Menus and screens show their own
     key hints at the bottom once you're inside them, and every option everywhere is also clickable with the mouse.</div>
-    <div class="modal-opt"><b>Capitalization matters.</b> Keys are listed here exactly as you must type them: a
-    lowercase letter means press it on its own, and a capital means hold <b>Shift</b>. Several letters are bound
-    twice on purpose and do completely different things in each case — <b>p</b> opens Property while <b>P</b> opens
-    the menu, <b>v</b> toggles Sprint while <b>V</b> opens Fast Travel, and <b>t</b> talks while <b>T</b> opens
-    Talents. Anywhere the game shows a key in brackets like [g], that key works on the screen you're looking at
-    right now; a key shown as <kbd style="background:#1a1610;border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--amber-bright);font-size:12px">g</kbd>
-    with a note beside it belongs to a different screen.</div>
+    <div class="modal-opt"><b>"Shift+" means hold Shift and press that letter.</b> Several letters are bound twice on
+    purpose and do completely different things depending on whether Shift is held — <b>p</b> opens Property while
+    <b>Shift+P</b> opens the menu, <b>v</b> toggles Sprint while <b>Shift+V</b> opens Fast Travel, and <b>t</b> talks
+    while <b>Shift+T</b> opens Talents. Every such pair below is written out as "Shift+" rather than shown as a bare
+    capital letter -- a couple of the display fonts under Settings (the pixel/blocky ones especially) don't draw
+    upper- and lowercase letters distinctly enough to always tell 'g' from 'G' apart at a glance, so relying on case
+    alone here would be easy to misread. Anywhere the game shows a key in brackets like [g], that key works on the
+    screen you're looking at right now; a key shown as <kbd>g</kbd> with a note beside it belongs to a different screen.</div>
     ${guideKeyTable('Movement', [
       ['Arrows / WASD / hjkl','Move, or attack a hostile standing in that direction.'],
       ['y u b n','Diagonal movement (matches the hjkl layout).'],
@@ -36519,39 +36544,39 @@ const GUIDE_SECTIONS = [
       ['a','Take Aim — line up a Called Shot (head/legs/weapon arm) for your next attack only, at reduced accuracy in exchange for a guaranteed extra effect. See the Status Effects tab, "Body &amp; Health".'],
       ['t','Talk to an adjacent friendly NPC — including an "Ask about your journey" option for a lead on your current main quest.'],
       ['x','Look/examine mode — inspect any visible tile, item, or creature.'],
-      ['S','Search the tiles around you for hidden doors and undiscovered traps. Takes a turn, and the better your senses the wider it reaches — worth pressing a few times anywhere a room looks like it should have another way out.'],
-      ['D','Dig — then a direction, to tunnel through an ordinary wall with a pickaxe (or a heavy hammer/maul/warhammer) in hand. Takes several turns and Stamina, and stops if anything dangerous comes near. See the Dungeons tab.'],
+      ['Shift+S','Search the tiles around you for hidden doors and undiscovered traps. Takes a turn, and the better your senses the wider it reaches — worth pressing a few times anywhere a room looks like it should have another way out. (If a friendly NPC happens to be standing in every adjacent tile, Shift+S/D and the other Shift+letter actions below force-attack them instead — see Combat.)'],
+      ['Shift+D','Dig — then a direction, to tunnel through an ordinary wall with a pickaxe (or a heavy hammer/maul/warhammer) in hand. Takes several turns and Stamina, and stops if anything dangerous comes near. See the Dungeons tab.'],
       ['&gt; / &lt;','Descend / ascend stairs.'],
       ['m','Plant a Waystone Shard as a named fast-travel waypoint.'],
-      ['M','Dungeon map — the full layout of everything you have explored on this floor, at a glance.'],
-      ['G / H','Auto-travel to the nearest stairs / back home.'],
-      ['X','Auto-explore the current area.'],
+      ['Shift+M','Dungeon map — the full layout of everything you have explored on this floor, at a glance.'],
+      ['Shift+G / Shift+H','Auto-travel to the nearest stairs / back home.'],
+      ['Shift+X','Auto-explore the current area.'],
     ])}
     ${guideKeyTable('Character & Menus', [
       ['i','Inventory.'],
       ['c','Character sheet.'],
       ['z','Abilities — spells, techniques, active cybernetics, and active mutations together.'],
-      ['T','Talents.'],
-      ['K','Crafting &amp; Cooking.'],
+      ['Shift+T','Talents.'],
+      ['Shift+K','Crafting &amp; Cooking.'],
       ['q','Quest Log — including a "Where to look" hint for your current main quest stage, plus your city rank, civic offices, and any noble title or crown.'],
-      ['L','Library — every book you have read, kept for reference even after you have sold or dropped the physical copy.'],
-      ['Y','Cybernetics management.'],
-      ['U','Eldritch/mutation screen.'],
-      ['V','Fast Travel.'],
+      ['Shift+L','Library — every book you have read, kept for reference even after you have sold or dropped the physical copy.'],
+      ['Shift+Y','Cybernetics management.'],
+      ['Shift+U','Eldritch/mutation screen.'],
+      ['Shift+V','Fast Travel.'],
       ['p','Property &amp; Housing — buy/sell/furnish houses, set a primary residence.'],
-      ['F','Family — spouse and children at a glance, including any grown child\'s life-path choice.'],
-      ['O','Professions — your trade levels/ranks, and the Merchant\'s Ledger if you\'ve taken up Trading.'],
+      ['Shift+F','Family — spouse and children at a glance, including any grown child\'s life-path choice.'],
+      ['Shift+O','Professions — your trade levels/ranks, and the Merchant\'s Ledger if you\'ve taken up Trading.'],
     ])}
     ${guideKeyTable('System', [
       ['Esc','Open the in-game menu — Save, Load, Export/Import, Settings, or Quit to Title Screen. Also backs out of whatever screen you\'re currently in.'],
-      ['P','Same in-game menu as Esc (Save/Load/Settings/Quit).'],
+      ['Shift+P','Same in-game menu as Esc (Save/Load/Settings/Quit).'],
       ['?','Open this guide.'],
       ['⚙ button (top-right)','Opens Settings directly from anywhere, in or out of a game.'],
     ])}
-    <div class="modal-opt" style="margin-top:8px">Settings are always reachable mid-game — press <b>Esc</b> or <b>P</b>
-    for the in-game menu and choose Settings, or click the <b>⚙</b> button in the top-right corner at any time. The
-    same menu has a <b>Quit to Title Screen</b> option (with a confirmation prompt, unless you've turned that off
-    under Gameplay settings) if you want to back out to the main menu without closing the browser tab.</div>` },
+    <div class="modal-opt" style="margin-top:8px">Settings are always reachable mid-game — press <b>Esc</b> or
+    <b>Shift+P</b> for the in-game menu and choose Settings, or click the <b>⚙</b> button in the top-right corner at
+    any time. The same menu has a <b>Quit to Title Screen</b> option (with a confirmation prompt, unless you've
+    turned that off under Gameplay settings) if you want to back out to the main menu without closing the browser tab.</div>` },
   { id:'movement', label:'Movement', category:'Getting Started', html: () => `
     <div class="modal-opt">Arrows / WASD / hjkl (+ yubn diagonals) — move, or attack if a hostile is adjacent. Bumping a
     friendly ally/companion/NPC swaps places with them instead of blocking you; use <b>t</b> to deliberately talk.</div>
@@ -36563,10 +36588,10 @@ const GUIDE_SECTIONS = [
     cybernetics, and spells layer on top. None of it is capped — stack as much as you can afford, but each extra
     source costs real Stamina/HP/Mana/Charge or a steep stat/level requirement to get, and sprinting on top of an
     already-fast build drains your Stamina bar noticeably faster than sprinting alone does.</div>
-    <div class="modal-opt"><b>V</b> opens Fast Travel to any settlement/dungeon/waypoint you've visited — free at a
+    <div class="modal-opt"><b>Shift+V</b> opens Fast Travel to any settlement/dungeon/waypoint you've visited — free at a
     waystone (in town, on a waypoint, or a dungeon exit-waystone), or via a Recall Stone/Teleport spell/Warp Relay
-    Implant/The Ninth Door mutation from anywhere. <b>m</b> plants a Waystone Shard as a named waypoint. <b>G</b>/<b>H</b> auto-walk to
-    danger/home respectively. <b>X</b> auto-explores.</div>
+    Implant/The Ninth Door mutation from anywhere. <b>m</b> plants a Waystone Shard as a named waypoint. <b>Shift+G</b>/<b>Shift+H</b> auto-walk to
+    danger/home respectively. <b>Shift+X</b> auto-explores.</div>
     <div class="modal-opt" style="margin-top:6px"><b>Locked doors & lockpicking (new).</b> Some houses (not all) have a
     real lockable door -- tied to whether the resident is actually home, not a fixed flag, so it naturally follows
     their daily schedule without needing a whole separate "lock/unlock" action in their AI. Even while home, there's a
@@ -36594,13 +36619,13 @@ const GUIDE_SECTIONS = [
     vi-keys alike (fixed a real bug where Shift+WASD specifically did nothing at all -- holding Shift makes the
     browser report an uppercase key, e.g. 'W' not 'w', which never matched the lowercase-only movement bindings;
     Shift+arrow keys were unaffected since arrow key names don't change case, which is why only the letter keys had
-    this problem). Shift+H/K/L/Y/U specifically check whether an NPC is actually standing in that direction first --
-    if one is, it's a force-attack same as any other direction; if not, it falls through to that letter's other
-    Shift shortcut (Auto-home, Craft, Library, Cybernetics, Eldritch), since those live on the same keys. Also fixed: bumping
-    into a sleeping NPC previously did the same silent position-swap as bumping into an awake one, which doesn't make
-    much sense (swapping places with someone unconscious) and meant the natural first thing a player would try -- just
-    walking into them -- produced no visible reaction at all. It now opens their sleep-aware dialogue (Wake/Attack/
-    Leave) instead.</div>
+    this problem). Shift+S/D/H/K/L/Y/U specifically check whether an NPC is actually standing in that direction
+    first -- if one is, it's a force-attack same as any other direction; if not, it falls through to that letter's
+    other Shift shortcut (Search, Dig, Auto-home, Craft, Library, Cybernetics, Eldritch), since those live on the
+    same keys. Also fixed: bumping into a sleeping NPC previously did the same silent position-swap as bumping into
+    an awake one, which doesn't make much sense (swapping places with someone unconscious) and meant the natural
+    first thing a player would try -- just walking into them -- produced no visible reaction at all. It now opens
+    their sleep-aware dialogue (Wake/Attack/Leave) instead.</div>
     <div class="modal-opt" style="margin-top:6px"><b>Multiple grand buildings per city/capital (new).</b> Previously
     just one standout building per settlement (a palace). A city now gets two (the palace, plus a second themed grand
     building at the opposite corner); a capital gets four (the palace at the true center, plus a Grand Cathedral,
@@ -36889,7 +36914,7 @@ const GUIDE_SECTIONS = [
     list:</div>
     ${generateTechniqueGuideHTML()}` },
   { id:'cybernetics', label:'Cybernetics', category:'Combat & Abilities', html: () => `
-    <div class="modal-opt"><b>Y</b> opens Cybernetics management. Acquire blueprints by buying from a Cybersmith NPC
+    <div class="modal-opt"><b>Shift+Y</b> opens Cybernetics management. Acquire blueprints by buying from a Cybersmith NPC
     (found in cities and Scrapworks settlements) or finding Cyberware Chips as loot, then install them — you have a
     limited number of slots (3 to start, more via talents). Passive cybernetics apply a permanent-while-installed bonus;
     active ones are cast like spells (from the Abilities screen) and cost Charge, a resource separate from Mana/Stamina
@@ -36898,7 +36923,7 @@ const GUIDE_SECTIONS = [
     prototype tech like the Antimatter Core Implant or Quantum Blink Array. Full list:</div>
     ${generateCyberGuideHTML()}` },
   { id:'eldritch', label:'Eldritch', category:'Combat & Abilities', html: () => `
-    <div class="modal-opt"><b>U</b> opens the Eldritch screen, showing your Corruption and known mutations. Mutations are
+    <div class="modal-opt"><b>Shift+U</b> opens the Eldritch screen, showing your Corruption and known mutations. Mutations are
     permanent bodily/mental changes gained by drinking Mutagen vials (loot) or performing a ritual at a Forbidden Altar
     (a rare point of interest) — rituals cost HP and raise Corruption, which in turn unlocks access to deeper, stranger
     mutations. Passive mutations apply automatically; active ones cost HP to use, like blood magic. ${MUTATIONS.length}
@@ -36999,7 +37024,7 @@ const GUIDE_SECTIONS = [
     which is also where a spouse told to "wait at home" actually goes, and give any property a real name of your
     own. Upkeep is billed daily; falling badly behind gets a final warning long before a property is ever
     repossessed.</div>
-    <div class="modal-opt" style="margin-top:6px"><b>Family & Growing Up (new).</b> Press <b>F</b> anywhere to check on
+    <div class="modal-opt" style="margin-top:6px"><b>Family & Growing Up (new).</b> Press <b>Shift+F</b> anywhere to check on
     your spouse and children. A child is born into your primary residence if you have one, then genuinely grows up
     over real (if compressed) game time -- Infant, Toddler, Child, Teenager, Young Adult -- widening how far they
     wander on their own the whole way, with dialogue that actually changes with their age and a distinct personality
@@ -37027,7 +37052,7 @@ const GUIDE_SECTIONS = [
     to make a settlement feel like a real, working economy rather than a backdrop. (Not to be confused with your own
     <b>Player Professions</b> -- see the Professions tab.)</div>` },
   { id:'professions', label:'Professions', category:'Crafting & Living', html: () => `
-    <div class="modal-opt">Press <b>O</b> anywhere to see your professions. Fourteen real trades are available --
+    <div class="modal-opt">Press <b>Shift+O</b> anywhere to see your professions. Fourteen real trades are available --
     Farming, Mining, Blacksmithing, Trading, Fishing, Cooking, Brewing (alchemy), Woodcutting, Hunting,
     Locksmithing, Jewelcrafting, Cartography, Scribing, and Guarding -- each with its own level and rank (Novice
     through Renowned), learned by asking a matching NPC to teach you (a small one-time fee), not from a menu. None
@@ -37364,10 +37389,10 @@ const GUIDE_SECTIONS = [
     <div class="modal-opt" style="margin-top:6px"><b>Secret vaults (new).</b> Some dungeons hide a door disguised as
     an ordinary wall — same glyph and color as everything around it — sealing off a small vault room with better
     loot than a normal chest deserves. You'll notice one automatically, over time, just from walking near it, but
-    press <b>[S]</b> next to a suspicious dead end to search deliberately and find it much faster. Nothing marks
+    press <b>Shift+S</b> next to a suspicious dead end to search deliberately and find it much faster. Nothing marks
     which walls are worth checking; that's the point.</div>
     <div class="modal-opt" style="margin-top:6px"><b>Tunneling (new).</b> With a pickaxe (or similarly heavy
-    hammer/maul/warhammer) in hand, press <b>[D]</b> then a direction to start digging through an ordinary wall in
+    hammer/maul/warhammer) in hand, press <b>Shift+D</b> then a direction to start digging through an ordinary wall in
     that direction. It takes several turns (faster with more Strength), costs Stamina, and is interrupted if a
     threat gets close -- but it lets you carve your own shortcut across a level, bypass a locked door entirely, or
     break straight into a room you spotted but couldn't reach. Level boundaries, doors, and statues can't be dug
@@ -37513,20 +37538,20 @@ const GUIDE_SECTIONS = [
     a weapon rack, a priest a reliquary), scattered around a settlement's open ground, inside dungeons, and out in the
     wider wilderness. Press <b>g</b> while standing on one to open it. Take what you want, leave the rest, or store
     your own things there for later — it stays exactly as you left it. <b>Tab</b> switches between taking and storing,
-    <b>S</b> sorts its contents, and <b>A</b> takes everything at once.</div>
+    <b>Shift+S</b> sorts its contents, and <b>Shift+A</b> takes everything at once.</div>
     <div class="modal-opt" style="margin-top:6px"><b>Books &amp; the Library.</b> Bookshelves, desks, and cabinets
     (especially an elder's, a scholar's, or a priest's) often hold real, readable books — diaries, field guides,
     histories, research, letters, myths, and traveler's guides, some fixed and world-spanning, others uniquely
     generated. Take one to your inventory and use it (<b>u</b> from the item menu) to read it in full. Ruined Library
     dungeons are especially dense with them. Every book you've read is kept permanently in your <b>Library</b>
-    (<b>L</b>), even after you've sold, dropped, or stored the physical copy — a growing in-world reference for
+    (<b>Shift+L</b>), even after you've sold, dropped, or stored the physical copy — a growing in-world reference for
     everything from how the twelve dimensions are actually reached to how reputation, bounties, and marriage work.</div>` },
   { id:'mouse', label:'Mouse', category:'Getting Started', html: () => `
     <div class="modal-opt">Every menu option is clickable. Click any visible map tile to examine it (including loose
     items — full stats shown, not just the ground biome). Scroll the mouse wheel over the map to zoom.</div>` },
   { id:'saves', label:'Saves & Meta', category:'Getting Started', html: () => `
     <div class="modal-opt">Saving uses your browser's local storage automatically when you choose Save (accessible via
-    the in-game menu, key <b>Esc</b> or <b>P</b>). If local storage isn't available, or you want a portable backup, Export
+    the in-game menu, key <b>Esc</b> or <b>Shift+P</b>). If local storage isn't available, or you want a portable backup, Export
     writes a save file you can download, and Import reads one back in. Your character, inventory, abilities, gold,
     quests, and relationships are fully preserved; the wider world regenerates identically from the same seed around
     you.</div>
@@ -37654,7 +37679,27 @@ function quitToMenu() {
 // ---- input v11 (final): main menu, character creation, cybernetics/eldritch, save/load ----
 function handleKey(e) {
   Sound.unlock();
-  const key = e.key;
+  let key = e.key;
+  // BUG FIX (Caps Lock inverts Shift for letters): every single-letter binding in this handler
+  // assumes e.shiftKey alone determines whether a letter is upper or lower case -- true almost
+  // always, EXCEPT when Caps Lock is engaged: the OS/browser then treats Shift as "cancel Caps
+  // Lock for this key" rather than "capitalize", so holding Shift and pressing s with Caps Lock on
+  // reports e.key as lowercase 's' (with e.shiftKey still true) -- the exact opposite of what
+  // holding Shift normally produces. That broke every letter with two different case-sensitive
+  // meanings for anyone with Caps Lock on -- Search vs move-south, Talents vs move-left, a
+  // container's Sort/Take-all vs picking an item by its list letter, and likely others not yet
+  // found by hand: Shift+S, typed exactly as instructed, silently produced a lowercase 's' and did
+  // the wrong thing, while a bare 's' (Caps Lock alone, no Shift) correctly produced 'S' and did
+  // the right thing -- exactly the "capital button then s works, but shift+s doesn't" symptom.
+  // Only this one specific combination (Caps Lock ON *and* Shift held) needs correcting: every
+  // other combination (no modifiers, Shift alone, Caps Lock alone) already reports the case a
+  // non-caps-lock user pressing Shift+X would expect, and must be left untouched -- an earlier,
+  // cruder version of this fix normalized ALL letters off e.shiftKey alone and broke the
+  // Caps-Lock-alone case in the process (bare 's' stopped meaning capital 'S') by overcorrecting.
+  // Flipping the case back only in this one combination is deliberately narrow and provably safe.
+  if (/^[a-zA-Z]$/.test(key) && e.shiftKey && typeof e.getModifierState === 'function' && e.getModifierState('CapsLock')) {
+    key = (key === key.toUpperCase()) ? key.toLowerCase() : key.toUpperCase();
+  }
 
   if (gameState === 'title') { if (/^[a-z]$/.test(key)) titleScreenChoice(key); return; }
   if (gameState === 'settings') { if (key === 'Escape') { closeSettings(); return; } return; }
@@ -37676,14 +37721,17 @@ function handleKey(e) {
     // holding Shift makes the browser report an uppercase key (e.g. 'W', not 'w') that never
     // matched MOVE_KEYS' lowercase-only entries -- Shift+arrow keys were unaffected since arrow
     // key names don't change case, which is why only WASD/vi-keys had this reported as broken.
-    // h/k/l/y/u each ALSO have their own dedicated Shift+letter shortcut a few lines down
-    // (Craft/Library/Cybernetics/Eldritch/auto-travel-home), so those five stay excluded from the
-    // blanket fallback below -- but that used to mean force-attack simply didn't work in those five
-    // directions for a vi-key player, full stop, even with a friendly NPC standing right there. Now
-    // it's resolved by actually looking: if there's an NPC on the tile that letter would move into,
-    // Shift+that-letter attacks it (matching every other direction); otherwise it's untouched and
-    // still runs its normal shortcut. A friendly NPC there is the rarer case, so this can't make the
-    // shortcut flaky in ordinary play, only extend force-attack to reach the last five directions.
+    // s/d/h/k/l/y/u each ALSO have their own dedicated Shift+letter shortcut a few lines down
+    // (Search/Dig/Craft/Library/Cybernetics/Eldritch/auto-travel-home), so those seven stay
+    // excluded from the blanket fallback below -- but that used to mean force-attack simply didn't
+    // work in those seven directions, full stop, even with a friendly NPC standing right there
+    // (and for s/d specifically, it went further: since Shift+s/Shift+d is the ONLY way to type a
+    // capital S/D at all, Search and Dig couldn't be triggered by keyboard in any way whatsoever --
+    // not a missing feature in one direction, a completely dead keybind). Now it's resolved by
+    // actually looking: if there's an NPC on the tile that letter would move into, Shift+that-letter
+    // attacks it (matching every other direction); otherwise it's untouched and still runs its
+    // normal shortcut. A friendly NPC there is the rarer case, so this can't make the shortcut
+    // flaky in ordinary play, only extend force-attack to reach these directions too.
     const lower = key.toLowerCase();
     const shiftUnsafeMove = e.shiftKey && SHIFT_MOVE_UNSAFE_KEYS.has(lower) && MOVE_KEYS[lower];
     if (shiftUnsafeMove) {
@@ -38872,7 +38920,7 @@ TUTORIALS.push({
     title: 'Choosing a Talent',
     blurb: 'Open the Talents screen and pick your first talent.',
     introText: [
-      'Press [T] (capital) to open your Talents screen. Unlike stat points, talents are grouped into tiers and often unlock further choices as you invest.',
+      'Press [Shift+T] to open your Talents screen. Unlike stat points, talents are grouped into tiers and often unlock further choices as you invest.',
       'You have one Talent Point to spend right now. Pick any tier-1 talent -- Toughness (+15 Max HP) is a safe, universally useful first pick if you\'re not sure.',
       'Talent Points are earned every few levels, not every level -- they\'re rarer and meant to feel like a real decision each time.',
     ],
@@ -38885,7 +38933,7 @@ TUTORIALS.push({
     ], { P: { type: 'player' } }),
     setupPlayer: (p) => { p.talentPoints = 1; },
     objectives: [
-      { desc: 'Open the Talents screen with [T].', check: (s) => !!s.player._tutSawTalents },
+      { desc: 'Open the Talents screen with [Shift+T].', check: (s) => !!s.player._tutSawTalents },
       { desc: 'Spend your Talent Point.', check: (s) => (s.player.talentPoints || 0) === 0 && Object.keys(s.player.talents || {}).length > 0 },
     ],
     completeText: 'That talent is yours for good. Later tiers build on earlier picks and often need a minimum level or a specific prior talent -- the Talents screen always shows exactly what\'s locked and why.',
@@ -38897,13 +38945,13 @@ TUTORIALS.push({
 // ---------------------------------------------------------------------------------------------
 TUTORIALS.push({
   id: 'crafting_cooking', title: 'Crafting & Cooking',
-  blurb: 'Turn raw materials into food and gear with the [K] menu -- no workbench or campfire required.',
+  blurb: 'Turn raw materials into food and gear with the [Shift+K] menu -- no workbench or campfire required.',
   parts: [
     {
       title: 'The Cookfire',
       blurb: 'Cook raw meat, then combine two ingredients into a proper stew.',
       introText: [
-        'Press [K] to open your Crafting menu -- it lists every recipe you currently know, and greys out anything you\'re missing ingredients for.',
+        'Press [Shift+K] to open your Crafting menu -- it lists every recipe you currently know, and greys out anything you\'re missing ingredients for.',
         'Cooking recipes are just a category of recipe like any other: pick one, and if you have the ingredients, it\'s made instantly. No fire or workbench needed.',
         'You\'re carrying Raw Meat and a Wild Herb. Cook the meat plain first, then try the Hearty Stew recipe, which needs meat AND herb together.',
       ],
@@ -38922,11 +38970,11 @@ TUTORIALS.push({
         p.inventory.push(meat1, meat2, herb);
       },
       objectives: [
-        { desc: 'Open the Crafting menu with [K].', check: (s) => !!s.player._tutSawCraft },
+        { desc: 'Open the Crafting menu with [Shift+K].', check: (s) => !!s.player._tutSawCraft },
         { desc: 'Cook the raw meat into Cooked Meat.', check: (s) => tutHasItem(s.player, 'meat_cooked') },
         { desc: 'Craft a Hearty Stew.', check: (s) => tutHasItem(s.player, 'stew') },
       ],
-      completeText: 'That\'s cooking in full: gather ingredients, know the recipe, press [K]. Eating what you cook restores HP on the spot -- some fancier dishes grant temporary stat buffs too, which is worth checking recipes for before a big fight.',
+      completeText: 'That\'s cooking in full: gather ingredients, know the recipe, press [Shift+K]. Eating what you cook restores HP on the spot -- some fancier dishes grant temporary stat buffs too, which is worth checking recipes for before a big fight.',
     },
     {
       title: 'The Forge',
@@ -39021,7 +39069,7 @@ TUTORIALS.push({
     introText: [
       'A locked chest needs a Lockpick (you have one) -- stand on it and press [g] for the option to pick the lock, or force it open bare-handed if you\'d rather risk breaking the pick.',
       'Not every hazard announces itself. A trap can be hiding anywhere underfoot, discovered only by triggering it -- or by a lucky glance if you\'re paying attention.',
-      'A suspicious dead end might just be a wall... or it might not be. Press [S] (capital) while standing next to one to search it -- it costs a turn, so it\'s a real decision, not a free action.',
+      'A suspicious dead end might just be a wall... or it might not be. Press [Shift+S] while standing next to one to search it -- it costs a turn, so it\'s a real decision, not a free action.',
     ],
     build: () => buildTutorialLevel([
       '#############################',
@@ -39042,7 +39090,7 @@ TUTORIALS.push({
     setupPlayer: (p) => { p.inventory.push(makeItem('lockpick', 0, Math.random)); },
     objectives: [
       { desc: 'Unlock and loot the Iron-Bound Chest.', check: (s) => { const c = s.level.containers.find(x => x.container.name === 'Iron-Bound Chest'); return c && !c.container.locked && c.container.contents.length === 0; } },
-      { desc: 'Find the secret door with [S] (search while adjacent to a suspicious wall).', check: (s) => { for (let y = 0; y < s.level.h; y++) for (let x = 0; x < s.level.w; x++) { const t = s.level.grid[y][x]; if (t.feature === 'secretdoor') return !!t.discovered; } return true; } },
+      { desc: 'Find the secret door with [Shift+S] (search while adjacent to a suspicious wall).', check: (s) => { for (let y = 0; y < s.level.h; y++) for (let x = 0; x < s.level.w; x++) { const t = s.level.grid[y][x]; if (t.feature === 'secretdoor') return !!t.discovered; } return true; } },
     ],
     completeText: 'Careless exploring gets you hurt; careful exploring gets you the good loot. Both the lock and the secret door had a real, item-and-skill-based chance to fail -- that\'s true everywhere in the game, not just here.',
   }],
@@ -39105,7 +39153,7 @@ TUTORIALS.push({
       blurb: 'Oil an enemy, then set them ablaze. Freeze a soaked one solid, then shatter the ice.',
       introText: [
         'Two ordinary systems can combine into something neither one does alone. Oil coats whatever it touches -- harmless by itself, but the very next flame turns it into a serious, lingering burn.',
-        'Throw the Oil Flask at the rat on the left: select it in your inventory ([i]), press [T] to throw, then aim (click, or Enter to snap to the nearest target). Follow up with the Firebomb the same way -- oil plus fire ignites the target directly, not just the ground under it.',
+        'Throw the Oil Flask at the rat on the left: select it in your inventory ([i]), press [t] to throw, then aim (click, or Enter to snap to the nearest target). Follow up with the Firebomb the same way -- oil plus fire ignites the target directly, not just the ground under it.',
         'The rat on the right is already soaked from the flooded cistern behind it. Frostbolt (in your spellbook, [z]) freezes a WET target solid instead of just chilling it -- solid means it cannot act at all for a few turns, and any hit lands a bonus-damage shatter while it lasts. The freeze is short, so the follow-up needs to be immediate: another spell, an arrow, anything -- it doesn\'t have to be melee.',
       ],
       build: () => buildTutorialLevel([
@@ -39147,7 +39195,7 @@ TUTORIALS.push({
       blurb: 'Scatter a group with a Flashbang, then use a doorway to finish them on your terms.',
       introText: [
         'A Flashbang confuses everything in its blast -- confused enemies wander instead of fighting, which turns "four enemies attacking together" into "four enemies not doing much of anything" for a few turns.',
-        'The rats ahead haven\'t noticed you yet. Stop just past the doorway -- close enough to throw, not so close they wake up -- and lob the Flashbang into the middle of them before the fight even starts: [i], select it, [T], aim, confirm.',
+        'The rats ahead haven\'t noticed you yet. Stop just past the doorway -- close enough to throw, not so close they wake up -- and lob the Flashbang into the middle of them before the fight even starts: [i], select it, [t], aim, confirm.',
         'The doorway behind you is still a choke point, exactly like the one you used earlier in Combat. Retreat through it and the confused stragglers can only reach you one at a time as the fog clears.',
       ],
       build: () => buildTutorialLevel([
@@ -39307,7 +39355,7 @@ TUTORIALS.push({
       title: 'Cyberware',
       blurb: 'Install an implant, then use an active one in combat -- same targeting as any spell.',
       introText: [
-        'Cyberware are implants -- some found in the world, some chosen at character creation. Knowing one isn\'t the same as having it running: press [Y] to install or remove them, within your slot limit.',
+        'Cyberware are implants -- some found in the world, some chosen at character creation. Knowing one isn\'t the same as having it running: press [Shift+Y] to install or remove them, within your slot limit.',
         'Passive implants (like armor plating) work automatically once installed. Active ones (like a servo-driven fist) show up in your [z] Abilities screen and are cast exactly like a spell or technique, just paid for with a fourth resource: Charge.',
         'You know Subdermal Plating (passive) and a Kinetic Fist (active) already installed. Install the plating, then punch the rat.',
       ],
@@ -39329,7 +39377,7 @@ TUTORIALS.push({
         p.charge = p.maxCharge = 60;
       },
       objectives: [
-        { desc: 'Open Cybernetics with [Y].', check: (s) => !!s.player._tutSawCyber },
+        { desc: 'Open Cybernetics with [Shift+Y].', check: (s) => !!s.player._tutSawCyber },
         { desc: 'Install Subdermal Plating.', check: (s) => s.player.installedCyber.includes('subdermalplating') },
         { desc: 'Use Kinetic Fist on the rat.', check: (s) => (s.player._tutSpellCasts || 0) >= 1 },
         { desc: 'Defeat the rat.', check: (s) => tutTagDead(s.level, 'cy') },
@@ -39458,9 +39506,9 @@ TUTORIALS.push({
       title: 'Tunneling',
       blurb: 'Dig straight through a solid wall with a pickaxe to reach a sealed side room.',
       introText: [
-        'With a Pickaxe (or similarly heavy hammer/maul/warhammer) in hand, press [D] then a direction to start digging through an ordinary dungeon wall -- it takes several turns, drains Stamina, and stops cold if anything dangerous gets close, so only try it somewhere safe.',
+        'With a Pickaxe (or similarly heavy hammer/maul/warhammer) in hand, press [Shift+D] then a direction to start digging through an ordinary dungeon wall -- it takes several turns, drains Stamina, and stops cold if anything dangerous gets close, so only try it somewhere safe.',
         'You can\'t dig through doors, statues, or a wall right at the edge of the level -- it always has to be an ordinary stretch of rock. The alcove to your east is sealed on purpose; there\'s no door in.',
-        'Equip the Pickaxe, then press [D] and a direction to break through.',
+        'Equip the Pickaxe, then press [Shift+D] and a direction to break through.',
       ],
       build: () => buildTutorialLevel([
         '###########################',
@@ -39586,7 +39634,7 @@ TUTORIALS.push({
       title: 'Fast Travel',
       blurb: 'Plant your own waypoint, then use a Recall Stone to warp straight back to it from anywhere.',
       introText: [
-        'A Waystone Shard plants a permanent, personal fast-travel waypoint wherever you\'re standing -- press [m], or use it from your inventory. Once it exists, it shows up in the Fast Travel menu [V] alongside any settlement or dungeon you\'ve already discovered.',
+        'A Waystone Shard plants a permanent, personal fast-travel waypoint wherever you\'re standing -- press [m], or use it from your inventory. Once it exists, it shows up in the Fast Travel menu [Shift+V] alongside any settlement or dungeon you\'ve already discovered.',
         'Opening that menu for free requires actually being at a waystone (in a settlement, on one of your own waypoints, or at a dungeon\'s exit-waystone). From anywhere else, a Recall Stone, the Teleport spell, a Warp Relay Implant, or the Ninth Door mutation can open it too, at a real cost -- the stone or the scroll is consumed, a spell costs mana.',
         'Plant a waypoint right here, then walk all the way down the corridor to the chest. Once you\'ve opened it, use your Recall Stone -- it\'ll open the same Fast Travel menu -- and pick the waypoint you planted to warp straight back.',
       ],
