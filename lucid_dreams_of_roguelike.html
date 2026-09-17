@@ -286,9 +286,13 @@
   .settings-tabs{ display:flex; flex-wrap:wrap; gap:2px 14px; border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:12px; }
   .settings-tab{ cursor:pointer; font-size:1.15rem; letter-spacing:0.5px; color:var(--text-dim); padding:2px 0; white-space:nowrap; }
 
-  .guide-tabs{ display:flex; flex-wrap:wrap; gap:4px 12px; border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:10px; }
+  .guide-tabgroups{ border-bottom:1px solid var(--line); padding-bottom:6px; margin-bottom:10px; }
+  .guide-tabgroup{ margin-bottom:4px; }
+  .guide-tabgroup-label{ font-size:0.78rem; text-transform:uppercase; letter-spacing:0.8px; color:var(--amber-dim); margin:5px 0 1px; }
+  .guide-tabs{ display:flex; flex-wrap:wrap; gap:4px 12px; padding-bottom:2px; }
   .guide-tab{ cursor:pointer; font-size:1.1rem; letter-spacing:0.3px; color:var(--text-dim); white-space:nowrap; padding:2px 0; }
   .guide-tab.active{ color:var(--amber-bright); text-decoration:underline; }
+  .guide-tab:hover{ color:var(--amber); }
   .settings-tab.active{ color:var(--amber-bright); text-decoration:underline; }
 
   /* Each settings row is a label (left) + control (right) when the control is
@@ -490,12 +494,15 @@
         <b>p</b> property &amp; housing &nbsp; <b>F</b> family<br>
         <b>O</b> professions<br>
         <b>t</b> talk &nbsp; <b>x</b> look &nbsp; <b>r</b> rest<br>
+        <b>a</b> take aim (called shot) &nbsp; <b>L</b> library<br>
         <b>v</b> toggle sprint<br>
         <b>G</b> auto-travel &nbsp; <b>H</b> auto-home<br>
         <b>X</b> auto-explore &nbsp; <b>M</b> dungeon map<br>
         <b>&gt;</b> enter/descend &nbsp; <b>&lt;</b> ascend<br>
         <b>S</b> search for secrets &nbsp; <b>D</b> dig (pickaxe in hand)<br>
-        <b>?</b> full guide &nbsp; click map to examine
+        <b>P</b> or <b>Esc</b> menu (save/load/settings)<br>
+        <b>?</b> full guide &nbsp; click map to examine<br>
+        <span class="dim">capitals need Shift — they're shown exactly as typed</span>
       </div>
     </div>
   </div>
@@ -522,7 +529,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.49.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.49.1-alpha</div>
     </div>
   </div>
 
@@ -11681,13 +11688,28 @@ const CROPS = {
 // this plain, empty, standable ground". Water, dungeons, settlements/buildings, and anything
 // already a feature (including another farmplot) are naturally excluded by the checks themselves.
 function isTillableGround(t) {
-  return !!(t && t.walkable && !t.feature && !t.building && !curIsDungeon());
+  // Tutorial System: real farmland is overworld-only by design (dungeons are stone, not soil) --
+  // but the "World & Living Off It" tutorial needs to actually teach farming with the real
+  // tillSoil/plantCrop/harvestCrop functions rather than faking it, so a tutorial-flagged player
+  // (player.isTutorial is only ever true inside the sandboxed tutorial system itself -- see
+  // enterTutorialPart) gets a narrow, explicit exception here instead of the whole dungeon/
+  // overworld mode system being reworked just to unblock one lesson.
+  // The feature check needs the same exception for a second, subtler reason: real outdoor ground
+  // carries no feature at all, but every walkable tile built by tutTerrainTile/dtile2 is tagged
+  // feature:'floor', so without allowing that one value through, a tutorial farm plot would be
+  // unreachable no matter what else was patched. Only plain 'floor' is allowed -- an existing
+  // farmplot, water, door, or anything else still correctly blocks, in tutorials as everywhere.
+  if (!t || !t.walkable || t.building) return false;
+  const inTutorial = !!player.isTutorial;
+  const featureOk = !t.feature || (inTutorial && t.feature === 'floor');
+  return featureOk && (!curIsDungeon() || inTutorial);
 }
 function tillSoil(x, y) {
   const t = curTileAt(x, y);
   if (!isTillableGround(t)) return false;
   t.feature = 'farmplot'; t.cropId = null; t.growStage = 0; t.growTimer = 0;
   t.glyph = ':'; t.color = '#5a4028';
+  if (player.isTutorial) player._tutDidTill = true; // Tutorial System: World & Living Off It curriculum
   return true;
 }
 function plantCrop(t, x, y, cropId) {
@@ -11695,10 +11717,12 @@ function plantCrop(t, x, y, cropId) {
   t.cropId = cropId; t.growStage = 0; t.growTimer = CROPS[cropId].stageTurns;
   t.glyph = '.'; t.color = '#4a6a2a';
   trackFxTile(t, x, y);
+  if (player.isTutorial) player._tutDidPlant = true; // Tutorial System: World & Living Off It curriculum
   return true;
 }
 function harvestCrop(t, x, y) {
   if (t.feature !== 'farmplot' || !t.cropId || t.growStage < 2) return false;
+  if (player.isTutorial) player._tutDidHarvest = true; // Tutorial System: World & Living Off It curriculum
   const crop = CROPS[t.cropId];
   const spec = specializationOf('farmer');
   const homesteaderMult = (spec === 'homesteader' && isAtHomeFarmTile(x, y)) ? 1.6 : 1;
@@ -11764,6 +11788,7 @@ function beginFishing(x, y) {
       }
       const catchId = Math.random() < (0.03 + fishermanRareBonus()) ? 'gem' : choice(Math.random, FISH_CATCH_TABLE);
       addItemToList(player.inventory, makeItem(catchId, 0, Math.random));
+      if (player.isTutorial) player._tutDidFish = true; // Tutorial System: World & Living Off It curriculum
       const base = ITEM_BASES.find(b => b.id === catchId);
       log(`You reel in a catch: ${base ? base.name : catchId}!`);
       gainProfessionXp('fisherman', catchId === 'gem' ? 20 : 6);
@@ -16174,9 +16199,14 @@ function useStairs() {
   if (curIsDungeon()) {
     const lvl = curDungeonLevel();
     const t = curTileAt(player.x, player.y);
-    if (t && t.feature === 'waystone') { warpToDungeonEntrance(); return; }
+    if (t && t.feature === 'waystone') { if (player.isTutorial) { openTravel(); } else { warpToDungeonEntrance(); } return; }
     if (t && t.feature === 'rift_portal') { travelThroughRift(); return; }
     if (t && t.feature === 'slumbering_altar') { useSlumberingAltar(); return; }
+    // BUG FIX: same class as autoTravelHome/autoTravelToStairs above -- a level with no '>' tile
+    // (any tutorial part, or in principle any other hand-built level) has downStairs === null, and
+    // this used to dereference lvl.downStairs.x unconditionally and crash the instant '>' was
+    // pressed anywhere on that floor, not just standing on a real staircase.
+    if (!lvl.downStairs) { log('Nothing to enter here.'); return; }
     if (player.x === lvl.downStairs.x && player.y === lvl.downStairs.y) { Sound.play('stairs'); descend(); }
     else log('No stairs down here.');
   } else {
@@ -16190,6 +16220,8 @@ function useStairs() {
 function useStairsUp() {
   if (curIsDungeon()) {
     const lvl = curDungeonLevel();
+    // BUG FIX: same as the downStairs guard above, for '<' and a level with no upStairs.
+    if (!lvl.upStairs) { log("You can't go up here."); return; }
     if (player.x === lvl.upStairs.x && player.y === lvl.upStairs.y) { Sound.play('stairsUp'); ascend(); }
     else log('No stairs up here.');
   } else log("You can't go up here.");
@@ -19270,6 +19302,7 @@ function salvageItem(it, slot) {
     addItemToList(player.inventory, Object.assign({}, matBase, { uid: 'i'+Math.random().toString(36).slice(2,9), amount: y.qty }));
     gained.push(`${y.qty}x ${matBase.name}`);
   }
+  if (player.isTutorial) player._tutDidSalvage = true; // Tutorial System: Gearing Up curriculum
   Sound.play('craftSuccess');
   log(`You break down ${it.name} for ${gained.join(', ')}.`);
   updateSidebar();
@@ -19312,6 +19345,7 @@ function reforgeItem(it) {
   // through it instead of duplicating (and getting wrong) that logic inline.
   if (it.maxDurability && it.maxDurability !== Infinity) { it.maxDurability = Math.round(it.maxDurability * 1.1); repairItem(it, it.maxDurability); }
   if (!/^Reforged /.test(it.name)) it.name = 'Reforged ' + it.name;
+  if (player.isTutorial) player._tutDidReforge = true; // Tutorial System: Gearing Up curriculum
   Sound.play('craftSuccess');
   // Polish pass: reforge and sockets previously didn't touch each other at all despite both being
   // funded by the same Arcane Dust -- maxing out a reforge (the moment it stops being useful on
@@ -19355,6 +19389,7 @@ function socketRune(it, rune) {
   it[rune.runeStat] = (it[rune.runeStat] || 0) + rune.runeValue;
   if (equippedHere) applyStatBonuses(it);
   player.inventory = player.inventory.filter(i => i.uid !== rune.uid);
+  if (player.isTutorial) player._tutDidSocket = true; // Tutorial System: Gearing Up curriculum
   Sound.play('craftSuccess');
   log(`You socket ${rune.name} into ${it.name}.`);
   updateSidebar();
@@ -19727,8 +19762,10 @@ function pickUp() {
     }
   }
   // ---- FISHING: only offered when adjacent (not standing on top of, which would mean you're
-  // swimming) to open water -- see beginFishing near CROPS for the full mechanic.
-  if (!curIsDungeon()) {
+  // swimming) to open water -- see beginFishing near CROPS for the full mechanic. Real fishing
+  // is overworld-only (see isTillableGround's comment above for why the tutorial gets the same
+  // player.isTutorial exception here -- beginFishing itself has no other overworld dependency).
+  if (!curIsDungeon() || player.isTutorial) {
     let waterAdj = false;
     for (const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) if (isWaterTile(curTileAt(player.x+dx, player.y+dy))) { waterAdj = true; break; }
     if (waterAdj && !isWaterTile(hereTile)) {
@@ -19950,7 +19987,7 @@ function openLibrary() {
   const entries = Object.entries(player.readLog);
   let html = `<div class="npcline dim">Everything you've read stays here, whether or not you still carry the book itself. ${entries.length} of ${BOOKS_MANUAL.length}+ known volumes read.</div>`;
   if (!entries.length) {
-    html += `<div class="npcline dim" style="margin-top:10px">You haven't read anything yet. Look for books on shelves, desks, and in what you find exploring — press [g] to open a container you're standing on, then read what's inside from your pack.</div>`;
+    html += `<div class="npcline dim" style="margin-top:10px">You haven't read anything yet. Look for books on shelves, desks, and in what you find exploring — press ${keyRef('g', 'out in the world')} to open a container you're standing on, then read what's inside from your pack.</div>`;
   }
   for (const cat of LIBRARY_CATEGORY_ORDER) {
     const inCat = entries.filter(([,b]) => b.category === cat);
@@ -19998,7 +20035,7 @@ function renderCraft() {
     html += `<div class="modal-opt" onclick="simulateKey('${letter}')" style="color:${have?'#7fd07f':'#8a7f6a'}">[${letter}] ${r.name} <span class="dim">→ ${ITEM_BASES.find(b=>b.id===r.output.id).name}</span><br><span class="dim">Needs: ${ingStr}</span></div>`;
   });
   if (totalPages > 1) html += `<div style="margin-top:6px" class="dim">Page ${player.craftPage+1}/${totalPages} &nbsp; <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey('[')">[prev]</span> <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey(']')">[next]</span></div>`;
-  html += `<div class="dim" style="margin-top:10px;border-top:1px solid var(--line);padding-top:6px">Don't need a piece of gear? Open it from your inventory [i] for [v] Salvage (break it down into materials, plus Arcane Dust if it's magic) or [r] Reforge (spend that dust to strengthen gear you're keeping).</div>`;
+  html += `<div class="dim" style="margin-top:10px;border-top:1px solid var(--line);padding-top:6px">Don't need a piece of gear? Open it from your inventory (${keyRef('i', 'out in the world')}) and choose Salvage to break it down into materials, plus Arcane Dust if it's magic — or Reforge, to spend that dust strengthening gear you're keeping. <span class="dim">(Those are inventory actions, not craft-screen keys: here, every letter crafts the recipe beside it.)</span></div>`;
   renderModal('Crafting & Cooking', html, 'Letter/click to craft (needs ingredients highlighted green). [ ] page. Esc to close.');
 }
 
@@ -21091,7 +21128,14 @@ function runAutoLoop(stepFn) {
 function autoTravelToStairs() {
   if (gameState !== 'playing') return;
   let goal;
-  if (curIsDungeon()) { const lvl = curDungeonLevel(); goal = { x: lvl.downStairs.x, y: lvl.downStairs.y }; }
+  if (curIsDungeon()) {
+    const lvl = curDungeonLevel();
+    // BUG FIX: same class as autoTravelHome() above -- a level with no '>' tile (every tutorial
+    // part, potentially any hand-built level) has downStairs === null, and this used to dereference
+    // it unconditionally and crash. See autoTravelHome's comment for the full explanation.
+    if (!lvl.downStairs) { log("There's no way down from here."); return; }
+    goal = { x: lvl.downStairs.x, y: lvl.downStairs.y };
+  }
   else {
     const found = nearestDungeonEntry(player.x, player.y);
     if (!found) { log('You have not discovered any dungeons nearby yet.'); return; }
@@ -21567,6 +21611,7 @@ function beginDig(dx, dy) {
       }
       Sound.play('door');
       markPlayerAreaDirty();
+      if (player.isTutorial) player._tutDidDig = true; // Tutorial System: Gearing Up curriculum
       autoRunActive = false; digState = null; clearInterval(interval);
       endTurn({forceFull:true}); render();
       return;
@@ -22125,6 +22170,22 @@ function isPlayerOwnedKiller(killer) {
   return false;
 }
 function onDeath(def, killer) {
+  // BUG FIX: a tutorial instructor NPC (Old Farmer Dell, Warden Cass, etc.) has hp:9999 precisely
+  // so nobody kills one by accident, but 9999 is a deterrent, not a hard floor -- enough hits (or
+  // one big enough AoE spell/thrown grenade, which don't check hostile/friendly the way a bump
+  // attack does) can still bring it to 0. When that happened, the NPC was removed from
+  // level.npcs like any other death, and every subsequent turn the objective check
+  // `s.level.npcs.find(n => n.name === '...')._tutTalked` (now also null-guarded, but the real fix
+  // belongs here) crashed on undefined -- and even without the crash, "Talk to X" would have been
+  // permanently unwinnable with X gone. An instructor exists only to deliver dialogue, never to be
+  // a combat encounter, so it simply can't die: this restores it rather than letting it fall
+  // through to the real onDeath logic below (loot drops, quest hooks, kill-count tracking, the
+  // works) that assumes a defeatable creature.
+  if (def.isTutorialInstructor) {
+    def.hp = def.maxHp;
+    log(`${def.name} isn't going anywhere -- ${def.name === 'You' ? 'you' : "they're"} just here to talk.`);
+    return;
+  }
   if (def === player) {
     // ---- ARTIFACT FRAMEWORK, part 3 of 4 (see doAttack for parts 1-2, movePlayer for part 4):
     // a phoenix-style relic that unmakes the killing blow itself, once, on its own cooldown --
@@ -24418,6 +24479,12 @@ function autoTravelHome() {
   if (gameState !== 'playing') return;
   if (curIsDungeon()) {
     const lvl = curDungeonLevel();
+    // BUG FIX: every tutorial level (buildTutorialLevel) runs in 'dungeon' mode for rendering
+    // purposes but most parts have no reason to place a '<' tile, so lvl.upStairs is null there --
+    // and this used to read lvl.upStairs.x unconditionally, throwing an uncaught exception the
+    // instant a player pressed H during almost any lesson. A real generated dungeon always has an
+    // upStairs, so this guard only ever fires for a level that genuinely doesn't have one.
+    if (!lvl.upStairs) { log("There's no way back up from here."); return; }
     const goal = { x: lvl.upStairs.x, y: lvl.upStairs.y };
     if (player.x === goal.x && player.y === goal.y) { useStairsUp(); return; }
     log('Auto-traveling to the stairs up...');
@@ -24583,6 +24650,33 @@ function generateItemGuideHTML() {
 }
 function generateScenarioGuideHTML() {
   return START_SCENARIOS.map(s => `<div class="modal-opt">• <b>${s.name}</b> — ${s.desc}</div>`).join('');
+}
+// Tutorial/Docs note: Engineering's guns, companion cores, and support items are all just entries
+// in RECIPES/ITEM_BASES like everything else this game crafts -- this reads them straight off
+// those live arrays (discriminated by RECIPES' category:'engineering' tag and ITEM_BASES' own
+// effect field, exactly the same shape spawnAlly/useItem already switch on) rather than a
+// hand-typed list, so a newly added gun, construct line, or reactor tier shows up here
+// automatically the moment its recipe/item entries exist, with no second place to remember to
+// update. See generateSpellGuideHTML/generateTalentGuideHTML above for the same pattern.
+function generateEngineeringGuideHTML() {
+  const engRecipes = RECIPES.filter(r => r.category === 'engineering');
+  const outputItem = (r) => ITEM_BASES.find(b => b.id === r.output.id);
+  let html = '<div style="color:var(--amber);margin-top:8px"><b>Guns (equip like any other weapon)</b></div>';
+  engRecipes.filter(r => { const it = outputItem(r); return it && it.type === 'weapon'; }).forEach(r => {
+    const it = outputItem(r);
+    html += `<div class="modal-opt">• <b>${it.name}</b> <span class="dim">(${it.dmg[0]}-${it.dmg[1]} dmg${it.armorPierce ? `, ${it.armorPierce} armor pierce` : ''}${it.isUnique ? ', unique' : ''})</span> — ${it.desc}</div>`;
+  });
+  html += '<div style="color:var(--amber);margin-top:8px"><b>Deployable companions (permanent until scrapped or destroyed)</b></div>';
+  ITEM_BASES.filter(it => it.effect === 'summonconstruct').forEach(it => {
+    const mon = MONSTER_BASES[it.summonId];
+    const stats = mon ? ` <span class="dim">(${mon.hp} HP, power draw ${mon.powerDraw || 1}${it.isUnique ? ', unique' : ''})</span>` : '';
+    html += `<div class="modal-opt">• <b>${it.name}</b>${stats} — ${it.desc}</div>`;
+  });
+  html += '<div style="color:var(--amber);margin-top:8px"><b>Keeping them running</b></div>';
+  ITEM_BASES.filter(it => it.effect === 'installreactor' || it.effect === 'rechargeconstructs').forEach(it => {
+    html += `<div class="modal-opt">• <b>${it.name}</b> — ${it.desc}</div>`;
+  });
+  return html;
 }
 
 
@@ -24788,7 +24882,7 @@ function lookAtWorldPos(wx, wy) {
       html += `<div class="modal-opt"><b>${it.glyph} ${it.name}</b><br>${describeItem(it)}</div>`;
     });
     html += `<hr><div class="npcline dim">Ground: ${describeTile(curTileAt(wx, wy), wx, wy)}</div>`;
-    renderModal('Examine', html, containers.length ? 'Esc to close. (Step onto this tile and press [g] to open it.)' : 'Esc to close.');
+    renderModal('Examine', html, containers.length ? `Esc to close. (Step onto this tile, then press ${keyRef('g', 'once you close this')} to open it.)` : 'Esc to close.');
     return;
   }
   renderModal('Examine', describeTile(curTileAt(wx, wy), wx, wy), 'Esc to close.');
@@ -24806,7 +24900,7 @@ function openLook() {
   for (const e of seenAny) html += `<div class="modal-opt">${describeEntity(e)}</div><hr>`;
   html += `<div class="trade-col-title">Standing on</div><div class="npcline">${describeTile(curTileAt(player.x,player.y), player.x, player.y)}</div>`;
   const containersHere = containersAt(player.x, player.y);
-  if (containersHere.length) html += `<div class="npcline">Here: ` + containersHere.map(c => `${c.name}${c.opened ? ' (opened)' : ''}`).join(', ') + ` — press [g] to open.</div>`;
+  if (containersHere.length) html += `<div class="npcline">Here: ` + containersHere.map(c => `${c.name}${c.opened ? ' (opened)' : ''}`).join(', ') + ` — press ${keyRef('g', 'after closing Look')} to open.</div>`;
   const groundItems = itemsAt(player.x, player.y).filter(i => i.type !== 'corpse');
   if (groundItems.length) html += `<div class="npcline">Here: ${groundItems.map(i => i.name).join(', ')}</div>`;
   if (!curIsDungeon() && !curIsDimension()) {
@@ -24874,7 +24968,7 @@ function openTravel(opts) {
       log("You need to be at a waystone — inside a settlement, on a planted waypoint, or at a dungeon's exit-waystone — to open the travel network for free. A Recall Stone, the Teleport spell, a Warp Relay Implant, or The Ninth Door (an eldritch mutation) can open it from anywhere, for a cost.");
       return;
     }
-    if (curIsDungeon()) { warpToDungeonEntrance(); return; }
+    if (curIsDungeon() && !player.isTutorial) { warpToDungeonEntrance(); return; }
     const nearbyThreat = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 8 && hasLOS(player.x,player.y,m.x,m.y));
     if (nearbyThreat) { log("You can't fast-travel with danger nearby!"); return; }
   }
@@ -24951,7 +25045,12 @@ function confirmTravel(letter) {
   gameState = 'playing';
   closeModal();
   pendingTravelBypass = null;
-  if (curIsDungeon()) {
+  // Tutorial System: a tutorial's dungeonRegistry entry is synthetic (see enterTutorialPart) and
+  // has nowhere real to "exit" to -- resetting mode/dungeonId here the way a real dungeon-exit
+  // travel does would eject the player straight into real overworld/dimension state at made-up
+  // coordinates and corrupt the sandbox. Skip that reset and just relocate within the same
+  // tutorial level instead, exactly like the isTillableGround/fishing/waystone exceptions above.
+  if (curIsDungeon() && !player.isTutorial) {
     const dg = curDungeon();
     clearAreaFx();
     player.mode = (dg && dg.originMode) || 'overworld';
@@ -24964,13 +25063,17 @@ function confirmTravel(letter) {
   player.x = d.x; player.y = d.y;
   relocateAllies();
   log(`${bypass ? 'A surge of magic tears you away and deposits you' : 'You travel swiftly'} at ${d.label}.`);
+  if (player.isTutorial) player._tutDidFastTravel = true; // Tutorial System: World & Living Off It curriculum
   updateSidebar();
   markSeen();
   render();
 }
 
 function plantWaystoneShard(shard) {
-  if (curIsDungeon() || curIsDimension()) { log("You can't plant a waystone shard here."); return; }
+  // Tutorial System: same isTutorial exception as isTillableGround/fishing above -- a planted
+  // waypoint is otherwise overworld/dimension-only (a dungeon only ever has its own single exit-
+  // waystone, never a personal network), but the tutorial needs one to teach Fast Travel for real.
+  if ((curIsDungeon() || curIsDimension()) && !player.isTutorial) { log("You can't plant a waystone shard here."); return; }
   const defaultName = `Waypoint ${player.waypoints.length + 1}`;
   let name = defaultName;
   try {
@@ -24981,6 +25084,7 @@ function plantWaystoneShard(shard) {
   } catch (e) { /* prompt unavailable — fall back to default name */ }
   player.waypoints.push({ name, x: player.x, y: player.y });
   if (shard.amount && shard.amount > 1) shard.amount--; else player.inventory = player.inventory.filter(i => i.uid !== shard.uid);
+  if (player.isTutorial) player._tutDidPlantWaystone = true; // Tutorial System: World & Living Off It curriculum
   log(`You plant the Waystone Shard. A waystone rises from the ground: "${name}".`);
   updateSidebar();
 }
@@ -25050,7 +25154,10 @@ function openDimensionTravel() {
 }
 
 function markWaypoint() {
-  if (curIsDungeon() || curIsDimension()) { log("You can't plant a waystone shard here."); return; }
+  // Tutorial System: same player.isTutorial exception as plantWaystoneShard itself (see its
+  // comment) -- this is the actual 'm' keybind entry point, so the exception has to live here too
+  // or the shortcut dead-ends before ever reaching plantWaystoneShard's own (already patched) gate.
+  if ((curIsDungeon() || curIsDimension()) && !player.isTutorial) { log("You can't plant a waystone shard here."); return; }
   const shard = player.inventory.find(i => i.effect === 'placewaypoint');
   if (!shard) { log("You need a Waystone Shard to plant a permanent waypoint here. Alchemists, traders, and dungeon vaults sometimes stock them."); return; }
   plantWaystoneShard(shard);
@@ -25802,6 +25909,12 @@ function newPlayer() {
     knownCyberIds: [], installedCyber: [], cyberSlots: 3,
     mutations: [],
     buffs: {}, statusPoison: 0, statusFear: 0, statusConfuse: 0, alive: true, kind: 'player', name: 'You',
+    // ---- Timed debuff counters, explicitly zeroed rather than left undefined. See the sprint-cost
+    // bug fix in worldTick(): these were previously only ever created at the moment the status was
+    // first inflicted, so any code testing them with `<= 0` (rather than the `> 0` form used almost
+    // everywhere else) silently misbehaved on a fresh character. Initializing them makes both
+    // comparison directions correct everywhere, for these and any future check against them. ----
+    frozenSolidTurns: 0, stunnedTurns: 0, burningTurns: 0, wetTurns: 0, oiledTurns: 0, bleedTurns: 0,
     allies: [], companions: [], quests: [], killCounts: {}, spouse: null, kids: 0, children: [], lastChildTurn: -9999,
     // ---- Property & Housing (Life Sim overhaul, pillar 1) ----
     properties: [], primaryResidenceId: null, propertyDebt: 0, lastUpkeepDay: null,
@@ -25891,12 +26004,23 @@ function doAttack(att, def, skipDuplicate) {
   // don't get a stealth playstyle to reward. See the crit-roll payoff below and def.engaged being
   // set true at the end of this function.
   const sneakAttack = isPlayer && def.alive !== false && !def.engaged;
+  // Tutorial System (Advanced Combat): credit the lesson when the sneak attack is ATTEMPTED, for
+  // the same reason as the called-shot flag below -- doAttack returns early on a miss, and a missed
+  // opener still wakes the target, so crediting only on a landed hit would leave a player who
+  // whiffed their one unaware target unable to ever complete the part. The objective's wording
+  // ("strike ... while it's unaware") matches this attempt-based credit rather than promising a hit.
+  if (sneakAttack) player._tutDidSneakAttack = true;
   // ---- CALLED SHOT: consumed exactly once per attack attempt, win or lose (dodge/miss/hit all
   // burn it), captured into a local const right up front so nothing later in this function can
   // read a stale or double-applied aim. See beginCalledShot for how it's set, and the payoff
   // block right after a successful hit below for what it actually does.
   const calledShot = isPlayer ? player.calledShotTarget : null;
   if (isPlayer) player.calledShotTarget = null;
+  // Tutorial System (Advanced Combat): credit the lesson the moment the called shot is SPENT,
+  // not only when it connects. doAttack returns early on a miss, so flagging this at the payoff
+  // site below would soft-lock the part for anyone who aims, misses, and then finishes the only
+  // target off with ordinary swings -- the mechanic was performed either way, which is the lesson.
+  if (isPlayer && calledShot) player._tutDidCalledShot = true;
   // Message Log Overhaul: the player is always a participant in their own fights (isPlayer or
   // def===player short-circuits true below), so this only actually filters monster-vs-NPC or
   // monster-vs-monster combat happening somewhere the player can't see or hear it -- previously
@@ -26948,6 +27072,13 @@ function updateAIState(m, vision) {
   // Message Log Overhaul: see runCombatState's comment -- monster-only function, gate on m's position.
   const log = posVisibleToPlayer(m.x, m.y) ? realLog : () => {};
   if (m.aiState === 'dormant') {
+    // Tutorial System: a scripted lesson (see the Advanced Combat curriculum's "Strike First" part)
+    // can flag a monster noAutoWake so it stays a guaranteed-unaware sneak-attack target regardless
+    // of how the player approaches, instead of leaving it to this proximity roll -- which is exactly
+    // the kind of RNG a hand-authored, one-shot teaching moment can't afford to fail on. Real dormant
+    // monsters (ambushers, sleepers) elsewhere in the game are completely unaffected; this flag is
+    // never set outside tutorial level construction (see tutApplyMarker).
+    if (m.tutorialNoAutoWake) return;
     const target = pickHostileTarget(m, 3);
     if (target) { m.aiState = 'combat'; m.target = target; m.engaged = true; log(`${m.name} stirs awake!`); alertNearbyAllies(m, target, 5); }
     return;
@@ -33092,7 +33223,20 @@ function worldTick() {
   // that the player can actually stand in it, treading water should suppress stamina regen the
   // same way it does in the overworld, rather than dungeon water silently acting like dry floor. ----
   const playerInWater = isWaterTile(curT);
-  const sprintActuallyDraining = player.sprinting && player.frozenSolidTurns <= 0 && player.stunnedTurns <= 0;
+  // ---- BUG FIX (sprint cost never applied): this used to read
+  //   player.sprinting && player.frozenSolidTurns <= 0 && player.stunnedTurns <= 0
+  // Both of those counters are only ever ASSIGNED when the status is first inflicted -- an
+  // untouched player has them as `undefined`, and in JS `undefined <= 0` is false. So for any
+  // character who had never been frozen or stunned (i.e. essentially every character, most of
+  // the time) this whole condition was false, which meant sprinting cost nothing AND, far worse,
+  // fell through to the `else if` regen branch below -- so holding Sprint actively RESTORED
+  // stamina instead of draining it, making the game's main stamina sink completely free and the
+  // +1 action per round a permanent, unconditional bonus.
+  // Every other site in the file tests these with `> 0` (safe against undefined) -- this was the
+  // one place that inverted the comparison, so it was the one place the undefined bit. Normalized
+  // with `|| 0` here, and the two counters are now also initialized to 0 in newPlayer() so the
+  // raw `<=` form is safe anywhere in future too.
+  const sprintActuallyDraining = player.sprinting && (player.frozenSolidTurns || 0) <= 0 && (player.stunnedTurns || 0) <= 0;
   if (!playerInWater && sprintActuallyDraining) {
     // SPRINT: costs stamina once per ROUND (not per bonus action spent -- see the Action Speed
     // Framework above), same "pay per round, not per swing" pattern armor upkeep already uses
@@ -33499,6 +33643,7 @@ function beginThrowTargeting(it, fromSlot) {
   log(`Throw ${it.name} (range ${range}) — click a tile, or press Enter/Space to snap to the nearest foe. Esc to cancel.`);
 }
 function resolveThrowAtTile(it, wx, wy, fromSlot) {
+  if (player.isTutorial) player._tutDidThrow = true; // Tutorial System: Advanced Combat curriculum
   const dmgMult = 1 + (player.alchemyPotencyBonus||0) + (player.throwDmgBonus||0);
   const radius = (it.radius||3) + (player.throwRadiusBonus||0);
   // Pull the item out of wherever it actually lives right now: an equipped slot, a stack in
@@ -36288,13 +36433,34 @@ function generateMutationGuideHTML() {
   });
   return html;
 }
+// ---- KEY-HINT CONVENTION (control-clarity pass) -------------------------------------------
+// Two visually distinct forms, so a player can always tell at a glance whether a key is pressable
+// RIGHT HERE or belongs to a different screen:
+//
+//   actionKey(k)  -> "[k]"          you can press this on the CURRENT screen, right now.
+//   keyRef(k, where) -> "the k key (out in the world)"   a key that belongs to ANOTHER screen.
+//
+// This exists because bracket notation had been used for both meanings, which actively misled
+// players: the Crafting screen's footer described Salvage/Reforge as "[v]"/"[r]" (inventory keys),
+// but on the Crafting screen every plain letter crafts the recipe at that index -- so a player who
+// read "[i]" and pressed i didn't get their inventory, they CRAFTED whatever recipe happened to sit
+// in slot 9. A dead hint is confusing; a hint that silently does the wrong thing is worse.
+//
+// Case matters throughout (the handler compares raw e.key), so both helpers render the key exactly
+// as it must be typed and never re-case it. Use actionKey/keyRef for any NEW hint rather than
+// hand-writing brackets, and the distinction stays correct as screens are added.
+function actionKey(k) { return `[${k}]`; }
+function keyRef(k, where) {
+  const ctx = where ? ` (${where})` : '';
+  return `<kbd style="background:#1a1610;border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--amber-bright);font-size:12px">${k}</kbd>${ctx}`;
+}
 function guideKeyTable(title, rows) {
   const body = rows.map(([key, desc]) => `<tr><td style="padding:3px 14px 3px 0;white-space:nowrap;vertical-align:top;"><kbd style="background:#1a1610;border:1px solid var(--line);border-radius:3px;padding:1px 6px;color:var(--amber-bright);font-size:12px;">${key}</kbd></td><td style="padding:3px 0;">${desc}</td></tr>`).join('');
   return `<div class="modal-opt" style="margin-top:10px"><b>${title}</b></div>
     <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:2px;">${body}</table>`;
 }
 const GUIDE_SECTIONS = [
-  { id:'start', label:'Start', html: () => `
+  { id:'start', label:'Start', category:'Getting Started', html: () => `
     <div class="modal-opt">New games begin with a character creator. <b>Custom</b> lets you build your own from a
     ${CREATION_POINTS}-point budget, and <b>Random</b> rolls a premade class for you if you just want to jump in.
     Before any of that, you pick your species — ${SPECIES.length} playable peoples, each with its own stat modifiers
@@ -36329,9 +36495,16 @@ const GUIDE_SECTIONS = [
     ${generateScenarioGuideHTML()}
     <div class="modal-opt" style="margin-top:6px">From the main menu you can also Continue a saved game, or start fresh.
     Saving/loading uses your browser's local storage (or an exported file) — see the Saves &amp; Meta tab.</div>` },
-  { id:'controls', label:'Controls', html: () => `
+  { id:'controls', label:'Controls', category:'Getting Started', html: () => `
     <div class="modal-opt">Every key below works while you're out in the world. Menus and screens show their own
     key hints at the bottom once you're inside them, and every option everywhere is also clickable with the mouse.</div>
+    <div class="modal-opt"><b>Capitalization matters.</b> Keys are listed here exactly as you must type them: a
+    lowercase letter means press it on its own, and a capital means hold <b>Shift</b>. Several letters are bound
+    twice on purpose and do completely different things in each case — <b>p</b> opens Property while <b>P</b> opens
+    the menu, <b>v</b> toggles Sprint while <b>V</b> opens Fast Travel, and <b>t</b> talks while <b>T</b> opens
+    Talents. Anywhere the game shows a key in brackets like [g], that key works on the screen you're looking at
+    right now; a key shown as <kbd style="background:#1a1610;border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--amber-bright);font-size:12px">g</kbd>
+    with a note beside it belongs to a different screen.</div>
     ${guideKeyTable('Movement', [
       ['Arrows / WASD / hjkl','Move, or attack a hostile standing in that direction.'],
       ['y u b n','Diagonal movement (matches the hjkl layout).'],
@@ -36346,8 +36519,11 @@ const GUIDE_SECTIONS = [
       ['a','Take Aim — line up a Called Shot (head/legs/weapon arm) for your next attack only, at reduced accuracy in exchange for a guaranteed extra effect. See the Status Effects tab, "Body &amp; Health".'],
       ['t','Talk to an adjacent friendly NPC — including an "Ask about your journey" option for a lead on your current main quest.'],
       ['x','Look/examine mode — inspect any visible tile, item, or creature.'],
+      ['S','Search the tiles around you for hidden doors and undiscovered traps. Takes a turn, and the better your senses the wider it reaches — worth pressing a few times anywhere a room looks like it should have another way out.'],
+      ['D','Dig — then a direction, to tunnel through an ordinary wall with a pickaxe (or a heavy hammer/maul/warhammer) in hand. Takes several turns and Stamina, and stops if anything dangerous comes near. See the Dungeons tab.'],
       ['&gt; / &lt;','Descend / ascend stairs.'],
       ['m','Plant a Waystone Shard as a named fast-travel waypoint.'],
+      ['M','Dungeon map — the full layout of everything you have explored on this floor, at a glance.'],
       ['G / H','Auto-travel to the nearest stairs / back home.'],
       ['X','Auto-explore the current area.'],
     ])}
@@ -36376,7 +36552,7 @@ const GUIDE_SECTIONS = [
     for the in-game menu and choose Settings, or click the <b>⚙</b> button in the top-right corner at any time. The
     same menu has a <b>Quit to Title Screen</b> option (with a confirmation prompt, unless you've turned that off
     under Gameplay settings) if you want to back out to the main menu without closing the browser tab.</div>` },
-  { id:'movement', label:'Movement', html: () => `
+  { id:'movement', label:'Movement', category:'Getting Started', html: () => `
     <div class="modal-opt">Arrows / WASD / hjkl (+ yubn diagonals) — move, or attack if a hostile is adjacent. Bumping a
     friendly ally/companion/NPC swaps places with them instead of blocking you; use <b>t</b> to deliberately talk.</div>
     <div class="modal-opt">+ / − or mouse wheel — zoom. g — pick up/open chest. . or 5 — wait. r — rest.</div>
@@ -36414,10 +36590,13 @@ const GUIDE_SECTIONS = [
     function -- monsters chasing, allies following, guards patrolling -- not just the new errand system.</div>
     <div class="modal-opt" style="margin-top:6px"><b>Force-attack any NPC (new).</b> Hold Shift while walking into a
     friendly or neutral NPC (rather than the normal "swap places") for a confirmation prompt to attack them anyway --
-    same crime/bounty handling as attacking a sleeping NPC. Works with arrow keys, WASD, and vi-keys alike (fixed a
-    real bug where Shift+WASD specifically did nothing at all -- holding Shift makes the browser report an uppercase
-    key, e.g. 'W' not 'w', which never matched the lowercase-only movement bindings; Shift+arrow keys were unaffected
-    since arrow key names don't change case, which is why only the letter keys had this problem). Also fixed: bumping
+    same crime/bounty handling as attacking a sleeping NPC. Works in every direction with arrow keys, WASD, or
+    vi-keys alike (fixed a real bug where Shift+WASD specifically did nothing at all -- holding Shift makes the
+    browser report an uppercase key, e.g. 'W' not 'w', which never matched the lowercase-only movement bindings;
+    Shift+arrow keys were unaffected since arrow key names don't change case, which is why only the letter keys had
+    this problem). Shift+H/K/L/Y/U specifically check whether an NPC is actually standing in that direction first --
+    if one is, it's a force-attack same as any other direction; if not, it falls through to that letter's other
+    Shift shortcut (Auto-home, Craft, Library, Cybernetics, Eldritch), since those live on the same keys. Also fixed: bumping
     into a sleeping NPC previously did the same silent position-swap as bumping into an awake one, which doesn't make
     much sense (swapping places with someone unconscious) and meant the natural first thing a player would try -- just
     walking into them -- produced no visible reaction at all. It now opens their sleep-aware dialogue (Wake/Attack/
@@ -36427,7 +36606,7 @@ const GUIDE_SECTIONS = [
     building at the opposite corner); a capital gets four (the palace at the true center, plus a Grand Cathedral,
     Guildhall, and Great Library in the districts directly adjacent to it). Each is staffed by, and themed around, a
     different NPC role rather than being a bigger empty building with the same role as before.</div>` },
-  { id:'combat', label:'Combat', html: () => `
+  { id:'combat', label:'Combat', category:'Combat & Abilities', html: () => `
     <div class="modal-opt">Melee: walk into a hostile. Ranged weapons: equip in Hand, press <b>f</b> to fire at range.</div>
     <div class="modal-opt"><b>Prey creatures now actually flee (bugfix).</b> Rabbits, deer, gulls, foxes, elk, hawks and
     the like are tagged as passive/flee-behavior so they never start a fight -- but that same check also meant they had
@@ -36445,6 +36624,15 @@ const GUIDE_SECTIONS = [
     turn right after a creature moves.</div>
     <div class="modal-opt">Hit chance scales with relative DEX; damage = weapon/technique dice + STR bonus − target Armor,
     with a critical chance that doubles damage.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Sneak Attack.</b> Your very first attack against a target that
+    hasn't noticed you yet — it's asleep, hasn't spotted you, or you closed in from Invisibility or a Stealth-line
+    talent/mutation/cybernetic — always lands as a sneak attack: a guaranteed critical hit for <i>triple</i> damage
+    (better than an ordinary critical's double), tagged "(sneak attack!)" in the log so you know it landed. This
+    applies to melee, thrown weapons, and offensive spells alike — a single opening Fireball on an unaware target hits
+    just as hard. The instant that attack lands (win or lose the fight afterward), the target counts as having
+    noticed you, so it's strictly a one-shot opener per target, not a repeatable damage multiplier — approach,
+    disengage, and re-stealth if you want another one. Only the player gets this: monsters don't get a stealth
+    playstyle to punish you with in return.</div>
     <div class="modal-opt">Offensive and debuff spells/techniques/cybernetics/mutations now open <b>free-aim targeting</b>
     instead of auto-locking onto whatever's nearest: click any tile you can see and reach, not just an enemy. Empty
     ground, a tree, water, an ally, or yourself are all valid — a fireball you drop short of a monster still ignites
@@ -36569,7 +36757,7 @@ const GUIDE_SECTIONS = [
     Spore Cloud) now leave a real spreading, lingering cloud instead of an instant one-time tick.</div>
     <div class="modal-opt">Click any visible enemy (or yourself) to inspect them — this now shows active status effects
     (poisoned, afraid, confused, slowed, berserk, burrowed, and any buffs) alongside HP and description.</div>` },
-  { id:'statuseffects', label:'Status Effects', html: () => `
+  { id:'statuseffects', label:'Status Effects', category:'Combat & Abilities', html: () => `
     <div class="modal-opt">Every status effect below counts down by 1 each turn (yours or the monster's), including
     while you're just standing still or resting — it isn't purely cosmetic, it changes what you and your target can
     actually do that turn. Click any visible monster (or yourself) to see current status effects and how many turns
@@ -36636,7 +36824,7 @@ const GUIDE_SECTIONS = [
     <br><br><b>Called Shot</b> (key <b>a</b>) lines up your <i>next</i> attack only to deliberately target the head
     (punches through most of the target's armor), the legs (cripples movement, a real Slow), or the weapon arm
     (staggers them into Confusion) — at a real accuracy penalty in exchange.</div>` },
-  { id:'equipment', label:'Equipment', html: () => `
+  { id:'equipment', label:'Equipment', category:'Combat & Abilities', html: () => `
     <div class="modal-opt">Slots: Hand, Offhand, Body, Head, Feet, Ring, Amulet, Gloves, Cloak.</div>
     <div class="modal-opt">i — Inventory. Equipped items lettered A-I (select → Unequip). Backpack items lettered a-t per
     page, Tab/click filters by category, [ / ] change pages. Every item shows a full description and a comparison to
@@ -36683,7 +36871,7 @@ const GUIDE_SECTIONS = [
       implant), and Flesh-Melding Symbiosis (eldritch mutation) all grant slow, steady passive auto-repair over
       time — pick whichever fits your build.</li>
     </ul></div>` },
-  { id:'magic', label:'Magic', html: () => `
+  { id:'magic', label:'Magic', category:'Combat & Abilities', html: () => `
     <div class="modal-opt">z opens your unified Abilities screen (spells, techniques, active cybernetics, active
     mutations together). ${SPELLS.length} spells across ${new Set(SPELLS.map(s=>s.school)).size} schools, spanning a real
     power range within each element — e.g. Firebolt → Fireball → Greater Fireball → Meteor Swarm → Sunfire Cataclysm is
@@ -36693,14 +36881,14 @@ const GUIDE_SECTIONS = [
     spells (Caustic Gas, Toxic Bloom, Plague Tide, Miasmic Apocalypse) leave a real cloud that spreads outward while
     fresh and affects anyone who walks through it later. Below is the full spell reference across all schools:</div>
     ${generateSpellGuideHTML()}` },
-  { id:'techniques', label:'Techniques', html: () => `
+  { id:'techniques', label:'Techniques', category:'Combat & Abilities', html: () => `
     <div class="modal-opt">Martial techniques cost Stamina, not Mana — a full combat path for non-casters.
     ${TECHNIQUES.length} techniques across ${new Set(TECHNIQUES.map(s=>s.school)).size} schools (including Daggers, Dual
     Wielding, Berserker Arts, Monastic Arts, Throwing, and Tactics), each with its own tier-1-through-5 progression from a basic
     maneuver to a legendary finisher. Learn them from weapon trainers or Technique Manuals, exactly like spells. Full
     list:</div>
     ${generateTechniqueGuideHTML()}` },
-  { id:'cybernetics', label:'Cybernetics', html: () => `
+  { id:'cybernetics', label:'Cybernetics', category:'Combat & Abilities', html: () => `
     <div class="modal-opt"><b>Y</b> opens Cybernetics management. Acquire blueprints by buying from a Cybersmith NPC
     (found in cities and Scrapworks settlements) or finding Cyberware Chips as loot, then install them — you have a
     limited number of slots (3 to start, more via talents). Passive cybernetics apply a permanent-while-installed bonus;
@@ -36709,7 +36897,7 @@ const GUIDE_SECTIONS = [
     categories (including Neural, Weapons Systems, Bio-Augment, and Stealth), ranging from a basic Wrist Blade to
     prototype tech like the Antimatter Core Implant or Quantum Blink Array. Full list:</div>
     ${generateCyberGuideHTML()}` },
-  { id:'eldritch', label:'Eldritch', html: () => `
+  { id:'eldritch', label:'Eldritch', category:'Combat & Abilities', html: () => `
     <div class="modal-opt"><b>U</b> opens the Eldritch screen, showing your Corruption and known mutations. Mutations are
     permanent bodily/mental changes gained by drinking Mutagen vials (loot) or performing a ritual at a Forbidden Altar
     (a rare point of interest) — rituals cost HP and raise Corruption, which in turn unlocks access to deeper, stranger
@@ -36719,14 +36907,14 @@ const GUIDE_SECTIONS = [
     Consuming. Each of those four categories has its own specialization line in the Talents screen (under Eldritch) if
     you want to commit to one rather than spread thin. Full list:</div>
     ${generateMutationGuideHTML()}` },
-  { id:'talents', label:'Talents', html: () => `
+  { id:'talents', label:'Talents', category:'Combat & Abilities', html: () => `
     <div class="modal-opt">T opens Talents. One point every 3 levels. Five tiers: Tier 1 open from the start; Tier 2
     needs level 5; Tier 3 needs level 10 + a specific Tier-2 talent; Tier 4 needs level 15 + a specific Tier-3 talent;
     Tier 5 capstones need level 20 + a specific Tier-4 talent. ${TALENTS_V2.length} talents across combat, magic,
     survival, cyber, eldritch, cooking, and alchemy — there are talents supporting every build, including niche ones
     like cooking, brewing, and swimming, not just combat and spellcasting. Full tree:</div>
     ${generateTalentGuideHTML()}` },
-  { id:'crafting', label:'Crafting', html: () => `
+  { id:'crafting', label:'Crafting', category:'Crafting & Living', html: () => `
     <div class="modal-opt">K opens Crafting/Cooking. Learn recipes from a Chef, Blacksmith, Alchemist, Tailor, or
     Fisherman, or find recipe scrolls, or stumble onto them in loot. ${RECIPES.length} recipes total (${RECIPES.filter(r=>r.category==='cooking').length}
     cooking, ${RECIPES.filter(r=>r.category==='crafting').length} crafting/alchemy) turn raw materials into food,
@@ -36759,13 +36947,31 @@ const GUIDE_SECTIONS = [
     Either way, a socket is still meant as a slow, deliberate commitment to the gear it's on, not something to
     shuffle every fight. Reforging a piece of gear all the way to 5/5 also has a chance to punch a brand new socket
     into it, if it has room — the two systems share the same Arcane Dust for a reason.</div>` },
-  { id:'water', label:'Water & Travel', html: () => `
+  { id:'engineering', label:'Engineering', category:'Crafting & Living', html: () => `
+    <div class="modal-opt">A full second crafting discipline alongside ordinary Crafting/Cooking, governed by INT and
+    trained the same way (a Cybersmith trainer, found schematics, or loose recipe drops) — it turns scrap and salvage
+    into real guns and permanent mechanical allies rather than potions and gear affixes.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>The Construct Power Grid.</b> You can't just field an unlimited
+    army: every deployed companion has a power draw, and your total capacity comes from four independent sources that
+    all stack — a small free baseline, your own Engineering crafting practice, your INT, and any Auxiliary Reactors
+    you've built and installed (permanent, capped at a few each). Deployment is blocked, like a mana check, if a new
+    construct's draw wouldn't fit your remaining capacity. Once deployed, every active construct drains its OWN
+    charge meter every turn it exists — win or lose, fighting or not — down to 0, at which point it powers down (stops
+    acting, but doesn't vanish or free its grid slot) until a Power Cell tops it back up. Bump into your own construct
+    to either swap places with it or Scrap it outright for a partial materials refund and its grid capacity back.</div>
+    ${generateEngineeringGuideHTML()}` },
+  { id:'water', label:'Water & Travel', category:'Crafting & Living', html: () => `
     <div class="modal-opt">Swimming costs Stamina; running out causes damage until you reach shore. A Wooden Raft,
     the Flight spell, Micro-Thrusters cybernetic, or the Waterborn talent all let you cross freely.</div>
-    <div class="modal-opt">Open ocean is no longer empty — sharks, eels, sirens, and drowned raiders swim it, boats and
+    <div class="modal-opt" style="margin-top:6px"><b>Boats: 3 real tiers.</b> A Wooden Raft is the cheapest way to stop
+    swimming across open water, but a Rowboat and then a Sailing Ship (craft both at a Workbench, or find one drifting
+    -- a capsized rowboat, an adrift merchant ship -- and salvage it into your own) are steadier platforms underfoot:
+    each higher tier gives a real accuracy bonus while you're fighting from the water, on top of just getting you
+    across faster and without the Stamina drain of swimming.</div>
+    <div class="modal-opt" style="margin-top:6px">Open ocean is no longer empty — sharks, eels, sirens, and drowned raiders swim it, boats and
     shipwrecks (some guarded, some worth looting) drift on it, and out in the deepest water a rare few — the
     Kraken, the Megalodon, Coilfang the Endless Serpent — are worth watching for, and worth avoiding until you're ready.</div>` },
-  { id:'relationships', label:'Relationships & Home', html: () => `
+  { id:'relationships', label:'Relationships & Home', category:'Crafting & Living', html: () => `
     <div class="modal-opt">t talks to an adjacent NPC — Trade, Learn, Ask for work, Pay for healing, Give a gift, and
     (80+ affection) Propose Marriage. Affection builds honestly: Talk only helps once per cooldown, gifts have
     diminishing returns, quests give a real boost. A traveling spouse fights at your side and can be sent home anytime;
@@ -36820,7 +37026,7 @@ const GUIDE_SECTIONS = [
     blacksmiths and priests down to cobblers, coopers, cartographers, midwives, and gravediggers -- most exist purely
     to make a settlement feel like a real, working economy rather than a backdrop. (Not to be confused with your own
     <b>Player Professions</b> -- see the Professions tab.)</div>` },
-  { id:'professions', label:'Professions', html: () => `
+  { id:'professions', label:'Professions', category:'Crafting & Living', html: () => `
     <div class="modal-opt">Press <b>O</b> anywhere to see your professions. Fourteen real trades are available --
     Farming, Mining, Blacksmithing, Trading, Fishing, Cooking, Brewing (alchemy), Woodcutting, Hunting,
     Locksmithing, Jewelcrafting, Cartography, Scribing, and Guarding -- each with its own level and rank (Novice
@@ -36862,7 +37068,7 @@ const GUIDE_SECTIONS = [
     or Market Stall furnishing (see Property & Housing) pays passive income of its own on top of all that, but only if
     someone's actually minding it while you're away -- your spouse waiting at that exact house, or a grown child who
     settled down in the same town.</div>` },
-  { id:'reputation', label:'Reputation & Rule', html: () => `
+  { id:'reputation', label:'Reputation & Rule', category:'Society & Politics', html: () => `
     <div class="modal-opt">Crime is regional. Assaulting/killing a peaceful NPC raises a bounty and alerts guards in
     that settlement; high enough bounty makes guards attack on sight there. Bounties decay slowly over time.</div>
     <div class="modal-opt" style="margin-top:6px"><b>Standing & Kingdom Reputation.</b> Every settlement quietly
@@ -36896,7 +37102,7 @@ const GUIDE_SECTIONS = [
     throne starts already dangerously close to rebellion (see Holding the crown, above), not stable from day one
     the way an earned one is. The two paths are mutually exclusive with each other and with ever holding two crowns
     at once.</div>` },
-  { id:'quests', label:'Quests', html: () => `
+  { id:'quests', label:'Quests', category:'Quests & Story', html: () => `
     <div class="modal-opt"><b>Main Quest</b>: a story generated fresh for this world's seed, drawn from 9 possible
     premises — the antagonist's name, and which of the game's named story bosses fill each beat, vary between
     playthroughs, and beats reference real kingdom politics (a "Betrayal" might genuinely name a kingdom yours is
@@ -36925,7 +37131,7 @@ const GUIDE_SECTIONS = [
     conversation, and eventually offer something personal instead of another anonymous job. Most quests reward
     gold, XP, a relationship boost, and <b>kingdom reputation</b> (nudges that kingdom's shop prices); meaningful
     ones can instead grant a unique, hand-named item you won't find any other way.</div>` },
-  { id:'ending', label:'The Ending', html: () => `
+  { id:'ending', label:'The Ending', category:'Quests & Story', html: () => `
     <div class="modal-opt">Defeating this world's antagonist doesn't end the story — it reveals what was actually
     behind them. What follows is fixed, not procedurally generated, no matter which of the 9 premises your world
     rolled: a single, final, 5-phase encounter with a fifty-move pool, meant to be a genuine wall even for a
@@ -36933,7 +37139,7 @@ const GUIDE_SECTIONS = [
     your world, and your save exactly as they were, free to keep exploring, and the world you return to may look
     very different depending on how far its <b>World Phase</b> escalated and which choices you made getting there.
     Completed runs are recorded in the <b>Hall of Legends</b>, viewable from the title screen.</div>` },
-  { id:'worldphase', label:'World Phase', html: () => `
+  { id:'worldphase', label:'World Phase', category:'Quests & Story', html: () => `
     <div class="modal-opt">A permanent, one-way shift in how the whole world plays, triggered only by specific
     Main Quest milestones — never randomly. Once it advances it never regresses. Phase 2 (the Infernal Tide) brings
     tougher "Infernal" monster variants (renamed, visibly recolored, dropping Infernal Ash) and Cinder Rift
@@ -36943,7 +37149,7 @@ const GUIDE_SECTIONS = [
     close. Both materials become valid gather-quest rewards once the phase that produces them has actually
     happened. NPCs react throughout — uneasy rumors early on, open fear or wariness of armed strangers by the worst
     of it. Check the Quest Log at any time to see the world's current phase and what it means.</div>` },
-  { id:'storybosses', label:'Story Bosses', html: () => `
+  { id:'storybosses', label:'Story Bosses', category:'Quests & Story', html: () => `
     <div class="modal-opt">Named bosses roam the overworld (and can be pulled into your Main Quest's later acts).
     Early game: <b>Thessaly Voss, the Broken Blade</b> (duelist, plains/forest) and <b>Grimsen Oldhollow, the
     Blightspeaker</b> (corrupted druid, forest/swamp). Mid-late game: <b>Seraphine Duskwarden, the Oathbroken</b>
@@ -36959,7 +37165,7 @@ const GUIDE_SECTIONS = [
     gatekeeper), and <b>Aurelith, Warden of the Reach</b> (dragon gatekeeper). A wandering optional boss, <b>the
     Recursion</b>, roams the surface world itself rather than guarding a dungeon. Expect multiple phases as HP
     drops on the scripted ones. More join this roster in future updates.</div>` },
-  { id:'weatherevents', label:'Weather & World Events', html: () => `
+  { id:'weatherevents', label:'Weather & World Events', category:'World & Exploration', html: () => `
     <div class="modal-opt"><b>Weather &amp; Climate.</b> Every zone -- the overworld and each of the twelve
     dimensions -- has its own weather that changes over time and reaches into the systems around it, not just the
     screen tint. Rain and snow weaken fire and actively put out burning ground; storms empower shock damage and can
@@ -37007,7 +37213,7 @@ const GUIDE_SECTIONS = [
     <div class="modal-opt" style="margin-top:6px">Curious what's possible, or want to test a specific weather or
     event for yourself? The Debug tab in Settings has a full, always-current search across every weather type and
     every event by name.</div>` },
-  { id:'dimensions', label:'Dimensions', html: () => `
+  { id:'dimensions', label:'Dimensions', category:'World & Exploration', html: () => `
     <div class="modal-opt">The world isn't the only world, and there's more than one way in. A rare "Demon Gate"
     dungeon holds <b>Malphegor, the Rift-Warden</b> at the bottom -- defeat him and the gate tears open into
     <b>the Abyssal Wastes</b> (ashfields, brimstone chasms, bone forests, obsidian spires, demonic monsters, and its
@@ -37049,7 +37255,7 @@ const GUIDE_SECTIONS = [
     every size, and its own optional dungeon, the Wyrm Hoard). Step onto a glowing rift tile and use the enter
     command (&gt;) to cross over, and again to come back -- you'll always return to exactly where you left. This
     is the full initial dozen; more dimensions may still join them in future updates.</div>` },
-  { id:'setsuniques', label:'Sets & Uniques', html: () => `
+  { id:'setsuniques', label:'Sets & Uniques', category:'Progression & Loot', html: () => `
     <div class="modal-opt">Beyond randomly-rolled affix gear, two kinds of fixed, hand-authored items exist, both
     earned only through combat -- neither is ever sold by shops or found as ordinary loot.</div>
     <div class="modal-opt"><b>Item Sets</b> -- ${Object.keys(ITEM_SETS).length} 5-piece sets, one per monster faction,
@@ -37063,7 +37269,7 @@ const GUIDE_SECTIONS = [
       const boss = MONSTER_BASES[bossId];
       return (item && boss) ? `<div class="modal-opt">${item.name} (${boss.name})</div>` : '';
     }).join('')}` },
-  { id:'leveling', label:'Leveling', html: () => `
+  { id:'leveling', label:'Leveling', category:'Progression & Loot', html: () => `
     <div class="modal-opt">Level 99 is the real cap, and now an achievable one -- roughly 450,000 total XP across
     the run, paced so early levels come quickly and the last stretch is a genuine long-game grind. Every level
     grants +2 stat points (more HP/MP too, scaling with level itself so the gap between level 1 and level 99 is
@@ -37071,7 +37277,7 @@ const GUIDE_SECTIONS = [
     rated on a power scale from 1 (early game) to 6 (the toughest existing tier); that scale now maps across
     roughly level 3 to level 98, instead of topping out around level 16 the way it used to. Expect true power-6
     content -- ancient dragons, Malphegor, Yog'tha, and the like -- to be a real fight even near the level cap.</div>` },
-  { id:'kingdoms', label:'Kingdoms & Politics', html: () => `
+  { id:'kingdoms', label:'Kingdoms & Politics', category:'Society & Politics', html: () => `
     <div class="modal-opt">Every kingdom now has a trait (militaristic, mercantile, scholarly, isolationist, pious,
     lawless), a named ruler, and a real multi-beat history including a historical figure NPCs will occasionally bring
     up in conversation. More importantly: each kingdom has a genuine, fixed political relationship with its
@@ -37079,16 +37285,55 @@ const GUIDE_SECTIONS = [
     This isn't just flavor. Your reputation ripples across it: staying friendly with a kingdom hostile to where
     you're currently shopping will cost you at the counter, while standing with an ally helps. Kingdoms at war or
     tension with a neighbor offer <b>sabotage</b> work against them; kingdoms with a trade pact or alliance offer
-    <b>caravan guard</b> work that raises your standing with both sides at once.</div>` },
-  { id:'itemization', label:'Gear & Item Power', html: () => `
+    <b>caravan guard</b> work that raises your standing with both sides at once.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>The political ladder, from local office to the throne itself.</b>
+    This is a real progression, not flavor text — every step below is a genuine mechanical state that persists and
+    pays off:</div>
+    <div class="modal-opt" style="margin-top:4px"><b>1. Civic Office.</b> At 60+ regional goodwill, petition whoever
+    actually runs a settlement (the noble in a Palace-bearing city/capital, otherwise the elder or senior professional
+    present) for office. You're appointed Village Reeve, Town Alderman, City Magistrate, or Capital Chancellor
+    depending on the settlement's size, and it pays a real daily gold stipend from then on (scaling with that same
+    tier) on top of an immediate goodwill and kingdom-reputation boost. One office per settlement, but you can hold
+    several across a kingdom (or several kingdoms).</div>
+    <div class="modal-opt" style="margin-top:4px"><b>2. Nobility.</b> With at least one civic office under your belt,
+    petition any noble for a title — Knight/Dame, then Baron/Baroness, Count/Countess, and finally Duke/Duchess —
+    each rung gated on a steadily higher kingdom-reputation threshold than the last.</div>
+    <div class="modal-opt" style="margin-top:4px"><b>3. The Crown, earned or seized.</b> Reaching Duke/Duchess with
+    600+ reputation, at least 2 civic offices in that kingdom, and a 2000g coronation tribute lets you petition to
+    formally claim the crown outright. There's also a violent shortcut: if a kingdom's reputation collapses to -150
+    or worse (that takes real, sustained hostility, not neglect) and you're level 12+, killing its current ruler
+    offers you the throne on the spot, seized rather than earned — you'll start already close to rebellion instead of
+    stable, so it demands fast follow-up. Either way, you can only rule one kingdom at a time.</div>
+    <div class="modal-opt" style="margin-top:4px"><b>4. Ruling it.</b> A crowned player gets a Court menu: name a
+    spouse Consort, name a settled grown child Governor of their settlement (see Relationships & Home for both), issue
+    a one-time Royal Decree (200g, +25 standing) whenever you want a quick boost, and set one ongoing Standing Policy
+    per kingdom — Fortify the Realm (halves rebellion risk for a daily treasury cost), Lower Taxes (civic offices
+    there earn less but generate steady local goodwill instead), or Royal Patronage (+25% kingdom reputation gained
+    there). None of it is free upkeep-wise, and none of it is optional flavor — it's how you actually hold the crown.</div>
+    <div class="modal-opt" style="margin-top:4px"><b>Rebellion risk.</b> Once crowned, letting that kingdom's
+    reputation stay critically low starts a real countdown: a warning at 10 straight unstable days, and the crown
+    lost outright — to someone else, permanently, reputation crashing hard as a parting blow — at 20. Recovering your
+    standing in time walks the countdown back down instead of resetting it instantly, so a ruler who let things slip
+    has to hold steady for a while, not just have one good day.</div>` },
+  { id:'itemization', label:'Gear & Item Power', category:'Progression & Loot', html: () => `
     <div class="modal-opt">Rarity (common through legendary) still controls how good a dropped item's bonus affixes
     can be, but it's no longer the whole story. Gear now also scales with the power of whatever dropped it: the exact
     same weapon dropped by an early wandering bandit and by a true endgame boss will not be remotely the same
     strength, even at identical rarity. Boss-dropped chests scale the same way -- a chest earned from a deep, powerful
     boss holds meaningfully better contents than one from an early fight, including more gold. Radiant quest gear
     rewards scale with your own character level for the same reason. The takeaway: don't expect one lucky early
-    legendary to carry you to level 99 -- you'll want to keep upgrading as you go.</div>` },
-  { id:'dungeons', label:'Dungeons', html: () => `
+    legendary to carry you to level 99 -- you'll want to keep upgrading as you go.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Shop stock &amp; restocking.</b> What a merchant has for sale
+    isn't a fixed list rolled once and forgotten — it's generated off that specific NPC's own tier (Novice/Journeyman/
+    Master — see Relationships &amp; Home) and the settlement's size, so a capital's Master blacksmith carries
+    genuinely better stock and a higher rarity ceiling than a hamlet's Novice one. Buy a shop empty and it isn't gone
+    for good: stepping into trade with that NPC again after enough time has passed quietly restocks their shelves
+    with a fresh roll off the same tier/settlement rules, so returning to a favorite merchant after a few days out
+    adventuring is always worth another look.</div>
+    <div class="modal-opt" style="margin-top:6px"><b>Carrying wealth safely.</b> Wyrmreach's Assayer will convert a
+    stack of gold into a single, compact Assayer's Note (at a small conversion loss) and cash one back in later at
+    full face value -- a real way to move or hold a large sum without a heavy coin stack, if you ever need one.</div>` },
+  { id:'dungeons', label:'Dungeons', category:'World & Exploration', html: () => `
     <div class="modal-opt">&gt; enter/descend, &lt; ascend. Entrances visually match their theme in the overworld and
     show a recommended level before you commit. Every deepest floor holds a boss whose strength is matched to that
     specific dungeon's real depth (not just its rarity label), and other floors have a chance at a themed miniboss — a
@@ -37134,7 +37379,7 @@ const GUIDE_SECTIONS = [
     ${generateDungeonThemeGuideHTML()}
     <div class="modal-opt" style="margin-top:6px"><b>Rarity variants:</b></div>
     ${generateDungeonVariantGuideHTML()}` },
-  { id:'world', label:'World', html: () => `
+  { id:'world', label:'World', category:'World & Exploration', html: () => `
     <div class="modal-opt"><b>Settlement Overhaul.</b> Settlements now come in ${Object.keys(SETTLEMENT_FLAVORS).length}
     flavors (up from 13) across five size tiers — hamlet, village, town, city, and a new, extremely rare <b>capital</b>
     tier (denser and more consistent than a city, laid out around a grand central plaza; a true capital spanning
@@ -37251,11 +37496,11 @@ const GUIDE_SECTIONS = [
     far enough and even a "common" spawn hits noticeably harder. Loot found loose on the ground out there stays modest
     regardless of distance, though — real gear upgrades come from fighting things, dungeons, and chests, not free
     finds lying in a field.</div>` },
-  { id:'bestiary', label:'Bestiary', html: () => `
+  { id:'bestiary', label:'Bestiary', category:'World & Exploration', html: () => `
     <div class="modal-opt">Dungeon-tier monsters and bosses, grouped by faction. Overworld wildlife (rabbits, wolves,
     bears, and the like) isn't listed here — it spawns based on biome and is generally weaker than anything below.</div>
     ${generateBestiaryGuideHTML()}` },
-  { id:'guidance', label:'Quests, Containers & Books', html: () => `
+  { id:'guidance', label:'Quests, Containers & Books', category:'Quests & Story', html: () => `
     <div class="modal-opt"><b>Finding your way.</b> The main quest never hands you an exact marker by default — instead,
     your always-visible sidebar tracker, the full Quest Log (<b>q</b>), and any NPC's "Ask about your journey" dialogue
     option all give you a compass direction and a rough sense of distance ("north-east, a fair distance away"), or an
@@ -37276,10 +37521,10 @@ const GUIDE_SECTIONS = [
     dungeons are especially dense with them. Every book you've read is kept permanently in your <b>Library</b>
     (<b>L</b>), even after you've sold, dropped, or stored the physical copy — a growing in-world reference for
     everything from how the twelve dimensions are actually reached to how reputation, bounties, and marriage work.</div>` },
-  { id:'mouse', label:'Mouse', html: () => `
+  { id:'mouse', label:'Mouse', category:'Getting Started', html: () => `
     <div class="modal-opt">Every menu option is clickable. Click any visible map tile to examine it (including loose
     items — full stats shown, not just the ground biome). Scroll the mouse wheel over the map to zoom.</div>` },
-  { id:'saves', label:'Saves & Meta', html: () => `
+  { id:'saves', label:'Saves & Meta', category:'Getting Started', html: () => `
     <div class="modal-opt">Saving uses your browser's local storage automatically when you choose Save (accessible via
     the in-game menu, key <b>Esc</b> or <b>P</b>). If local storage isn't available, or you want a portable backup, Export
     writes a save file you can download, and Import reads one back in. Your character, inventory, abilities, gold,
@@ -37290,35 +37535,79 @@ const GUIDE_SECTIONS = [
     storage the moment you change them, independent of your character save.</div>` },
 ];
 let guideCurrentTab = 'start';
+// ---- GUIDE CATEGORY ORDER: the fixed left-to-right/top-to-bottom order categories render in.
+// GUIDE_SECTIONS itself stays a flat array (every generator function, id lookup, and the search
+// index below all still just iterate it) -- this is purely a presentation grouping layered on top,
+// built once from whatever `category` each section declares. Adding a brand new section with a
+// brand new category string automatically gets its own group appended at the end; no separate
+// registry to keep in sync.
+const GUIDE_CATEGORY_ORDER = ['Getting Started', 'Combat & Abilities', 'Crafting & Living', 'Quests & Story', 'World & Exploration', 'Progression & Loot', 'Society & Politics', 'Reference'];
+function guideCategoriesInOrder() {
+  const present = new Set(GUIDE_SECTIONS.map(s => s.category || 'Reference'));
+  const ordered = GUIDE_CATEGORY_ORDER.filter(c => present.has(c));
+  present.forEach(c => { if (!ordered.includes(c)) ordered.push(c); }); // safety net for a future category string not yet added above
+  return ordered;
+}
 function guideSearchBarHtml(query) {
   const valueAttr = query ? ` value="${escapeHtml(query)}"` : '';
-  return `<div style="margin:8px 0"><input id="guide-search-input" type="text"${valueAttr} placeholder="Search the guide..." style="width:65%;background:#1a1610;border:1px solid var(--line);color:var(--text);padding:4px;font-family:inherit"> <span onclick="runGuideSearch()" style="cursor:pointer;background:var(--amber-dim);color:#000;padding:4px 10px;">Search</span></div>`;
+  return `<div style="margin:8px 0;display:flex;gap:6px;align-items:center">
+    <input id="guide-search-input" type="text"${valueAttr} placeholder="Search the whole guide (e.g. 'sneak attack', 'sockets', 'bounty')..." style="flex:1;background:#1a1610;border:1px solid var(--line);color:var(--text);padding:5px 7px;font-family:inherit" onkeydown="if(event.key==='Enter')runGuideSearch()">
+    <span onclick="runGuideSearch()" style="cursor:pointer;background:var(--amber-dim);color:#000;padding:5px 12px;white-space:nowrap">Search</span>
+  </div>`;
+}
+// Renders the tab bar grouped under bold category headers instead of one undifferentiated wall of
+// 30+ labels -- the actual "reformat so it's easy to read/search" ask. Still just one flat click
+// target per section (onclick="renderGuideTab(...)"), so nothing downstream needs to know grouping
+// exists.
+function guideTabBarHtml(activeId) {
+  let html = '<div class="guide-tabgroups">';
+  guideCategoriesInOrder().forEach(cat => {
+    const sections = GUIDE_SECTIONS.filter(s => (s.category || 'Reference') === cat);
+    html += `<div class="guide-tabgroup"><div class="guide-tabgroup-label">${cat}</div><div class="guide-tabs">`;
+    html += sections.map(s => `<span class="guide-tab${s.id===activeId?' active':''}" onclick="renderGuideTab('${s.id}')">${s.label}</span>`).join('');
+    html += '</div></div>';
+  });
+  html += '</div>';
+  return html;
+}
+function guideHighlight(text, query) {
+  if (!query) return escapeHtml(text);
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return escapeHtml(text);
+  return escapeHtml(text.slice(0, idx)) + '<mark style="background:var(--amber-dim);color:#000;padding:0 2px">' + escapeHtml(text.slice(idx, idx + query.length)) + '</mark>' + escapeHtml(text.slice(idx + query.length));
 }
 function renderGuideTab(tabId) {
   guideCurrentTab = tabId;
   document.getElementById('modal-inner').classList.add('modal-wide');
-  const tabBar = GUIDE_SECTIONS.map(s => `<span class="guide-tab${s.id===tabId?' active':''}" onclick="renderGuideTab('${s.id}')">${s.label}</span>`).join('');
-  const searchBar = guideSearchBarHtml('');
   const section = GUIDE_SECTIONS.find(s => s.id === tabId) || GUIDE_SECTIONS[0];
-  const html = `<div class="guide-tabs">${tabBar}</div>${searchBar}<hr>${section.html()}`;
-  renderModal('Guide & Controls', html, 'Esc to close. Click a tab above to switch sections.');
+  const crumb = `<div class="dim" style="margin-bottom:2px">${section.category || 'Reference'} &rsaquo; <b style="color:var(--amber-bright)">${section.label}</b></div>`;
+  const html = `${guideTabBarHtml(tabId)}${guideSearchBarHtml('')}${crumb}<hr>${section.html()}`;
+  renderModal('Guide & Controls', html, 'Esc to close. Click a tab above to switch sections, or search across all of them.');
 }
+// ---- Search index: every section is split into standalone sentences once per call (guide text is
+// small -- a few hundred KB of generated HTML at most -- so re-deriving this on demand instead of
+// caching is simpler and can never go stale if a section's html() output changes based on live game
+// state, e.g. counts like `${SPELLS.length}`).
 function runGuideSearch() {
   document.getElementById('modal-inner').classList.add('modal-wide');
   const input = document.getElementById('guide-search-input');
-  const query = input ? (input.value || '').trim().toLowerCase() : '';
-  const tabBar = GUIDE_SECTIONS.map(s => `<span class="guide-tab${s.id===guideCurrentTab?' active':''}" onclick="renderGuideTab('${s.id}')">${s.label}</span>`).join('');
+  const query = input ? (input.value || '').trim() : '';
+  const tabBar = guideTabBarHtml(null);
   const searchBar = guideSearchBarHtml(query);
-  if (!query) { renderModal('Guide Search', `<div class="guide-tabs">${tabBar}</div>${searchBar}<hr><div class="npcline dim">Type something to search for.</div>`, 'Esc to close.'); return; }
+  if (!query) { renderModal('Guide Search', `${tabBar}${searchBar}<hr><div class="npcline dim">Type something above and press Enter (or click Search) -- this searches every section of the guide at once, not just the one you're currently on.</div>`, 'Esc to close.'); return; }
+  const q = query.toLowerCase();
   const results = [];
   GUIDE_SECTIONS.forEach(s => {
     const text = stripHtml(s.html());
     const sentences = text.split(/(?<=[.!?])\s+/).map(x => x.trim()).filter(Boolean);
-    sentences.forEach(sent => { if (sent.toLowerCase().includes(query)) results.push({ section: s.label, sent }); });
+    sentences.forEach(sent => { if (sent.toLowerCase().includes(q)) results.push({ id: s.id, section: s.label, category: s.category || 'Reference', sent }); });
   });
-  let body = `<div class="npcline">Results for "${escapeHtml(query)}": ${results.length} match(es)</div>`;
-  results.slice(0, 40).forEach(r => { body += `<div class="modal-opt"><span class="dim">[${r.section}]</span> ${r.sent}</div>`; });
-  renderModal('Guide Search Results', `<div class="guide-tabs">${tabBar}</div>${searchBar}<hr>${body}`, 'Esc to close.');
+  let body = `<div class="npcline">${results.length} match${results.length===1?'':'es'} for "${escapeHtml(query)}"${results.length > 40 ? ' -- showing the first 40' : ''}. Click a result to jump straight to that section.</div>`;
+  if (!results.length) body += `<div class="modal-opt dim">No matches. Try a shorter or more general word -- e.g. "rune" instead of "runes", or "sneak" instead of "sneak attack".</div>`;
+  results.slice(0, 40).forEach(r => {
+    body += `<div class="modal-opt" style="cursor:pointer" onclick="renderGuideTab('${r.id}')"><span class="dim">[${r.category} &rsaquo; ${r.section}]</span> ${guideHighlight(r.sent, query)}</div>`;
+  });
+  renderModal('Guide Search Results', `${tabBar}${searchBar}<hr>${body}`, 'Esc to close, or click any result to open its section.');
 }
 let helpReturnState = 'playing';
 function openHelp() {
@@ -37387,10 +37676,24 @@ function handleKey(e) {
     // holding Shift makes the browser report an uppercase key (e.g. 'W', not 'w') that never
     // matched MOVE_KEYS' lowercase-only entries -- Shift+arrow keys were unaffected since arrow
     // key names don't change case, which is why only WASD/vi-keys had this reported as broken.
-    // But h/k/l/y/u already have their own dedicated Shift+letter shortcuts a few lines down
-    // (Craft/Library/Cybernetics/Eldritch/auto-travel-home) -- excluded here so movement doesn't
-    // silently steal those.
+    // h/k/l/y/u each ALSO have their own dedicated Shift+letter shortcut a few lines down
+    // (Craft/Library/Cybernetics/Eldritch/auto-travel-home), so those five stay excluded from the
+    // blanket fallback below -- but that used to mean force-attack simply didn't work in those five
+    // directions for a vi-key player, full stop, even with a friendly NPC standing right there. Now
+    // it's resolved by actually looking: if there's an NPC on the tile that letter would move into,
+    // Shift+that-letter attacks it (matching every other direction); otherwise it's untouched and
+    // still runs its normal shortcut. A friendly NPC there is the rarer case, so this can't make the
+    // shortcut flaky in ordinary play, only extend force-attack to reach the last five directions.
     const lower = key.toLowerCase();
+    const shiftUnsafeMove = e.shiftKey && SHIFT_MOVE_UNSAFE_KEYS.has(lower) && MOVE_KEYS[lower];
+    if (shiftUnsafeMove) {
+      const [udx, udy] = shiftUnsafeMove;
+      const unsafeTarget = entityAt(player.x + udx, player.y + udy);
+      if (unsafeTarget && unsafeTarget !== player && unsafeTarget.kind === 'npc') {
+        e.preventDefault(); movePlayer(udx, udy, true); return;
+      }
+      // else: no NPC there -- fall through to this letter's normal Shift shortcut below.
+    }
     const moveVec = MOVE_KEYS[key] || (e.shiftKey && !SHIFT_MOVE_UNSAFE_KEYS.has(lower) && MOVE_KEYS[lower]);
     if (moveVec) { e.preventDefault(); const [dx,dy] = moveVec; movePlayer(dx,dy,e.shiftKey); return; }
     if (key === '.' || key === '5') { e.preventDefault(); waitTurn(); return; }
@@ -37720,6 +38023,10 @@ function tutTerrainTile(ch) {
   if (ch === 'H') return { glyph: '#', walkable: false, feature: 'secretdoor', discovered: false, color: '#6a6258', bg: '#0e0c0a' };
   if (ch === '<') return dtile2('<', true, '#e0c34a');
   if (ch === '>') return dtile2('>', true, '#5a5248');
+  // Tutorial System: matches the shape real water tiles use (see setMoatIfClear) closely enough
+  // for isWaterTile()/fishing to recognize it -- not walkable, so "Fish here" only ever offers
+  // from an adjacent bank tile, exactly like real open water.
+  if (ch === '~') return { glyph: '~', walkable: false, feature: 'water', color: '#2a4a6a', bg: '#0a141c' };
   return dtile2('.', true);
 }
 function tutApplyMarker(level, marker, x, y, tile) {
@@ -37734,6 +38041,7 @@ function tutApplyMarker(level, marker, x, y, tile) {
       if (marker.atk) m.atk = marker.atk.slice();
       if (marker.armor !== undefined) m.armor = marker.armor;
       if (marker.dormant) { m.aiState = 'dormant'; m.sleeper = true; }
+      if (marker.noAutoWake) m.tutorialNoAutoWake = true;
       if (marker.wet) m.wetTurns = 60; // generous window -- this is a scripted teaching demo, not a timing puzzle; see the Emergence tutorial
       if (marker.dummy) m.isTutorialDummy = true;
       if (marker.tag) m.tutorialTag = marker.tag;
@@ -37800,6 +38108,27 @@ function tutApplyMarker(level, marker, x, y, tile) {
       tile.hiddenTrap = true;
       tile.trapType = marker.trapType || 'spike';
       if (tile.trapType === 'mine') { tile.minePower = marker.minePower || [4, 8]; tile.mineRadius = marker.mineRadius || 1; }
+      break;
+    }
+    case 'farmplot': {
+      // Tutorial System: a pre-grown demo plot, so a farming lesson can teach the Harvest verb (and
+      // show the payoff) immediately, instead of making the player sit through the real 28-46 turn
+      // growth cycle just to see it -- they still till and plant a plot of their own for real in the
+      // same lesson, this just isn't gated behind waiting.
+      tile.feature = 'farmplot';
+      tile.cropId = marker.cropId || 'potato';
+      tile.growStage = marker.growStage != null ? marker.growStage : 2;
+      tile.growTimer = tile.growStage >= 2 ? 0 : (CROPS[tile.cropId] ? CROPS[tile.cropId].stageTurns : 30);
+      tile.glyph = tile.growStage >= 2 ? '\u2663' : (tile.growStage === 1 ? ';' : ':');
+      tile.color = tile.growStage >= 2 ? '#8ac93a' : (tile.growStage === 1 ? '#6a8a3a' : '#5a4028');
+      break;
+    }
+    case 'waystone': {
+      // Tutorial System: matches the real feature flag isAtWaystoneNow()/renderMap check against
+      // (see level.hasWaystone on a real dungeon's exit) so opening Fast Travel from here works
+      // exactly like standing on a genuine waystone.
+      tile.feature = 'waystone';
+      level.hasWaystone = true;
       break;
     }
   }
@@ -38671,7 +39000,7 @@ TUTORIALS.push({
     }),
     setupPlayer: (p) => { p.gold = 40; p.inventory.push(makeItem('dagger', 0, Math.random)); },
     objectives: [
-      { desc: 'Talk to Old Farmer Dell.', check: (s) => !!s.level.npcs.find(n => n.name === 'Old Farmer Dell')._tutTalked },
+      { desc: 'Talk to Old Farmer Dell.', check: (s) => !!(s.level.npcs.find(n => n.name === 'Old Farmer Dell') || {})._tutTalked },
       { desc: 'Talk to Merchant Yara and browse her wares.', check: (s) => !!s.player._tutSawShop },
       { desc: 'Buy something from Yara.', check: (s) => !!s.player._tutDidBuy },
       { desc: 'Sell something to Yara.', check: (s) => !!s.player._tutDidSell },
@@ -39041,10 +39370,245 @@ TUTORIALS.push({
       }),
       setupPlayer: (p) => {},
       objectives: [
-        { desc: 'Talk to Warden Cass about Dimensions.', check: (s) => !!s.level.npcs.find(n => n.name === 'Warden Cass')._tutTalked },
+        { desc: 'Talk to Warden Cass about Dimensions.', check: (s) => !!(s.level.npcs.find(n => n.name === 'Warden Cass') || {})._tutTalked },
         { desc: 'Take a look at the inert gate.', check: (s) => !!s.player._tutSawPortal },
       ],
       completeText: 'That\'s the honest version: Dimensions are a late-game system this tutorial can\'t responsibly simulate in miniature, because each one plays by its own rules on purpose. Beat a unique boss, and you\'ll be shown the rest for real.',
+    },
+  ],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 14. ADVANCED COMBAT: sneak attacks, called shots, and throwing weapons -- three real, coded
+//     mechanics that predate this tutorial curriculum and were never actually taught anywhere.
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'advanced_combat', title: 'Advanced Combat: Sneak Attacks, Called Shots & Throwing',
+  blurb: 'Land a guaranteed opening crit on an unaware enemy, line up a called shot, and fight at range with thrown weapons.',
+  parts: [
+    {
+      title: 'Strike First',
+      blurb: 'Land a Sneak Attack on an unaware enemy, then use Called Shot on one that already knows you\'re there.',
+      introText: [
+        'Your very FIRST hit on a target that hasn\'t noticed you yet always lands as a Sneak Attack -- a guaranteed critical for triple damage, instead of the usual double. Invisibility, Stealth talents/cybernetics, or just quietly walking up on something sleeping all set this up.',
+        'The sentry ahead is fast asleep. Walk up and attack it -- your first hit is guaranteed to be a sneak attack no matter how you approach.',
+        'Once a fight actually starts, press [a] to Take Aim: your very next attack only targets the head (bypasses armor), the legs (cripples movement), or the weapon arm (staggers into confusion) -- at reduced accuracy in trade.',
+      ],
+      build: () => buildTutorialLevel([
+        '#########################',
+        '#.P.....................#',
+        '#.......................#',
+        '#..............1........#',
+        '#.......................#',
+        '#....................2..#',
+        '#########################',
+      ], {
+        P: { type: 'player' },
+        '1': { id: 'spider', type: 'monster', name: 'Sleeping Sentry', hp: 20, atk: [2, 5], armor: 1, dormant: true, noAutoWake: true, tag: 'sneak' },
+        '2': { id: 'giantrat', type: 'monster', name: 'Wary Rat', hp: 18, atk: [1, 3], tag: 'shot' },
+      }),
+      setupPlayer: (p) => {},
+      objectives: [
+        { desc: 'Strike the sleeping sentry while it is still unaware (a Sneak Attack).', check: (s) => !!s.player._tutDidSneakAttack },
+        { desc: 'Press [a] to Take Aim, then land a Called Shot on the wary rat.', check: (s) => !!s.player._tutDidCalledShot },
+      ],
+      completeText: 'Both are one-time-per-swing tools rather than always-on bonuses: Sneak Attack is spent the instant your target notices anything (including your own hit), and Called Shot is consumed by your very next attack whether it lands or misses. Line them up deliberately rather than assuming either is automatic.',
+    },
+    {
+      title: 'Throwing Weapons',
+      blurb: 'Free-aim a thrown weapon at a target from range, then throw a utility item at a spot on the ground.',
+      introText: [
+        'Throwing is a full combat style, not just grenades: purpose-built throwing weapons (daggers, javelins, axes) have a real chance to stick in whatever they hit, and a dedicated 5-tier Throwing technique school plus its own talent line covers accuracy, crit, and getting your blade back.',
+        'Open your inventory [i], select the Throwing Knives, and choose Throw. This opens free-aim targeting -- click any tile you can see and reach, not just the nearest enemy. Press Enter/Space instead to auto-aim at the nearest hostile, or Esc to cancel for free.',
+        'Hit the rat with a thrown knife, then throw the Smoke Bomb at your own feet (or anywhere) to see that throwables don\'t have to be aimed at a creature at all.',
+      ],
+      build: () => buildTutorialLevel([
+        '###################',
+        '#.P...............#',
+        '#.................#',
+        '#..............1..#',
+        '#.................#',
+        '###################',
+      ], {
+        P: { type: 'player' },
+        '1': { id: 'giantrat', type: 'monster', name: 'Target Rat', hp: 14, atk: [1, 3], tag: 'throwtarget' },
+      }),
+      setupPlayer: (p) => {
+        p.inventory.push(makeItem('throwing_knife', 0, Math.random));
+        p.inventory.push(makeItem('smoke_bomb', 0, Math.random));
+      },
+      objectives: [
+        { desc: 'Throw a weapon or item at least once.', check: (s) => !!s.player._tutDidThrow },
+        { desc: 'Defeat the target rat.', check: (s) => tutTagDead(s.level, 'throwtarget') },
+      ],
+      completeText: 'Anything throwable shows a Throw option in its item menu -- weapons for real ranged damage, potions and grenades for their effect wherever they land, even a piece of armor in a pinch. Combine this with the free-aim targeting every offensive spell and technique also uses, and you can genuinely fight a whole encounter without ever closing to melee.',
+    },
+  ],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 15. GEARING UP: digging, salvage, reforge, and sockets & runes -- the deeper end of the gear
+//     game, for a character who's found something worth investing in rather than replacing.
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'gearing_up', title: 'Gearing Up: Digging, Salvage, Reforge & Sockets',
+  blurb: 'Tunnel through a dungeon wall, break old gear down for parts, and push your favorite weapon further with reforging and runes.',
+  parts: [
+    {
+      title: 'Tunneling',
+      blurb: 'Dig straight through a solid wall with a pickaxe to reach a sealed side room.',
+      introText: [
+        'With a Pickaxe (or similarly heavy hammer/maul/warhammer) in hand, press [D] then a direction to start digging through an ordinary dungeon wall -- it takes several turns, drains Stamina, and stops cold if anything dangerous gets close, so only try it somewhere safe.',
+        'You can\'t dig through doors, statues, or a wall right at the edge of the level -- it always has to be an ordinary stretch of rock. The alcove to your east is sealed on purpose; there\'s no door in.',
+        'Equip the Pickaxe, then press [D] and a direction to break through.',
+      ],
+      build: () => buildTutorialLevel([
+        '###########################',
+        '#.P.......................#',
+        '#.........................#',
+        '#.........................######',
+        '#.........................#C....#',
+        '#.........................######',
+        '#.........................#',
+        '###########################',
+      ], {
+        P: { type: 'player' },
+        C: { type: 'container', kind: 'chest', name: 'Sealed Cache', contents: [{ id: 'gem', amount: 2 }, { id: 'potion_greaterheal', amount: 1 }] },
+      }),
+      setupPlayer: (p) => {
+        p.inventory.push(makeItem('pickaxe', 0, Math.random));
+      },
+      objectives: [
+        { desc: 'Equip the Pickaxe.', check: (s) => tutEquipped(s.player, 'hand', 'pickaxe') },
+        { desc: 'Dig through the wall to reach the sealed cache.', check: (s) => !!s.player._tutDidDig },
+      ],
+      completeText: 'A brawnier character digs faster, but even a weak one gets through eventually -- and even a very strong one can\'t one-turn it. Tunneling can get you around a locked vault or a sealed room without the matching key, but it\'s deliberately slow enough that it\'s a genuine alternative, not a shortcut that trivializes locks.',
+    },
+    {
+      title: 'Salvage, Reforge & Sockets',
+      blurb: 'Break an old weapon down for parts, then spend them making your real weapon permanently better.',
+      introText: [
+        'Open a weapon or armor piece from your inventory [i] and you\'ll see [v] Salvage alongside Equip/Drop -- it breaks the item down into its raw materials, plus Arcane Dust if it carries real magic. [J] Salvage all junk does this for everything worse than what you already have equipped, all at once.',
+        'Dust has two uses. [r] Reforge spends it (plus gold) on a piece of gear you\'re keeping, for a small permanent bump to its damage/armor and durability -- capped at 5 reforges per item. Or spend it crafting a rune, then [k] Socket a rune into any piece of gear with an empty socket slot (check its description for "Sockets: x/y").',
+        'You\'re carrying an old, worse sword and your real equipped dagger, plus enough Dust and gold to reforge. Salvage the old sword, then reforge your equipped dagger.',
+      ],
+      build: () => buildTutorialLevel([
+        '#######################',
+        '#.P...................#',
+        '#.....................#',
+        '#######################',
+      ], {
+        P: { type: 'player' },
+      }),
+      setupPlayer: (p) => {
+        p.inventory.push(makeItem('shortsword', 0, Math.random));
+        p.gold = Math.max(p.gold, 200);
+        for (let i = 0; i < 6; i++) p.inventory.push(makeItem('arcane_dust', 0, Math.random));
+      },
+      objectives: [
+        { desc: 'Salvage the old Shortsword for materials.', check: (s) => !!s.player._tutDidSalvage },
+        { desc: 'Reforge your equipped dagger using Arcane Dust and gold.', check: (s) => !!s.player._tutDidReforge },
+      ],
+      completeText: 'Both systems share the same Dust for a reason: reforging a piece of gear all the way to 5/5 has a real chance to punch a brand new socket into it if it has room, tying the two together. Neither replaces finding better gear -- they\'re a long-tail way to keep loving the weapon you already found instead of it going stale the moment something with bigger numbers drops.',
+    },
+  ],
+});
+
+// ---------------------------------------------------------------------------------------------
+// 16. THE WIDER WORLD: farming, fishing, and fast travel -- three real overworld systems that
+//     the tutorial engine couldn't teach until now (see isTillableGround/beginFishing's "Fish
+//     here" gate/plantWaystoneShard/openTravel/confirmTravel, all patched to give a player flagged
+//     player.isTutorial a narrow, explicit exception instead of leaving these three systems
+//     permanently untaught just because tutorial levels are built like dungeons).
+// ---------------------------------------------------------------------------------------------
+TUTORIALS.push({
+  id: 'wider_world', title: 'The Wider World: Farming, Fishing & Fast Travel',
+  blurb: 'Three real living-off-the-land systems, normally only available out in the overworld: work a farm plot, land a catch, and mark your own fast-travel waypoint.',
+  parts: [
+    {
+      title: 'Farming',
+      blurb: 'Harvest a plot that\'s already grown, then till and plant one of your own.',
+      introText: [
+        'Farming is slow and real: with a Hoe equipped, press [g] on open ground to Till the soil, then [g] again to Plant a seed (Potato, Onion, Garlic, or Berries all work) into it. From there it just needs time -- 2 stages, roughly 30-45 turns each depending on the crop, faster in rain and slower in drought or frost out in the real world.',
+        'The garlic plot to your south is already fully grown, so you can see the payoff without waiting through two whole growth cycles first. Walk onto it and press [g] to Harvest.',
+        'Then till a patch of your own open ground and plant one of the Potatoes you\'re carrying. It won\'t finish growing before this lesson ends -- that\'s the honest, non-sped-up version of the system -- but you\'ll have started a real plot exactly like any other, ready whenever you next pass through.',
+      ],
+      build: () => buildTutorialLevel([
+        '#######################',
+        '#.P...................#',
+        '#.....................#',
+        '#.....................#',
+        '#..........F..........#',
+        '#.....................#',
+        '#######################',
+      ], {
+        P: { type: 'player' },
+        F: { type: 'farmplot', cropId: 'garlic', growStage: 2 },
+      }),
+      setupPlayer: (p) => {
+        p.equipment.hand = makeItem('hoe', 0, Math.random);
+        for (let i = 0; i < 3; i++) p.inventory.push(makeItem('potato', 0, Math.random));
+      },
+      objectives: [
+        { desc: 'Harvest the fully-grown garlic plot.', check: (s) => !!s.player._tutDidHarvest },
+        { desc: 'Till a patch of open ground with the Hoe.', check: (s) => !!s.player._tutDidTill },
+        { desc: 'Plant a Potato in the soil you tilled.', check: (s) => !!s.player._tutDidPlant },
+      ],
+      completeText: 'A dedicated Farmer profession (see Relationships & Home) speeds growth and boosts yield further, and a home plot you own outright gets its own bonus on top of that. None of it is required -- anyone can till, plant, and harvest with nothing but a Hoe and patience.',
+    },
+    {
+      title: 'Fishing',
+      blurb: 'Cast a line from the bank and reel something in.',
+      introText: [
+        'Stand on dry ground directly next to open water (not on top of it -- that\'s swimming) and the interact-here menu [g] offers "Fish here". It works bare-handed, but a Fishing Rod (equipped, like a weapon) makes every cast noticeably more likely to land something.',
+        'Each cast takes a few turns and can be interrupted by nearby danger, same as Resting. If nothing bites on the first try, there\'s nothing stopping you from casting again right away.',
+        'Walk down to the water\'s edge and fish until you land a catch.',
+      ],
+      build: () => buildTutorialLevel([
+        '#######################',
+        '#.....................#',
+        '#.P...................#',
+        '#.....................#',
+        '#~~~~~~~~~~~~~~~~~~~~~#',
+        '#######################',
+      ], {
+        P: { type: 'player' },
+      }),
+      setupPlayer: (p) => {
+        p.equipment.hand = makeItem('fishing_rod', 0, Math.random);
+      },
+      objectives: [
+        { desc: 'Fish at the water\'s edge until you land a catch.', check: (s) => !!s.player._tutDidFish },
+      ],
+      completeText: 'A raw catch is food -- eat it as-is or cook it into something better at a campfire or kitchen (see Crafting & Cooking) -- and a rare cast can pull up a gem instead of a fish entirely. A dedicated Fisherman profession improves both odds further, same pattern as every other gathering skill.',
+    },
+    {
+      title: 'Fast Travel',
+      blurb: 'Plant your own waypoint, then use a Recall Stone to warp straight back to it from anywhere.',
+      introText: [
+        'A Waystone Shard plants a permanent, personal fast-travel waypoint wherever you\'re standing -- press [m], or use it from your inventory. Once it exists, it shows up in the Fast Travel menu [V] alongside any settlement or dungeon you\'ve already discovered.',
+        'Opening that menu for free requires actually being at a waystone (in a settlement, on one of your own waypoints, or at a dungeon\'s exit-waystone). From anywhere else, a Recall Stone, the Teleport spell, a Warp Relay Implant, or the Ninth Door mutation can open it too, at a real cost -- the stone or the scroll is consumed, a spell costs mana.',
+        'Plant a waypoint right here, then walk all the way down the corridor to the chest. Once you\'ve opened it, use your Recall Stone -- it\'ll open the same Fast Travel menu -- and pick the waypoint you planted to warp straight back.',
+      ],
+      build: () => buildTutorialLevel([
+        '#############################################',
+        '#.P.........................................#',
+        '#..........................................C#',
+        '#############################################',
+      ], {
+        P: { type: 'player' },
+        C: { type: 'container', kind: 'chest', name: 'Traveler\'s Cache', contents: [{ id: 'gold', amount: 40 }] },
+      }),
+      setupPlayer: (p) => {
+        p.inventory.push(makeItem('stone_waymark', 0, Math.random));
+        p.inventory.push(makeItem('stone_recall', 0, Math.random));
+      },
+      objectives: [
+        { desc: 'Plant a Waystone Shard to mark this spot.', check: (s) => !!s.player._tutDidPlantWaystone },
+        { desc: 'Walk to the far end and open the Traveler\'s Cache.', check: (s) => { const c = s.level.containers[0]; return !!(c && c.container.opened); } },
+        { desc: 'Use the Recall Stone and travel back to your waypoint.', check: (s) => !!s.player._tutDidFastTravel },
+      ],
+      completeText: 'This is the whole loop real explorers live by: plant a waypoint at camp, at a dungeon mouth, or anywhere worth returning to, then range as far as you like -- getting back is always just a Recall Stone (or a mana bar) away. A settlement you\'ve visited and a dungeon you\'ve found both join the same menu automatically, no shard required.',
     },
   ],
 });
