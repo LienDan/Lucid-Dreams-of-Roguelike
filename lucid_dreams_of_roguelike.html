@@ -540,7 +540,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.49.2-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.49.3-alpha</div>
     </div>
   </div>
 
@@ -9994,18 +9994,22 @@ for (const _mid in MONSTER_BASES) {
       base.fixedStats;
   }
   // A short explicit-override tail for cases the pattern/faction rules above get wrong -- either
-  // a unique superboss id that doesn't tokenize cleanly (seraphiel), or flavor that lives only in
+  // a unique superboss id that doesn't tokenize cleanly, or flavor that lives only in
   // a name/lore string the classifier never reads (a "Stone Guardian" reads as construct-flavored
   // to a person the instant they see it, but "guardian" alone is too generic a word to safely
   // pattern-match against every current and future monster). Same "explicit beats pattern"
   // precedent as an authored dmgType beating WEAPON_DAMAGE_TYPE_PATTERNS elsewhere in this file.
-  if (_mid === 'seraphiel') base.diseaseImmune = true; // a literal seraph/angel superboss
   if (_mid === 'stoneguardian') base.bloodless = true; // a living-statue guardian, same family as claygolem/stonegolem
   if (_mid === 'vampire') base.diseaseImmune = true; // undead -- can still bleed (vampire blood matters thematically), just doesn't sicken
-  if (_mid === 'black_ice') { base.noBodyParts = true; base.bloodless = true; base.diseaseImmune = true; } // cyberpunk term for a digital security system, not a physical body -- same family as the other virus-faction glitch entities
-  if (_mid === 'admin7') { base.bloodless = true; base.diseaseImmune = true; } // "Chrome-plated" per its own lore text -- a robotic warden despite predating the faction tag convention
-  if (_mid === 'unburied_queen') { base.bloodless = true; base.diseaseImmune = true; } // an undead queen ruling the restless dead, per its own lore text
-  if (_mid === 'rootmind') { base.bloodless = true; base.diseaseImmune = true; } // "everything...that used to be separate plants" per its own lore text -- sap, not blood
+  // seraphiel / black_ice / admin7 / unburied_queen / rootmind moved out of this tail (found this
+  // session): every one of those ids also sets `scriptedAI`, and this entire loop bails out via
+  // `if (base.scriptedAI || base.fixedStats) continue;` right at its top (existing code, there to
+  // protect hand-authored boss templates from the generic racial-trait/caster/thrower stanzas
+  // further down this same loop) -- so those five lines were silently dead code, and those five
+  // bosses have been fighting as fully fleshed-out, diseasable, bleeding creatures this whole time
+  // despite each one's own comment explaining why it shouldn't. Re-homed below, in a second pass
+  // over MONSTER_BASES that deliberately has no scriptedAI/fixedStats skip, alongside the
+  // dmgType/inflictsWounds classification (found the same way, same session, same root cause).
 
   // -- racial traits: humanoid templates that map cleanly onto an existing SPECIES entry get
   // that species' real racial traits (poison/fear resistance, armor, crit, etc), the same way
@@ -10051,6 +10055,158 @@ for (const _mid in MONSTER_BASES) {
     base.thrower = true;
     base.abilities = base.faction === 'orc' ? ['throw_bomb'] : ['throw_frost'];
   }
+}
+// ---- BLEED-BALANCE FOLLOW-UP + WOUND/BLEED PREVALENCE PASS (found via automated playtest, this
+// session; re-homed into its own pass later the same session -- see below). The v0.43.0 bleed
+// pass built a real per-damage-type chance table (BLEED_CHANCE_BY_TYPE: slashing 55%/piercing
+// 22%/blunt 0%) specifically so "not every attack should inflict bleed" -- but weaponDamageType()
+// only classifies PLAYER weapons by name (sword/axe/dagger/mace/...); a monster attacker has no
+// `weapon` object at all (see doAttack: `weapon = isPlayer ? player.equipment.hand : null`), so
+// it falls straight through to that function's catch-all `return 'slashing'`. Verified directly
+// against every entry in this table: all ~280 monsters -- rabbits, crabs, zombies, ghosts, golems,
+// everything -- were landing on 'slashing', the single HIGHEST bleed-chance tier, unconditionally.
+// Fixed with a keyword pass over each monster's own name, same style as isBloodlessMonster's loop
+// above. Then, same session: every monster with a body was still rolling the full
+// locational-wound-and-bleed system on every hit regardless of dmgType, just some at 0% bleed
+// chance instead of 55% -- backwards from what actually reads well. Most creatures in a dungeon
+// should just be a straightforward source of HP damage; only a smaller, thematically-earned subset
+// (apex predators, armed raiders, crushing brutes, anything boss-tier) should be able to cripple a
+// limb or open a bleeding wound at all. `inflictsWounds` gates the ENTIRE wound+bleed block in
+// doAttack for monster attackers only -- the player's own capability is untouched, still governed
+// by their equipped weapon's dmgType as always.
+//
+// THIS is its own separate, unguarded loop -- not folded into the big classification loop above --
+// because that loop opens with `if (base.scriptedAI || base.fixedStats) continue;` (there to
+// protect hand-authored boss templates from the racial-trait/caster/thrower stanzas further down
+// it), which was silently skipping EVERY named story boss in the game: Umbroth, the Oathbroken,
+// the Hollow King, Vex-9, Windrender, the archdemon, Seraphiel, GOD, all 23 of them use
+// `scriptedAI` and every one came out of that loop with inflictsWounds still undefined -- the
+// exact opposite of "every boss should be a real threat" this pass exists to guarantee. Caught by
+// testing dmgType/inflictsWounds directly against every scriptedAI monster before this shipped
+// (same reason seraphiel/black_ice/admin7/unburied_queen/rootmind's bloodless/diseaseImmune
+// overrides got moved down here too, out of that loop's dead zone -- see the note left in their
+// old spot). This pass intentionally has NO scriptedAI/fixedStats skip, so it reaches every
+// monster in the game exactly once, scripted bosses included.
+for (const _mid in MONSTER_BASES) {
+  const base = MONSTER_BASES[_mid];
+  const name = (base.name || '').toLowerCase();
+  const hay = (name + ' ' + _mid.toLowerCase()).replace(/_/g, ' ');
+
+  if (_mid === 'seraphiel') base.diseaseImmune = true; // a literal seraph/angel superboss
+  if (_mid === 'black_ice') { base.noBodyParts = true; base.bloodless = true; base.diseaseImmune = true; } // cyberpunk term for a digital security system, not a physical body -- same family as the other virus-faction glitch entities
+  if (_mid === 'admin7') { base.bloodless = true; base.diseaseImmune = true; } // "Chrome-plated" per its own lore text -- a robotic warden despite predating the faction tag convention
+  if (_mid === 'unburied_queen') { base.bloodless = true; base.diseaseImmune = true; } // an undead queen ruling the restless dead, per its own lore text
+  if (_mid === 'rootmind') { base.bloodless = true; base.diseaseImmune = true; } // "everything...that used to be separate plants" per its own lore text -- sap, not blood
+
+  // ---- Same gap, wider than just the five lines above: the ORIGINAL classification loop's
+  // aquatic/flying/noBodyParts/bloodless/diseaseImmune auto-classification (the keyword-pattern
+  // logic right above its own explicit-override tail) is ALSO gated by that loop's
+  // scriptedAI/fixedStats skip -- it's the same loop, just earlier in it. That's a wider version of
+  // the exact bug this whole second pass exists to fix: 18 of the 24 scripted bosses currently have
+  // EVERY ONE of these five fields completely unset (verified directly), not just inflictsWounds --
+  // Yog'tha "the Unblinking Eye" isn't noBodyParts despite reading as a floating eye, The Master Cog
+  // and Choir of Rust aren't bloodless despite being machines, etc. Re-running the identical logic
+  // here (unmodified, same patterns, same `=== undefined` guards) is safe for every OTHER monster
+  // too, not just scripted ones -- non-scripted monsters already have these fields set by the
+  // original loop, so the undefined-guards below are a no-op for all ~255 of them and this only
+  // ever actually changes anything for the scriptedAI/fixedStats monsters that needed it.
+  if (base.aquatic === undefined && (base.faction === 'aquatic' || base.faction === 'drowned' ||
+      /shark|fish|eel|kraken|crab|leviathan|siren|merfolk|serpent/.test(name))) base.aquatic = true;
+  if (base.aquatic && base.waterOnly === undefined &&
+      /shark|fish|eel|kraken|leviathan|serpent|siren|merfolk|jellyfish|squid|manta|stingray|whale/.test(name)) base.waterOnly = true;
+  if (base.flying === undefined && /bat|hawk|vulture|wyvern|drake|harpy|griffin|phoenix|thunderbird|wisp|specter|spectre|ghost|wraith|banshee|imp|gargoyle|angel|seraph|gull/.test(name)) base.flying = true;
+  if (base.flying === undefined && base.faction === 'dragon' && !/wyrm|worm/.test(name)) base.flying = true;
+  if (base.noBodyParts === undefined) {
+    base.noBodyParts = /\b(slime|ooze|jelly|blob|swarm|elemental|gas|cloud|mist|vapor|process|exception|angle|signal|wraith|spirit|ghost|phantom|specter|spectre|spectral|shade|banshee)\b/.test(hay) ||
+      base.faction === 'virus' || base.faction === 'ooze';
+  }
+  if (base.bloodless === undefined) {
+    base.bloodless = base.noBodyParts ||
+      /\b(golem|construct|armor|robot|drone|android|turret|sentry|sentinel|automaton|skeleton|bone|lich|mummy|zombie|revenant|cog)\b/.test(hay) ||
+      ['undead', 'construct', 'cyber', 'drowned'].includes(base.faction);
+  }
+  if (base.diseaseImmune === undefined) {
+    base.diseaseImmune = base.bloodless ||
+      /\b(demon|archdemon|angel|seraph|deity|god)\b/.test(hay) ||
+      ['undead', 'construct', 'cyber', 'celestial', 'plant', 'eldritch', 'cosmic', 'nonEuclid', 'dream', 'demonic', 'drowned'].includes(base.faction) ||
+      base.fixedStats;
+  }
+
+  //   - blunt (0% bleed, but still fully able to wound/cripple a limb -- see bluntMult): anything
+  //     with no cutting edge at all -- mechanical/constructed bodies, incorporeal touch-attackers
+  //     (a ghost's chill shouldn't open a laceration), elemental force, crushing pincers/shells,
+  //     and blunt-force brutes that grapple/smash rather than claw.
+  //   - piercing (22%): fangs, stingers, beaks, bites -- a real but lesser bleed source, matching
+  //     BLEED_CHANCE_BY_TYPE's own "a dagger is real but lesser" precedent for the player side.
+  //   - slashing (55%, the pattern default below): left for actual claws/talons/blades -- predators
+  //     built around raking/tearing, and anything explicitly bladed (scythe-limbed, edged plating).
+  if (base.dmgType === undefined) {
+    const isBluntBody =
+      /\b(golem|construct|robot|automaton|android|drone|turret|sentry|sentinel|mech|cog|machine)\b/.test(hay) ||
+      /\b(ooze|slime|jelly|blob|elemental|boulder|stone|earth)\b/.test(hay) ||
+      /\b(ghost|wraith|spirit|specter|spectre|phantom|banshee|shade|poltergeist)\b/.test(hay) ||
+      /\b(ogre|troll|yeti|mummy|zombie|crab|turtle|tortoise|armadillo)\b/.test(hay) ||
+      // NOT a bare \bgiant\b word match: "Giant Spider"/"Giant Rat"/"Giant Leech" are
+      // size-descriptor names, not the brute Giant archetype -- that archetype is its own
+      // 'giantkin' faction (ogre_brute, hill_giant, frost_giant, ...), which is what this
+      // actually needs to key off.
+      base.faction === 'giantkin' ||
+      ['undead', 'construct', 'cyber'].includes(base.faction);
+    const isPiercingBody =
+      /\b(snake|serpent|viper|adder|spider|scorpion|wasp|hornet|bee|beetle|mosquito|tick|leech)\b/.test(hay) ||
+      /\b(wolf|jackal|hyena|coyote|fox|bat|shark|eel|piranha|fish)\b/.test(hay) ||
+      /\b(vulture|gull|hawk|raven|crow|owl|beak)\b/.test(hay) ||
+      /\b(imp|ghoul|revenant)\b/.test(hay) ||
+      // insectoid/invertebrate mandibles and boring mouthparts puncture rather than slice --
+      // caught separately from the spider/scorpion/etc cluster above because "Giant Ant"/"Giant
+      // Worm" read as size-descriptor names the same way "Giant Spider" did (see the giantkin
+      // false-positive note above), not compound words a single \b pattern catches.
+      /\b(ant|centipede|worm|mandible)\b/.test(hay);
+    // Non-threat fauna (rabbit/deer/gull-type wildlife, tagged behavior:'flee' precisely because
+    // they're not real predators) get an extra explicit push toward blunt regardless of what
+    // keyword they happen to match -- a panicked kick or peck from something that runs from you
+    // shouldn't be a real bleed source. Distinct from (and in addition to) the existing
+    // dmgFraction/bleedThreshold scaling in doAttack, which already makes any small hit (from a
+    // weak OR strong source) less likely to clear the bleed threshold in the first place.
+    if (base.behavior === 'flee') base.dmgType = 'blunt';
+    else if (isBluntBody) base.dmgType = 'blunt';
+    else if (isPiercingBody) base.dmgType = 'piercing';
+    // else: falls through to weaponDamageType()'s own default of 'slashing' for real claw/talon/
+    // blade predators (bear, lion, dragon, raptor, etc) -- left unset here on purpose so those
+    // still resolve through the same single source of truth as everything else.
+  }
+  // Explicit-override tail -- same "explicit beats pattern" precedent as the noBodyParts/bloodless
+  // overrides above, for the handful that read wrong from name/keyword alone.
+  if (_mid === 'skeleton') base.dmgType = 'blunt'; // no claws, no edge -- bony fists/bludgeoning
+  if (_mid === 'vampire') base.dmgType = 'piercing'; // fangs -- would otherwise fall into the
+  // blunt 'undead' faction catch-all above, but a vampire's bite is exactly the kind of real,
+  // lesser bleed source that category exists for (can still bleed, just doesn't sicken).
+  if (_mid === 'gelatinous_cube' || _mid === 'gibbering_mouther') base.dmgType = 'blunt'; // amorphous
+  // bodies with no cutting edge -- "Gelatinous Cube"/"Gibbering Mouther" don't contain any of the
+  // ooze/slime/jelly/blob keywords above, so they'd otherwise fall through to the slashing default.
+  // bear / savanna_lion / taiga_lynx deliberately left unmatched by either bucket above -- real
+  // claws, so they fall through to weaponDamageType()'s slashing default, same as any other
+  // claw/talon predator.
+
+  if (base.inflictsWounds === undefined) {
+    const isTruePredator =
+      /\b(bear|wolf|jackal|hyena|coyote|lion|lynx|cougar|panther|tiger|leopard|cheetah)\b/.test(hay) ||
+      /\b(boar|crocodile|alligator|shark|raptor|owlbear)\b/.test(hay) ||
+      /\b(spider|scorpion|snake|serpent|viper|adder)\b/.test(hay) ||
+      /\b(dragon|wyvern|drake|wyrmling|griffin|manticore|hippogriff)\b/.test(hay);
+    const isArmedCombatant =
+      /\b(orc|goblin|hobgoblin|bugbear|kobold)\b/.test(hay) ||
+      /\b(bandit|raider|marauder|mercenary|thug|pirate|poacher)\b/.test(hay) ||
+      /\b(knight|soldier|guard|cultist|assassin|warlord|warchief|berserker)\b/.test(hay);
+    const isCrushingBrute =
+      /\b(ogre|troll|golem|minotaur|gorilla|ape)\b/.test(hay) || base.faction === 'giantkin';
+    if (isTruePredator || isArmedCombatant || isCrushingBrute) base.inflictsWounds = true;
+  }
+  // Bosses and minibosses always get real physical stakes regardless of species -- a climactic
+  // fight should be able to actually hurt you, not just chip HP. Overrides the classification
+  // above (a boss-tier ooze or spirit still counts). This is the specific line that scriptedAI
+  // bosses were never reaching before this pass got its own loop.
+  if (base.boss || base.miniboss) base.inflictsWounds = true;
 }
 // -- personality: predator/prey inside the 'wild' alignment (wolves hunt rabbits even though
 // wild|wild defaults to neutral -- see isHostileTo in Part B), plus who gets scared and who
@@ -10100,7 +10256,7 @@ let uidCounter = 1;
 // fields that pass straight from a MONSTER_BASES template onto the live instance, unscaled,
 // so that special mechanics (splitting, summoning, breath weapons, etc.) work at runtime.
 const MONSTER_EXTRA_FIELDS = [
-  'faction', 'splitInto', 'splitCount', 'multiTile', 'breathWeapon', 'gasRadius', 'gasDamage',
+  'faction', 'dmgType', 'inflictsWounds', 'splitInto', 'splitCount', 'multiTile', 'breathWeapon', 'gasRadius', 'gasDamage',
   'summonId', 'summonMax', 'ambush', 'ambushRange', 'burrower', 'phaser', 'berserkHpPct',
   'multiattack', 'range', 'preferredRange', 'miniboss', 'flying', 'aquatic', 'waterOnly', 'armorPierce',
   'causesFear', 'causesConfuse', 'bossPower', 'corrosive', 'scriptedAI', 'engageLine', 'deathLine', 'lore',
@@ -26205,7 +26361,13 @@ function doAttack(att, def, skipDuplicate) {
   // number nobody interacts with. Everything else here is fully shared code.
   const defHasBodyParts = !def.noBodyParts;
   const defCanBleed = !def.bloodless;
-  if (defHasBodyParts && def.hp > 0 && dmg > 0) {
+  // Gate on the ATTACKER's own capability to cause this kind of harm at all -- see the
+  // inflictsWounds classification pass near isBloodlessMonster's loop. Player attacks are always
+  // capable (governed by weapon dmgType instead, same as ever); monster attacks default to NOT
+  // capable unless that monster was specifically classified as a real predator/combatant/brute
+  // or is boss-tier.
+  const attackerInflictsTrauma = isPlayer || !!att.inflictsWounds;
+  if (attackerInflictsTrauma && defHasBodyParts && def.hp > 0 && dmg > 0) {
     // Player attacks always know their exact weapon; monster/NPC attacks don't carry an item, so
     // weaponDamageType falls through to its generic slashing-attack guess for anything that
     // isn't explicitly tagged (see the pattern table near getPartArmorValue) -- claws and fangs
@@ -26283,7 +26445,7 @@ function doAttack(att, def, skipDuplicate) {
       // in processEntityStatus's body-part tick, which is what actually punishes ignoring it
       // rather than this moment of impact. Player-only, per the comment at the top of this block.
     }
-  } else if (defCanBleed && crit && def.hp > 0 && dmg > 0 && (BLEED_CHANCE_BY_TYPE[weaponDamageType(isPlayer ? weapon : att)] ?? 0.3) > 0 && Math.random() < 0.4 * (1 - effectiveBleedResistChance(def))) {
+  } else if (attackerInflictsTrauma && defCanBleed && crit && def.hp > 0 && dmg > 0 && (BLEED_CHANCE_BY_TYPE[weaponDamageType(isPlayer ? weapon : att)] ?? 0.3) > 0 && Math.random() < 0.4 * (1 - effectiveBleedResistChance(def))) {
     // Symmetric fallback for anything with no body-part model at all (oozes, swarms, elementals,
     // rogue code) -- a crit still opens a real bleeding wound where the creature has anything
     // resembling blood to lose, which is what makes Bloodfrenzy and Hemorrhage's own flavor text
