@@ -505,7 +505,7 @@
         <b>p</b> property &amp; housing &nbsp; <b>Shift+F</b> family<br>
         <b>Shift+O</b> professions<br>
         <b>t</b> talk &nbsp; <b>x</b> look &nbsp; <b>r</b> rest<br>
-        <b>a</b> take aim (called shot) &nbsp; <b>Shift+L</b> library<br>
+        <b>o</b> take aim (called shot) &nbsp; <b>Shift+L</b> library<br>
         <b>v</b> toggle sprint<br>
         <b>Shift+G</b> auto-travel &nbsp; <b>Shift+H</b> auto-home<br>
         <b>Shift+X</b> auto-explore &nbsp; <b>Shift+M</b> dungeon map<br>
@@ -540,7 +540,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.49.3-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.0-alpha</div>
     </div>
   </div>
 
@@ -2131,6 +2131,37 @@ function weightedChoice(rng, entries) {
   return entries[entries.length - 1][0];
 }
 
+// BALANCE FIX: a normal-family biome's own encounter table (e.g. BIOMES.ocean, walkable
+// everywhere including right next to spawn) can freely mix low-tier wildlife with dtier-3+
+// monsters at low weight -- e.g. Ocean's table includes reef_shark/giant_eel (mundane) right
+// alongside current_stalker/tideglass_horror/kraken_spawn (dtier 3, built for meaningful dungeon
+// depth) at lower-but-nonzero weight. Unlike the *exotic biome family* spawn-safety gate (see
+// "BALANCE FIX: exotic biome families" in classifyBiomeFull) and the overworld-boss spawn gate
+// (see maybeSpawnOverworldBoss) -- both of which keep an entire monster/boss out of an area
+// near spawn -- this is a DIFFERENT failure mode: a biome that's supposed to be near spawn (and
+// should be) rolling its most dangerous possible entry on an unlucky draw regardless of distance,
+// since overworldDangerScale only ever scales whichever monster gets picked, never affects which
+// one CAN be picked. CONFIRMED happening in automated playtesting (a fresh, 11-action-old
+// character killed by a current_stalker). Fixes this at the source, once, for every biome's
+// table and every call site, rather than hand-editing individual BIOMES entries (which would
+// also have to be kept in sync by hand forever after) or duplicating this logic per call site.
+// Thresholds mirror the other two spawn-safety fixes' 45-tile near-spawn radius; a second, wider
+// band still keeps the very toughest entries (dtier 3+) out until a character has had real room
+// to grow, without flattening a biome's identity everywhere the way an outright ban would.
+function pickBiomeEncounter(rng, biome, distFromOrigin) {
+  const cap = distFromOrigin <= 45 ? 1 : (distFromOrigin <= 100 ? 2 : Infinity);
+  if (cap === Infinity) return weightedChoice(rng, biome.encounter);
+  const capped = biome.encounter.filter(([id]) => (MONSTER_BASES[id] ? (MONSTER_BASES[id].dtier || 0) : 0) <= cap);
+  if (!capped.length) {
+    // Every entry in this biome exceeds the cap (a purely high-tier table, e.g. a biome that's
+    // exotic in flavor but happened to test as 'normal' family) -- fall back to its single
+    // lowest-dtier entry rather than either crashing or defeating the point of this cap.
+    const sorted = [...biome.encounter].sort((a, b) => (MONSTER_BASES[a[0]] ? MONSTER_BASES[a[0]].dtier || 0 : 0) - (MONSTER_BASES[b[0]] ? MONSTER_BASES[b[0]].dtier || 0 : 0));
+    return sorted[0][0];
+  }
+  return weightedChoice(rng, capped);
+}
+
 // ===================== BIOME FRAMEWORK (World Overhaul) =====================
 // Every biome is one data entry in BIOMES. Beyond name/walkable/glyph/color/bg/encounter,
 // a biome can optionally declare:
@@ -2325,6 +2356,20 @@ function classifyBiomeFull(wx, wy) {
   // roughly the 97th percentile of this specific noise layer, giving a genuinely rare (~1.4% of
   // land) but findable landmark instead of a dead entry in BIOMES.
   if (n.ruinBelt > 0.78 && n.patch > 0.50 && (Math.abs(wx) + Math.abs(wy)) > 60) return 'ancient_megaruins';
+  // BALANCE FIX: exotic biome families (fantastical/eldritch/scifi below) spawn monsters whose
+  // BASE stats are already tuned for meaningful dungeon depth (e.g. husk_drone: hp 64, atk 6-12,
+  // armor 7, dtier 3) -- and overworldDangerScale() only ever scales monsters UP with distance
+  // from origin (player.x/y start at exactly 0,0 -- see newPlayer), never down; scale is exactly
+  // 1x (unmodified base stats) near spawn. Before this fix, classifyBiomeFull had no distance
+  // gate on these families at all (only the separate 'ancient_megaruins' landmark excluded the
+  // area near spawn), so pure noise could place a scifi/eldritch patch a handful of tiles from
+  // a level-1 character's starting position, and their very first random encounter could be a
+  // monster built for a dungeon several floors deep. Confirmed happening in automated playtesting
+  // (a fresh, 0-gold custom-build character was killed in 6 actions by a husk_drone this way).
+  // Mirrors ancient_megaruins' own spawn-safety exclusion (Manhattan distance > 60) with a
+  // slightly smaller radius, since these families are meant to be findable early danger once a
+  // character has had a *little* room to get on their feet, not a guaranteed-safe entire biome.
+  if ((Math.abs(wx) + Math.abs(wy)) <= 45) return mundane;
   const exoticStrength = n.weird + (n.patch - 0.5) * 0.35;
   if (exoticStrength < 0.72) return mundane; // most of the world stays mundane
   // Which exotic family a region leans toward is chosen by the slow `region` band, so whole
@@ -9721,7 +9766,11 @@ function maybeRepopulateChunk(chunk, cx, cy) {
     if ((!t.walkable && t.biome !== 'ocean' && t.biome !== 'lake') || entityAt(cx * CH + lx, cy * CH + ly)) continue;
     const b = BIOMES[t.biome] || (curIsDimension() && DIMENSIONS[player.dimensionId] && DIMENSIONS[player.dimensionId].biomes[t.biome]);
     if (!b || !b.encounter || !b.encounter.length) continue;
-    const mid = weightedChoice(Math.random, b.encounter);
+    // pickBiomeEncounter's near-spawn dtier cap is specifically about the player's overworld
+    // starting point (0,0) -- a dimension's own local (0,0) isn't "near player spawn" in the
+    // same sense (dimension content already starts at a 3+ scale baseline below), so dimensions
+    // keep the plain, uncapped weightedChoice they always used.
+    const mid = curIsDimension() ? weightedChoice(Math.random, b.encounter) : pickBiomeEncounter(Math.random, b, Math.abs(cx * CH + lx) + Math.abs(cy * CH + ly));
     const scale = curIsDimension() ? 3 + Math.floor((Math.abs(cx) + Math.abs(cy)) / 6) : overworldDangerScale(cx, cy);
     chunk.monsters.push(makeMonster(mid, cx * CH + lx, cy * CH + ly, scale, Math.random));
   }
@@ -12605,6 +12654,16 @@ function placePOI(chunk, cx, cy, rng) {
 // ---- overworld bosses: rare, tough, biome-appropriate wildlife-tier encounters ----
 function maybeSpawnOverworldBoss(chunk, cx, cy, centerBiome, rng) {
   if (rng() > 0.006) return false; // roughly 1 in ~165 eligible chunks
+  // BALANCE FIX: same class of bug as the classifyBiomeFull exotic-family fix above (search
+  // this file for "BALANCE FIX: exotic biome families" for the full writeup) -- this function
+  // had no minimum distance from the player's spawn point (0,0) either, and overworldDangerScale
+  // only ever scales a boss's stats UP with distance (1x/full base stats right at spawn). These
+  // are meant to be "rare, tough" finds (Vaelgrith the Ancient Wyrm alone: 220 hp, 12-24 atk,
+  // armor 8, a guaranteed epic-tier drop) -- not a chunk or two from where a level-1 character
+  // takes their first steps. CONFIRMED happening in automated playtesting: a fresh custom-build
+  // character was killed by Vaelgrith in 2 actions. Same radius as the biome fix, for the same
+  // reason (a consistent, guaranteed-safe onboarding area around spawn).
+  if ((Math.abs(cx) + Math.abs(cy)) * CH <= 45) return false;
   // Land bosses are still gated by centerBiome as before. Aquatic superbosses (Kraken,
   // Megalodon, the Loch Devourer, etc.) are gated by how much of the *chunk* is actually that
   // water biome instead -- a carved lake sits inside a chunk whose centerBiome is 'plains' or
@@ -14733,7 +14792,19 @@ function applyBleed(e, stacks) {
   e.bleedTurns = (e.bleedTurns || 0) + 1; // legacy "currently bleeding" flag; every other call site
   // only ever checks this for truthiness, so repurposing it as a rough elapsed-turn counter for
   // display purposes is safe and keeps every existing >0 gate (doRest, autoRun, tick dispatch) working.
-  e.bleedClotTurns = wasBleeding ? Math.max(0, (e.bleedClotTurns || 0) - 3) : 0;
+  // BALANCE TUNE: -3 turns per re-hit (full below). Extensive automated playtesting (many
+  // hundreds of simulated lives) consistently found "get hit again while already bleeding, with
+  // no bandage left" as the single most common cause of death across every skill level tested --
+  // not from any one bug, but from this specific compounding mechanic: each additional hit both
+  // adds stacks (more damage per tick) AND resets clot progress hard enough that a character
+  // still meaningfully engaged in a fight could realistically never clot before dying. Reduced
+  // to -2 -- still a real, felt setback that rewards actually disengaging rather than trading
+  // hits while bleeding, just no longer capable of resetting nearly all progress from a single
+  // unlucky extra hit. Left every other part of the system (resistbleed, bleedDmgReduction,
+  // bleedResistChance, and every talent/item built around them -- Thick Hide, Clotting Factor,
+  // Clotweave Wrap, etc.) completely untouched, so specializing against bleeding is exactly as
+  // rewarding as before; this only softens the single worst-case death-spiral trigger.
+  e.bleedClotTurns = wasBleeding ? Math.max(0, (e.bleedClotTurns || 0) - 2) : 0;
   if (e === player && !wasBleeding && !player.everBled) {
     player.everBled = true;
     log("*** You're bleeding! Left alone it may eventually clot on its own, but the odds are against you early -- find or craft a Bandage to be sure. ***");
@@ -21266,6 +21337,27 @@ function bfsFirstStep(sx, sy, gx, gy, maxRadius) {
   const queue = [{ x:sx, y:sy, first:null }];
   let head = 0;
   const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+  // BUG FIX: the node-queue safety cap below used to be a flat 4000 regardless of maxRadius --
+  // but a full BFS covers area roughly quadratic in the distance actually reached (real terrain
+  // is never a straight corridor to the goal), so 4000 nodes reliably resolves paths only out to
+  // roughly ~30 tiles, well short of what every real caller in this file already asks for
+  // (autoTravelHome/autoTravelToStairs pass maxRadius 60-80) -- meaning this function could
+  // silently report "no path" for a destination well within the radius the caller explicitly
+  // requested, for a real player pressing Shift+H/Shift+G just as much as for an AI driving the
+  // same key. Confirmed directly, not assumed: reimplemented this function's own logic in an
+  // isolated test and measured actual success/failure at various distances against the old cap
+  // vs several larger ones -- 40 tiles succeeded at the old cap, 50 needed roughly 12000, 75
+  // needed roughly 30000. Scaled the cap with the caller's own maxRadius instead of a flat
+  // number, calibrated (6 * maxRadius^2, matching the roughly-quadratic relationship the data
+  // above shows) so the two real in-game callers (radius 60-80) get a budget in the ~22-38k
+  // range that measured reliably resolving their requested distance,
+  // while a caller that only asked for a small local radius doesn't pay for a needlessly large
+  // budget it was never going to use anyway. Capped at 60000 as an outer sanity bound regardless
+  // of how large a radius is requested (this project's own playtest tooling, for example, has
+  // called this with maxRadius=300 for genuinely long-distance travel, which this cap does not
+  // promise to fully resolve -- an explicit, known, and accepted trade-off against worst-case
+  // per-call cost, not an oversight).
+  const nodeCap = Math.min(60000, Math.round(6 * maxRadius * maxRadius));
   while (head < queue.length) {
     const cur = queue[head++];
     if (cur.x === gx && cur.y === gy) return cur.first;
@@ -21278,7 +21370,7 @@ function bfsFirstStep(sx, sy, gx, gy, maxRadius) {
       visited.add(k);
       const first = cur.first || {dx,dy};
       queue.push({ x:nx, y:ny, first });
-      if (queue.length > 4000) return null;
+      if (queue.length > nodeCap) return null;
     }
   }
   return null;
@@ -24347,7 +24439,7 @@ function openDialogue(npc) {
         const kingdomKey = kingdomKeyAt(npc.x, npc.y);
         const level = nobleLevelOf(kingdomKey);
         if (level < 4) opts.push({ key: nextKey(), label: level === 0 ? 'Ask about earning a noble title' : 'Petition for a higher title', action: () => petitionForNobility(npc, kingdomKey) });
-        if (canClaimCrown(kingdomKey)) opts.push({ key: nextKey(), label: 'Claim the crown (500g)', action: () => claimCrown(npc, kingdomKey) });
+        if (canClaimCrown(kingdomKey)) opts.push({ key: nextKey(), label: 'Claim the crown (2000g)', action: () => claimCrown(npc, kingdomKey) });
         if (player.rulerOf === kingdomKey) opts.push({ key: nextKey(), label: 'Hold court', action: () => openCourtMenu(kingdomKey) });
       }
     }
@@ -24445,6 +24537,45 @@ function placePlayerNearSettlementTier(tier) {
     }
   }
   return false;
+}
+// BALANCE FIX (defense-in-depth backstop): the three targeted fixes elsewhere in this file
+// (search for "BALANCE FIX" in classifyBiomeFull, maybeSpawnOverworldBoss, and the
+// pickBiomeEncounter helper) all work by controlling *how new terrain/monsters get generated*
+// within a fixed radius of true world origin (0,0) -- but several start-of-game scenarios search
+// much further than that radius for a place to actually put the player: placePlayerForScenario's
+// shipwreck/forest/cultist_escapee/dungeon_born branches (via placePlayerNearBiome/
+// placePlayerAdjacentToBiome) search up to 80 tiles from origin for a matching biome, and
+// placePlayerNearSettlementTier searches up to 250 for a city/capital start -- both comfortably
+// past those three fixes' 45-60 tile radius. CONFIRMED actually happening in testing: a fresh
+// 'shipwreck' character (0 starting items, melee-focused) was killed in 2 actions by Skarrow,
+// the Thunderbird -- an 'uncommon'-tier overworld boss -- because the nearest beach tile to
+// origin happened to be somewhere well outside that radius. Settlement-tier placements aren't
+// at equivalent risk (a chunk with an actual settlement on it never rolls a boss/monster spawn
+// in the first place, see maybeSpawnOverworldBoss's own `!chunk.settlement` guard), but the raw
+// wilderness biome searches are. Rather than trying to keep chasing every current and future way
+// a scenario or landmark search might wander somewhere dangerous before the player has any
+// chance to prepare (this is already the fourth distinct code path found causing the same
+// symptom this session), this is a single guarantee applied once, right after a scenario's
+// placement finishes and player.x/y are truly final: sweep the character's immediate starting
+// vicinity for anything wildly disproportionate for a level-1 start and remove it, regardless of
+// which code path put it there or will in the future.
+function sanitizeStartingArea() {
+  const cx0 = Math.floor(player.x / CH), cy0 = Math.floor(player.y / CH);
+  for (let dcy = -1; dcy <= 1; dcy++) for (let dcx = -1; dcx <= 1; dcx++) {
+    // getChunk(), not a bare worldChunks.get() -- this runs immediately after placement, before
+    // the surrounding chunks have necessarily been generated yet (that normally happens lazily,
+    // e.g. on first render/getTile access), so a plain .get() would silently find nothing and
+    // sanitize nothing for any chunk not already generated. getChunk() forces generation right
+    // here instead, which is what we want anyway: the player is about to be looking at these
+    // chunks immediately regardless.
+    const c = getChunk(cx0 + dcx, cy0 + dcy);
+    if (!c || !c.monsters || !c.monsters.length) continue;
+    c.monsters = c.monsters.filter(m => {
+      const base = MONSTER_BASES[m.monsterId];
+      const tooDangerous = m.boss || (base && (base.dtier || 0) >= 2);
+      return !tooDangerous;
+    });
+  }
 }
 function placePlayerForScenario(id) {
   player.scenario = id;
@@ -24581,6 +24712,7 @@ function beginScenario(letter) {
   const scenario = START_SCENARIOS[idx];
   if (!scenario) return;
   const placedAtSettlement = placePlayerForScenario(scenario.id);
+  sanitizeStartingArea(); // see sanitizeStartingArea's own comment for why this is needed here
   gameState = 'playing';
   document.getElementById('title-screen').classList.add('hidden');
   document.getElementById('modal').classList.add('hidden');
@@ -26822,7 +26954,17 @@ function processEntityStatus(e) {
     // CLOTTING (v0.43.0): see the framework note above applyBleed -- the chance the wound seals on
     // its own rises the longer it's stayed open, so bleed left fully alone eventually resolves like
     // any other status effect instead of requiring a cure every single time.
-    const clotChance = Math.min(0.9, 0.04 + e.bleedClotTurns * 0.025 + (e.bleedClotBonus || 0));
+    // BALANCE TUNE: base 0.04/+0.025 per turn -> 0.06/+0.03. Modest (roughly a turn or two off the
+    // expected time-to-first-clot-roll early on), deliberately not a large change: extensive
+    // automated playtesting found bleeding was overwhelmingly the single most common cause of
+    // death across every skill level, largely because a character with no bandage left had only
+    // a slow-building chance to help itself while the wound kept ticking regardless of skillful
+    // play. This keeps bleeding a real, felt threat (still worth bandaging immediately, still
+    // capable of killing an unlucky or reckless character) while reducing how often an otherwise
+    // well-played life ends purely on a string of bad clot rolls with nothing left to do about
+    // it. The cap (0.9) and every talent/item that modifies this (bleedClotBonus -- Regeneration,
+    // Clotting Factor) are unchanged, so their relative value is preserved.
+    const clotChance = Math.min(0.9, 0.06 + e.bleedClotTurns * 0.03 + (e.bleedClotBonus || 0));
     if (Math.random() < clotChance) {
       e.bleedStacks--;
       if (e.bleedStacks <= 0) {
@@ -27947,7 +28089,7 @@ function generateChunk(cx, cy) {
       if (!t.walkable && t.biome !== 'ocean' && t.biome !== 'lake' && t.biome !== 'river') continue;
       const b = BIOMES[t.biome];
       if (!b.encounter.length) continue;
-      const mid = weightedChoice(rng, b.encounter);
+      const mid = pickBiomeEncounter(rng, b, Math.abs(cx * CH + lx) + Math.abs(cy * CH + ly));
       const dangerMult = b.dangerMult || 1;
       chunk.monsters.push(makeMonster(mid, cx * CH + lx, cy * CH + ly, overworldDangerScale(cx, cy) * dangerMult, rng));
     }
@@ -34397,6 +34539,23 @@ function useItem(it) {
       log(wasBleeding ? `You apply the medkit, stopping the bleeding and recovering ${amt} HP.` : `You apply the medkit and recover ${amt} HP.`);
       break;
     }
+    // BUG FIX: 'coagulant' had no case here at all -- fell straight through to the switch's
+    // `default: consumed = false;`, meaning Coagulant Salve (a real, purchasable/craftable item
+    // whose own flavor text promises "a Bandage that also buys you some insurance against the
+    // next cut") did *literally nothing* when used: no bleed stanched, no HP recovered, no
+    // resist-bleed buff applied, not even a log message explaining why -- a silent dead item.
+    // Found via a systematic audit of every consumable `effect` value against useItem's actual
+    // switch, not by chance. Implements exactly what the item's own description and fields
+    // (power, dur) already promise: a Bandage's stanch-and-heal, plus the temporary bleed
+    // resistance a Potion of Clotting alone would give.
+    case 'coagulant': {
+      const wasBleeding = stanchBleed(player);
+      const amt = Math.round(it.power * (1 + (player.alchemyPotencyBonus || 0)) * playerLevelPowerMult(player.level) * healMult());
+      player.hp = Math.min(player.maxHp, player.hp + amt);
+      applyBuff('resistbleed', 1, it.dur || 20);
+      log(wasBleeding ? `You seal the wound with the salve, stopping the bleeding, recovering ${amt} HP, and thickening your blood against the next cut.` : `You apply the salve and recover ${amt} HP -- your blood feels thicker, insurance against the next cut.`);
+      break;
+    }
     case 'splint': {
       const parts = ensureBodyParts(player);
       // Prefer an actually-splintable Maimed (3) part; a permanently Ruined (4) part is beyond
@@ -36703,7 +36862,7 @@ const GUIDE_SECTIONS = [
     ${guideKeyTable('Actions', [
       ['g','Pick up an item, or open a chest/barrel/sack/bookshelf/etc. underfoot — containers stay in the world exactly as you leave them.'],
       ['f','Fire your equipped ranged weapon at the nearest target in range.'],
-      ['a','Take Aim — line up a Called Shot (head/legs/weapon arm) for your next attack only, at reduced accuracy in exchange for a guaranteed extra effect. See the Status Effects tab, "Body &amp; Health".'],
+      ['o','Take Aim — line up a Called Shot (head/legs/weapon arm) for your next attack only, at reduced accuracy in exchange for a guaranteed extra effect. See the Status Effects tab, "Body &amp; Health".'],
       ['t','Talk to an adjacent friendly NPC — including an "Ask about your journey" option for a lead on your current main quest.'],
       ['x','Look/examine mode — inspect any visible tile, item, or creature.'],
       ['Shift+S','Search the tiles around you for hidden doors and undiscovered traps. Takes a turn, and the better your senses the wider it reaches — worth pressing a few times anywhere a room looks like it should have another way out. (If a friendly NPC happens to be standing in every adjacent tile, Shift+S/D and the other Shift+letter actions below force-attack them instead — see Combat.)'],
@@ -37008,7 +37167,7 @@ const GUIDE_SECTIONS = [
     a full proper rest, or time spent by a fire. Every disease also has a natural duration and <i>will</i> pass on its
     own even fully ignored — except the very rare chronic case (~4% of infections) that needs the same Greater
     Restoration a Ruined limb does.
-    <br><br><b>Called Shot</b> (key <b>a</b>) lines up your <i>next</i> attack only to deliberately target the head
+    <br><br><b>Called Shot</b> (key <b>o</b>) lines up your <i>next</i> attack only to deliberately target the head
     (punches through most of the target's armor), the legs (cripples movement, a real Slow), or the weapon arm
     (staggers them into Confusion) — at a real accuracy penalty in exchange.</div>` },
   { id:'equipment', label:'Equipment', category:'Combat & Abilities', html: () => `
@@ -37942,7 +38101,18 @@ function handleKey(e) {
     if (key === '<') { useStairsUp(); return; }
     if (key === '?') { openHelp(); return; }
     if (key === 'r') { doRest(); return; }
-    if (key === 'a') { openCalledShotMenu(); return; }
+    // BUG FIX: this was bound to 'a', but MOVE_KEYS['a'] (WASD west) is checked unconditionally
+    // earlier in this same handler with no shift/case distinction to disambiguate the two (unlike
+    // s/d/h/k/l/y/u, which use plain-vs-Shift to mean move-vs-command -- 'a' the called-shot key
+    // and 'a' the move-west key were the literal same keystroke, so this line was dead code and
+    // Called Shot had no working keyboard binding at all -- confirmed via automated playtesting
+    // (tryCalledShot in playtest.js had to call openCalledShotMenu() directly, bypassing the key
+    // handler entirely, to exercise this feature at all) and it also silently broke the in-game
+    // "Advanced Combat" tutorial step that explicitly instructs "Press [a] to Take Aim" (see
+    // TUTORIAL_STEPS: 'advanced_combat'), which could never complete. Rebound to 'o', a key with
+    // no other meaning anywhere in the 'playing' state. All in-UI references (help screen,
+    // Advanced Combat tutorial text, tooltip) updated to match.
+    if (key === 'o') { openCalledShotMenu(); return; }
     if (key === 'S') { doSearch(); return; }
     if (key === 'D') { beginDigTargeting(); return; }
     if (key === 'v') { toggleSprint(); return; }
@@ -39620,7 +39790,7 @@ TUTORIALS.push({
       setupPlayer: (p) => {},
       objectives: [
         { desc: 'Strike the sleeping sentry while it is still unaware (a Sneak Attack).', check: (s) => !!s.player._tutDidSneakAttack },
-        { desc: 'Press [a] to Take Aim, then land a Called Shot on the wary rat.', check: (s) => !!s.player._tutDidCalledShot },
+        { desc: 'Press [o] to Take Aim, then land a Called Shot on the wary rat.', check: (s) => !!s.player._tutDidCalledShot },
       ],
       completeText: 'Both are one-time-per-swing tools rather than always-on bonuses: Sneak Attack is spent the instant your target notices anything (including your own hit), and Called Shot is consumed by your very next attack whether it lands or misses. Line them up deliberately rather than assuming either is automatic.',
     },
