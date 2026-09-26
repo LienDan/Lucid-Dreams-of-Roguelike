@@ -208,6 +208,30 @@ const PROFILES = {
     buffChance: 0.85,
     summonChance: 0.9,
   },
+  // "Perfect knowledge, player-legal actions" -- not a cheat mode (no stat boosts, no bypassing
+  // RNG, no seeing through fog of war), but a character piloted by someone who has fully
+  // internalized every mechanic this session's audit covered: exactly when a called shot is
+  // worth the accuracy penalty, exactly how dangerous a fight will be before committing, exactly
+  // how much buffer to keep in reserve. Operationalized as "never skip a clearly-favorable
+  // tactical action, and be maximally conservative about anything ambiguous" -- the ceiling of
+  // what this profile-dial framework can represent (a genuinely omniscient player would also
+  // make sharper in-the-moment judgment calls this framework doesn't model, like exactly which
+  // of two viable escape routes is better -- see PROGRESS.md for the honest caveat on this).
+  optimal: {
+    fleeHpFrac: 0.40,             // disengages sooner than veteran -- recognizes a bad trend before it's critical
+    avoidOverwhelmingEnabled: true,
+    overwhelmThreshold: 0.30,     // avoids more fights preemptively, not just near-one-shots
+    recoverHpFrac: 0.65,          // tops off far more readily, knowing exactly when it's worth the detour
+    curativeReserve: 8,
+    supplySeekThreshold: 4,
+    calledShotChance: 1.0,        // always takes it when the accuracy trade-off is favorable
+    ritualChance: 0.15,           // only gambles on genuinely good odds, never just to see what happens
+    giftChance: 0.1,              // never gives away anything that could plausibly matter later
+    customCreateChance: 1.0,      // always builds deliberately rather than rolling a premade archetype
+    debuffChance: 1.0,            // never skips a free tactical advantage
+    buffChance: 1.0,
+    summonChance: 1.0,
+  },
 };
 // The live, mutable profile every strategy function's default parameters read from. Start on
 // 'casual' (this toolkit's original tuned baseline); call applyProfile(name) or mutate fields
@@ -679,7 +703,14 @@ async function exploreStep(win, wanderState) {
 
   const far = evalGame(win, 'findNearestFrontier(220)').value;
   if (far) {
-    const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${far.x}, ${far.y}, 260)`).value;
+    // Distance-proportional maxRadius (not a flat number) -- see the shared comment on the other
+    // five bfsFirstStep call sites in this file for why: after game.html's own BUG FIX scaled
+    // its internal node-search budget with maxRadius (6*maxRadius^2, to actually reach the
+    // distance callers request instead of silently capping out around ~30 tiles regardless), a
+    // flat large maxRadius here would mean paying that same large budget on every call even when
+    // the actual target is close and reachable in a handful of nodes -- confirmed directly via
+    // timing (some calls took 1.8-3.2 real seconds once the cap was raised, before this fix).
+    const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${far.x}, ${far.y}, Math.min(260, Math.ceil(Math.max(Math.abs(${far.x}-player.x), Math.abs(${far.y}-player.y))*1.5)+20))`).value;
     if (step) {
       const dirEntry = MOVE_DIRS.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
       if (dirEntry) {
@@ -809,6 +840,7 @@ async function tryAvoidOverwhelmingMonster(win, log) {
 
   const step = bestRetreatStep(win);
   if (!step) return false; // boxed in -- fall through and fight
+  ensureSprinting(win, true, log); // see ensureSprinting's own comment
   const before = evalGame(win, 'turnCount').value;
   key(win, step);
   const after = evalGame(win, 'turnCount').value;
@@ -852,7 +884,7 @@ async function tryAvoidOverwhelmingMonster(win, log) {
 // Fix: track bandage and antidote stock SEPARATELY from the general curative bundle, and treat
 // either specific shortage as its own trigger to seek supplies, independent of how many generic
 // heal potions/elixirs happen to be on hand.
-async function trySeekSupplies(win, log) {
+async function trySeekSupplies(win, log, lock = {}) {
   const counts = evalGame(win, `
     (function(){
       const inv = player.inventory.filter(it => it.type==='consumable');
@@ -913,7 +945,23 @@ async function trySeekSupplies(win, log) {
   // enumerated list too, or this exact interference will silently reappear a fourth time.
   const pursuingQuestTarget = evalGame(win, `(function(){ const s = curStoryStage(); return s && (s.type === 'enter_dungeon' || s.type === 'talk_npc' || s.type === 'kill_any' || s.type === 'kill_boss'); })()`).value === true
     || getMainQuestNavigationTarget(win) !== null; // reuses the SAME target-finding logic tryAdvanceMainQuest itself uses, rather than re-deriving which stage types count as "actively navigable" a second way
-  if (pursuingQuestTarget) return false;
+  // BUG FIX (found via the gold-floor fix's own validation batch): main-quest stages chain
+  // essentially continuously from the very first turn of a fresh life (a brand-new character
+  // almost always has SOME navigable stage active), so this exclusion, exactly as originally
+  // written, meant a character that started with zero curatives (routine before the
+  // draftCustomCharacter gold-floor fix; still possible for premade archetypes or bad shopping
+  // luck afterward) could go an entire life without ever restocking at all -- confirmed directly:
+  // a fresh 'shipwreck' character with real starting gold and 0 starting items never once visited
+  // a shop before dying to unavoidable, uncurable poison. This is a narrower, much rarer
+  // condition than the routine "below target reserve" shortage this whole guard exists to defer
+  // (see the two BUG FIX writeups above for why routine restocking must NOT override active
+  // pursuit -- that caused 123+ and 263 pointless interruptions per life before being fixed) --
+  // zero of a needed category, not merely low, is the one case worth interrupting pursuit for,
+  // since heading into the FIRST real fight with literally nothing to cure a bad outcome is a
+  // materially different risk than being a little under target reserve later in a life that
+  // already has some buffer.
+  const trulyEmpty = curatives === 0 && (lock.emptyRetries || 0) < 3;
+  if (pursuingQuestTarget && !trulyEmpty) return false;
   // NOTE: 'kill_boss' added alongside 'kill_any' in the same pass -- found together in the same
   // batch life (51 restock interruptions during a kill_boss stage that turned out to be an
   // OVERWORLD_BOSSES/biome case, the same gap as kill_any's, since getMainQuestNavigationTarget
@@ -921,12 +969,150 @@ async function trySeekSupplies(win, log) {
   // handles). Between this and 'kill_any', every stage type tryPathTowardBossBiome can act on is
   // now covered -- if that function is ever extended to a THIRD stage type, extend this list too.
 
+  // BUG FIX (found via the optimal profile's own first large-budget validation run, same
+  // session as the trulyEmpty override above): that override had no limiter at all, so a
+  // character whose nearest-for-restocking settlement (whatever autoTravelHome/'H' finds) turns
+  // out to be a DIFFERENT settlement than the one a talk_npc stage's specific required role
+  // lives in could ping-pong between the two indefinitely -- travel to restock, still arrive at
+  // 0 bandages (that settlement's shop doesn't stock any, or tryShopIfTrading otherwise doesn't
+  // resolve the shortage there), resume toward the quest NPC, get close, get yanked back to
+  // "restock" again since curatives is still 0, repeat. CONFIRMED live: a 1859-action optimal-
+  // profile life alternated "Traveling to restock supplies (only 0 bandage(s) on hand)" with
+  // quest-NPC pursuit for its entire final ~100 turns, the quest-NPC distance visibly oscillating
+  // (3 -> 1 -> 7 -> ...) exactly like the two previous documented "restock interference" bugs
+  // above, just via the trulyEmpty override this time instead of the routine threshold. Capped
+  // at 3 retries via lock.emptyRetries (reset to 0 the moment curatives ever leaves zero, from
+  // ANY source -- a successful restock, loot, a quest reward) so a settlement that genuinely
+  // can't help is given a bounded, not infinite, number of chances before this defers back to
+  // ordinary quest pursuit like the non-trulyEmpty case always has.
+  if (curatives > 0) lock.emptyRetries = 0;
+
+  // Prefer an instant travelbypass ability over the long walk, if one's known and affordable --
+  // see tryUseTravelBypassForSupplyRun's own comment for why this is the one place it's used.
+  const bypassed = tryUseTravelBypassForSupplyRun(win, log);
+  if (bypassed) {
+    // Same counting as the walk path below -- a teleport-bypassed trip is still a "trip" for
+    // the purposes of the emptyRetries cap. Missing this would let a character with a cheap,
+    // repeatable teleport loop the trulyEmpty override indefinitely regardless of the cap,
+    // since this early return previously skipped the increment entirely.
+    if (curatives === 0) lock.emptyRetries = (lock.emptyRetries || 0) + 1;
+    return true;
+  }
+
   const beforeTurn = evalGame(win, 'turnCount').value;
   await keyAndWait(win, 'H', 8000);
   const afterTurn = evalGame(win, 'turnCount').value;
   if (afterTurn === beforeTurn) return false; // no settlement discovered yet, or already there
+  if (curatives === 0) lock.emptyRetries = (lock.emptyRetries || 0) + 1; // count this trip whether or not it actually resolves the shortage -- checked again next call
   const reason = bandageShort ? `only ${bandages} bandage(s)` : antidoteShort ? `only ${antidotes} antidote(s)` : `${curatives} curative(s)`;
   if (log) log(`Traveling to restock supplies (${reason} on hand).`);
+  return true;
+}
+
+/**
+ * Exercises the three remaining self-resolving ability types that had no strategy at all
+ * ('detectability'/generic 'utility' scans -- Detect Creatures, Threat Scanner, Motion Tracker,
+ * Omni-Scan Array; 'transmute' -- Transmute Material; 'weather' -- Call the Rain, Call the
+ * Storm, Winter's Call, Storm Battery Array, Sky Wound, etc.). All three resolve in a single
+ * castSpell() call with no follow-up targeting needed (verified directly in game.html: each
+ * branch pays its cost and calls endTurn() itself), unlike blinklike/travelbypass, so this is a
+ * straightforward extension of the same pattern tryCastHealSpell/tryCastBuffAbility use. Kept
+ * as one low-priority, low-frequency, chance-gated function (not three) since none of these
+ * meaningfully affects survival the way the earlier fixes did -- this exists so these ability
+ * types actually get exercised at all instead of sitting completely unused for an entire life,
+ * per the audit that found every one of them, not for tactical value.
+ */
+function tryUseMinorUtilityAbility(win, log, chance = 0.05) {
+  if (nearbyMonster(win)) return false; // combat/survival strategies take priority; this is flavor
+  if (Math.random() > chance) return false;
+  const r = evalGame(win, `
+    (function(){
+      const ids = [...new Set([
+        ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
+        ...(player.installedCyber||[]), ...(player.mutations||[]),
+        // grant_X buffs (e.g. a foodspell item's temporary bonus spell) are a real, game-
+        // recognized form of "knowing" an ability -- see isAbilityKnown() in game.html, which
+        // already checks getBuff('grant_'+id) alongside the four normal pools. Every ability-
+        // gathering function in this file used to rebuild this list without that check, so a
+        // temporarily-granted spell could never actually get cast by anything even while active.
+        ...Object.keys(player.buffs||{}).filter(k => k.startsWith('grant_')).map(k => k.slice(6)),
+      ])];
+      const MINOR = new Set(['detectability', 'utility', 'transmute', 'weather']);
+      const known = ids.map(id => findAbilityById(id)).filter(s => s && MINOR.has(s.type));
+      const usable = known.filter(s => {
+        if (s.type === 'transmute' && !player.inventory.some(i => i.type === 'material')) return false;
+        if (s.type === 'weather' && typeof canControlWeather === 'function' && !canControlWeather()) return false;
+        return getPoolValue(s.resource||'mp') >= effectiveCost(s);
+      });
+      if (!usable.length) return null;
+      const spell = choice(Math.random, usable);
+      const before = getPoolValue(spell.resource||'mp');
+      castSpell(spell.id);
+      return { name: spell.name, resource: spell.resource||'mp', before };
+    })()
+  `);
+  if (!r.ok || !r.value) return false;
+  const after = evalGame(win, `getPoolValue(${JSON.stringify(r.value.resource)})`).value;
+  if (after < r.value.before) { if (log) log(`Used ${r.value.name}.`); return true; }
+  return false;
+}
+
+/**
+ * Uses a known 'travelbypass' ability (Teleport, Warp Relay Implant, The Ninth Door) as a fast
+ * way back to a known settlement when one would otherwise be walked to on foot. AUDIT FINDING:
+ * previously not just unused but structurally incapable of being useful even if a strategy did
+ * cast one -- castSpell's travelbypass branch opens the same destination-picker menu as a normal
+ * waystone (openTravel -> gameState='travel'), and the main loop's only handling for an
+ * unrecognized menu state is to generically close it (see tryEscapeUnknownMenu), so the ability
+ * would have been cast, its cost paid, and then immediately wasted with no destination ever
+ * chosen. Fixed properly rather than left as a documented gap: this resolves the SAME menu a
+ * human's click resolves (travelDestinations, sorted nearest-first, letter-keyed -- see
+ * renderTravel in game.html) by pressing 'a' for the nearest entry once it's open, not a
+ * separate/fake resolution path. Deliberately narrow trigger (only when this function's own
+ * caller -- trySeekSupplies -- would otherwise walk home) rather than firing opportunistically:
+ * the game itself already refuses to open this menu at all with a hostile within 8 tiles and
+ * line of sight (see openTravel's nearbyThreat guard), so there's no combat-escape use case to
+ * chase here the way there was for blinklike -- its only real use is exactly the trip
+ * trySeekSupplies already wants to make, just instantly instead of on foot.
+ */
+function tryUseTravelBypassForSupplyRun(win, log) {
+  const r = evalGame(win, `
+    (function(){
+      const ids = [...new Set([
+        ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
+        ...(player.installedCyber||[]), ...(player.mutations||[]),
+        // grant_X buffs (e.g. a foodspell item's temporary bonus spell) are a real, game-
+        // recognized form of "knowing" an ability -- see isAbilityKnown() in game.html, which
+        // already checks getBuff('grant_'+id) alongside the four normal pools. Every ability-
+        // gathering function in this file used to rebuild this list without that check, so a
+        // temporarily-granted spell could never actually get cast by anything even while active.
+        ...Object.keys(player.buffs||{}).filter(k => k.startsWith('grant_')).map(k => k.slice(6)),
+      ])];
+      known: {
+        const known = ids.map(id => findAbilityById(id)).filter(s => s && s.type === 'travelbypass');
+        known.sort((a,b) => effectiveCost(a) - effectiveCost(b)); // cheapest first, same reasoning as tryUseEscapeAbility
+        const usable = known.find(s => getPoolValue(s.resource||'mp') >= effectiveCost(s));
+        if (usable) {
+          castSpell(usable.id);
+          if (gameState !== 'travel') return null; // didn't open (e.g. a hostile's in sight -- openTravel's own guard)
+          return { name: usable.name };
+        }
+        // No known ability -- fall back to a carried 'recall' item (e.g. a Recall Scroll), which
+        // routes through the exact same beginBypassTravel() (see useItem's 'recall' case in
+        // game.html), so it opens and resolves identically to the ability path above.
+        const recallItem = player.inventory.find(it => it.effect === 'recall');
+        if (!recallItem) return null;
+        useItem(recallItem);
+        if (gameState !== 'travel') return null;
+        return { name: recallItem.name };
+      }
+    })()
+  `);
+  if (!r.ok || !r.value) return false;
+  const destCount = evalGame(win, '(typeof travelDestinations !== "undefined" && travelDestinations) ? travelDestinations.length : 0').value;
+  if (!destCount) { key(win, 'Escape'); return false; } // opened, but nowhere discovered yet to go -- cancel cleanly, no cost was paid yet
+  key(win, 'a'); // nearest known destination -- travelDestinations is pre-sorted by distance
+  if (log) log(`Used ${r.value.name} to fast-travel toward a known destination.`);
   return true;
 }
 
@@ -945,19 +1131,21 @@ function tryCalledShot(win, log, chance = BOT_PROFILE.calledShotChance) {
   if (!nearbyMonster(win)) return false;
   if (Math.random() > chance) return false;
   if (evalGame(win, 'player.calledShotTarget').value) return false; // one already queued
-  // BUG FIX (found via SECTION 8 verb testing, then traced back here): pressing 'a' does NOT
-  // reach the called-shot handler. MOVE_KEYS defines a WASD scheme where a:[-1,0] (move west),
-  // and that binding is checked BEFORE key==='a''s openCalledShotMenu() in the game's own
-  // handleKey dispatch order -- so 'a' always moves the player west instead, consuming a real
-  // turn, and the called-shot key handler is unreachable dead code in the base game (a bug in
-  // the game itself, not something fixable by choosing a different key from the keyboard --
-  // there may be a mouse-only path a real player could use, but no keyboard one). This function
-  // correctly detected the resulting failure (gameState never became 'choice') and returned
-  // false -- so it never *reported* success incorrectly -- but the side effect (an extra,
-  // unlogged move west, every time the calledShotChance roll succeeded) was real and silent:
-  // roughly 15-35% of combat turns near a monster, across every batch this project has ever
-  // run, depending on profile. Confirmed via direct before/after position + turnCount check.
-  // Fixed by calling openCalledShotMenu() directly instead of going through the shadowed key.
+  // BUG FIX, FIXED IN GAME.HTML THIS SESSION (comment kept for history, updated to stay
+  // accurate): pressing 'a' did NOT reach the called-shot handler. MOVE_KEYS defined a WASD
+  // scheme where a:[-1,0] (move west), and that binding was checked BEFORE key==='a''s
+  // openCalledShotMenu() in the game's own handleKey dispatch order -- so 'a' always moved the
+  // player west instead, consuming a real turn, and the called-shot key handler was unreachable
+  // dead code in the base game. This function correctly detected the resulting failure
+  // (gameState never became 'choice') and returned false -- so it never *reported* success
+  // incorrectly -- but the side effect (an extra, unlogged move west, every time the
+  // calledShotChance roll succeeded) was real and silent: roughly 15-35% of combat turns near a
+  // monster, across every batch this project has ever run, depending on profile. Confirmed via
+  // direct before/after position + turnCount check. The game itself has since been fixed
+  // (Called Shot rebound to the free 'o' key -- see handleKey in game.html), so pressing the
+  // real key would work correctly now too, but this still calls openCalledShotMenu() directly
+  // rather than going through the key, consistent with how every other menu-opening action in
+  // this file works and one less thing to keep in sync with the game's current keybindings.
   evalGame(win, 'openCalledShotMenu();');
   if (evalGame(win, 'gameState').value !== 'choice') { return false; } // no adjacent target, no key press happened, nothing to undo
   const label = resolveChoiceMenu(win, log, { prefer: [/head/i, /legs/i, /arm/i] });
@@ -1061,6 +1249,7 @@ async function tryFleeIfCritical(win, log, hpFrac = BOT_PROFILE.fleeHpFrac, stal
 
   const step = bestRetreatStep(win);
   if (!step) return false; // boxed in -- let normal combat handle it
+  ensureSprinting(win, true, log); // extra action per round while retreating -- see ensureSprinting's own comment
   const before = evalGame(win, 'turnCount').value;
   key(win, step);
   const after = evalGame(win, 'turnCount').value;
@@ -1121,6 +1310,12 @@ function knownAffordableAbilities(win, typeFilter) {
       const ids = [...new Set([
         ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
         ...(player.installedCyber||[]), ...(player.mutations||[]),
+        // grant_X buffs (e.g. a foodspell item's temporary bonus spell) are a real, game-
+        // recognized form of "knowing" an ability -- see isAbilityKnown() in game.html, which
+        // already checks getBuff('grant_'+id) alongside the four normal pools. Every ability-
+        // gathering function in this file used to rebuild this list without that check, so a
+        // temporarily-granted spell could never actually get cast by anything even while active.
+        ...Object.keys(player.buffs||{}).filter(k => k.startsWith('grant_')).map(k => k.slice(6)),
       ])];
       const types = ${typesJson};
       return ids.map(id => findAbilityById(id)).filter(Boolean)
@@ -1154,23 +1349,48 @@ function tryCastOffensiveSpell(win, log) {
       const ids = [...new Set([
         ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
         ...(player.installedCyber||[]), ...(player.mutations||[]),
+        // grant_X buffs (e.g. a foodspell item's temporary bonus spell) are a real, game-
+        // recognized form of "knowing" an ability -- see isAbilityKnown() in game.html, which
+        // already checks getBuff('grant_'+id) alongside the four normal pools. Every ability-
+        // gathering function in this file used to rebuild this list without that check, so a
+        // temporarily-granted spell could never actually get cast by anything even while active.
+        ...Object.keys(player.buffs||{}).filter(k => k.startsWith('grant_')).map(k => k.slice(6)),
       ])];
-      const OFFENSIVE = new Set(['damage','execute','smite','drain']);
+      // 'lifetap' ADDED: an HP-costs-instead-of-mana damage type (Life Tap, Crimson Lance,
+      // Shared Pain, Bound Companion/Hunger, Ravenous Maw) -- same power[]/range shape as
+      // damage/execute/smite/drain, just paid from a different pool (see paySpellCost's
+      // resource==='hp' branch), so it belongs in the same "pick the strongest affordable
+      // offensive option" pool rather than being ignored entirely. AUDIT FINDING (see also
+      // tryCastBuffAbility/tryCastHealSpell): a live-playtest review found this whole type had
+      // NEVER been cast by the bot -- any Blood Mage/eldritch build whose entire offense ran
+      // through lifetap abilities was, in effect, unable to fight back at all. Guarded below:
+      // the game's own paySpellCost already refuses a cast that would drop HP to 0 or below
+      // (no crash, no death risk from this), but that still burns a turn doing nothing right
+      // when a turn matters most, so this adds its own more conservative margin (skip lifetap
+      // candidates below 35% HP) as a cheap defense-in-depth on top of the game's hard guard --
+      // by that HP fraction tryStanchBleeding/tryRecoverHp/tryFleeIfCritical (all higher
+      // priority in the main loop) should already have taken over anyway.
+      const OFFENSIVE = new Set(['damage','execute','smite','drain','lifetap']);
       const known = ids.map(id => findAbilityById(id)).filter(s => s && OFFENSIVE.has(s.type) && Array.isArray(s.power));
-      const usable = known.filter(s => getPoolValue(s.resource||'mp') >= effectiveCost(s) && nearestHostile(s.range));
+      const usable = known.filter(s => {
+        if (s.type === 'lifetap' && player.hp < player.maxHp * 0.35) return false;
+        return getPoolValue(s.resource||'mp') >= effectiveCost(s) && nearestHostile(s.range);
+      });
       if (!usable.length) return null;
       usable.sort((a,b) => ((b.power[0]+b.power[1]) - (a.power[0]+a.power[1])));
       const spell = usable[0];
       const before = getPoolValue(spell.resource||'mp');
+      const beforeHp = player.hp;
       castSpell(spell.id);
-      return { name: spell.name, resource: spell.resource||'mp', before, gsAfter: gameState };
+      return { name: spell.name, resource: spell.resource||'mp', before, beforeHp, gsAfter: gameState };
     })()
   `);
   if (!r.ok || !r.value) return false;
 
   confirmSpellTargetIfNeeded(win);
   const after = evalGame(win, `getPoolValue(${JSON.stringify(r.value.resource)})`).value;
-  if (after < r.value.before) {
+  const hpAfter = evalGame(win, 'player.hp').value;
+  if (after < r.value.before || hpAfter < r.value.beforeHp) {
     if (log) log(`Used ${r.value.name}.`);
     return true;
   }
@@ -1191,8 +1411,18 @@ function tryCastHealSpell(win, log) {
       const ids = [...new Set([
         ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
         ...(player.installedCyber||[]), ...(player.mutations||[]),
+        // grant_X buffs (e.g. a foodspell item's temporary bonus spell) are a real, game-
+        // recognized form of "knowing" an ability -- see isAbilityKnown() in game.html, which
+        // already checks getBuff('grant_'+id) alongside the four normal pools. Every ability-
+        // gathering function in this file used to rebuild this list without that check, so a
+        // temporarily-granted spell could never actually get cast by anything even while active.
+        ...Object.keys(player.buffs||{}).filter(k => k.startsWith('grant_')).map(k => k.slice(6)),
       ])];
-      const HEALING = new Set(['heal','cleanse','purify']);
+      // 'repair' ADDED: Field Repair / Mending -- same self-targeted "restore a pool" shape as
+      // heal (see castSpell's 'repair' branch: restores HP via spell.power, no different from
+      // heal mechanically, just re-flavored for a gear-focused Defense/Restoration school) --
+      // previously excluded purely because it isn't literally named 'heal'.
+      const HEALING = new Set(['heal','cleanse','purify','repair']);
       const known = ids.map(id => findAbilityById(id)).filter(s => s && HEALING.has(s.type));
       const usable = known.filter(s => getPoolValue(s.resource||'mp') >= effectiveCost(s));
       if (!usable.length) return null;
@@ -1211,11 +1441,75 @@ function tryCastHealSpell(win, log) {
 }
 
 /**
- * Weakens the nearest hostile with a known, affordable 'debuff' ability (slow/fear/poison/
- * silence/etc., from any of the four ability pools) before or during a fight -- previously
- * NEVER exercised: no strategy anywhere read type==='debuff' at all, so a build that rolled
- * Fear or Crippling Shot carried it completely unused for the entire life. Debuffs have no
- * power[]/damage semantics to rank by, so this doesn't try to pick the "best" one -- it just
+ * Throws a known offensive/utility grenade-type consumable (effect in THROWABLE_EFFECTS --
+ * aoefire/aoefrost/aoepoison/aoeconfuse/throwdmg/scrollfire/throwaoe/nukeblast/throwgas/
+ * throwemp/throwslow/throwsnare/oilsplash) at the nearest hostile. AUDIT FINDING: an entire
+ * combat item category -- arguably the single most powerful one for a group fight, since most
+ * of these are AOE -- had no strategy touching it at all. Two real mechanical traps found and
+ * avoided while building this, both root-caused by reading useItem/beginThrowTargeting directly
+ * rather than guessing:
+ *   1. useItem(it) on a throwable does NOT open targeting -- it explicitly pre-aims at the
+ *      player's OWN tile ("Use on self", per the item-action menu's own label for these) and
+ *      detonates there immediately. That's the right call for a few of these (a defensive smoke/
+ *      gas cloud centered on yourself), but wrong for basically every offensive one -- calling
+ *      useItem() here would have looked like it worked (no error, resource consumed) while
+ *      actually just hurting the thrower. The real aimed throw is a SEPARATE function,
+ *      beginThrowTargeting(it), reached in the real UI via the item-action menu's 't' (Throw)
+ *      option, not 'u' (Use).
+ *   2. beginThrowTargeting opens the same generic tiletarget mode blink/offensive spells use, so
+ *      the same confirmSpellTargetIfNeeded(win) (Enter -> snap to nearest hostile) resolves it
+ *      correctly with no new resolution path needed.
+ * Gated to fire only when it's clearly worth spending a normally-scarce, non-reusable item: two
+ * or more hostiles clustered within the item's blast radius (hostilesWithinRadius, the exact
+ * same function resolveThrowAtTile itself uses to decide what an AOE effect actually hits -- not
+ * a separate/approximate radius check), or a single boss-tier hostile. An ordinary one-on-one
+ * fight against a rank-and-file monster falls through to melee/spells instead.
+ */
+function tryThrowOffensiveItem(win, log) {
+  // NOT nearbyMonster() (adjacent-only) -- this is a ranged action, gating on an 8-neighbor
+  // check would mean it could only ever fire once already standing next to something, which
+  // defeats the entire point of throwing rather than swinging. The inner per-item nearestHostile
+  // (range) check below is the real, correct gate. Caught via direct unit testing (a scenario
+  // with hostiles clustered 4-6 tiles away -- well within an 8-range firebomb -- returned false
+  // until this was fixed).
+  const r = evalGame(win, `
+    (function(){
+      const items = player.inventory.filter(it => THROWABLE_EFFECTS.has(it.effect));
+      if (!items.length) return null;
+      let best = null, bestScore = -1;
+      for (const it of items) {
+        const range = throwRangeFor(it);
+        const hostile = nearestHostile(range);
+        if (!hostile) continue;
+        const radius = (it.radius || 3) + (player.throwRadiusBonus || 0);
+        const groupSize = hostilesWithinRadius(hostile.x, hostile.y, radius).length;
+        const worthIt = groupSize >= 2 || hostile.boss;
+        if (!worthIt) continue;
+        const score = groupSize + (hostile.boss ? 3 : 0);
+        if (score > bestScore) { bestScore = score; best = it; }
+      }
+      if (!best) return null;
+      const beforeCount = player.inventory.length;
+      const beforeAmount = best.amount;
+      beginThrowTargeting(best);
+      if (gameState !== 'tiletarget') return null; // frozen/stunned guard inside beginThrowTargeting tripped, or similar
+      return { name: best.name, beforeCount, beforeAmount, uid: best.uid };
+    })()
+  `);
+  if (!r.ok || !r.value) return false;
+  confirmSpellTargetIfNeeded(win);
+  const after = evalGame(win, `JSON.stringify({count: player.inventory.length, amount: (player.inventory.find(i=>i.uid===${JSON.stringify(r.value.uid)})||{}).amount})`).value;
+  let consumed = false;
+  try {
+    const { count, amount } = JSON.parse(after);
+    consumed = count < r.value.beforeCount || (typeof amount === 'number' && amount < r.value.beforeAmount);
+  } catch (e) {}
+  if (consumed) { if (log) log(`Threw ${r.value.name} at a threat.`); return true; }
+  return false; // opened targeting but didn't actually resolve (cancelled/no valid tile) -- let other strategies take the turn
+}
+
+/**
+ * Same "cast whichever affordable debuff has a valid target" idea tryCastOffensiveSpell uses,
  * fires whichever affordable debuff has a valid target, gated by BOT_PROFILE.debuffChance so
  * it's a real tactical choice (sometimes softening a foe first) rather than a mandatory
  * pre-step every single fight. Doesn't check whether the target is already debuffed with the
@@ -1231,6 +1525,12 @@ function tryCastDebuffAbility(win, log, chance = BOT_PROFILE.debuffChance) {
       const ids = [...new Set([
         ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
         ...(player.installedCyber||[]), ...(player.mutations||[]),
+        // grant_X buffs (e.g. a foodspell item's temporary bonus spell) are a real, game-
+        // recognized form of "knowing" an ability -- see isAbilityKnown() in game.html, which
+        // already checks getBuff('grant_'+id) alongside the four normal pools. Every ability-
+        // gathering function in this file used to rebuild this list without that check, so a
+        // temporarily-granted spell could never actually get cast by anything even while active.
+        ...Object.keys(player.buffs||{}).filter(k => k.startsWith('grant_')).map(k => k.slice(6)),
       ])];
       const known = ids.map(id => findAbilityById(id)).filter(s => s && s.type==='debuff');
       const usable = known.filter(s => getPoolValue(s.resource||'mp') >= effectiveCost(s) && nearestHostile(s.range));
@@ -1265,33 +1565,83 @@ function tryCastBuffAbility(win, log, chance = BOT_PROFILE.buffChance) {
       const ids = [...new Set([
         ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
         ...(player.installedCyber||[]), ...(player.mutations||[]),
+        // grant_X buffs (e.g. a foodspell item's temporary bonus spell) are a real, game-
+        // recognized form of "knowing" an ability -- see isAbilityKnown() in game.html, which
+        // already checks getBuff('grant_'+id) alongside the four normal pools. Every ability-
+        // gathering function in this file used to rebuild this list without that check, so a
+        // temporarily-granted spell could never actually get cast by anything even while active.
+        ...Object.keys(player.buffs||{}).filter(k => k.startsWith('grant_')).map(k => k.slice(6)),
       ])];
-      const known = ids.map(id => findAbilityById(id)).filter(s => s && s.type==='buff');
+      // 'bloodbuff'/'bloodarmor' ADDED: the entire Berserker Arts / Blood Magic buff family
+      // (Adrenaline Rush, Raging Blow, Blood Frenzy, Undying Rage, World-Ender's Fury, Blood
+      // Pact, Pain Is Weakness, Blood God's Covenant, Sanguine Armor) pays a percentage or flat
+      // slice of current HP (see castSpell's dedicated 'bloodbuff'/'bloodarmor' branches) rather
+      // than mana/stamina like a plain 'buff', so a berserker-focused build's entire signature
+      // combat tool was previously never touched by this function's plain type==='buff' filter.
+      // Safety mirrors tryCastOffensiveSpell's lifetap guard: skip below 35% HP as a
+      // defense-in-depth margin on top of the game's own hard refusal-if-lethal check in
+      // castSpell (player.hp <= cost => logs and aborts, no cast, no crash either way).
+      const BUFFLIKE = new Set(['buff','bloodbuff','bloodarmor']);
+      const known = ids.map(id => findAbilityById(id)).filter(s => s && BUFFLIKE.has(s.type));
       const usable = known.filter(s => {
+        if ((s.type === 'bloodbuff' || s.type === 'bloodarmor') && player.hp < player.maxHp * 0.35) return false;
         if (getPoolValue(s.resource||'mp') < effectiveCost(s)) return false;
-        const active = player.buffs[s.stat];
+        const active = player.buffs[s.stat || 'armor'];
         return !active || active.turns <= 3; // not active, or about to expire -- worth refreshing
       });
       if (!usable.length) return null;
       const spell = choice(Math.random, usable);
+      const beforeHp = player.hp;
       castSpell(spell.id);
-      return spell.name;
+      return { name: spell.name, beforeHp };
     })()
   `);
-  if (r.ok && r.value) { if (log) log(`Buffed with ${r.value}.`); return true; }
+  if (r.ok && r.value) { if (log) log(`Buffed with ${r.value.name}.`); return true; }
   return false;
 }
 
 /**
- * Conjures a temporary ally with a known, affordable 'summon' ability (any of the four pools)
- * when none is currently active -- previously NEVER exercised. Summons are self-targeted
- * (range 0, resolve immediately via the game's own spawnAlly(), which pushes onto
- * player.allies) -- checking player.allies for anything still alive is the same real state the
- * game itself tracks summons/companions in, so a build that already has a permanent companion
- * (spouse, hired follower, etc.) correctly won't burn resources summoning a redundant second
- * ally either. Deliberately excludes type:'raise' (same conjure-an-ally family, but needs a
- * corpse in range rather than being purely self-targeted) -- see the SECTION 5 header's open
- * gaps list for that one.
+ * Item-based counterpart to tryCastBuffAbility, for the seven stat-buff consumable effects
+ * (buffstr/buffdex/buffint/buffarmor/buffcrit/buffhaste/buffregen -- all self-resolving in one
+ * useItem() call, see game.html's case block for each: applyBuff(stat, power, dur), no
+ * targeting). AUDIT FINDING: an entire potion/food-buff category sat unused all session --
+ * these are exactly the kind of "drink before a big fight" item a real player reaches for, and
+ * cooking (tryCookUseful) can even produce several of them (a foodFlavor buff item gets a
+ * cooking-talent duration bonus applied automatically -- see durMult in each case -- which this
+ * exercises for free as a side effect of using them at all). Same "don't refresh what's already
+ * active" check tryCastBuffAbility uses, keyed by the stat applyBuff actually writes to (not the
+ * item's effect name, which doesn't always match 1:1 -- buffhaste writes to BOTH 'dex' and
+ * 'actionspeed', so it's checked via 'actionspeed' specifically since that's the field nothing
+ * else touches).
+ */
+function tryUseBuffPotion(win, log, chance = BOT_PROFILE.buffChance) {
+  if (!nearbyMonster(win)) return false;
+  if (Math.random() > chance) return false;
+  const r = evalGame(win, `
+    (function(){
+      const EFFECT_TO_BUFF_KEY = { buffstr:'str', buffdex:'dex', buffint:'int', buffarmor:'armor', buffcrit:'crit', buffregen:'regen', buffhaste:'actionspeed' };
+      const usable = player.inventory.filter(it => {
+        const key = EFFECT_TO_BUFF_KEY[it.effect];
+        if (!key) return false;
+        const active = player.buffs[key];
+        return !active || active.turns <= 3;
+      });
+      if (!usable.length) return null;
+      const it = choice(Math.random, usable);
+      try { useItem(it); return it.name; } catch(e){ return 'ERR:'+e.message; }
+    })()
+  `);
+  if (r.ok && typeof r.value === 'string' && !r.value.startsWith('ERR:')) { if (log) log(`Drank ${r.value} before the fight.`); return true; }
+  return false;
+}
+
+/**
+ * Deliberately conjures a temporary ally with a known, affordable 'summon' ability -- checks
+ * player.companion (or the equivalent field the game itself tracks summons/companions in, so a
+ * build that already has a permanent companion (spouse, hired follower, etc.) correctly won't
+ * burn resources summoning a redundant second ally either. Deliberately excludes type:'raise'
+ * (same conjure-an-ally family, but needs a corpse in range rather than being purely
+ * self-targeted) -- see the SECTION 5 header's open gaps list for that one.
  */
 function tryCastSummonAbility(win, log, chance = BOT_PROFILE.summonChance) {
   if (!nearbyMonster(win)) return false;
@@ -1302,6 +1652,12 @@ function tryCastSummonAbility(win, log, chance = BOT_PROFILE.summonChance) {
       const ids = [...new Set([
         ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
         ...(player.installedCyber||[]), ...(player.mutations||[]),
+        // grant_X buffs (e.g. a foodspell item's temporary bonus spell) are a real, game-
+        // recognized form of "knowing" an ability -- see isAbilityKnown() in game.html, which
+        // already checks getBuff('grant_'+id) alongside the four normal pools. Every ability-
+        // gathering function in this file used to rebuild this list without that check, so a
+        // temporarily-granted spell could never actually get cast by anything even while active.
+        ...Object.keys(player.buffs||{}).filter(k => k.startsWith('grant_')).map(k => k.slice(6)),
       ])];
       const known = ids.map(id => findAbilityById(id)).filter(s => s && s.type==='summon');
       const usable = known.filter(s => getPoolValue(s.resource||'mp') >= effectiveCost(s));
@@ -1335,6 +1691,12 @@ function tryCastRaiseAbility(win, log, chance = BOT_PROFILE.summonChance) {
       const ids = [...new Set([
         ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
         ...(player.installedCyber||[]), ...(player.mutations||[]),
+        // grant_X buffs (e.g. a foodspell item's temporary bonus spell) are a real, game-
+        // recognized form of "knowing" an ability -- see isAbilityKnown() in game.html, which
+        // already checks getBuff('grant_'+id) alongside the four normal pools. Every ability-
+        // gathering function in this file used to rebuild this list without that check, so a
+        // temporarily-granted spell could never actually get cast by anything even while active.
+        ...Object.keys(player.buffs||{}).filter(k => k.startsWith('grant_')).map(k => k.slice(6)),
       ])];
       const known = ids.map(id => findAbilityById(id)).filter(s => s && s.type==='raise');
       const usable = known.filter(s => getPoolValue(s.resource||'mp') >= effectiveCost(s) && findNearestCorpse(s.range));
@@ -1357,6 +1719,200 @@ function tryCastRaiseAbility(win, log, chance = BOT_PROFILE.summonChance) {
  * Returns true if it used a bandage; false if not bleeding or none available (in which case
  * the caller should still know it's bleeding via getState().bleedTurns for its own logging).
  */
+/**
+ * Emergency mobility: teleports away from the nearest hostile using a known, affordable
+ * 'blinklike' ability (Phantom Step, Time Skip, Shadow Step, Blink Drive Implant, Phase-Shift
+ * Boots, Quantum Blink Array, Spring-Loaded Heels, Warp Step, Vestigial Wings, Astral
+ * Projection, Flickering Form, Stellar Drift, Ride the Lightning, Temporal Rift, Grapple Hook
+ * Launcher, ... -- any of the four ability pools). AUDIT FINDING: this entire ability type --
+ * one of the largest single families in the game, and the single most direct counter to
+ * exactly the death pattern real batch runs kept hitting ("Retreated from an overwhelming
+ * threat" followed by the same monster catching up again next turn, or bleeding out during a
+ * multi-turn retreat a pursuer kept interrupting) -- was never cast by any strategy in this
+ * file. A build that rolled Phantom Step or a Blink Drive Implant carried a free, instant,
+ * guaranteed-distance escape button for its entire life and never once pressed it.
+ *
+ * Unlike a plain damage/heal/buff cast, a blinklike ability doesn't auto-resolve -- the game
+ * opens tile-targeting (beginBlinkTargeting -> gameState='tiletarget', see confirmTileTarget in
+ * game.html) and waits for a destination click. Driving that the same "just press Enter to
+ * snap to the nearest hostile" way confirmSpellTargetIfNeeded does for offense would be exactly
+ * backwards here -- Enter's quickConfirmTileTarget() targets the nearest HOSTILE tile, which
+ * blink then refuses to land on (occupied), wasting the turn. So this computes a real landing
+ * tile directly (the furthest open, walkable, unoccupied tile within the ability's range, along
+ * the straight line away from the nearest hostile) and resolves targeting with that tile
+ * directly via confirmTileTarget(), the same underlying function a human's tile-click ends up
+ * calling -- not a separate/fake resolution path.
+ *
+ * Gated to real danger (matches tryFleeIfCritical's own trigger threshold) so this is spent as
+ * an escape tool, not wasted wandering around: only fires at or below fleeHpFrac, or when
+ * already bleeding/poisoned with nothing left to cure it (see tryStanchBleeding/tryCurePoison --
+ * those run first in the main loop and only fail through to here if truly out of supplies),
+ * since a blink can end a multi-turn "getting bled/poisoned while chased" sequence outright
+ * where ordinary tile-by-tile fleeing cannot.
+ */
+async function tryUseEscapeAbility(win, log, hpFrac = BOT_PROFILE.fleeHpFrac) {
+  if (!nearbyMonster(win)) return false;
+  const st = evalGame(win, 'JSON.stringify({hp:player.hp,maxHp:player.maxHp,bleeding:(player.bleedTurns||0)>0,poisoned:(player.statusPoison||0)>0})').value;
+  let hp, maxHp, bleeding, poisoned;
+  try { ({ hp, maxHp, bleeding, poisoned } = JSON.parse(st)); } catch (e) { return false; }
+  const desperate = (typeof hp === 'number' && typeof maxHp === 'number' && hp <= maxHp * hpFrac) || bleeding || poisoned;
+  if (!desperate) return false;
+
+  const r = evalGame(win, `
+    (function(){
+      const ids = [...new Set([
+        ...(player.knownSpells||[]), ...(player.knownTechniques||[]),
+        ...(player.installedCyber||[]), ...(player.mutations||[]),
+        // grant_X buffs (e.g. a foodspell item's temporary bonus spell) are a real, game-
+        // recognized form of "knowing" an ability -- see isAbilityKnown() in game.html, which
+        // already checks getBuff('grant_'+id) alongside the four normal pools. Every ability-
+        // gathering function in this file used to rebuild this list without that check, so a
+        // temporarily-granted spell could never actually get cast by anything even while active.
+        ...Object.keys(player.buffs||{}).filter(k => k.startsWith('grant_')).map(k => k.slice(6)),
+      ])];
+      // includes the base 'blink' spell too -- it's type:'utility', not 'blinklike', but
+      // castSpell special-cases spell.id==='blink' to route through the exact same
+      // beginBlinkTargeting() as every 'blinklike' ability (see game.html), so it belongs here
+      // mechanically even though its type field doesn't say so. AUDIT FINDING: missed in the
+      // original pass that added this function -- 'blink' is probably the single most commonly
+      // available escape option early on (a low-tier Illusion/Mage spell), so this mattered.
+      const known = ids.map(id => findAbilityById(id)).filter(s => s && (s.type === 'blinklike' || s.id === 'blink'));
+      // Cheapest-first, not strongest-first: 'power' here means teleport RANGE (see
+      // beginBlinkTargeting: range = spell.power||10), not damage -- when multiple escapes are
+      // known, prefer the one that leaves the most resource in reserve for next time, not the
+      // longest-range one, since even a short blink is normally enough to break adjacency.
+      known.sort((a,b) => effectiveCost(a) - effectiveCost(b));
+      const usable = known.find(s => getPoolValue(s.resource||'mp') >= effectiveCost(s));
+      if (!usable) return null;
+      const hostile = nearestHostile(999);
+      if (!hostile) return null;
+      const range = usable.power || 10;
+      let dx = player.x - hostile.x, dy = player.y - hostile.y;
+      const len = Math.max(1, Math.hypot(dx, dy));
+      const ux = dx / len, uy = dy / len;
+      let tx = null, ty = null;
+      for (let d = range; d >= 1; d--) {
+        const cx = Math.round(player.x + ux * d), cy = Math.round(player.y + uy * d);
+        // Must also have a clear line of sight -- confirmTileTarget rejects a blink target it
+        // can't see a path to (see BLINK_IGNORE_LOS/hasLOS in game.html) just like it rejects an
+        // occupied/unwalkable one; checking all three here up front avoids opening targeting
+        // mode and then having the confirm silently fail on an LOS block a naive straight-line
+        // walkable/occupied check alone wouldn't have caught (confirmed via direct testing --
+        // this was the actual failure mode before this check was added).
+        if (curWalkable(cx, cy) && !entityAt(cx, cy) && hasLOS(player.x, player.y, cx, cy)) { tx = cx; ty = cy; break; }
+      }
+      if (tx === null) return null; // no clear landing spot away from the threat -- don't waste the resource
+      const beforeHp = player.hp;
+      const beforePos = { x: player.x, y: player.y };
+      castSpell(usable.id); // opens tiletarget (or, for grapple-style, still resolves via confirmTileTarget below)
+      if (gameState !== 'tiletarget') return null; // didn't actually open targeting (e.g. cast got refused) -- nothing to confirm
+      confirmTileTarget(tx, ty);
+      return { name: usable.name, beforeHp, beforePos };
+    })()
+  `);
+  if (!r.ok || !r.value) return false;
+  const after = evalGame(win, 'JSON.stringify({x:player.x,y:player.y})').value;
+  let moved = false;
+  try { const { x, y } = JSON.parse(after); moved = (x !== r.value.beforePos.x || y !== r.value.beforePos.y); } catch (e) {}
+  if (moved) { if (log) log(`Teleported away with ${r.value.name}.`); return true; }
+  return false; // targeting opened but didn't resolve (e.g. cost check failed inside confirmTileTarget) -- let other strategies take the turn
+}
+
+/**
+ * Toggles the game's real Sprint mode (key 'v' / toggleSprint() -- grants an extra action per
+ * round at a Stamina cost per round, see computeBonusActions/sprintStaminaCostThisRound in
+ * game.html) to match whether the bot actually wants it on right now. AUDIT FINDING: sprint was
+ * never toggled by any strategy in this file at all -- a real cost-free (when not actively
+ * being drained) speed advantage during exactly the "flee/retreat from something dangerous"
+ * moments this toolkit's own batch data kept showing as a dominant failure mode (a fleeing
+ * character repeatedly caught by a Wolf that simply wasn't slower) sat completely unused.
+ * Only calls toggleSprint() when current state actually differs from what's wanted (an
+ * unconditional press would just as often turn it back OFF), and turning on is skipped at 0
+ * Stamina since sprinting drains a per-round cost this function has no way to pay for that turn
+ * anyway (see sprintStaminaCostThisRound) -- the game itself also auto-cancels sprint on rest
+ * (doRest()) and on respawn, so this doesn't need to manage every off-ramp itself, only the
+ * "make sure it's on while actively fleeing/retreating" and "don't leave it draining once the
+ * danger's passed" cases the main loop calls it from.
+ */
+function ensureSprinting(win, wantOn, log) {
+  const cur = evalGame(win, 'JSON.stringify({sprinting: !!player.sprinting, stamina: player.stamina})').value;
+  let sprinting, stamina;
+  try { ({ sprinting, stamina } = JSON.parse(cur)); } catch (e) { return false; }
+  if (sprinting === wantOn) return false;
+  if (wantOn && stamina <= 0) return false;
+  key(win, 'v');
+  if (log && wantOn) log('Broke into a sprint.');
+  return true;
+}
+
+
+/**
+ * Reacts to dangerous cold/heat exposure (player.statusChill/statusHeat, real HP drain starting
+ * at 14 -- see handleTemperatureExposure in game.html). AUDIT FINDING: no strategy in this file
+ * ever checked either stat, at all -- confirmed as a real, repeated cause of death in batch
+ * testing ("DIED: the bitter cold", "DIED: heatstroke"). Note this is NOT a hidden-information
+ * problem the way the original bleeding/poison gaps were: the game already surfaces this in the
+ * normal always-visible status-effect list ('Chilled'/'Freezing', 'Sweltering'/'Overheating' --
+ * see getActiveStatusEffects), so a human player has the information right in front of them.
+ * This is purely a bot-capability gap; the fix belongs here, not in game.html.
+ *
+ * Two lines of defense, tried in order:
+ * 1. Drink a matching Resistance potion if one is carried (immediately starts the stat decaying
+ *    instead of climbing -- see the protectedFromCold/protectedFromHeat branches).
+ * 2. If none is carried and it's already gotten serious, and we're somewhere repositioning can
+ *    actually help (the overworld -- a dungeon/dimension's ambient temperature is uniform across
+ *    the whole zone, see currentTemperature's `zk === 'overworld' && !curIsDungeon()` guard, so
+ *    walking a few tiles never changes anything there and isn't attempted), move toward whichever
+ *    adjacent tile's biome temperature tag (biomeTempTag -- the same classifier
+ *    currentTemperature() itself reads) pulls away from the problem instead of into it.
+ */
+function tryHandleTemperatureExtreme(win, log) {
+  const st = evalGame(win, 'JSON.stringify({chill: player.statusChill||0, heat: player.statusHeat||0})').value;
+  let chill, heat;
+  try { ({ chill, heat } = JSON.parse(st)); } catch (e) { return false; }
+  if (chill < 6 && heat < 6) return false; // not serious yet -- don't interrupt anything else for it
+  const kind = chill >= heat ? 'cold' : 'heat';
+
+  const potionResult = evalGame(win, `
+    (function(){
+      const wantEffect = ${JSON.stringify(kind === 'cold' ? 'resistfrost' : 'resistfire')};
+      const it = player.inventory.find(i => i.effect === wantEffect);
+      if (!it) return false;
+      try { useItem(it); return true; } catch(e) { return 'ERR:'+e.message; }
+    })()
+  `);
+  if (potionResult.ok && potionResult.value === true) {
+    if (log) log(`Drank a ${kind === 'cold' ? 'Frost' : 'Fire'} Resistance potion.`);
+    return true;
+  }
+
+  if (chill < 14 && heat < 14) return false; // below the real-damage threshold -- no need to move yet
+  const moveResult = evalGame(win, `
+    (function(){
+      if (curIsDungeon() || zoneKey() !== 'overworld') return null; // ambient temp is uniform here -- moving can't help
+      const wantTag = ${JSON.stringify(kind === 'cold' ? 'hot' : 'cold')};
+      const badTag = ${JSON.stringify(kind === 'cold' ? 'cold' : 'hot')};
+      const dirs = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
+      let best = null, bestScore = -1;
+      for (const [k,dx,dy] of dirs) {
+        const nx = player.x+dx, ny = player.y+dy;
+        if (!curWalkable(nx, ny) || entityAt(nx, ny)) continue;
+        const tag = biomeTempTag(curTileAt(nx, ny));
+        const score = tag === wantTag ? 2 : (tag === badTag ? 0 : 1);
+        if (score > bestScore) { bestScore = score; best = k; }
+      }
+      return bestScore > 0 ? best : null; // don't bother moving somewhere no better than here
+    })()
+  `);
+  if (moveResult.ok && moveResult.value) {
+    key(win, moveResult.value);
+    if (log) log(`Moved to get out of the dangerous ${kind}.`);
+    return true;
+  }
+  return false;
+}
+
+
 async function tryStanchBleeding(win, log) {
   const bleeding = evalGame(win, '(player.bleedTurns||0) > 0').value === true;
   if (!bleeding) return false;
@@ -1369,6 +1925,206 @@ async function tryStanchBleeding(win, log) {
   `);
   if (r.ok && r.value === true) { if (log) log('Used a bandage to stop bleeding.'); return true; }
   if (log && r.ok && r.value === false) log('Bleeding with no bandage available.');
+  return false;
+}
+
+/**
+ * Fear (player.statusFear) and Confusion (player.statusConfuse) both meaningfully impair
+ * fighting -- Confused can misdirect an attack or move, Afraid interferes with acting normally
+ * -- but neither had a curative-item strategy, unlike poison/bleeding. Same pattern as
+ * tryCurePoison: matches the exact effect ids useItem's own switch dispatches on
+ * ('curefear'/'cureconfuse'/'cureall'), cure-first rather than waiting for anything else to
+ * notice. Combined into one function (rather than two near-identical ones) since both draw from
+ * the same small item pool and the same priority slot is appropriate for either.
+ */
+function tryCureMinorStatusAilment(win, log) {
+  const st = evalGame(win, 'JSON.stringify({fear:(player.statusFear||0)>0, confuse:(player.statusConfuse||0)>0})').value;
+  let fear, confuse;
+  try { ({ fear, confuse } = JSON.parse(st)); } catch (e) { return false; }
+  if (!fear && !confuse) return false;
+  const wantEffect = fear ? 'curefear' : 'cureconfuse';
+  const r = evalGame(win, `
+    (function(){
+      const cure = player.inventory.find(it => it.effect === ${JSON.stringify(wantEffect)} || it.effect === 'cureall');
+      if (!cure) return false;
+      try { useItem(cure); return cure.name; } catch(e){ return 'ERR:'+e.message; }
+    })()
+  `);
+  if (r.ok && typeof r.value === 'string' && !r.value.startsWith('ERR:')) { if (log) log(`Used ${r.value} to steady ${fear ? 'nerves' : 'mind'}.`); return true; }
+  return false;
+}
+
+/**
+ * Smoke Bomb (effect:'escape') is a genuinely simpler emergency escape than any spell-based
+ * blinklike ability: useItem's own case does `blinkPlayer(6); applyBuff('invis',1,8);` in one
+ * shot with no destination to pick at all (blinkPlayer resolves its own landing tile
+ * internally), unlike tryUseEscapeAbility's spells, which need this file to compute and confirm
+ * a tile. AUDIT FINDING: an item this directly suited to the exact "fled but got caught anyway"
+ * death pattern this session kept finding was sitting completely unused. Same trigger condition
+ * as tryUseEscapeAbility (see that function's own comment) since it's solving the same problem;
+ * tried first for exactly that reason -- if both a Smoke Bomb and a blinklike spell are on hand,
+ * spend the consumable that does nothing else for you outside combat before the reusable mana-
+ * gated ability.
+ */
+function tryUseSmokeBombEscape(win, log, hpFrac = BOT_PROFILE.fleeHpFrac) {
+  if (!nearbyMonster(win)) return false;
+  const st = evalGame(win, 'JSON.stringify({hp:player.hp,maxHp:player.maxHp,bleeding:(player.bleedTurns||0)>0,poisoned:(player.statusPoison||0)>0})').value;
+  let hp, maxHp, bleeding, poisoned;
+  try { ({ hp, maxHp, bleeding, poisoned } = JSON.parse(st)); } catch (e) { return false; }
+  const desperate = (typeof hp === 'number' && typeof maxHp === 'number' && hp <= maxHp * hpFrac) || bleeding || poisoned;
+  if (!desperate) return false;
+  const r = evalGame(win, `
+    (function(){
+      const bomb = player.inventory.find(it => it.effect === 'escape');
+      if (!bomb) return false;
+      const beforePos = { x: player.x, y: player.y };
+      try { useItem(bomb); } catch(e){ return 'ERR:'+e.message; }
+      return player.x !== beforePos.x || player.y !== beforePos.y;
+    })()
+  `);
+  if (r.ok && r.value === true) { if (log) log('Used a Smoke Bomb to vanish and get clear.'); return true; }
+  return false;
+}
+
+/**
+ * Covers the remaining self-resolving utility item effects that had no strategy at all:
+ * curseremove (strips a 'Cursed' equipment mod -- only worth using if one's actually present,
+ * checked directly rather than assumed), identify (repurposed in game.html from a dead no-op
+ * into dungeon treasure-detection -- only useful while curIsDungeon()), invisibility/
+ * nightvision/waterbreathing (plain timed self-buffs, skipped if already active), reveal
+ * (one-shot map reveal, no ongoing state to check), and foodspell (grants a temporary bonus
+ * spell via a grant_X buff -- see isAbilityKnown()/the ids-gathering fix above for how that
+ * granted spell then actually gets cast by the rest of this file once active; this is just the
+ * "should I eat the food that grants it" half, skipped if that exact grant is already active).
+ * All seven resolve in a single useItem() call with no targeting. Low-priority/opportunistic (none of these meaningfully affects survival),
+ * gated the same way tryUseMinorUtilityAbility is -- this exists so these item effects actually
+ * get exercised at all, not for tactical value.
+ */
+function tryUseMinorUtilityItem(win, log, chance = 0.05) {
+  if (nearbyMonster(win)) return false;
+  if (Math.random() > chance) return false;
+  const r = evalGame(win, `
+    (function(){
+      const hasCurse = Object.values(player.equipment).some(eq => eq && eq.mods && eq.mods.some(m => m.name === 'Cursed'));
+      const candidates = player.inventory.filter(it => {
+        switch (it.effect) {
+          case 'curseremove': return hasCurse;
+          case 'identify': return curIsDungeon();
+          case 'invisibility': return !(player.buffs.invis && player.buffs.invis.turns > 3);
+          case 'nightvision': return !(player.buffs.nightvision && player.buffs.nightvision.turns > 3);
+          case 'waterbreathing': return !(player.buffs.waterbreathing && player.buffs.waterbreathing.turns > 3);
+          case 'reveal': return true;
+          case 'foodspell': return !(player.buffs['grant_' + it.grantSpell] && player.buffs['grant_' + it.grantSpell].turns > 3);
+          default: return false;
+        }
+      });
+      if (!candidates.length) return null;
+      const it = choice(Math.random, candidates);
+      try { useItem(it); return it.name; } catch(e){ return 'ERR:'+e.message; }
+    })()
+  `);
+  if (r.ok && typeof r.value === 'string' && !r.value.startsWith('ERR:')) { if (log) log(`Used ${r.value}.`); return true; }
+  return false;
+}
+
+/**
+ * Mana/Stamina potions (effect:'mana'/'stamina') restore the two resources nearly every
+ * ability strategy in this file depends on, but nothing ever proactively drank one -- a
+ * character could be sitting on a full pouch of Mana Potions while too low on MP for
+ * tryCastOffensiveSpell/tryCastHealSpell/etc. to fire at all. Modest, not urgent-survival-tier
+ * priority (gated to a fairly low pool fraction, and skipped mid-combat -- outside of literal
+ * life-or-death this is about keeping the rest of the arsenal usable, not an emergency itself).
+ */
+function tryRestoreResourcePotion(win, log) {
+  if (nearbyMonster(win)) return false;
+  const st = evalGame(win, 'JSON.stringify({mp:player.mp,maxMp:player.maxMp,stamina:player.stamina,maxStamina:player.maxStamina})').value;
+  let mp, maxMp, stamina, maxStamina;
+  try { ({ mp, maxMp, stamina, maxStamina } = JSON.parse(st)); } catch (e) { return false; }
+  const mpLow = maxMp > 0 && mp < maxMp * 0.25;
+  const staLow = maxStamina > 0 && stamina < maxStamina * 0.25;
+  if (!mpLow && !staLow) return false;
+  const wantEffect = mpLow ? 'mana' : 'stamina';
+  const r = evalGame(win, `
+    (function(){
+      const pool = player.inventory.filter(it => it.effect === ${JSON.stringify(wantEffect)});
+      if (!pool.length) return false;
+      pool.sort((a,b) => (a.power||0) - (b.power||0)); // smallest-first -- don't burn a Major potion topping off a small deficit
+      try { useItem(pool[0]); return pool[0].name; } catch(e){ return 'ERR:'+e.message; }
+    })()
+  `);
+  if (r.ok && typeof r.value === 'string' && !r.value.startsWith('ERR:')) { if (log) log(`Drank ${r.value}.`); return true; }
+  return false;
+}
+
+/**
+ * Eats a Phoenix Ash Biscuit (effect:'phoenixcharge') the instant one's carried, unconditionally
+ * -- unlike every other food/curative strategy in this file, this deliberately does NOT gate on
+ * low HP, being safe, or any other precondition. AUDIT FINDING: this item permanently grants an
+ * extra Second Wind charge (player.secondWindMax++/secondWindCharges++ -- "survive a killing
+ * blow at 1 HP instead of dying," normally a level-5 talent-tree pick, see the 'secondwind'/
+ * 'undying' talents), a fully passive safety net that triggers automatically on what would
+ * otherwise be a killing blow (see the (player.secondWindCharges||0)>0 check in the death-
+ * handling code) -- there is nothing to "use" reactively in combat here, only a decision to eat
+ * it at all. It has zero downside and a permanent, stacking upside, so there is never a reason
+ * to hold onto one instead of eating it immediately, unlike ordinary food/potions where
+ * saving them for a worse moment can be the right call. Was previously not recognized as
+ * beneficial by any strategy at all (its effect name doesn't match 'heal'/'food'/'foodbuff').
+ */
+function tryEatPhoenixChargeImmediately(win, log) {
+  const r = evalGame(win, `
+    (function(){
+      const it = player.inventory.find(i => i.effect === 'phoenixcharge');
+      if (!it) return false;
+      try { useItem(it); return true; } catch(e){ return 'ERR:'+e.message; }
+    })()
+  `);
+  if (r.ok && r.value === true) { if (log) log('Ate a Phoenix Ash Biscuit for a permanent extra Second Wind.'); return true; }
+  return false;
+}
+
+/**
+ * A Splint fixes a Maimed (BODY_PARTS level 3) limb -- see useItem's 'splint' case in game.html,
+ * which explicitly declines to consume itself on anything less urgent (an uninjured or merely
+ * level-1/2-hurt part) or more (a permanently Ruined level-4 part, which needs Greater
+ * Restoration instead). Never used by any strategy before this; Maimed limbs carry real
+ * mechanical penalties (recalcBodyPenalties) that this leaves fixed for a long while otherwise.
+ */
+function tryUseSplintIfMaimed(win, log) {
+  if (nearbyMonster(win)) return false;
+  const r = evalGame(win, `
+    (function(){
+      const parts = ensureBodyParts(player);
+      const hasMaimed = BODY_PARTS.some(p => parts[p].level === 3);
+      if (!hasMaimed) return false;
+      const splint = player.inventory.find(it => it.effect === 'splint');
+      if (!splint) return false;
+      try { useItem(splint); return true; } catch(e){ return 'ERR:'+e.message; }
+    })()
+  `);
+  if (r.ok && r.value === true) { if (log) log('Used a Splint on a Maimed limb.'); return true; }
+  return false;
+}
+
+/**
+ * Equipment-repair items (effect:'repair' -- distinct from the ability type of the same name,
+ * which restores HP; this fixes gear DURABILITY) target whichever equipped piece needs it most
+ * (see useItem's own case: sorts by lowest durability% first). Never used before this; degraded
+ * gear presumably loses effectiveness over a long playthrough (durability exists as a system
+ * either way), so a carried repair item doing nothing all life is a real gap for any build
+ * that leans on its equipment (most of them).
+ */
+function tryRepairEquipmentItem(win, log) {
+  if (nearbyMonster(win)) return false;
+  const r = evalGame(win, `
+    (function(){
+      const needsRepair = Object.values(player.equipment).some(eq => eq && eq.maxDurability !== undefined && eq.maxDurability !== Infinity && eq.durability < eq.maxDurability * 0.5);
+      if (!needsRepair) return false;
+      const kit = player.inventory.find(it => it.effect === 'repair');
+      if (!kit) return false;
+      try { useItem(kit); return true; } catch(e){ return 'ERR:'+e.message; }
+    })()
+  `);
+  if (r.ok && r.value === true) { if (log) log('Repaired damaged equipment.'); return true; }
   return false;
 }
 
@@ -1386,7 +2142,15 @@ function tryCurePoison(win, log) {
   if (!poisoned) return false;
   const r = evalGame(win, `
     (function(){
-      const cure = player.inventory.find(it => it.effect === 'cureposion' || it.effect === 'cureall' || /antidote/i.test(it.name));
+      // resistpoison ADDED as a fallback: it's a full immunity buff (getBuff('resistpoison')>0
+      // blocks the poison tick's damage entirely, not just future re-poisoning -- see the
+      // 'resisted'/'fullyResisted' checks in game.html's poison-tick processing), so it stops an
+      // already-active poison just as effectively as a direct antidote when no antidote is
+      // carried, even though it isn't literally a "cure". Tried second, after a real cure/
+      // cureall, since those also clear the status outright rather than just neutralizing its
+      // damage for a while.
+      const cure = player.inventory.find(it => it.effect === 'cureposion' || it.effect === 'cureall' || /antidote/i.test(it.name))
+        || player.inventory.find(it => it.effect === 'resistpoison');
       if (!cure) return false;
       try { useItem(cure); return true; } catch(e){ return 'ERR:'+e.message; }
     })()
@@ -1418,9 +2182,16 @@ async function tryRecoverHp(win, log, hpFrac = BOT_PROFILE.recoverHpFrac) {
       // added with a flavorful, non-obvious name (e.g. a quest reward or a themed dimension's
       // reskinned potion) wouldn't match the name regex at all, but its data still says what it
       // does. Name regex kept as a fallback for the common case where the data doesn't expose a
-      // dedicated field but the name is unambiguous.
+      // dedicated field but the name is unambiguous. 'food'/'foodbuff' ADDED: cooking recipes
+      // (Cooked Meat, Hearty Stew, Bread, Roasted Apple, etc.) heal HP exactly like a potion
+      // (see useItem's 'food'/'foodbuff' cases) but their names never match the regex below --
+      // without this, tryCookUseful could cook a full pantry of food that then never actually
+      // got eaten by anything.
       const isHealish = (it) => it.type==='consumable' && (
-        it.effect==='heal' || it.effect==='bandage' || it.healAmount || it.hpRestore ||
+        it.effect==='heal' || it.effect==='bandage' || it.effect==='medkit' ||
+        it.effect==='food' || it.effect==='foodbuff' || it.effect==='ambrosia' ||
+        it.effect==='titansfeast' || it.effect==='foodextralife' || it.effect==='chaosstew' ||
+        it.healAmount || it.hpRestore ||
         /heal|potion|elixir|bandage|medkit|ration|food|tonic|salve/i.test(it.name)
       );
       const heals = player.inventory.filter(isHealish)
@@ -1670,7 +2441,8 @@ function tryGiftIfOffered(win, log, chance = BOT_PROFILE.giftChance) {
     (function(){
       const equippedUids = new Set(Object.values(player.equipment).filter(Boolean).map(i => i.uid));
       const isHealish = (it) => it.type==='consumable' && (
-        it.effect==='heal' || it.effect==='bandage' || it.healAmount || it.hpRestore ||
+        it.effect==='heal' || it.effect==='bandage' || it.effect==='food' || it.effect==='foodbuff' ||
+        it.healAmount || it.hpRestore ||
         /heal|potion|elixir|bandage|medkit|ration|food|tonic|salve/i.test(it.name)
       );
       const curativeCount = player.inventory.filter(isHealish).length;
@@ -1911,20 +2683,37 @@ function tryPickUpHere(win, log) {
 // ---------------------------------------------------------------------------------------
 
 /**
- * Craft the first known, currently-affordable recipe whose output name matches `wantRegex`
- * (default: curatives). Returns true if something was crafted. Note: player.knownRecipes
- * starts EMPTY for most archetypes (see README "Known limitations") -- this can only craft
- * recipes the character has actually learned from an NPC/scroll/starting kit, exactly like
- * a real player.
+ * Craft the first known, currently-affordable recipe whose output is a beneficial consumable
+ * (default: match on the output's declared `effect` field against a broad, curated set of
+ * "worth having" effects, falling back to name-regex for anything with no such field). AUDIT
+ * FINDING: this originally matched purely by name regex against `/heal|bandage|antidote|potion/`
+ * -- which happens to work for most alchemy potions, but silently excludes anything whose name
+ * doesn't happen to contain one of those words, including EVERY cooking recipe (Cooked Meat,
+ * Hearty Stew, Bread, Roasted Apple, Boiled Egg, Baked Potato, Honey Cake -- none of those
+ * strings match), even though several of them (food/foodbuff) mechanically heal HP exactly like
+ * a potion does (see useItem's 'food'/'foodbuff' cases in game.html). Matching on the item's own
+ * effect field first is the same fix already applied to tryRecoverHp's curative-matching and
+ * several other functions this session, for the same reason: the data already says what
+ * something does, and trusting that is more robust than guessing from a name string. Note:
+ * player.knownRecipes starts EMPTY for most archetypes (see README "Known limitations") -- this
+ * can only craft recipes the character has actually learned from an NPC/scroll/starting kit,
+ * exactly like a real player.
  */
 function tryCraftUseful(win, log, wantRegex = /heal|bandage|antidote|potion/i) {
   const r = evalGame(win, `
     (function(){
+      const BENEFICIAL_EFFECTS = new Set([
+        'heal','bandage','medkit','cureposion','cureall','curefear','cureconfuse','curseremove',
+        'coagulant','food','foodbuff','resistfire','resistfrost','resistpoison','resistbleed',
+        'mana','stamina','splint','repair','ambrosia','titansfeast','foodextralife','chaosstew',
+      ]);
       const rid = (player.knownRecipes||[]).find(id => {
         const rec = RECIPES.find(x=>x.id===id);
         if (!rec) return false;
         const outBase = ITEM_BASES.find(b=>b.id===rec.output.id);
-        if (!outBase || !${wantRegex.toString()}.test(outBase.name)) return false;
+        if (!outBase) return false;
+        const matches = (outBase.effect && BENEFICIAL_EFFECTS.has(outBase.effect)) || ${wantRegex.toString()}.test(outBase.name);
+        if (!matches) return false;
         return hasIngredients(rec);
       });
       if (!rid) return null;
@@ -1933,6 +2722,41 @@ function tryCraftUseful(win, log, wantRegex = /heal|bandage|antidote|potion/i) {
     })()
   `);
   if (r.ok && r.value) { if (log) log(`Crafted via recipe: ${r.value}`); return true; }
+  return false;
+}
+
+/**
+ * Cooking's own dedicated strategy, distinct from tryCraftUseful even though both ultimately
+ * call the same craftRecipe() (cooking recipes are RECIPES entries with category:'cooking' --
+ * see game.html; there is no separate mechanic, no campfire/station requirement, nothing
+ * location-gated about it). AUDIT FINDING (raised directly by the user, confirmed true): cooking
+ * had ZERO exercise from autonomous play all session -- not because it's hard to reach (it's
+ * exactly as reachable as any other recipe) but because nothing ever selected a cooking recipe
+ * specifically. Kept as its own function rather than just broadening tryCraftUseful's filter
+ * (which now also would incidentally match cooking output via the effect-field fix above)
+ * because cooking has its own profession-XP path (gainProfessionXp('chef', ...)) and its own
+ * yield/quality talent tree (cookingHealBonus/cookingYieldBonus/cookingBonusEffectChance --
+ * Camp Cook through Chef of the Gods) worth exercising and verifying directly, independent of
+ * ordinary alchemy/smithing crafting. Only fires below a modest food-stock threshold so this
+ * doesn't spend every raw ingredient on hand at first opportunity.
+ */
+function tryCookUseful(win, log) {
+  const r = evalGame(win, `
+    (function(){
+      const isHealish = (it) => it.type==='consumable' && (it.effect==='food' || it.effect==='foodbuff' || it.effect==='heal');
+      const stock = player.inventory.filter(isHealish).length;
+      if (stock >= 3) return null; // already have enough on hand -- don't burn every ingredient cooking more
+      const rid = (player.knownRecipes||[]).find(id => {
+        const rec = RECIPES.find(x=>x.id===id);
+        if (!rec || rec.category !== 'cooking') return false;
+        return hasIngredients(rec);
+      });
+      if (!rid) return null;
+      craftRecipe(rid);
+      return rid;
+    })()
+  `);
+  if (r.ok && r.value) { if (log) log(`Cooked via recipe: ${r.value}`); return true; }
   return false;
 }
 
@@ -2846,7 +3670,19 @@ function tryAdvanceMainQuest(win, log, lock) {
     lock.stageId = undefined; // wasn't actually enterable from here -- drop the lock, re-evaluate fresh next time
     return false;
   }
-  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 300)`).value;
+  // BUG FIX (found via a debug-invincible diagnostic run, then traced upstream into game.html
+  // itself -- see the BALANCE-adjacent BUG FIX comment on bfsFirstStep there for the full
+  // writeup): that function's own internal node-search budget now correctly scales with the
+  // maxRadius it's given (6*maxRadius^2) instead of a flat, disconnected cap -- which is the
+  // right fix there, but means passing a flat large maxRadius here (as every one of this file's
+  // 6 bfsFirstStep call sites used to) pays that same large budget on every single call, even
+  // when the actual target is only a few tiles away and trivially reachable. Confirmed directly
+  // via timing: some calls took 1.8-3.2 real seconds once game.html's cap was raised, before
+  // this fix. Passing a maxRadius proportional to the ACTUAL distance to this specific target
+  // (with a 1.5x/+20 buffer for realistically winding paths, still capped at the original 300)
+  // keeps nearby, common-case targets fast while still allowing genuinely distant ones their
+  // full budget.
+  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, Math.min(300, Math.ceil(Math.max(Math.abs(${target.x}-player.x), Math.abs(${target.y}-player.y))*1.5)+20))`).value;
   if (!step) { lock.stageId = undefined; return false; } // unreachable -- drop the lock, let a fresh pick happen next time
   const MOVE_DIRS = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
   const dirEntry = MOVE_DIRS.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
@@ -2979,7 +3815,7 @@ function tryPathTowardQuestNpc(win, log, lock) {
     return false; // already adjacent/arrived -- tryTalkToAdjacentNpc handles adjacency; nothing more to do this turn otherwise
   }
   if (viaSettlementFallback) lock.settlementArrivedCount = 0; // moving again -- reset the stuck-at-arrival counter
-  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 300)`).value;
+  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, Math.min(300, Math.ceil(Math.max(Math.abs(${target.x}-player.x), Math.abs(${target.y}-player.y))*1.5)+20))`).value;
   if (!step) { lock.uid = null; return false; } // unreachable -- drop the lock and let a fresh pick happen next time
   const MOVE_DIRS_Q = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
   const dirEntry = MOVE_DIRS_Q.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
@@ -3020,19 +3856,36 @@ function tryPathTowardQuestNpc(win, log, lock) {
  */
 function tryPathTowardQuestKillTarget(win, log, lock) {
   if (evalGame(win, 'curIsDungeon() || curIsDimension()').value) return false; // curMonsters() below only makes sense as "visible in this loaded area"
+  // BUG FIX: this used to only recognize side-quest bounty/chain_kill/dimension_bounty targets
+  // (q.target, always a single monster id) -- it never matched the MAIN QUEST's own 'kill_any'
+  // stage type at all, which tracks progress against stage.targetIds (a LIST of acceptable
+  // species, e.g. PROLOGUE_WILDLIFE.forestFringe) via checkMainQuestKillAny(). tryPathTowardBoss-
+  // Biome (added earlier this session) gets a kill_any character into the right BIOME for its
+  // required species, then explicitly steps aside ("let normal explore+combat find the actual
+  // target") once already there -- but nothing then actively sought out a MATCHING monster among
+  // however many other species share that biome; ordinary combat just fights whatever wanders
+  // adjacent, whether or not it counts. CONFIRMED as a major real-world impact, not just a
+  // theoretical gap: the single longest-surviving life across this entire session's testing
+  // (1964 actions, ~4400 in-game turns) never advanced past its very first kill_any prologue
+  // stage. Fixed by unifying both target sources into one `targetIds` array (a bounty's single
+  // q.target normalized to a one-element array) and matching against ANY of them, reusing the
+  // exact same "lock onto a specific monster, approach it" logic already proven for bounties.
   const questTargetR = evalGame(win, `
     (function(){
       const q = (player.quests || []).find(q => !q.done && ['bounty', 'chain_kill', 'dimension_bounty'].includes(q.type) && q.target);
-      return q ? q.target : null;
+      if (q) return [q.target];
+      const s = curStoryStage();
+      if (s && s.type === 'kill_any' && s.targetIds && s.targetIds.length && (s.progress||0) < s.targetCount) return s.targetIds;
+      return null;
     })()
   `);
-  const targetId = questTargetR.ok ? questTargetR.value : null;
-  if (!targetId) { lock.uid = null; return false; }
+  const targetIds = questTargetR.ok ? questTargetR.value : null;
+  if (!targetIds || !targetIds.length) { lock.uid = null; return false; }
   const monR = evalGame(win, `
     (function(){
-      const targetId = ${JSON.stringify(targetId)};
+      const targetIds = ${JSON.stringify(targetIds)};
       const lockedUid = ${JSON.stringify(lock.uid)};
-      const cands = curMonsters().filter(m => m.hp > 0 && m.monsterId === targetId);
+      const cands = curMonsters().filter(m => m.hp > 0 && targetIds.includes(m.monsterId));
       if (!cands.length) return null;
       const stillThere = lockedUid ? cands.find(m => m.uid === lockedUid) : null;
       if (stillThere) return { uid: stillThere.uid, x: stillThere.x, y: stillThere.y };
@@ -3046,14 +3899,14 @@ function tryPathTowardQuestKillTarget(win, log, lock) {
   lock.uid = target.uid;
   const already = evalGame(win, `chebyshev(player.x, player.y, ${target.x}, ${target.y})`).value;
   if (already <= 1) return false; // adjacent -- tryFightAdjacent (earlier in the main loop) handles it
-  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 300)`).value;
+  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, Math.min(300, Math.ceil(Math.max(Math.abs(${target.x}-player.x), Math.abs(${target.y}-player.y))*1.5)+20))`).value;
   if (!step) { lock.uid = null; return false; } // unreachable -- drop the lock, let normal explore/re-pick handle it
   const dirEntry = MOVE_DIRS.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
   if (!dirEntry) return false;
   const before = evalGame(win, 'turnCount').value;
   key(win, dirEntry[0]);
   if (evalGame(win, 'turnCount').value === before) { lock.uid = null; return false; } // blocked -- drop the lock
-  if (log && Math.random() < 0.1) log(`Heading toward a ${targetId} for an active bounty/kill quest.`);
+  if (log && Math.random() < 0.1) log(`Heading toward a ${targetIds.join('/')} for an active bounty/kill quest.`);
   return true;
 }
 
@@ -3124,7 +3977,7 @@ function tryPathTowardAnyDungeon(win, log, lock) {
     return true;
   }
 
-  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 300)`).value;
+  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, Math.min(300, Math.ceil(Math.max(Math.abs(${target.x}-player.x), Math.abs(${target.y}-player.y))*1.5)+20))`).value;
   if (!step) { lock.x = undefined; return false; } // unreachable from here -- drop the lock, let a fresh pick happen next time
   const MOVE_DIRS_D = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
   const dirEntry = MOVE_DIRS_D.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
@@ -3242,7 +4095,7 @@ function tryAdvanceDimensionGateStructure(win, log, memory) {
           if (log && evalGame(win, 'turnCount').value !== before) log('Used the slumbering altar to open the way to the Lucid Expanse.');
           return true;
         }
-        const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${altar.x}, ${altar.y}, 300)`).value;
+        const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${altar.x}, ${altar.y}, Math.min(300, Math.ceil(Math.max(Math.abs(${altar.x}-player.x), Math.abs(${altar.y}-player.y))*1.5)+20))`).value;
         if (step) {
           const MOVE_DIRS_A = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
           const d = MOVE_DIRS_A.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
@@ -3282,7 +4135,7 @@ function tryAdvanceDimensionGateStructure(win, log, memory) {
     if (log && evalGame(win, 'turnCount').value !== before) log(`Used the remembered ${feature.replace('_', ' ')} to work toward the current dimension trail stage.`);
     return true;
   }
-  const step = evalGame(win, `!curIsDungeon() && !curIsDimension() ? bfsFirstStep(player.x, player.y, ${pos.x}, ${pos.y}, 300) : null`).value;
+  const step = evalGame(win, `!curIsDungeon() && !curIsDimension() ? bfsFirstStep(player.x, player.y, ${pos.x}, ${pos.y}, Math.min(300, Math.ceil(Math.max(Math.abs(${pos.x}-player.x), Math.abs(${pos.y}-player.y))*1.5)+20)) : null`).value;
   if (!step) return false;
   const MOVE_DIRS_S = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
   const dirEntry = MOVE_DIRS_S.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
@@ -3361,7 +4214,85 @@ function tryPathTowardBossBiome(win, log, memory, lock) {
   if (!info) return false;
   if (evalGame(win, 'curIsDungeon() || curIsDimension()').value) return false; // biomes are an overworld-only concept
   const alreadyHere = evalGame(win, `${JSON.stringify(info)}.includes((getTile(player.x, player.y)||{}).biome)`).value;
-  if (alreadyHere) return false; // in the right terrain already -- let normal explore+combat find the actual target
+  if (alreadyHere) {
+    // AUDIT FINDING (from a debug-invincible diagnostic run specifically built to isolate
+    // "can the bot complete the game" from "can it survive" -- see PROGRESS.md): a kill_boss
+    // stage whose target is a roaming OVERWORLD_BOSSES entry (as opposed to a dungeon-themed
+    // one) spawns at only ~0.6% chance PER NEWLY-GENERATED CHUNK (see maybeSpawnOverworldBoss's
+    // own BALANCE FIX comment) -- and that roll only ever happens once, the moment a chunk is
+    // first generated. A character that's already in the right biome but re-treads already-
+    // generated ground (which generic nav.exploreStep will do plenty of, since it isn't biome-
+    // aware) is burning actions with zero chance of ever finding the boss there -- that ground's
+    // spawn roll, if any, already happened and failed. Confirmed directly: an invincible
+    // diagnostic life spent 800+ actions (and climbing) doing exactly this before the run was
+    // stopped. Fixed for the kill_boss/OVERWORLD_BOSSES case specifically (kill_any's ordinary
+    // wildlife spawns far more densely and doesn't need this): if the boss hasn't actually been
+    // seen yet nearby, steer toward the nearest chunk that (a) is NOT YET in worldChunks (its
+    // spawn roll hasn't happened yet) and (b) classifyBiomeFull() -- a pure function of
+    // coordinates alone, safe to call speculatively with no side effects or generation cost --
+    // predicts will actually match one of this boss's eligible biomes, rather than deferring to
+    // biome-blind generic exploration. Bounded to a modest search ring so this stays cheap.
+    const bossNearby = evalGame(win, `
+      (function(){
+        const s = curStoryStage();
+        if (!s || s.type !== 'kill_boss') return true; // kill_any or anything else -- old behavior (defer to generic explore)
+        return curMonsters().some(m => m.hp > 0 && m.monsterId === s.targetBossId);
+      })()
+    `).value;
+    if (bossNearby) return false; // already visible, or this isn't the roaming-boss case -- let combat/generic explore handle it
+    const target = evalGame(win, `
+      (function(){
+        const biomes = ${JSON.stringify(info)};
+        const CHUNK = 24;
+        const pcx = Math.floor(player.x / CHUNK), pcy = Math.floor(player.y / CHUNK);
+        // Capped at 8 rings (<=192 tiles chebyshev to a chunk's center), deliberately well under
+        // the 300-tile bfsFirstStep budget used below -- caught via direct testing that a
+        // farther ring (12, ~288 tiles) can find a real, correctly-predicted candidate that
+        // then has NO actual path within budget once real terrain is accounted for (natural
+        // obstacles mean actual path length routinely exceeds straight-line chebyshev distance).
+        for (let ring = 1; ring <= 8; ring++) {
+          for (let dcy = -ring; dcy <= ring; dcy++) {
+            for (let dcx = -ring; dcx <= ring; dcx++) {
+              if (Math.max(Math.abs(dcx), Math.abs(dcy)) !== ring) continue; // ring perimeter only
+              const cx = pcx + dcx, cy = pcy + dcy;
+              if (worldChunks.has(cx + ',' + cy)) continue; // already generated -- its spawn roll already happened
+              const wx = cx * CHUNK + Math.floor(CHUNK / 2), wy = cy * CHUNK + Math.floor(CHUNK / 2);
+              if (biomes.includes(classifyBiomeFull(wx, wy))) return { x: wx, y: wy };
+            }
+          }
+        }
+        return null;
+      })()
+    `).value;
+    if (!target) return false; // nothing predictable within range -- fall back to generic explore same as before
+    // NOT the shared distance-proportional formula the other bfsFirstStep call sites in this
+    // file use -- this one is different in kind, not just placement: every other call site
+    // paths through terrain that's a mix of already-generated (cheap to check) and occasionally-
+    // new ground, but this one is BY DESIGN always heading toward genuinely unexplored chunks
+    // (see the comment on 'alreadyHere' above -- that's the entire point, to trigger their
+    // spawn roll), so the BFS itself keeps triggering real chunk generation as a side effect of
+    // exploring, which is inherently far more expensive per node than reading already-cached
+    // terrain. Measured directly: a call reaching ~85 tiles into unexplored ground took 2.5
+    // real seconds even after the distance-proportional formula, since that formula's own 1.5x
+    // buffer combined with the quadratic node-cost relationship still saturates the outer 60000
+    // cap well before 85 tiles. Capped at a flat, modest 80 here instead (matching what the
+    // actual game's own autoTravelHome/autoTravelToStairs consider a normal travel radius, per
+    // their own maxRadius arguments), trading some reach for keeping this responsive -- an 8-ring
+    // (192 tile) search that can only successfully path to targets within roughly 80 tiles of
+    // that will still very often find something inside its own effective range, and this
+    // function is called repeatedly every turn regardless, so a farther candidate simply becomes
+    // reachable on a later call as the character naturally moves closer to it via other actions.
+    const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 80)`).value;
+    if (!step) return false;
+    const MOVE_DIRS_U = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
+    const dirEntry = MOVE_DIRS_U.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
+    if (!dirEntry) return false;
+    const before = evalGame(win, 'turnCount').value;
+    key(win, dirEntry[0]);
+    if (evalGame(win, 'turnCount').value === before) return false;
+    if (log && Math.random() < 0.1) log(`Pushing into unexplored ${info.join('/')} terrain, hoping to cross paths with the boss.`);
+    return true;
+  }
 
   // scan only the currently-loaded 3x3 chunk radius, same bounded cost as scanForDimensionGateFeatures
   const seen = evalGame(win, `
@@ -3413,7 +4344,7 @@ function tryPathTowardBossBiome(win, log, memory, lock) {
   }
   const best = memory[lock.biome];
 
-  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${best.x}, ${best.y}, 300)`).value;
+  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${best.x}, ${best.y}, Math.min(300, Math.ceil(Math.max(Math.abs(${best.x}-player.x), Math.abs(${best.y}-player.y))*1.5)+20))`).value;
   if (!step) return false;
   const MOVE_DIRS_B = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
   const dirEntry = MOVE_DIRS_B.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
@@ -3452,9 +4383,13 @@ function tryEscapeUnknownMenu(win) {
 const nav = { MOVE_DIRS, exploreStep };
 const strat = {
   tryFightAdjacent, tryFireRanged, tryFleeIfCritical, tryAvoidOverwhelmingMonster, tryUseHackChip,
-  tryCalledShot, tryCastOffensiveSpell, tryCastHealSpell, tryCastDebuffAbility, tryCastBuffAbility,
-  tryCastSummonAbility, tryCastRaiseAbility, tryStanchBleeding, tryCurePoison, tryRecoverHp,
-  tryEquipUpgrades, tryPickUpHere, tryFarm, tryCraftUseful, tryCraftGearUpgrade, tryShopIfTrading, tryTrainIfOffered,
+  tryCalledShot, tryCastOffensiveSpell, tryThrowOffensiveItem, tryCastHealSpell, tryCastDebuffAbility, tryCastBuffAbility,
+  tryCastSummonAbility, tryCastRaiseAbility, tryUseBuffPotion, tryStanchBleeding, tryCurePoison, tryRecoverHp,
+  tryUseEscapeAbility, ensureSprinting, tryHandleTemperatureExtreme, tryEatPhoenixChargeImmediately,
+  tryUseMinorUtilityAbility, tryUseTravelBypassForSupplyRun,
+  tryCureMinorStatusAilment, tryUseSmokeBombEscape, tryRestoreResourcePotion, tryUseMinorUtilityItem,
+  tryUseSplintIfMaimed, tryRepairEquipmentItem,
+  tryEquipUpgrades, tryPickUpHere, tryFarm, tryCraftUseful, tryCookUseful, tryCraftGearUpgrade, tryShopIfTrading, tryTrainIfOffered,
   tryGiftIfOffered, tryHandleDialogueIfOpen, tryTalkToAdjacentNpc, tryAdvanceMainQuest, tryPathTowardQuestNpc,
   tryAdvanceDimensionGateStructure, tryPathTowardAnyDungeon, tryPathTowardBossBiome,
   getMainQuestNavigationTarget, tryEscapeUnknownMenu, trySpendStatPoints, trySpendTalentPoints,
@@ -3754,9 +4689,11 @@ const strat = {
 //   math below the actual threshold every time -- root-caused by direct instrumentation, not
 //   guessed at, then fixed by clearing the policy before that specific sub-test. Also verified
 //   openCourtMenu's decree and standing-policy actions directly. NOTABLE FINDING surfaced along
-//   the way and left as a `notableFindings` entry (a game.html bug, not a playtest.js one, so
-//   not fixed here): claimCrown's dialogue option displays "Claim the crown (500g)" but the
-//   function itself charges a flat 2000g.
+//   the way (a game.html bug, not a playtest.js one): claimCrown's dialogue option displayed
+//   "Claim the crown (500g)" but the function itself charged a flat 2000g -- FIXED IN GAME.HTML
+//   (later session): the label now reads 2000g to match the real cost. The notableFindings push
+//   below was removed accordingly so a future sweep run doesn't keep reporting an already-fixed
+//   bug as still present.
 //   (2) SEVEN '>'-TRIGGERED WORLD-FEATURE TILES -- found by tracing key '>' (useStairs() in
 //   game.html, a misleading name -- it's a generic dispatch on tile feature covering stairs,
 //   dungeon entrances, rift portals, AND dimension shrines/winding posts/confessional pillars/
@@ -4042,6 +4979,24 @@ function draftCustomCharacter(win) {
       }
       d.gold += d.points * CREATION_GOLD_PER_POINT;
       d.points = 0;
+      // BUG FIX: previously nothing guaranteed a minimum here, so a roll where the ability
+      // phase's own reserve landed at exactly 3 (its usual case -- see reserve = Math.min(
+      // d.points, 3) above) and then the item-purchase coin flip above spent all 3 of those
+      // points on a single item, ended with d.points = 0 and therefore exactly 0 GOLD -- "1
+      // starting item, 0g" is exactly this outcome, and it showed up repeatedly in real
+      // playtest batches as a direct contributor to early deaths (bled/poisoned with literally
+      // no money to have pre-bought a bandage/antidote or top up mid-run). A real player
+      // choosing a custom build essentially never deliberately leaves themselves with zero
+      // gold on purpose -- this was an artifact of blind 50/50 coin flips in this RANDOM TEST
+      // GENERATOR, not a real skilled-play choice, and not a change to the actual game's
+      // point-buy costs or rules. Applied as a pure top-up on the FINAL result rather than
+      // ring-fencing points earlier in the process (an earlier version of this fix tried
+      // reserving points before the item-purchase loop and, by directly shrinking the same pool
+      // items are bought from, ended up disabling item purchases entirely in the common case --
+      // caught via direct statistical testing across 30 rolls, 0 of which bought an item, before
+      // this version shipped) -- so item-purchase behavior here is completely unaffected, and
+      // only the specific degenerate "ended up with literally 0 gold" case is topped up.
+      if (d.gold === 0) d.gold = CREATION_GOLD_PER_POINT * 2;
 
       return { focus, statAdds: {...d.statAdds}, abilityCount: d.abilities.length, itemCount: d.items.length, gold: d.gold };
     })()
@@ -4286,6 +5241,7 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
   const anyDungeonLock = {}; // see tryPathTowardAnyDungeon's BUG FIX comment for why this exists
   const bossBiomeMemory = {}; // see tryPathTowardBossBiome for what this holds
   const bossBiomeLock = {}; // see tryPathTowardBossBiome's BUG FIX comment for why this exists
+  const seekSuppliesLock = {}; // see trySeekSupplies's trulyEmpty BUG FIX comment for why this exists
   const fleeStall = { count: 0 }; // see tryFleeIfCritical's BUG FIX comment for why this exists
   let hasBeenPlaying = false; // tracks whether we've ever reached 'playing' -- see the
   // implicit-death handling below, right before the main loop.
@@ -4484,14 +5440,38 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     let actionLabel = 'explore';
     acted = acted || await strat.tryStanchBleeding(win, log); if (acted) actionLabel = 'bandage';
     if (!acted) { acted = strat.tryCurePoison(win, log); if (acted) actionLabel = 'antidote'; }
+    if (!acted) { acted = strat.tryCureMinorStatusAilment(win, log); if (acted) actionLabel = 'cure-status'; }
+    // Zero-downside permanent upside, no gating needed -- see tryEatPhoenixChargeImmediately's
+    // own comment for why this doesn't wait for low HP the way ordinary food/potions do.
+    if (!acted) { acted = strat.tryEatPhoenixChargeImmediately(win, log); if (acted) actionLabel = 'phoenix-charge'; }
     if (!acted) { acted = await strat.tryRecoverHp(win, log); if (acted) actionLabel = 'recover'; }
+    if (!acted) { acted = strat.tryHandleTemperatureExtreme(win, log); if (acted) actionLabel = 'temperature'; }
+    // Smoke Bomb tried before the spell-based escape -- see tryUseSmokeBombEscape's own comment
+    // for why (same trigger condition, but it's the item that does nothing else outside combat).
+    if (!acted) { acted = strat.tryUseSmokeBombEscape(win, log); if (acted) actionLabel = 'smoke-bomb'; }
+    // Emergency teleport-escape: checked ahead of ordinary fleeing since it can end a
+    // multi-turn "getting bled/poisoned while chased" sequence outright in a single action,
+    // which tile-by-tile fleeing cannot. See tryUseEscapeAbility's own comment (SECTION 4/5).
+    if (!acted) { acted = await strat.tryUseEscapeAbility(win, log); if (acted) actionLabel = 'blink-escape'; }
     if (!acted) { acted = await strat.tryFleeIfCritical(win, log, undefined, fleeStall); if (acted) actionLabel = 'flee'; }
     if (!acted) { acted = await strat.tryAvoidOverwhelmingMonster(win, log); if (acted) actionLabel = 'retreat'; }
+    // Nothing acute enough to flee/retreat from this turn -- if sprint was left on from a
+    // previous scare, turn it off so it isn't silently draining Stamina for no reason once the
+    // danger's passed (the game auto-cancels it on rest/respawn already; this covers the
+    // "still standing, no longer in danger" gap those two don't).
+    if (!acted && !nearbyMonster(win)) strat.ensureSprinting(win, false, null);
+    if (!acted) { acted = strat.tryRestoreResourcePotion(win, log); if (acted) actionLabel = 'restore-resource'; }
+    if (!acted) { acted = strat.tryUseSplintIfMaimed(win, log); if (acted) actionLabel = 'splint'; }
+    if (!acted) { acted = strat.tryRepairEquipmentItem(win, log); if (acted) actionLabel = 'repair-gear'; }
+    if (!acted) { acted = strat.tryUseMinorUtilityAbility(win, log); if (acted) actionLabel = 'minor-utility'; }
+    if (!acted) { acted = strat.tryUseMinorUtilityItem(win, log); if (acted) actionLabel = 'minor-utility-item'; }
     if (!acted) { acted = strat.tryUseHackChip(win, log); if (acted) actionLabel = 'hack'; }
     if (!acted) { acted = strat.tryCastBuffAbility(win, log); if (acted) actionLabel = 'buff'; }
+    if (!acted) { acted = strat.tryUseBuffPotion(win, log); if (acted) actionLabel = 'buff-potion'; }
     if (!acted) { acted = strat.tryCastSummonAbility(win, log); if (acted) actionLabel = 'summon'; }
     if (!acted) { acted = strat.tryCastRaiseAbility(win, log); if (acted) actionLabel = 'raise'; }
     if (!acted) { acted = strat.tryCastDebuffAbility(win, log); if (acted) actionLabel = 'debuff'; }
+    if (!acted) { acted = strat.tryThrowOffensiveItem(win, log); if (acted) actionLabel = 'throw'; }
     if (!acted) { acted = strat.tryCastOffensiveSpell(win, log); if (acted) actionLabel = 'spell'; }
     if (!acted) { acted = strat.tryFireRanged(win, log); if (acted) actionLabel = 'ranged'; }
     if (!acted) strat.tryCalledShot(win, log); // never counts as "acted" on its own -- setup only
@@ -4502,6 +5482,7 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     if (!acted) acted = strat.tryTalkToAdjacentNpc(win, log, talkedNpcUids);
     if (!acted && i % 40 === 0) acted = strat.tryEquipUpgrades(win, log);
     if (!acted && i % 25 === 0) acted = strat.tryCraftUseful(win, log);
+    if (!acted && i % 27 === 0) acted = strat.tryCookUseful(win, log);
     if (!acted && i % 35 === 0) acted = strat.tryCraftGearUpgrade(win, log);
     if (!acted && i % 15 === 0) acted = strat.trySpendStatPoints(win, log);
     if (!acted && i % 15 === 0) acted = strat.trySpendTalentPoints(win, log);
@@ -4513,10 +5494,23 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     if (!acted) acted = strat.tryAdvanceMainQuest(win, log, mainQuestNavLock);
     if (!acted) acted = strat.tryPathTowardQuestNpc(win, log, questNpcLock);
     if (!acted) acted = strat.tryPathTowardQuestKillTarget(win, log, questKillTargetLock);
+    // Proactive top-off: tryRecoverHp already ran once above at each profile's own reactive
+    // threshold (0.25/0.35/0.5 for novice/casual/veteran) and returned false if HP was already
+    // above that. Calling it again here with a flat, generous 0.85 threshold means a character
+    // that's safe (no nearby monster -- tryRecoverHp's own gate) and merely moderately hurt
+    // (not urgently so) tops off BEFORE walking into the next fight or dungeon, instead of only
+    // ever reacting once things are already dangerous. AUDIT FINDING: this was the structural
+    // root of most of this session's bleeding-death investigation -- every profile's reactive
+    // threshold left a wide band (e.g. casual: 35%-100% HP) where a character would cheerfully
+    // walk into a new fight already wounded, so by the time bleeding/a bad exchange actually
+    // triggered the reactive threshold, there was much less HP buffer left before critical. This
+    // doesn't remove that risk (a fight can still go badly fast), but it means characters start
+    // each new encounter closer to full health far more often than before.
+    if (!acted) acted = await strat.tryRecoverHp(win, log, 0.85);
     if (!acted) acted = strat.tryPathTowardAnyDungeon(win, log, anyDungeonLock);
     if (!acted) acted = strat.tryPathTowardBossBiome(win, log, bossBiomeMemory, bossBiomeLock);
     if (!acted) acted = strat.tryAdvanceDimensionGateStructure(win, log, dimensionGateMemory);
-    if (!acted) acted = await strat.trySeekSupplies(win, log);
+    if (!acted) acted = await strat.trySeekSupplies(win, log, seekSuppliesLock);
     if (!acted) {
       const { progressed } = await nav.exploreStep(win, wanderState);
       acted = true;
@@ -5389,11 +6383,11 @@ async function runContentSweep(win, opts = {}) {
       // routing through machinery this file already handles generically -- so the real risk
       // being tested here isn't "does opening a menu crash", it's "do these functions
       // themselves, and the ongoing per-day stability tick a ruler is subject to afterward,
-      // execute correctly all the way through". NOTABLE FINDING along the way, NOT fixed here
-      // since it's a game.html issue, not a playtest.js one: the dialogue option that offers
-      // claimCrown displays "Claim the crown (500g)" but the function itself charges 2000g --
-      // a real display/logic mismatch in the game, flagged in notableFindings below rather than
-      // silently worked around.
+      // execute correctly all the way through". A NOTABLE FINDING surfaced along the way here in
+      // an earlier session (the dialogue option that offers claimCrown displayed "Claim the
+      // crown (500g)" but the function itself charged 2000g) and has since been FIXED directly
+      // in game.html (the label now reads 2000g) -- the notableFindings.push that used to flag
+      // it below was removed so this check doesn't keep reporting an already-fixed bug.
       const kingdomKey = evalGame(win, `getKingdom(Math.floor(player.x / CH), Math.floor(player.y / CH)).key`).value;
       // ---- legitimate succession ----
       evalGame(win, `
@@ -5472,7 +6466,6 @@ async function runContentSweep(win, opts = {}) {
       const policySet = evalGame(win, `!!(player.kingdomPolicy && player.kingdomPolicy[${JSON.stringify(kingdomKey)}])`);
       if (!policySet.ok || policySet.value !== true) throw new Error('Setting a Standing Policy from the court menu did not persist to player.kingdomPolicy');
       if (evalGame(win, 'gameState').value === 'dialogue') key(win, 'Escape');
-      notableFindings.push({ area: 'kingship', note: "game.html display/logic mismatch: claimCrown's dialogue option is labeled \"Claim the crown (500g)\" but the function itself charges a flat 2000g -- a real bug in the game, not in this test." });
       visited.lifesim.push('kingship');
     });
     await safely('lifesim', 'tile-features', async () => {
@@ -5570,7 +6563,7 @@ async function runContentSweep(win, opts = {}) {
             if (dirEntry) key(win, dirEntry[0]); // bump-attack aimed at THIS boss specifically -- see comment above
             continue;
           }
-          const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${pos.x}, ${pos.y}, 100)`).value;
+          const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${pos.x}, ${pos.y}, Math.min(300, Math.ceil(Math.max(Math.abs(${pos.x}-player.x), Math.abs(${pos.y}-player.y))*1.5)+20))`).value;
           if (!step) return false; // genuinely can't path to it -- let the caller report this as a real finding
           const dirEntry = MOVE_DIRS.find(([, ddx, ddy]) => ddx === step.dx && ddy === step.dy);
           if (dirEntry) key(win, dirEntry[0]);
