@@ -540,7 +540,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.0-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.1-alpha</div>
     </div>
   </div>
 
@@ -2857,7 +2857,7 @@ const MONSTER_BASES = {
   nanite_drone: { name:'Nanite Drone', glyph:'n', color:'#4ae0d0', hp:10, str:5, dex:14, atk:[1,4], armor:2, xp:10, behavior:'ranged', corrosive:true,
     loot:[{id:'nanite_cluster',chance:0.4,min:1,max:1}],
     desc:'A fist-sized cloud of self-assembling machinery, taking apart anything it lands on.' },
-  ruin_guardian:{ name:'Ruin Guardian', glyph:'G', color:'#9a8a7a', hp:75, str:19, dex:6, atk:[6,13], armor:6, xp:55, behavior:'aggressive', miniboss:true,
+  ruin_guardian:{ name:'Ruin Guardian', glyph:'G', color:'#9a8a7a', hp:75, str:19, dex:6, atk:[6,13], armor:6, xp:55, behavior:'aggressive', dtier:3, miniboss:true,
     loot:[{id:'circuit_board',chance:0.5,min:1,max:2},{id:'silver_ore',chance:0.3,min:1,max:1}],
     desc:'A towering statue-construct, still faithfully guarding a city that has been rubble for a thousand years.' },
 };
@@ -8889,6 +8889,36 @@ STORY_BOSS_AI.snowbound_warden = function (m, dist, seesPlayer) {
 // and a modest self-heal -- roughly gatekeeper-weight, on a boss that gates nothing.
 STORY_BOSS_AI.umbroth = function (m, dist, seesPlayer) {
   bossTickCds(m);
+  // BALANCE FIX (found via extensive automated playtesting, both mortal and debug-invincible):
+  // this scripted AI had no pursuit give-up condition at all, unlike ordinary (non-boss)
+  // monsters, which naturally stop chasing once they lose the player. Combined with `pounce`
+  // (closes up to 5 tiles in one bound, ready again after just 5 turns) that made a real,
+  // reproducible finding: a character that engages Umbroth -- an OPTIONAL, rare wandering
+  // superboss, not required story content -- and can't win outright had NO reliable way to
+  // actually get away either, since any ground gained on foot was routinely erased by the next
+  // ready pounce. A debug-invincible test life spent over 25,000 actions across many separate
+  // playtest sessions never breaking off a single such encounter confirms this isn't a rare edge
+  // case. "Hard to beat" is fine for optional superboss content; "impossible to walk away from
+  // even when you genuinely try" is not -- it turns a piece of avoidable danger into a trap.
+  // Fix: track consecutive ticks spent at real range (dist > 8, well outside pounce's own 5-tile
+  // reach) and give up the chase -- revert to plain wandering -- once the player has clearly
+  // committed to distancing themselves for a sustained stretch, not just one lucky gap. Scoped
+  // narrowly to this boss's own tracking field (m.umbrothFarTicks) rather than touching the
+  // shared `.engaged` flag every monster/NPC behavior and the player's own Sneak Attack mechanic
+  // read game-wide -- resetting that flag would quietly change meaning ("hasn't noticed you yet")
+  // for systems well outside this one boss's scope.
+  if (dist > 8) {
+    m.umbrothFarTicks = (m.umbrothFarTicks || 0) + 1;
+    if (m.umbrothFarTicks >= 6) {
+      m.umbrothFarTicks = 0;
+      m.engaged = false;
+      log(`${m.name} breaks off, content to let the distance between you grow.`);
+      wander(m);
+      return true;
+    }
+  } else {
+    m.umbrothFarTicks = 0;
+  }
   if (!seesPlayer && !m.engaged) { wander(m); return true; }
   if (!m.usedAmbush && seesPlayer) {
     m.usedAmbush = true;
@@ -8930,8 +8960,19 @@ STORY_BOSS_AI.umbroth = function (m, dist, seesPlayer) {
     bossSummon(m, 'wolf', 2);
     return true;
   }
-  if (bossReady(m, 'mend') && m.hp < m.maxHp * 0.5 && Math.random() < 0.25) {
+  // BALANCE FIX (same investigation as the pursuit give-up above): mend had no cap on total
+  // uses, so at a damage-per-turn output close to its 6%-max-HP/~25%-chance/9-turn-cooldown
+  // regen rate, a fight could sit in a genuine mathematical equilibrium indefinitely -- directly
+  // observed as Umbroth's HP oscillating in the same ~810-930 (out of 1680) band for thousands of
+  // turns straight with no net progress either way. Capping total mends per encounter guarantees
+  // the fight is finite for a character that commits to grinding it out, the same way the
+  // pursuit give-up above guarantees an out for a character that commits to leaving instead --
+  // without touching how dangerous any single exchange feels (ambush/pounce/frenzy/howl/pack are
+  // all untouched). Resets naturally next encounter since m.umbrothMendCount lives on this one
+  // monster instance.
+  if (bossReady(m, 'mend') && m.hp < m.maxHp * 0.5 && Math.random() < 0.25 && (m.umbrothMendCount || 0) < 3) {
     bossCool(m, 'mend', 9);
+    m.umbrothMendCount = (m.umbrothMendCount || 0) + 1;
     const heal = Math.round(m.maxHp * 0.06);
     m.hp = Math.min(m.maxHp, m.hp + heal);
     log(`${m.name}'s wounds close over almost as fast as you open them.`);
@@ -12653,6 +12694,44 @@ function placePOI(chunk, cx, cy, rng) {
 
 // ---- overworld bosses: rare, tough, biome-appropriate wildlife-tier encounters ----
 function maybeSpawnOverworldBoss(chunk, cx, cy, centerBiome, rng) {
+  // BALANCE FIX (found via extensive automated playtesting -- both mortal-profile batches and a
+  // dedicated debug-invincible "is the game theoretically completable" run): this function used
+  // ONE flat 0.6%-per-eligible-chunk rate for every entry in OVERWORLD_BOSSES -- but that array
+  // isn't just the hand-authored optional superbosses it reads like at a glance (Vaelgrith,
+  // Umbroth, etc.); `OVERWORLD_BOSSES.push(...STORY_BOSSES)` merges in every procedurally-cast
+  // main-quest lieutenant too (b1/b2a/b2b/b4/b5 -- see generateMainQuest), for any of them not
+  // already covered by BOSS_DUNGEON_THEME. That means a REQUIRED story beat -- for a fresh
+  // character, their very first one, "First Trial" -- could draw exactly the same ~1-in-165-
+  // eligible-chunks rarity as a wholly optional, skippable secret superboss. Confirmed directly:
+  // an invincible test character spent 25,000+ actions (multiple real play-sessions' worth)
+  // still searching for its First Trial target with no end in sight, in the correct biome the
+  // whole time. Rare-and-optional is a fine, intentional design for something like Umbroth;
+  // rare-and-MANDATORY just to see the game's next story beat is a real fairness/pacing problem
+  // for every ordinary player, not a bot-specific quirk -- nothing about finding it faster
+  // requires foreknowledge a real player wouldn't have (they'd just be wandering the biome the
+  // quest text already names). Fixed by giving the CURRENTLY ACTIVE story target its own, much
+  // higher, roll -- tried first, before the original flat roll -- so a player pursuing their
+  // actual quest finds it in a reasonable number of chunks, while every other (optional) entry in
+  // the pool, Umbroth included, keeps exactly the rarity it always had.
+  let storyTargetId = null;
+  try {
+    const s = curStoryStage();
+    if (s && s.type === 'kill_boss' && !(typeof BOSS_DUNGEON_THEME !== 'undefined' && BOSS_DUNGEON_THEME[s.targetBossId])) {
+      storyTargetId = s.targetBossId;
+    }
+  } catch (e) { /* story/player not ready yet (e.g. very first chunks) -- just skip the boost this tick */ }
+  // Distance gate applies BEFORE anything else, story boss included: a required boss ambushing a
+  // level-1 character a chunk from spawn would be exactly the unfair surprise this whole radius
+  // exists to prevent (see the very next comment block) -- being "required" doesn't exempt it.
+  if ((Math.abs(cx) + Math.abs(cy)) * CH <= 45) return false;
+  if (storyTargetId) {
+    const storyBossDef = OVERWORLD_BOSSES.find(b => b.id === storyTargetId);
+    if (storyBossDef && !storyBossDef.aquatic && storyBossDef.biomes.includes(centerBiome) && rng() <= 0.05) {
+      // ~1-in-20 eligible chunks instead of ~1-in-165 -- still a real search, not a guarantee on
+      // the first patch of matching terrain, but no longer an effectively unbounded one.
+      return placeOverworldBoss(chunk, cx, cy, storyBossDef, rng);
+    }
+  }
   if (rng() > 0.006) return false; // roughly 1 in ~165 eligible chunks
   // BALANCE FIX: same class of bug as the classifyBiomeFull exotic-family fix above (search
   // this file for "BALANCE FIX: exotic biome families" for the full writeup) -- this function
@@ -12663,7 +12742,7 @@ function maybeSpawnOverworldBoss(chunk, cx, cy, centerBiome, rng) {
   // takes their first steps. CONFIRMED happening in automated playtesting: a fresh custom-build
   // character was killed by Vaelgrith in 2 actions. Same radius as the biome fix, for the same
   // reason (a consistent, guaranteed-safe onboarding area around spawn).
-  if ((Math.abs(cx) + Math.abs(cy)) * CH <= 45) return false;
+  // (distance gate itself moved above, ahead of the story-boss boost -- see that comment)
   // Land bosses are still gated by centerBiome as before. Aquatic superbosses (Kraken,
   // Megalodon, the Loch Devourer, etc.) are gated by how much of the *chunk* is actually that
   // water biome instead -- a carved lake sits inside a chunk whose centerBiome is 'plains' or
@@ -12680,6 +12759,11 @@ function maybeSpawnOverworldBoss(chunk, cx, cy, centerBiome, rng) {
   eligible = eligible.concat(OVERWORLD_BOSSES.filter(b => b.aquatic && b.biomes.some(bi => waterDensity[bi] >= (WATER_BOSS_THRESHOLD[bi] || 1))));
   if (!eligible.length) return false;
   const bossDef = choice(rng, eligible);
+  return placeOverworldBoss(chunk, cx, cy, bossDef, rng);
+}
+// Actual placement, factored out so the boosted story-boss roll above and the original random
+// pool below can share it instead of duplicating the tile-picking/makeMonster/Object.assign block.
+function placeOverworldBoss(chunk, cx, cy, bossDef, rng) {
   const lx = randInt(rng, 3, CH-4), ly = randInt(rng, 3, CH-4);
   const t = chunk.tiles[ly][lx];
   if (!t.walkable && !(bossDef.aquatic && (t.biome === 'ocean' || t.biome === 'lake'))) return false;
@@ -24572,7 +24656,19 @@ function sanitizeStartingArea() {
     if (!c || !c.monsters || !c.monsters.length) continue;
     c.monsters = c.monsters.filter(m => {
       const base = MONSTER_BASES[m.monsterId];
-      const tooDangerous = m.boss || (base && (base.dtier || 0) >= 2);
+      // BUG FOUND THIS SESSION (a "veteran"-profile mortal playtest died at action 21, right
+      // after the shipwreck scenario placed it, to a "Ruin Guardian" -- traced directly rather
+      // than assumed): that monster is legitimately a miniboss (75 hp, armor 6, a level-1
+      // character's first random encounter having no realistic chance) but had NO dtier field
+      // at all, so `(base.dtier || 0) >= 2` silently read as 0 and let it slide straight through
+      // this exact safety net. Fixed at the source too (ruin_guardian now has dtier:3, matching
+      // its real stats, which also correctly subjects it to pickBiomeEncounter's distance-based
+      // dtier caps elsewhere) -- but checking `m.miniboss` here directly as well, not just relying
+      // on dtier being set correctly on every current and future miniboss-flagged monster, is the
+      // same belt-and-suspenders reasoning as the dungeon staircase fix earlier this session: one
+      // missing/wrong data field on any single monster definition shouldn't be able to defeat the
+      // one safety net that exists specifically to catch exactly this.
+      const tooDangerous = m.boss || m.miniboss || (base && (base.dtier || 0) >= 2);
       return !tooDangerous;
     });
   }
@@ -32330,6 +32426,14 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
   function wouldDisconnectStairs(g, x, y) {
     const t = g[y][x];
     if (!t || !t.walkable) return false;
+    // BUG FIX (found via automated playtesting): the connectivity check below starts its flood
+    // from the up stairs and only ever *enters* the down stairs, so it correctly refused to
+    // block the '>' tile but happily allowed a pillar/statue to be dropped ON the '<' tile
+    // itself (the walk starts there regardless of whether it's walkable). Result: a floor whose
+    // up staircase was replaced by a solid stone pillar -- no way back up, Shift+H/'<' both dead,
+    // permanently trapping the player on that floor. Confirmed in a real Ancient Bandit Hideout
+    // level (depth 2). Never let a blocking feature land on either staircase tile.
+    if ((x === up.x && y === up.y) || (x === down.x && y === down.y)) return true;
     t.walkable = false;
     const visited = new Set([up.x + ',' + up.y]);
     const stack = [[up.x, up.y]];
@@ -32374,6 +32478,12 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
       }
     }
     if (!reached) carveCorridor(g, up.x, up.y, down.x, down.y);
+    // Belt and braces for the same bug as wouldDisconnectStairs: whatever feature pass ran, both
+    // staircase tiles must end up walkable stairs, never a pillar/statue/wall.
+    for (const s of [up, down]) {
+      const st = g[s.y] && g[s.y][s.x];
+      if (st && !st.walkable) { st.walkable = true; if (st.feature === 'statue') delete st.feature; st.glyph = (s === up) ? '<' : '>'; st.color = (s === up) ? '#e0c34a' : '#e05ae0'; }
+    }
   }
   // ---- clever encounter placement: instead of scattering monsters one at a time onto random
   // floor tiles independently, most of the level's population comes in as dens/hordes (3-6 of
