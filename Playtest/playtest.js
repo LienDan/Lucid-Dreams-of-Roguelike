@@ -174,8 +174,8 @@ const PROFILES = {
     debuffChance: 0.1,           // rarely thinks to weaken a foe first instead of just attacking
     buffChance: 0.3,             // sometimes forgets to buff up before a fight
     summonChance: 0.5,
-    minLevelForStoryBoss: 1,     // rushes the story the moment it's found, like a real first-timer would
-    creationItemReserve: 3,      // leaves just enough for one starting item, like a real first-timer would
+    minLevelForStoryBoss: 1,     // charges at the main-quest boss the moment it's findable, no readiness check
+    creationItemReserve: 3,      // barely plans ahead when drafting a custom character's starting kit
   },
   // The tuned baseline this toolkit shipped and was validated with -- competent, not optimal.
   casual: {
@@ -192,7 +192,7 @@ const PROFILES = {
     debuffChance: 0.35,
     buffChance: 0.6,
     summonChance: 0.7,
-    minLevelForStoryBoss: 1,     // still plausible for a competent-but-not-methodical player to rush in
+    minLevelForStoryBoss: 1,
     creationItemReserve: 3,
   },
   // Cautious and deliberate -- disengages earlier, keeps deeper reserves, uses advanced tactics
@@ -211,9 +211,8 @@ const PROFILES = {
     debuffChance: 0.6,           // consistently softens up dangerous foes before committing
     buffChance: 0.85,
     summonChance: 0.9,
-    minLevelForStoryBoss: 3,     // won't go looking for a named story fight before leveling up some
-    creationItemReserve: 6,      // see draftCustomCharacter's own comment: knows abilities are worth
-                                  // little at level 1, prioritizes gear that helps from turn one
+    minLevelForStoryBoss: 3,     // waits until reasonably leveled before seeking out the main-quest boss
+    creationItemReserve: 6,      // plans several points ahead when drafting a custom build's kit
   },
   // "Perfect knowledge, player-legal actions" -- not a cheat mode (no stat boosts, no bypassing
   // RNG, no seeing through fog of war), but a character piloted by someone who has fully
@@ -238,39 +237,24 @@ const PROFILES = {
     debuffChance: 1.0,            // never skips a free tactical advantage
     buffChance: 1.0,
     summonChance: 1.0,
-    // BUG FOUND THIS SESSION (real mortal-profile batch, not the invincible one): 5 fresh
-    // "optimal" lives died at an average of action 50 -- FASTER than novice's 59 -- and a direct
-    // trace of one showed exactly why: tryPathTowardBossBiome correctly found the very first
-    // story lieutenant (Thessaly Voss, "the Broken Blade") and walked a level-1, 3-ability, just-
-    // created character straight at it, with no retreat warning ever firing before it died in one
-    // exchange. avoidOverwhelmingEnabled reacts to an individual hit's danger relative to CURRENT
-    // hp -- it has no notion of "I am nowhere near ready for this fight as a whole," which is
-    // exactly the judgment an actually skilled player applies before ever seeking a story boss
-    // out. Left ungated, "optimal" was measuring "best mechanical decisions in a fight it should
-    // never have picked," not genuine skilled play -- the opposite of what this profile exists to
-    // represent. minLevelForStoryBoss (checked by tryPathTowardBossBiome/getMainQuestNavigationTarget
-    // before actively SEEKING a kill_boss target -- reactive defense if one is stumbled into
-    // anyway is untouched) is the fix: a real expert would spend a little time getting their
-    // footing first. Set higher than veteran's, matching "optimal" being the most patient/
-    // deliberate profile of the four, not just the most tactically correct in a fight already picked.
+    // BUG FIX (found via checkpoint tracing on the debug-invincible completability run, but a
+    // real bug for mortal lives too): getMainQuestNavigationTarget/tryPathTowardBossBiome will
+    // rush straight at the currently-active main-quest boss the instant it's locatable, with no
+    // regard for whether the character is anywhere near strong enough yet -- on a level-1-3
+    // "optimal" life this meant beelining into a story boss fight it had no realistic chance of
+    // winning, dying to a fully-avoidable encounter despite otherwise flawless play. Gated behind
+    // a per-profile minimum level so a perfect-knowledge player (who would obviously recognize
+    // "I'm not ready for this yet") doesn't suicide into the boss room; lower-skill profiles keep
+    // a lower bar since part of what defines them is NOT having that judgment.
     minLevelForStoryBoss: 4,
-    // SECOND BUG FOUND THE SAME SESSION, isolating the FIRST fix's own limits: even after the
-    // level gate above stopped optimal from rushing story bosses, a controlled test (forcing
-    // customCreateChance to 0, i.e. premade archetypes only) showed veteran's average survival
-    // roughly 6x -- optimal barely moved. Root cause, confirmed by tracing the fastest remaining
-    // death: the real game's own character-creation budget is a flat CREATION_POINTS=20 total,
-    // and draftCustomCharacter's ability-buying phase only left a fixed reserve of 3 points
-    // (barely one starting item) for gold/gear afterward regardless of profile -- so "optimal"
-    // was spending most of a skilled build's 20-point budget on abilities mostly useless at
-    // level 1, then walking out with a single curative and no armor/weapon upgrade into a world
-    // with three independent early hazards (combat, temperature extremes, and even its own
-    // Blood Magic abilities' intentional HP-cost mechanic compounding an already-thin margin).
-    // This ISN'T inventing free resources -- 20 points is the same budget any real player gets --
-    // it's modeling the allocation choice an actually experienced player would obviously make:
-    // abilities you mostly can't use yet are worth far less at level 1 than gear/curatives that
-    // help from turn one. creationItemReserve raises how much of that same fixed budget
-    // draftCustomCharacter leaves unspent on abilities, specifically so there's real gold/items
-    // left to spend once guaranteed-curative logic and the item-purchase coin flip run.
+    // BUG FIX (found via a direct audit of 10 "optimal"-profile custom character creations): the
+    // old hard-coded `Math.min(d.points, 3)` reserve in draftCustomCharacter left only 3 points
+    // held back regardless of the character's total budget, so the random coin-flip item-buying
+    // loop would routinely spend the rest of a much larger budget before the guaranteed-curative
+    // purchase ever got a chance to run -- 4 of 10 sampled "optimal" builds ended up with zero
+    // starting curatives despite the profile wanting a guaranteed one. Replaced with a per-profile
+    // field so each tier reserves a budget-appropriate amount instead of one fixed number; optimal
+    // reserves the most since it's the tier that should least often end up under-equipped.
     creationItemReserve: 8,
   },
 };
@@ -733,24 +717,31 @@ const MOVE_DIRS = [
 async function exploreStep(win, wanderState) {
   const before = evalGame(win, 'turnCount').value;
 
-  // Once the dungeon-exit fallback below has fired, stay committed to leaving: without this the
-  // bot ping-pongs (verified directly from a checkpoint) -- H climbs a level, then G/'>' on the
-  // now-explored floor above walks straight back down, forever. Cleared automatically the moment
-  // the character is back on the overworld, so ordinary exploration of later dungeons is unaffected.
-  // While leaving, X/G/'>' are skipped entirely even if H stalls for a tick: falling through
-  // to '>' while standing on a floor's down stairs is exactly what dragged the character back
-  // down (observed: depth 2 -> 3 -> 2 -> 3 ...).
-  let leaving = false;
-  if (wanderState.leavingDungeon) {
-    if (!evalGame(win, 'curIsDungeon()').value) wanderState.leavingDungeon = false;
-    else {
-      leaving = true;
-      await keyAndWait(win, 'H', 4000);
-      if (evalGame(win, 'turnCount').value !== before) return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
-    }
+  // BUG FIX (found via a batch life whose vitalsTimeline showed `dungeon` flipping depth 2 -> 3
+  // -> 2 -> 3 for hundreds of turns straight with zero other progress): once X (autoExplore) and
+  // G (autoTravelToStairs) both have nothing left to do on the current dungeon floor, falling
+  // through to '>' is correct ONLY while trying to go deeper -- but the exact same fallback chain
+  // runs again next call while the character is STANDING ON a floor's down-stairs tile with
+  // nothing else to explore, so '>' dives deeper, finds nothing new there either on the NEXT
+  // call, and the floor-below's own up-stairs tile sends it right back. Nothing in the old logic
+  // ever distinguished "still trying to finish this floor" from "actually trying to leave the
+  // dungeon entirely" -- it just kept re-deriving the same action from the same local state every
+  // single call. Fixed with a sticky wanderState.leavingDungeon flag: once set, this skips the
+  // X/G/'>' fallback chain entirely (the exact chain that produces the ping-pong) and instead
+  // commits to the game's own 'H' (Shift+H, autoTravelHome -- which paths toward the UP stairs/
+  // dungeon exit specifically, not the down stairs X/G/'>' gravitate toward) until actually back
+  // out of the dungeon, at which point it's cleared and normal exploration resumes.
+  if (wanderState.leavingDungeon && evalGame(win, '!curIsDungeon()').value) {
+    wanderState.leavingDungeon = false;
   }
 
-  if (!leaving) {
+  if (wanderState.leavingDungeon) {
+    await keyAndWait(win, 'H', 4000);
+    if (evalGame(win, 'turnCount').value !== before) return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+    // 'H' made no progress this call (e.g. no remembered path up right now) -- fall through to
+    // the wide-frontier search / wander below, same as the non-leaving path does, but still
+    // WITHOUT touching X/G/'>' while this flag remains set.
+  } else {
     await keyAndWait(win, 'X', 4000);
     if (evalGame(win, 'turnCount').value !== before) return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
 
@@ -759,19 +750,16 @@ async function exploreStep(win, wanderState) {
 
     key(win, '>');
     if (evalGame(win, 'turnCount').value !== before) return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
-  }
 
-  // BUG FOUND THIS SESSION (debug-invincible completability run): autoexplore (X), travel-to-
-  // stairs (G) and '>' are all exhausted once a dungeon is fully explored and the character is
-  // standing on the bottom level's '>' -- and nothing in this bot ever walked back OUT. After
-  // clearing the "An Omen" dungeon the run sat inside it for thousands of actions ("No navigable
-  // progress", ~4s each) while the next quest target lived on the overworld. Shift+H (the game's
-  // own auto-travel-home) walks to the up stairs and ascends one level per press, so repeated
-  // calls surface the character -- exactly what a human does after finishing a dungeon.
-  if (evalGame(win, 'curIsDungeon()').value) {
-    wanderState.leavingDungeon = true;
-    await keyAndWait(win, 'H', 4000);
-    if (evalGame(win, 'turnCount').value !== before) return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+    // X, G, and '>' all made no progress. If this is happening inside a dungeon, that's exactly
+    // the "nothing left to do on this floor" signal -- start heading OUT via 'H' from now on,
+    // rather than repeating this same exhausted chain (and its '>'-triggered ping-pong) again
+    // next call.
+    if (evalGame(win, 'curIsDungeon()').value) {
+      wanderState.leavingDungeon = true;
+      await keyAndWait(win, 'H', 4000);
+      if (evalGame(win, 'turnCount').value !== before) return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+    }
   }
 
   const far = evalGame(win, 'findNearestFrontier(220)').value;
@@ -922,77 +910,83 @@ async function tryAvoidOverwhelmingMonster(win, log) {
 }
 
 /**
- * BUG FOUND THIS SESSION (via a debug-invincible "is completion theoretically reachable" run):
- * a life spent over 11,000 straight actions locked in melee with "Umbroth, the First Beast" --
- * an OPTIONAL rare superboss (see its own definition/comment: "optional and rare to even find")
- * that the bot stumbled next to while exploring. It was never the active quest target (the real
- * kill_boss stage wanted a completely different boss, 'blightspeaker') and Umbroth's own scripted
- * AI (see STORY_BOSS_AI.umbroth in game.html) heals ~6% of its max HP back periodically, so the
- * bot's slow chip damage was being largely offset -- a fight it was never going to finish, on a
- * target it never needed to fight, that nothing in the priority chain above ever said "give up
- * on this." tryAvoidOverwhelmingMonster (just above) is a DIFFERENT, narrower check -- "could the
- * very next hit nearly kill me" -- and correctly does nothing here once invincibility is on (or
- * even off, if the fight isn't obviously lethal turn-to-turn even though it's unwinnable over
- * time). This is a genuinely separate stall class: "productivity", not "acute lethality" --
- * relevant for MORTAL profiles too (a slow losing/stalemate fight against something optional can
- * burn a huge action budget before the death-threshold logic ever notices anything's wrong), not
- * just the invincible test mode that happened to surface it.
+ * Disengage from a fight that has stopped being productive: stuck trading blows with the same
+ * monster for a long time without actually winning. Found via long debug-invincible-adjacent
+ * checkpoint tracing (a mortal character in the same spot would usually just die first, which
+ * is its own problem tryAvoidOverwhelmingMonster/tryFleeIfCritical already cover -- this is for
+ * the case where the fight ISN'T lethal, just a stalemate: a monster with self-heal/regen/armor
+ * the bot's current build can't out-damage, or a mutual-miss streak that happens to keep
+ * re-triggering before either side's HP bar moves much). Without this, the bot has no concept of
+ * "this isn't working, stop" and will cheerfully grind against the same unwinnable monster for
+ * the entire rest of the action budget.
  *
- * Tracks how long the CURRENT single fight (same monster uid) has run and how much of that
- * monster's HP bar has actually come down; if a fight runs past a turn budget with little to
- * show for it AND the monster isn't anything an active quest/bounty actually needs dead, gives
- * up and disengages -- same retreat mechanics as tryAvoidOverwhelmingMonster, just a different
- * trigger. A quest-relevant target (main-quest kill_boss's targetBossId, or a kill_any/bounty
- * targetIds match) is exempt: that fight has to happen eventually regardless of how slow it is,
- * so disengaging from it would just trade one stall for another.
+ * `lock` persists {uid, sinceTurn, startHp, maxHp} across calls (same pattern as every other
+ * locked strategy in this file -- see tryPathTowardQuestNpc's own comment for why a lock object
+ * is needed rather than recomputing from scratch each call: a single turn's snapshot can't tell
+ * "stuck" from "just started").
+ *
+ * Deliberately exempts quest-relevant targets -- the main quest's current kill_boss target, a
+ * kill_any stage's targetIds, or an active bounty's target -- since giving up on the ONE thing
+ * actually required to progress would be worse than a long fight, and because those targets are
+ * exactly the ones most likely to legitimately need a long grind (story/named bosses are tuned
+ * to take a while). Everything else -- an ordinary wandering monster that happened to turn into
+ * a stalemate -- is fair game to walk away from.
  */
-async function tryDisengageUnproductiveFight(win, log, lock) {
-  const FIGHT_TURN_BUDGET = 250;      // how long we'll tolerate one fight before judging it
-  const MIN_PROGRESS_FRACTION = 0.35; // must have brought the target down by at least this much
-  const info = evalGame(win, `
+async function tryDisengageUnproductiveFight(win, log, lock = {}) {
+  const dir = directionToAdjacentMonster(win);
+  if (!dir) { lock.uid = null; return false; }
+
+  const snap = evalGame(win, `
     (function(){
-      const m = nearestHostile(4);
-      if (!m || typeof m.hp !== 'number' || typeof m.maxHp !== 'number') return null;
+      const dirs = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
+      let target = null;
+      for (const [k,dx,dy] of dirs) {
+        const t = entityAt(player.x+dx, player.y+dy);
+        if (t && t.kind === 'monster') { target = t; break; }
+      }
+      if (!target) return null;
       const s = curStoryStage();
-      const isMainQuestTarget = !!(s && s.type === 'kill_boss' && s.targetBossId === m.monsterId);
-      const isKillAnyTarget = !!(s && s.type === 'kill_any' && s.targetIds && s.targetIds.includes(m.monsterId) && (s.progress||0) < s.targetCount);
-      const bounty = (player.quests || []).find(q => !q.done && ['bounty','chain_kill','dimension_bounty'].includes(q.type) && q.target === m.monsterId);
-      return { uid: m.uid, monsterId: m.monsterId, name: m.name, hp: m.hp, maxHp: m.maxHp, relevant: isMainQuestTarget || isKillAnyTarget || !!bounty };
+      const bountyTarget = (player.quests || []).some(q => !q.done && ['bounty', 'chain_kill', 'dimension_bounty'].includes(q.type) && q.target === target.monsterId);
+      const isQuestRelevant =
+        (s && s.type === 'kill_boss' && s.targetBossId === target.monsterId) ||
+        (s && s.type === 'kill_any' && s.targetIds && s.targetIds.includes(target.monsterId)) ||
+        bountyTarget;
+      return { uid: target.uid, hp: target.hp, maxHp: target.maxHp, isQuestRelevant: !!isQuestRelevant };
     })()
-  `);
-  const target = info.ok ? info.value : null;
+  `).value;
+  if (!snap) { lock.uid = null; return false; }
+  if (snap.isQuestRelevant) { lock.uid = null; return false; } // never give up on what actually matters
+
   const turn = evalGame(win, 'turnCount').value;
-  if (!target) { lock.uid = null; return false; }
-  if (target.relevant) { lock.uid = null; return false; } // has to be fought regardless of pace
-  if (lock.uid !== target.uid) {
-    lock.uid = target.uid; lock.sinceTurn = turn; lock.startHp = target.hp; lock.maxHp = target.maxHp;
+  if (lock.uid !== snap.uid) {
+    // Either a fresh fight, or the previous target died/fled -- (re)start tracking from here.
+    lock.uid = snap.uid; lock.sinceTurn = turn; lock.startHp = snap.hp; lock.maxHp = snap.maxHp || snap.hp || 1;
     return false;
   }
-  const turnsEngaged = turn - lock.sinceTurn;
-  if (turnsEngaged < FIGHT_TURN_BUDGET) return false;
-  const progressFraction = lock.maxHp > 0 ? (lock.startHp - target.hp) / lock.maxHp : 1;
-  if (progressFraction >= MIN_PROGRESS_FRACTION) { lock.uid = null; return false; } // genuinely winning, just slowly -- let it finish
 
-  lock.uid = null; // give up on this specific fight either way -- re-engaging fresh resets the budget
-  // Blink/teleport tried FIRST, not just as a last resort: directly observed that a plain walking
-  // retreat only creates a few tiles of distance, which is not enough against a monster with a
-  // gap-closing ability -- Umbroth's own scripted AI can "close the distance in a single silent
-  // bound" from up to 5 tiles away, so a walked-away character gets re-caught almost immediately
-  // and the same unproductive fight just resumes with the turn budget reset for nothing. A real
-  // teleport breaks line of sight/proximity outright; falls back to walking only when no
-  // blink-type ability is known.
-  const blinked = await tryUseEscapeAbility(win, log, 1.0);
-  if (blinked) { if (log) log(`Blinked away from an unproductive fight with ${target.name}.`); return true; }
+  const turnsEngaged = turn - lock.sinceTurn;
+  if (turnsEngaged < 250) return false; // give any ordinary fight plenty of room to resolve normally first
+
+  const hpProgress = (lock.startHp - snap.hp) / (lock.maxHp || 1);
+  if (hpProgress >= 0.35) {
+    // Genuinely making headway, just slowly (a tanky monster, say) -- not a stalemate, let it continue.
+    lock.sinceTurn = turn; lock.startHp = snap.hp; // reset the clock so this re-checks progress over the NEXT 250 turns, not an ever-growing window
+    return false;
+  }
+
+  // Confirmed unproductive: 250+ turns against the same non-quest-relevant monster with less
+  // than 35% of its hp bar actually down. Try an escape ability first (forced hpFrac=1.0 so its
+  // normal low-HP-only gate doesn't block a disengage that isn't about survival at all), falling
+  // back to an ordinary retreat step if no escape ability is known/available.
+  lock.uid = null; // drop the lock regardless of how disengage goes -- re-evaluate fresh next time
+  const escaped = await tryUseEscapeAbility(win, log, 1.0);
+  if (escaped) { if (log) log('Disengaged from an unproductive fight via escape ability.'); return true; }
   const step = bestRetreatStep(win);
-  if (!step) return false; // boxed in and nothing to blink with -- nothing better to do than keep fighting
-  ensureSprinting(win, true, log);
+  if (!step) return false; // boxed in -- fall through and let combat continue
   const before = evalGame(win, 'turnCount').value;
   key(win, step);
   const after = evalGame(win, 'turnCount').value;
-  if (after !== before) {
-    if (log) log(`Disengaged from an unproductive optional fight with ${target.name} (${turnsEngaged} turns, only ${Math.round(progressFraction * 100)}% of its HP down, not a quest target).`);
-    return true;
-  }
+  if (after !== before) { if (log) log('Disengaged from an unproductive fight (250+ turns, <35% progress).'); return true; }
   return false;
 }
 
@@ -3670,28 +3664,33 @@ function tryTalkToAdjacentNpc(win, log, talkedNpcUids) {
  * dedicated one.
  */
 function getMainQuestNavigationTarget(win) {
-  const minLevelForStoryBoss = BOT_PROFILE.minLevelForStoryBoss || 1; // see optimal profile's own comment for the full story
+  // Node-scope capture for interpolation below -- see draftCustomCharacter's own comment on why
+  // BOT_PROFILE can't be referenced directly inside an evalGame template string.
+  const minLevelForStoryBoss = BOT_PROFILE.minLevelForStoryBoss || 1;
   const r = evalGame(win, `
     (function(){
-      const minLevelForStoryBoss = ${JSON.stringify(minLevelForStoryBoss)};
-      // Every target this function can return is an OVERWORLD coordinate (a dungeon entrance, a
-      // boss's dungeon, a bounty location), but while inside a dungeon/dimension player.x/y are
-      // local to that map -- every distance computed below (nearestRegisteredDungeonOfTheme,
-      // the dungeon_tier loop, side-quest lookups) would compare incompatible coordinate spaces
-      // and return noise. Guarding once here covers all branches (kill_boss, dungeon_tier,
-      // dimension_trail, side bounties) instead of patching each one separately.
+      // BUG FIX (found via checkpoint tracing a life that had just entered a dungeon): every
+      // target this function returns (dungeonRegistry entries, dimension gate coordinates) is an
+      // OVERWORLD coordinate, but player.x/player.y mean something completely different once
+      // curIsDungeon() or curIsDimension() is true (dungeon-local tile coordinates, which
+      // routinely collide numerically with real overworld coordinates elsewhere on the map).
+      // Comparing/pathing against an overworld target while actually inside a dungeon or
+      // dimension produces a direction that has nothing to do with the real world position --
+      // this single guard at the top covers every branch below at once (kill_boss, dungeon_tier,
+      // dimension_trail, and the boss_bounty side-quest check), rather than patching each branch
+      // separately the way an earlier, narrower version of this fix (dungeon_tier-only) did.
       if (curIsDungeon() || curIsDimension()) return null;
       const stage = curStoryStage();
       if (stage) {
         if (stage.type === 'kill_boss') {
-          // BUG FOUND THIS SESSION (see the "optimal" profile's own comment for the full story):
-          // don't actively go LOOKING for a story boss fight until at least somewhat leveled up.
-          // Purely a seek-it-out gate -- if the character stumbles onto the boss anyway while
-          // exploring for some other reason, tryAvoidOverwhelmingMonster/tryDisengageUnproductiveFight
-          // still apply exactly as before; this only stops this function from handing back a
-          // coordinate to walk toward on purpose.
-          if (player.level < minLevelForStoryBoss) return null;
-          const themeInfo = (typeof BOSS_DUNGEON_THEME !== 'undefined') ? BOSS_DUNGEON_THEME[stage.targetBossId] : null;
+          // BUG FIX: see PROFILES.optimal's minLevelForStoryBoss comment -- without this gate,
+          // a freshly-created level-1 character would path straight at the main-quest boss's
+          // dungeon the instant it was locatable, with no regard for whether the character
+          // stood any realistic chance there at all. Not an early function return -- a
+          // not-ready-yet character should still fall through to the boss_bounty side-quest
+          // check and normal exploration below, exactly like the "no themeInfo found" case does.
+          const readyForStoryBoss = player.level >= ${JSON.stringify(minLevelForStoryBoss)};
+          const themeInfo = (readyForStoryBoss && typeof BOSS_DUNGEON_THEME !== 'undefined') ? BOSS_DUNGEON_THEME[stage.targetBossId] : null;
           if (themeInfo) {
             const found = nearestRegisteredDungeonOfTheme(themeInfo.theme, player.x, player.y);
             if (found) return { x: found.dg.x, y: found.dg.y, why: 'kill_boss -> ' + found.dg.name };
@@ -3701,28 +3700,6 @@ function getMainQuestNavigationTarget(win) {
           // already-discovered dungeon is still worth heading toward this turn) and finally to
           // normal exploration if neither has anything concrete yet.
         } else if (stage.type === 'dungeon_tier') {
-          // BUG FOUND THIS SESSION (via the debug-invincible completability run -- a character
-          // sat at depth 3/3, the true bottom, of "Ancient Sewer", a common-tier dungeon that
-          // exactly satisfies this stage's own targetTier, and STILL got redirected 1834 tiles
-          // away toward a totally different dungeon, "Abandoned House"). Root cause: this loop
-          // compares player.x/player.y against every registered dungeon's OVERWORLD entrance
-          // coordinates via chebyshev -- but player.x/y are DUNGEON-LOCAL coordinates whenever
-          // curIsDungeon() is true, a completely different, much smaller coordinate space than
-          // the overworld one dungeonRegistry stores. Comparing them produces a distance that's
-          // essentially meaningless noise, so "nearest" could come out as literally any
-          // registered dungeon depending on how its overworld coordinates happen to numerically
-          // relate to the current dungeon-local ones -- including redirecting AWAY from the
-          // exact dungeon the player is correctly, deliberately standing inside. Fixed the same
-          // way tryPathTowardBossBiome's own version of this exact class of bug was fixed
-          // earlier this session: while already inside a dungeon, this function simply has
-          // nothing useful to compute a travel COORDINATE for. If the current dungeon's tier
-          // already matches, there's nothing to travel to at all -- the objective is to clear
-          // THIS one, which is nav.exploreStep's/the stairs-seeking keys' job, not a coordinate
-          // pathing job. If it's the wrong tier, no sensible overworld coordinate exists to give
-          // either (the right target is a DIFFERENT physical place, reachable only after
-          // resurfacing) -- returning null both times, correctly deferring to whatever handles
-          // actually leaving a dungeon, rather than fabricating a bogus long-distance target.
-          if (curIsDungeon() || curIsDimension()) return null;
           let best = null, bestD = Infinity;
           for (const dg of dungeonRegistry.values()) {
             if (dg.tier !== stage.targetTier) continue;
@@ -3868,40 +3845,38 @@ function tryAdvanceMainQuest(win, log, lock) {
   // (with a 1.5x/+20 buffer for realistically winding paths, still capped at the original 300)
   // keeps nearby, common-case targets fast while still allowing genuinely distant ones their
   // full budget.
-  // BUG FOUND THIS SESSION (via a debug-invincible run, after fixing the story-boss-biome
-  // search's own version of this exact class of problem): the distance-proportional maxRadius
-  // fix above (this comment's own predecessor) caps maxRadius at 300, but bfsFirstStep's node
-  // budget is 6*maxRadius^2 -- so ANY target beyond ~100 tiles away already saturates the full
-  // 60000-node cap, every single turn, for as long as the target stays that far off. Confirmed
-  // directly: after successfully clearing the "First Trial" kill_boss stage, the character
-  // auto-traveled home (a real, sensible action -- selling loot/restocking), leaving the nearest
-  // registered common-tier dungeon for the next stage 1813 tiles away. Every action from then on
-  // cost ~4 real seconds (measured directly, action-by-action) doing a full 60000-node search
-  // whose first step was always just "walk generally toward it" -- precise obstacle-aware
-  // pathfinding doesn't earn its cost at that range, when just closing distance is what matters.
-  // A cheap greedy directional step (pick whichever of the 8 directions actually reduces
-  // distance, no search at all) handles long hauls at a small fraction of the cost; the real BFS
-  // only engages once the target is close enough that weaving around actual obstacles matters.
-  const distToTarget = Math.max(Math.abs(target.x - evalGame(win, 'player.x').value), Math.abs(target.y - evalGame(win, 'player.y').value));
   const MOVE_DIRS = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
-  if (distToTarget > 100) {
-    const px = evalGame(win, 'player.x').value, py = evalGame(win, 'player.y').value;
-    const dx = Math.sign(target.x - px), dy = Math.sign(target.y - py);
-    const greedyEntry = MOVE_DIRS.find(([, mdx, mdy]) => mdx === dx && mdy === dy)
-      || MOVE_DIRS.find(([, mdx]) => mdx === dx && dx !== 0)
-      || MOVE_DIRS.find(([, , mdy]) => mdy === dy && dy !== 0);
-    if (greedyEntry) {
-      const before = evalGame(win, 'turnCount').value;
-      key(win, greedyEntry[0]);
-      if (evalGame(win, 'turnCount').value !== before) {
-        if (log && Math.random() < 0.05) log(`Heading toward main quest target, ${distToTarget} tiles off (${target.why}).`);
-        return true;
-      }
-      // blocked on the greedy line -- worth one real (but now comfortably in-budget once closer)
-      // BFS attempt rather than immediately giving up on an otherwise-good, still-distant target
-    }
+  // PERFORMANCE FIX: the proportional-maxRadius fix above (see its own comment) still caps at
+  // 300, and bfsFirstStep's internal node budget is 6*maxRadius^2 -- so for a target more than
+  // ~190 tiles out (not rare: a main-quest boss/dungeon can easily be 1000+ tiles from spawn),
+  // every single call still pays the FULL capped-budget search, confirmed directly via timing at
+  // 1.8-3.2 real seconds per action on such targets. Open terrain rarely needs full BFS to take
+  // one sensible step toward something 100+ tiles away in a straight line -- a simple greedy
+  // "try the 8 directions, ranked by how much closer each gets you, use the first that's
+  // actually walkable" step is nearly always just as good there and vastly cheaper. Only falls
+  // back to the full bfsFirstStep (which correctly handles mazes/dead-ends BFS exists for in the
+  // first place) once close enough that getting it exactly right matters more than speed, or if
+  // greedy stepping is blocked in every ranked direction (a real obstacle, not just "far away").
+  const distToTarget = evalGame(win, `Math.max(Math.abs(${target.x}-player.x), Math.abs(${target.y}-player.y))`).value;
+  let step = null;
+  if (typeof distToTarget === 'number' && distToTarget > 100) {
+    const greedy = evalGame(win, `
+      (function(){
+        const dirs = ${JSON.stringify(MOVE_DIRS)};
+        const dx0 = ${target.x} - player.x, dy0 = ${target.y} - player.y;
+        const ranked = dirs.map(([k,dx,dy]) => ({k,dx,dy,dist: Math.abs((dx0-dx))+Math.abs((dy0-dy))})).sort((a,b) => a.dist-b.dist);
+        for (const r of ranked) {
+          const nx = player.x+r.dx, ny = player.y+r.dy;
+          if (curWalkable(nx,ny) && !entityAt(nx,ny)) return {dx:r.dx, dy:r.dy};
+        }
+        return null;
+      })()
+    `).value;
+    if (greedy) step = greedy;
   }
-  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, Math.min(300, Math.ceil(Math.max(Math.abs(${target.x}-player.x), Math.abs(${target.y}-player.y))*1.5)+20))`).value;
+  if (!step) {
+    step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, Math.min(300, Math.ceil(Math.max(Math.abs(${target.x}-player.x), Math.abs(${target.y}-player.y))*1.5)+20))`).value;
+  }
   if (!step) { lock.stageId = undefined; return false; } // unreachable -- drop the lock, let a fresh pick happen next time
   const dirEntry = MOVE_DIRS.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
   if (!dirEntry) return false;
@@ -4404,15 +4379,125 @@ function tryAdvanceDimensionGateStructure(win, log, memory) {
  *   note below (added proactively, same session, right after finding and fixing the identical
  *   pattern in tryPathTowardAnyDungeon/tryAdvanceMainQuest)
  */
+/**
+ * Shared movement toward a committed lock.pushX/pushY "hoping to find a roaming boss by pushing
+ * into unexplored, biome-matching ground" target (see tryPathTowardBossBiome's two BUG FIX
+ * comments on the oscillation this exists to avoid, and its own comment above for the overall
+ * mechanism). Tries the real bfsFirstStep pathfinder first, then falls back to a cheap greedy
+ * multi-directional step ranked by Manhattan distance if that comes back null/blocked (expected
+ * and common for a target this far into unexplored ground -- see the greedy fallback's own BUG
+ * FIX comment). Returns true/false same as any other strategy function; never clears the lock
+ * itself on failure -- a `false` here just means "no progress THIS call", and the same
+ * committed target is retried next call rather than abandoned (abandoning on any single blocked
+ * call was the OLD bug; see the comments this replaced).
+ */
+function pushTowardLockedTarget(win, log, info, lock) {
+  const target = { x: lock.pushX, y: lock.pushY };
+  // NOT the shared distance-proportional formula the other bfsFirstStep call sites in this
+  // file use -- this one is different in kind, not just placement: every other call site
+  // paths through terrain that's a mix of already-generated (cheap to check) and occasionally-
+  // new ground, but this one is BY DESIGN always heading toward genuinely unexplored chunks
+  // (see tryPathTowardBossBiome's 'alreadyHere' comment -- that's the entire point, to trigger
+  // their spawn roll), so the BFS itself keeps triggering real chunk generation as a side effect
+  // of exploring, which is inherently far more expensive per node than reading already-cached
+  // terrain. Measured directly: a call reaching ~85 tiles into unexplored ground took 2.5 real
+  // seconds even after the distance-proportional formula, since that formula's own 1.5x buffer
+  // combined with the quadratic node-cost relationship still saturates the outer 60000 cap well
+  // before 85 tiles. Capped at a flat, modest 80 here instead (matching what the actual game's
+  // own autoTravelHome/autoTravelToStairs consider a normal travel radius, per their own
+  // maxRadius arguments), trading some reach for keeping this responsive -- an 8-ring (192 tile)
+  // search that can only successfully path to targets within roughly 80 tiles of that will still
+  // very often find something inside its own effective range, and this function is called
+  // repeatedly every turn regardless, so a farther candidate simply becomes reachable on a later
+  // call as the character naturally moves closer to it via other actions.
+  // BUG FIX (found via direct checkpoint-state tracing on a debug-invincible completability run
+  // that spent 10,000+ turns reporting success every call while never actually changing tile):
+  // every movement call site in this file (including the two below) historically judged success
+  // by "did turnCount change", which is WRONG specifically for movement -- movePlayer() in
+  // game.html burns a full turn via endTurn() on several failure paths that never relocate the
+  // player at all (a frozen/stunned character, a confused random stumble, a Slow fumble, and
+  // critically here, a wounded leg "buckling underfoot" -- player.legInjuryPenalty, a PERMANENT
+  // per-step chance that applies to every move attempt for the rest of that leg injury's
+  // duration). A character with a 75% legInjuryPenalty burns a turn on roughly 3 of every 4 move
+  // attempts WITHOUT moving, and the old turnCount check happily accepted the very first such
+  // failure as "progress" and returned true -- which is exactly why a character could sit
+  // reporting a successful "push" every single call for 10,000+ turns while its x/y never
+  // changed once. For PURE MOVEMENT specifically (unlike autoExplore/autoTravelToStairs, which
+  // legitimately do other useful things like search/pick up loot on a turn that doesn't relocate
+  // the player, and correctly keep using turnCount), the only honest success signal is "did
+  // player.x/player.y actually change" -- checked directly here instead.
+  const posBefore = evalGame(win, '({x:player.x,y:player.y})').value;
+  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 80)`).value;
+  const MOVE_DIRS_U = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
+  if (step) {
+    const dirEntry = MOVE_DIRS_U.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
+    if (dirEntry) {
+      key(win, dirEntry[0]);
+      const posAfter = evalGame(win, '({x:player.x,y:player.y})').value;
+      if (posAfter.x !== posBefore.x || posAfter.y !== posBefore.y) {
+        if (log && Math.random() < 0.1) log(`Pushing into unexplored ${info.join('/')} terrain, hoping to cross paths with the boss.`);
+        return true;
+      }
+      // A turn may well have passed (a leg buckle, a confused stumble, etc.) without actually
+      // moving -- that still counts as "acted" for this call (something real happened, and the
+      // caller's main loop should move on rather than trying a second action on the same turn),
+      // but it's NOT success for pushing toward the target, so fall through to the greedy
+      // fallback below rather than returning true on a turn that went nowhere.
+    }
+  }
+  // BUG FIX (found via direct checkpoint-state tracing on a debug-invincible completability
+  // run): an earlier version of this fallback stopped here on a null/blocked bfsFirstStep
+  // result, deferring entirely to generic exploration -- and a target 80+ tiles into
+  // unexplored ground is exactly the case where bfsFirstStep (capped at 80) is MOST likely to
+  // come back null, since the real path there hasn't been discovered/generated yet for it to
+  // search. Traced one specific life that got stuck for 45,000+ turns pushing at the same
+  // single blocked tile, because its one computed direction never changed. A greedy
+  // multi-directional step is a much better fallback here specifically: rank all 8 directions
+  // by how much closer each gets to the target (pure Manhattan distance, no pathfinding needed)
+  // and try them in that order until one is actually walkable AND causes real POSITION progress
+  // (see the posBefore/posAfter comment above for why this checks position, not turnCount) --
+  // trivially cheap (no search budget at all) and, unlike a single best-direction-only
+  // candidate, never permanently stalls just because the single nearest direction happens to
+  // be one blocked tile; the 2nd/3rd-ranked directions route around exactly that case.
+  const greedy = evalGame(win, `
+    (function(){
+      const dirs = ${JSON.stringify(MOVE_DIRS_U)};
+      const dx0 = ${target.x} - player.x, dy0 = ${target.y} - player.y;
+      const ranked = dirs.map(([k,dx,dy]) => ({k,dx,dy,dist: Math.abs((dx0-dx))+Math.abs((dy0-dy))})).sort((a,b) => a.dist-b.dist);
+      return ranked.map(r => r.k);
+    })()
+  `).value;
+  if (greedy && greedy.length) {
+    for (const k of greedy) {
+      const before = evalGame(win, '({x:player.x,y:player.y})').value;
+      key(win, k);
+      const after = evalGame(win, '({x:player.x,y:player.y})').value;
+      if (after.x !== before.x || after.y !== before.y) {
+        if (log && Math.random() < 0.1) log(`Pushing into unexplored ${info.join('/')} terrain (greedy fallback), hoping to cross paths with the boss.`);
+        return true;
+      }
+    }
+  }
+  // Every direction either was blocked or burned a turn without relocating (e.g. that same leg
+  // buckling again) -- report honestly that no PUSH progress happened this call. The caller's
+  // main loop will simply try the next-lower-priority strategy or move on to the next action;
+  // the committed lock itself (lock.pushX/pushY, set by the caller) is untouched, so the very
+  // next call retries toward the same target rather than abandoning it over one unlucky turn.
+  return false;
+}
 function tryPathTowardBossBiome(win, log, memory, lock) {
-  const minLevelForStoryBoss = BOT_PROFILE.minLevelForStoryBoss || 1; // see optimal profile's own comment (PROFILES.optimal) for the full story
+  // Node-scope capture for interpolation below -- see draftCustomCharacter's own comment on why
+  // BOT_PROFILE can't be referenced directly inside an evalGame template string. Same readiness
+  // gate as getMainQuestNavigationTarget's kill_boss branch (see its own comment) -- a roaming
+  // OVERWORLD_BOSSES target is exactly as dangerous to rush at underleveled as a dungeon-themed
+  // one, so this needs the identical gate, not just the dungeon-theme half of kill_boss.
+  const minLevelForStoryBoss = BOT_PROFILE.minLevelForStoryBoss || 1;
   const info = evalGame(win, `
     (function(){
-      const minLevelForStoryBoss = ${JSON.stringify(minLevelForStoryBoss)};
       const s = curStoryStage();
       if (!s) return null;
       if (s.type === 'kill_boss') {
-        if (player.level < minLevelForStoryBoss) return null; // seek-it-out gate only -- see getMainQuestNavigationTarget's matching comment
+        if (player.level < ${JSON.stringify(minLevelForStoryBoss)}) return null;
         const bossId = s.targetBossId;
         if (typeof BOSS_DUNGEON_THEME !== 'undefined' && BOSS_DUNGEON_THEME[bossId]) return null; // dungeon-theme nav already covers this
         const owb = (typeof OVERWORLD_BOSSES !== 'undefined') ? OVERWORLD_BOSSES.find(b => b.id === bossId) : null;
@@ -4432,9 +4517,45 @@ function tryPathTowardBossBiome(win, log, memory, lock) {
       return null;
     })()
   `).value;
-  if (!info) return false;
+  if (!info) { lock.pushStageId = undefined; lock.pushX = undefined; lock.pushY = undefined; return false; }
   if (evalGame(win, 'curIsDungeon() || curIsDimension()').value) return false; // biomes are an overworld-only concept
-  {
+
+  // SECOND BUG FIX, found the same way as the first (direct checkpoint tracing on a stalled
+  // debug-invincible run): even after locking the ring-search's OWN target (below), the
+  // character kept oscillating -- because 'alreadyHere' itself was flickering true/false every
+  // other call near a biome boundary (one step across the line into non-matching terrain, one
+  // step back). That flicker alone was enough to bounce between this branch (push AWAY into
+  // unexplored ground) and the sibling 'remembered biome' branch below (path BACK toward a
+  // remembered tile of the matching biome, often the very spot just stepped away from) --
+  // fighting each other regardless of how stable either branch's own internal target was. Fixed
+  // by checking for an already-committed push-lock BEFORE re-evaluating alreadyHere at all: once
+  // committed to pushing toward a specific candidate chunk for this stage, stay committed
+  // (ignoring which side of a biome boundary the character happens to be standing on this exact
+  // call) until that chunk's spawn roll actually happens (it gets generated), the boss is
+  // spotted, or the stage itself changes -- only when there's NO active commitment does this
+  // re-derive which branch to take from scratch.
+  const pushStageId = evalGame(win, `(function(){ const s = curStoryStage(); return s ? s.id : null; })()`).value;
+  if (lock.pushStageId !== pushStageId) { lock.pushStageId = pushStageId; lock.pushX = undefined; lock.pushY = undefined; }
+  if (lock.pushX !== undefined) {
+    const stillUsable = evalGame(win, `(function(){ const CHUNK=24; const cx=Math.floor(${lock.pushX}/CHUNK), cy=Math.floor(${lock.pushY}/CHUNK); return !worldChunks.has(cx+','+cy); })()`).value;
+    if (!stillUsable) { lock.pushX = undefined; lock.pushY = undefined; } // its spawn roll already happened -- re-derive from scratch below
+  }
+  if (lock.pushX !== undefined) {
+    // Still worth checking the boss hasn't actually shown up in the meantime -- if it has,
+    // drop the commitment and let combat/generic explore take over, same as the fresh-pick path.
+    const bossNearbyNow = evalGame(win, `
+      (function(){
+        const s = curStoryStage();
+        if (!s || s.type !== 'kill_boss') return true;
+        return curMonsters().some(m => m.hp > 0 && m.monsterId === s.targetBossId);
+      })()
+    `).value;
+    if (bossNearbyNow) { lock.pushX = undefined; lock.pushY = undefined; return false; }
+    return pushTowardLockedTarget(win, log, info, lock);
+  }
+
+  const alreadyHere = evalGame(win, `${JSON.stringify(info)}.includes((getTile(player.x, player.y)||{}).biome)`).value;
+  if (alreadyHere) {
     // AUDIT FINDING (from a debug-invincible diagnostic run specifically built to isolate
     // "can the bot complete the game" from "can it survive" -- see PROGRESS.md): a kill_boss
     // stage whose target is a roaming OVERWORLD_BOSSES entry (as opposed to a dungeon-themed
@@ -4452,22 +4573,6 @@ function tryPathTowardBossBiome(win, log, memory, lock) {
     // coordinates alone, safe to call speculatively with no side effects or generation cost --
     // predicts will actually match one of this boss's eligible biomes, rather than deferring to
     // biome-blind generic exploration. Bounded to a modest search ring so this stays cheap.
-    //
-    // BUG FOUND THIS SESSION, same investigation, one level deeper: this block originally only
-    // ran when `alreadyHere` -- the player's CURRENT tile literally matching one of the target
-    // biome strings -- was true, falling back to walking toward a REMEMBERED biome tile
-    // otherwise. But every remembered tile came from something the bot had already SEEN, and a
-    // tile can only be "seen" once its chunk has already been generated -- which means that
-    // fallback was, unconditionally, walking toward ground whose one-time spawn roll had ALREADY
-    // happened (and failed, or the search wouldn't still be going). Confirmed directly: a real
-    // stuck run kept returning to the exact same remembered forest tile for over 12,000 turns
-    // straight, in a chunk confirmed already-generated the entire time -- structurally zero
-    // chance of ever finding the boss there, no matter how many times it made the trip. This
-    // block's own internal bail (just below: anything other than an active, not-yet-satisfied
-    // kill_boss stage returns true/defers) already makes it safe to attempt unconditionally, so
-    // it no longer waits for alreadyHere at all -- it's simply tried first, every call, and only
-    // the (now provably pointless for this case) remembered-tile walk further below is left as
-    // the fallback for kill_any, which this block correctly declines to touch.
     const bossNearby = evalGame(win, `
       (function(){
         const s = curStoryStage();
@@ -4475,8 +4580,12 @@ function tryPathTowardBossBiome(win, log, memory, lock) {
         return curMonsters().some(m => m.hp > 0 && m.monsterId === s.targetBossId);
       })()
     `).value;
-    if (!bossNearby) {
-    const target = evalGame(win, `
+    if (bossNearby) return false; // already visible, or this isn't the roaming-boss case -- let combat/generic explore handle it
+    // Pick a candidate push target via the ring search and commit to it (lock.pushX/pushY,
+    // established above) -- pushTowardLockedTarget (below) does the actual bfsFirstStep/greedy
+    // movement, shared with the "already committed" fast path above so there's exactly one
+    // movement implementation for this instead of two that could drift out of sync.
+    const found = evalGame(win, `
       (function(){
         const biomes = ${JSON.stringify(info)};
         const CHUNK = 24;
@@ -4500,68 +4609,10 @@ function tryPathTowardBossBiome(win, log, memory, lock) {
         return null;
       })()
     `).value;
-    if (target) {
-    // NOT the shared distance-proportional formula the other bfsFirstStep call sites in this
-    // file use -- this one is different in kind, not just placement: every other call site
-    // paths through terrain that's a mix of already-generated (cheap to check) and occasionally-
-    // new ground, but this one is BY DESIGN always heading toward genuinely unexplored chunks
-    // (see the comment above -- that's the entire point, to trigger their spawn roll), so the
-    // BFS itself keeps triggering real chunk generation as a side effect of exploring, which is
-    // inherently far more expensive per node than reading already-cached terrain. Measured
-    // directly: a call reaching ~85 tiles into unexplored ground took 2.5 real seconds even
-    // after the distance-proportional formula, since that formula's own 1.5x buffer combined
-    // with the quadratic node-cost relationship still saturates the outer 60000 cap well before
-    // 85 tiles. Capped at a flat, modest 80 here instead (matching what the actual game's own
-    // autoTravelHome/autoTravelToStairs consider a normal travel radius, per their own maxRadius
-    // arguments), trading some reach for keeping this responsive -- an 8-ring (192 tile) search
-    // that can only successfully path to targets within roughly 80 tiles of that will still very
-    // often find something inside its own effective range, and this function is called
-    // repeatedly every turn regardless, so a farther candidate simply becomes reachable on a
-    // later call as the character naturally moves closer to it via other actions.
-    const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 80)`).value;
-    const MOVE_DIRS_U = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
-    if (step) {
-    const dirEntry = MOVE_DIRS_U.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
-    if (dirEntry) {
-    const before = evalGame(win, 'turnCount').value;
-    key(win, dirEntry[0]);
-    if (evalGame(win, 'turnCount').value !== before) {
-      if (log && Math.random() < 0.1) log(`Pushing into unexplored ${info.join('/')} terrain, hoping to cross paths with the boss.`);
-      return true;
-    }
-    }
-    } else {
-      // BUG FOUND THIS SESSION: the ring search above deliberately looks out to ring 8
-      // (~204 tiles chebyshev to a chunk's center) so it has real candidates to offer even in a
-      // heavily-explored area, but bfsFirstStep here is capped at a flat 80 for responsiveness
-      // (see the comment above) -- so a found candidate beyond that range came back with no
-      // path at all, and execution used to just fall all the way through to the remembered-tile
-      // walk below, which -- as the comment at the top of this whole block explains -- can only
-      // ever lead somewhere already exhausted. Confirmed directly: a real stuck run had a valid,
-      // correctly-identified frontier candidate just 4 rings out (~100 tiles) the entire time,
-      // and never made an inch of progress toward it because of exactly this gap. A crude
-      // straight-line step (no full pathfind, just "which of the 8 directions reduces distance
-      // to the target") is a cheap, honest fallback: it can't get permanently stuck on a single
-      // obstacle since a different frontier candidate (or a fully in-range one) gets recomputed
-      // fresh on every call, and it at least biases movement toward real, reachable-eventually
-      // frontier instead of walking back to provably dead ground.
-      const dx = Math.sign(target.x - evalGame(win, 'player.x').value);
-      const dy = Math.sign(target.y - evalGame(win, 'player.y').value);
-      const greedyEntry = MOVE_DIRS_U.find(([, mdx, mdy]) => mdx === dx && mdy === dy)
-        || MOVE_DIRS_U.find(([, mdx, mdy]) => mdx === dx && dx !== 0) // straighten to a pure axis move if the exact diagonal isn't in the list
-        || MOVE_DIRS_U.find(([, mdx, mdy]) => mdy === dy && dy !== 0);
-      if (greedyEntry) {
-        const before = evalGame(win, 'turnCount').value;
-        key(win, greedyEntry[0]);
-        if (evalGame(win, 'turnCount').value !== before) {
-          if (log && Math.random() < 0.1) log(`Pushing into unexplored ${info.join('/')} terrain, hoping to cross paths with the boss.`);
-          return true;
-        }
-      }
-    }
-    }
-    }
-    }
+    if (!found) return false; // nothing predictable within range right now -- fall back to generic explore same as before
+    lock.pushX = found.x; lock.pushY = found.y;
+    return pushTowardLockedTarget(win, log, info, lock);
+  }
 
   // scan only the currently-loaded 3x3 chunk radius, same bounded cost as scanForDimensionGateFeatures
   const seen = evalGame(win, `
@@ -5190,19 +5241,33 @@ const SPECIFICALLY_HANDLED_STATES = ['playing', 'trade', 'dialogue', 'gameover',
  * would, so nothing about validation/application of the draft is bypassed.
  */
 function draftCustomCharacter(win) {
-  // NOTE: everything below is a STRING evaluated inside the JSDOM window context (see
-  // evalGame), not this Node.js module's scope -- BOT_PROFILE lives out here, so any of its
-  // fields the drafted code needs must be captured into a plain value first and interpolated
-  // in via ${...}, exactly like targetIds is elsewhere in this file. Referencing BOT_PROFILE
-  // directly inside the template string throws "BOT_PROFILE is not defined" at eval time,
-  // since the window context has no such binding.
-  const wantsGuaranteedCurative = BOT_PROFILE.curativeReserve >= 4; // false only for novice
-  const creationItemReserve = BOT_PROFILE.creationItemReserve || 3; // see optimal profile's own comment for the full story
+  // Captured in Node scope and interpolated below -- evalGame's string runs inside the jsdom
+  // window's own context, which has no binding for BOT_PROFILE (referencing it directly inside
+  // the template string throws ReferenceError at eval time), so anything from BOT_PROFILE a draft
+  // needs has to be read here first and spliced in as a literal value.
+  const creationItemReserve = BOT_PROFILE.creationItemReserve || 3;
+  const wantsGuaranteedCurative = BOT_PROFILE.curativeReserve >= 4;
   return evalGame(win, `
     (function(){
-      const wantsGuaranteedCurative = ${JSON.stringify(wantsGuaranteedCurative)};
-      const creationItemReserve = ${JSON.stringify(creationItemReserve)};
       const d = creationDraft;
+      // BUG FIX: a profile asking for a deep curative reserve (curativeReserve >= 4, i.e.
+      // casual/veteran/optimal) still had NO guarantee its custom-built starting kit actually
+      // contained a single bandage/potion/antidote -- the random 50% coin-flip item-purchase
+      // loop below picks uniformly from the whole weapon/armor/consumable pool, so a build could
+      // easily (and, sampled directly across 10 "optimal" rolls, did 4/10 times) end up with
+      // zero curatives purchased at all despite plenty of points spent elsewhere. Fixed by
+      // reserving and guaranteeing one curative purchase FIRST, before the random loop gets a
+      // chance to spend the budget on other things -- an earlier attempt placed this same check
+      // AFTER the random loop instead (only backfilling if d.items had no curative yet), which
+      // didn't help, since by then the random loop had often already spent every point.
+      const CURATIVE_IDS = new Set(['bandage', 'potion_heal', 'antidote']);
+      if (${JSON.stringify(wantsGuaranteedCurative)} && d.points >= 3) {
+        const curativeChoices = CREATION_STARTING_ITEM_POOL.filter(b => CURATIVE_IDS.has(b.id));
+        if (curativeChoices.length) {
+          const pick = choice(Math.random, curativeChoices);
+          d.points -= 3; d.items.push(pick.id);
+        }
+      }
       const focus = choice(Math.random, ['melee','caster','hybrid']);
       const weights = focus === 'caster' ? {str:1,dex:1,int:4,con:2,wil:2,cha:1}
         : focus === 'melee' ? {str:4,dex:2,int:1,con:3,wil:1,cha:1}
@@ -5229,7 +5294,11 @@ function draftCustomCharacter(win) {
       // ---- abilities: leave a small reserve for the gold/items screen, spend the rest on
       // categories matching the rolled focus, taking roughly half of what's affordable in each
       // category (not maxing one category outright) for a more varied, less min-maxed spread ----
-      const reserve = Math.min(d.points, creationItemReserve);
+      // BUG FIX: this reserve used to be a hard-coded Math.min(d.points, 3) regardless of
+      // profile, so even "optimal" rolls only ever held back 3 points for the gold/items screen
+      // -- now reads from the per-profile creationItemReserve field (see PROFILES) so a
+      // higher-tier profile plans further ahead and ends up with a more complete starting kit.
+      const reserve = Math.min(d.points, ${JSON.stringify(creationItemReserve)});
       const catOrder = focus === 'caster' ? ['spells','techniques','mutations','cyber']
         : focus === 'melee' ? ['techniques','spells','mutations','cyber']
         : ['spells','techniques','mutations','cyber'];
@@ -5251,34 +5320,6 @@ function draftCustomCharacter(win) {
       }
 
       // ---- gold & starting items: occasionally grab an item (3pt each), convert the rest to gold ----
-      // BUG FOUND THIS SESSION: nothing here ever forced a curative into the build. Because
-      // every purchase (weapon/armor/consumable alike) went through the SAME blind 50/50 coin
-      // flip over the whole pool, a real, observed rollout produced "0 starting items, 75g" and
-      // then died at action ~30 to bleeding with "no bandage available" logged twice right
-      // before death -- for a VETERAN-profile life, not even novice. That's a real contamination
-      // of the skill-tier comparison this toolkit exists to produce: an actual veteran/optimal
-      // player deciding a custom build from scratch would essentially never walk out with zero
-      // curatives, so any run this happens to isn't testing "does a skilled build survive," it's
-      // testing "did the RNG happen to buy a bandage" -- same category of artifact as the
-      // already-fixed 0-gold case just below, and fixed the same way (a floor applied once,
-      // not a change to the real game's point-buy costs/rules). novice is deliberately exempt:
-      // a first-timer plausibly *does* forget this, so leaving novice's odds alone is correct,
-      // not an oversight.
-      const CURATIVE_IDS = new Set(['bandage', 'potion_heal', 'antidote', 'food_ration']);
-      // The guaranteed curative purchase (when the profile wants one) MUST come before the
-      // random coin-flip loop below, not after: an earlier version of this fix applied it
-      // afterward and found it only fired when the random loop happened to leave 3+ points
-      // unspent -- direct testing (10 rolls) showed 4/10 "optimal" builds still ended up with
-      // zero curatives, because the random loop was free to blow the entire remaining budget on
-      // weapons/armor first. Reserving the points up front makes it unconditional whenever
-      // affordable at all.
-      if (wantsGuaranteedCurative && d.points >= 3) {
-        const curativeOptions = CREATION_STARTING_ITEM_POOL.filter(b => CURATIVE_IDS.has(b.id));
-        if (curativeOptions.length) {
-          const b = choice(Math.random, curativeOptions);
-          d.points -= 3; d.items.push(b.id);
-        }
-      }
       let guardC = 0;
       while (d.points >= 3 && guardC++ < 20 && Math.random() < 0.5) {
         const b = choice(Math.random, CREATION_STARTING_ITEM_POOL);
@@ -5528,26 +5569,16 @@ async function createCustomCharacter(win, log, spec = {}) {
 async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
   const {
     collectTelemetry = true, vitalsInterval = 25, onAction = null,
-    // ---- resumability additions (this session): let a caller checkpoint a long life to disk
-    // periodically and resume it in a FRESH process later, rather than losing all progress if a
-    // run gets killed mid-way (background processes don't reliably survive a turn/conversation
-    // boundary -- see the project handoff). Built as opt-in additions on top of the existing
-    // create-a-fresh-character flow rather than a parallel reimplementation of this loop, so
-    // every strategy/bug-fix in the ~300 lines below applies identically whether a life started
-    // fresh or resumed. ----
-    resumeSnapshot = null,       // a string previously returned by snapshotState() -- if given,
-                                  // this life restores from it instead of creating a new character.
-    checkpointPath = null,       // if given, the live game state is written here periodically
-                                  // (see checkpointInterval) via snapshotToFile, overwriting each time.
-    checkpointInterval = 200,    // actions between checkpoint writes.
-    // ---- debug-invincible mode (this session): flips the same debug.setVitalFlags(true) a
-    // human would toggle from the debug menu, right after character creation/resume and before
-    // the main loop starts. Exists to answer a narrower question than "can a real (mortal) bot
-    // survive to the end" -- "is the critical path to the true ending even reachable/finishable
-    // at all, with survival taken out of the equation." A stall here (get stuck, never progress,
-    // hit maxActions) is real signal about content reachability/pathing that's independent of
-    // combat balance; a death is impossible so 'died' should never appear in this mode's result. --
-    debugInvincible = false,
+    // Added to support long-running "lives" split across many short-lived Node processes (this
+    // environment does not reliably keep a long background process alive across turn/session
+    // boundaries) and to support the debug-invincible completability check (isolating "can the
+    // bot's navigation/logic reach the end" from "can it survive combat," a different question
+    // from ordinary mortal-profile win-rate testing). See snapshotState/restoreState/
+    // snapshotToFile/restoreFromFile (SECTION 6) for the serialization this relies on.
+    resumeSnapshot = null,     // a snapshotState()-produced JSON string to resume from, instead of creating a fresh character
+    checkpointPath = null,     // if set, periodically (and on normal exit) writes a resumable snapshot here
+    checkpointInterval = 200,  // how many actions between checkpoint writes
+    debugInvincible = false,   // makes the character unkillable (debug.setVitalFlags) and relaxes profile dials that only make sense for a mortal character
   } = opts;
   const win = dom.window;
   const events = [];
@@ -5572,7 +5603,7 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
   const bossBiomeLock = {}; // see tryPathTowardBossBiome's BUG FIX comment for why this exists
   const seekSuppliesLock = {}; // see trySeekSupplies's trulyEmpty BUG FIX comment for why this exists
   const fleeStall = { count: 0 }; // see tryFleeIfCritical's BUG FIX comment for why this exists
-  const unproductiveFightLock = { uid: null, sinceTurn: null, startHp: null, maxHp: null }; // see tryDisengageUnproductiveFight's own comment
+  const unproductiveFightLock = {}; // see tryDisengageUnproductiveFight's own comment for what this holds
   let hasBeenPlaying = false; // tracks whether we've ever reached 'playing' -- see the
   // implicit-death handling below, right before the main loop.
 
@@ -5595,17 +5626,7 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     }
   };
 
-  const buildResult = (reason, actionsUsed, stateCounts, unrecognizedStates, extra = {}) => {
-    // Final checkpoint on the way out, regardless of why the life ended, so a caller resuming
-    // from checkpointPath continues from the true last state rather than up to
-    // checkpointInterval actions stale. Skipped for 'died' -- resuming into an already-gameover
-    // state has nothing to continue.
-    if (checkpointPath && reason !== 'died') {
-      try { snapshotToFile(win, checkpointPath); } catch (e) { log(`Final checkpoint write failed: ${e.message}`); }
-    }
-    if (debugInvincible) BOT_PROFILE.avoidOverwhelmingEnabled = savedAvoidOverwhelming;
-    if (debugInvincible) BOT_PROFILE.minLevelForStoryBoss = savedMinLevelForStoryBoss;
-    return {
+  const buildResult = (reason, actionsUsed, stateCounts, unrecognizedStates, extra = {}) => ({
     events, errors, windowErrors, died: reason === 'died', reason, actionsUsed,
     stateCounts, unrecognizedStates: [...unrecognizedStates],
     combatLog, combatSummary: summarizeCombatLog(combatLog), vitalsTimeline,
@@ -5629,42 +5650,47 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     gameCompleted: evalGame(win, 'player.gameCompleted').value === true,
     completionTurn: evalGame(win, 'player.completionTurn').value ?? null,
     ...extra,
-    };
+  });
+
+  // Checkpoint/resume support: a "life" can span far more actions than a single Node process
+  // reliably stays alive for in this environment, so a long completability run is split into
+  // many short processes, each resuming from the last successfully-written checkpoint. Skipped
+  // on a 'died' result -- there's nothing to resume into, and writing one would just invite a
+  // future process to "resume" a dead character. debugInvincible's profile overrides (below) are
+  // restored here, right before writing/returning, regardless of which exit path got us here.
+  const writeCheckpointIfDue = (reason) => {
+    if (!checkpointPath || reason === 'died') return;
+    try { snapshotToFile(win, checkpointPath); } catch (e) { errors.push(['checkpoint-write', String(e)]); }
+  };
+  const restoreDebugInvincibleOverrides = debugInvincible ? (() => {
+    const savedAvoidOverwhelming = BOT_PROFILE.avoidOverwhelmingEnabled;
+    const savedMinLevelForStoryBoss = BOT_PROFILE.minLevelForStoryBoss;
+    // Neither dial makes sense for an unkillable character: there is no "this fight could nearly
+    // one-shot me" to avoid, and no reason to wait until some level before going after the
+    // main-quest boss when survivability isn't the question this run is trying to answer at all.
+    BOT_PROFILE.avoidOverwhelmingEnabled = false;
+    BOT_PROFILE.minLevelForStoryBoss = 1;
+    return () => { BOT_PROFILE.avoidOverwhelmingEnabled = savedAvoidOverwhelming; BOT_PROFILE.minLevelForStoryBoss = savedMinLevelForStoryBoss; };
+  })() : () => {};
+  const buildResultChecked = (reason, actionsUsed, stateCounts, unrecognizedStates, extra = {}) => {
+    writeCheckpointIfDue(reason);
+    restoreDebugInvincibleOverrides();
+    return buildResult(reason, actionsUsed, stateCounts, unrecognizedStates, extra);
   };
 
-  const creation = resumeSnapshot
-    ? (() => {
-        const ok = restoreState(win, resumeSnapshot);
-        if (ok) log(`Resumed from checkpoint snapshot at turn ${evalGame(win, 'turnCount').value}.`);
-        return { ok, errors: ok ? [] : [['resume-failed', 'restoreState returned false -- snapshot may be from an incompatible save version']] };
-      })()
-    : await createRandomCharacter(win, log);
-  errors.push(...creation.errors);
-  if (!creation.ok) return buildResult('failed-to-start', 0, {}, new Set());
-  if (debugInvincible) {
-    debugSetVitalFlags(win, true);
-    log('Debug invincibility + infinite mana/stamina enabled for this life (theoretical-completability mode).');
+  if (debugInvincible) debugSetVitalFlags(win, true);
+
+  let creation;
+  if (resumeSnapshot) {
+    // Resuming a checkpointed life: skip character creation entirely (the character already
+    // exists in the snapshot) and restore the saved state directly into this freshly-booted win.
+    const ok = restoreState(win, resumeSnapshot);
+    creation = { ok, errors: ok ? [] : [['restore-snapshot', 'restoreState failed']] };
+  } else {
+    creation = await createRandomCharacter(win, log);
   }
-  // BUG FOUND THIS SESSION: with invincibility on, tryAvoidOverwhelmingMonster (a genuinely
-  // useful heuristic in normal play -- "don't walk into a hit that could nearly kill me") still
-  // reads BOT_PROFILE.avoidOverwhelmingEnabled and retreats from any monster whose predicted hit
-  // is large relative to current HP, with NO awareness that damage can't actually land. Observed
-  // directly: three straight 1500-action phases spent almost entirely retreating from and
-  // re-approaching the same monster ("potential hit ~173 vs Nhp") while leveling from 6 to 8 over
-  // 4500 actions -- i.e. debug-invincible mode was, before this fix, still bottlenecked by a
-  // mortal-play heuristic that no longer serves any purpose once death is impossible, defeating
-  // the entire point of using this mode to test reachability independent of survival. Scoped to
-  // just this one life (saved/restored, not a permanent mutation of the shared BOT_PROFILE
-  // object) so normal (non-invincible) runs using the same profile afterward are unaffected.
-  const savedAvoidOverwhelming = BOT_PROFILE.avoidOverwhelmingEnabled;
-  if (debugInvincible) BOT_PROFILE.avoidOverwhelmingEnabled = false;
-  // Same reasoning, same scoping, for minLevelForStoryBoss (see PROFILES.optimal's own comment):
-  // that gate exists to model a REAL player's patience before picking a story fight, which has
-  // nothing to do with what this mode is testing (whether the story's critical path is reachable
-  // at all). Left in place, it would have blocked exactly the boss-seeking behavior that found
-  // and fixed the discoverability bugs earlier this session.
-  const savedMinLevelForStoryBoss = BOT_PROFILE.minLevelForStoryBoss;
-  if (debugInvincible) BOT_PROFILE.minLevelForStoryBoss = 1;
+  errors.push(...creation.errors);
+  if (!creation.ok) return buildResultChecked('failed-to-start', 0, {}, new Set());
 
   let lastTurnCount = evalGame(win, 'turnCount').value;
   let stuckCounter = 0;
@@ -5693,10 +5719,6 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     const gs = evalGame(win, 'gameState').value;
     noteState(gs);
 
-    if (checkpointPath && i > 0 && i % checkpointInterval === 0) {
-      try { snapshotToFile(win, checkpointPath); } catch (e) { log(`Checkpoint write failed: ${e.message}`); }
-    }
-
     if (!completionLogged && evalGame(win, 'player.gameCompleted').value === true) {
       completionLogged = true;
       log(`*** TRUE ENDING REACHED at turn ${evalGame(win, 'turnCount').value} (player.gameCompleted) -- the game does not stop here by design (see buildResult's comment), so play continues normally. ***`);
@@ -5710,7 +5732,7 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
       // exactly when it was captured relative to the death message itself).
       const cause = evalGame(win, 'player.deathCause').value;
       log(`DIED: ${cause || '(unknown cause)'}`);
-      return buildResult('died', actionsUsed, stateCounts, unrecognizedStates);
+      return buildResultChecked('died', actionsUsed, stateCounts, unrecognizedStates);
     }
 
     if (gs === 'trade') { strat.tryShopIfTrading(win, log); continue; }
@@ -5759,7 +5781,7 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     if (hasBeenPlaying && (gs === 'start' || gs === 'create_species' || gs === 'create_archetype' || gs === 'title')) {
       const cause = evalGame(win, 'player.deathCause').value;
       log(`DIED: ${cause || '(unknown cause -- game auto-rerolled a new character without a gameover screen)'}`);
-      return buildResult('died', actionsUsed, stateCounts, unrecognizedStates);
+      return buildResultChecked('died', actionsUsed, stateCounts, unrecognizedStates);
     }
     if (gs !== 'playing') {
       if (unrecognizedStates.has(gs) && stateCounts[gs] === 1) {
@@ -5798,6 +5820,14 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     if (collectTelemetry && vitalsInterval > 0 && i % vitalsInterval === 0) {
       const v = evalGame(win, `JSON.stringify({turn:turnCount, hp:player.hp, maxHp:player.maxHp, level:player.level, xp:player.xp, gold:player.gold, x:player.x, y:player.y, dungeon:curIsDungeon(), dimension:player.dimensionId||null})`);
       if (v.ok) { try { vitalsTimeline.push(JSON.parse(v.value)); } catch (e) {} }
+    }
+
+    // --- periodic checkpoint write: lets a long life be resumed by a LATER, separate Node
+    // process (see the resumeSnapshot/checkpointPath options above and snapshotToFile/
+    // restoreFromFile in SECTION 6). Deliberately not gated on `collectTelemetry` -- checkpointing
+    // is an orthogonal concern from telemetry collection. ---
+    if (checkpointPath && checkpointInterval > 0 && i > 0 && i % checkpointInterval === 0) {
+      try { snapshotToFile(win, checkpointPath); } catch (e) { errors.push(['checkpoint-write', String(e)]); }
     }
 
     // --- combat telemetry: snapshot before, act, snapshot after, diff -- only when something
@@ -5886,9 +5916,12 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     if (!acted) acted = strat.tryPathTowardAnyDungeon(win, log, anyDungeonLock);
     if (!acted) acted = strat.tryPathTowardBossBiome(win, log, bossBiomeMemory, bossBiomeLock);
     if (!acted) acted = strat.tryAdvanceDimensionGateStructure(win, log, dimensionGateMemory);
-    // Skipped in debug-invincible mode: supplies are irrelevant when death is impossible, and
-    // (observed directly) the restock trip pulled the character OUT of the dungeon it was
-    // partway through clearing, over and over, stalling the very objective the mode exists to test.
+    // BUG FIX (debug-invincible completability runs specifically): an unkillable character has
+    // no real need to restock curatives at all, but trySeekSupplies doesn't know that -- it was
+    // repeatedly pulling an otherwise-mid-dungeon invincible character all the way back out to
+    // the nearest settlement just to "restock" bandages that would never actually get used,
+    // wasting enormous numbers of actions on round trips that contributed nothing toward the
+    // actual goal of this run (reaching the end).
     if (!acted && !debugInvincible) acted = await strat.trySeekSupplies(win, log, seekSuppliesLock);
     if (!acted) {
       const { progressed } = await nav.exploreStep(win, wanderState);
@@ -5911,7 +5944,7 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
       const shouldContinue = await onAction({ i, actionLabel, acted, gameState: evalGame(win, 'gameState').value, state: getState(win) }, win);
       if (shouldContinue === false) {
         log('Stopped early by onAction callback.');
-        return buildResult('stopped-by-caller', actionsUsed, stateCounts, unrecognizedStates);
+        return buildResultChecked('stopped-by-caller', actionsUsed, stateCounts, unrecognizedStates);
       }
     }
 
@@ -5921,13 +5954,13 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     if (stuckCounter > maxStuckActions) {
       const stX = evalGame(win, 'player.x').value, stY = evalGame(win, 'player.y').value;
       log(`STUCK: no turn progress for ${stuckCounter}+ actions at x=${stX} y=${stY}, dungeon=${evalGame(win, 'curIsDungeon()').value}`);
-      return buildResult('stuck', actionsUsed, stateCounts, unrecognizedStates);
+      return buildResultChecked('stuck', actionsUsed, stateCounts, unrecognizedStates);
     }
   }
 
   const finalSt = getState(win);
   log(`Reached action budget. hp=${finalSt && finalSt.hp} level=${finalSt && finalSt.level}`);
-  return buildResult('budget-reached', actionsUsed, stateCounts, unrecognizedStates, { finalState: finalSt });
+  return buildResultChecked('budget-reached', actionsUsed, stateCounts, unrecognizedStates, { finalState: finalSt });
 }
 
 // ==========================================================================================
