@@ -152,10 +152,10 @@
   /* Screen shake for big explosions (tactical nuke, etc). Respects the reduceMotion setting --
      see triggerScreenShake(), which skips applying this class entirely when that's on. */
   @keyframes screenShake{
-    0%{ transform:translate(0,0); } 10%{ transform:translate(-8px,-5px); } 20%{ transform:translate(7px,4px); }
-    30%{ transform:translate(-6px,6px); } 40%{ transform:translate(6px,-6px); } 50%{ transform:translate(-4px,3px); }
-    60%{ transform:translate(4px,-3px); } 70%{ transform:translate(-3px,2px); } 80%{ transform:translate(2px,-2px); }
-    90%{ transform:translate(-1px,1px); } 100%{ transform:translate(0,0); }
+    0%{ transform:translate(0,0); } 10%{ transform:translate(calc(-8px * var(--shake-scale, 1)),calc(-5px * var(--shake-scale, 1))); } 20%{ transform:translate(calc(7px * var(--shake-scale, 1)),calc(4px * var(--shake-scale, 1))); }
+    30%{ transform:translate(calc(-6px * var(--shake-scale, 1)),calc(6px * var(--shake-scale, 1))); } 40%{ transform:translate(calc(6px * var(--shake-scale, 1)),calc(-6px * var(--shake-scale, 1))); } 50%{ transform:translate(calc(-4px * var(--shake-scale, 1)),calc(3px * var(--shake-scale, 1))); }
+    60%{ transform:translate(calc(4px * var(--shake-scale, 1)),calc(-3px * var(--shake-scale, 1))); } 70%{ transform:translate(calc(-3px * var(--shake-scale, 1)),calc(2px * var(--shake-scale, 1))); } 80%{ transform:translate(calc(2px * var(--shake-scale, 1)),calc(-2px * var(--shake-scale, 1))); }
+    90%{ transform:translate(calc(-1px * var(--shake-scale, 1)),calc(1px * var(--shake-scale, 1))); } 100%{ transform:translate(0,0); }
   }
   #canvas.screen-shake{ animation:screenShake 0.5s cubic-bezier(.36,.07,.19,.97) both; }
   #explosion-flash{
@@ -540,7 +540,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.1-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.6-alpha</div>
     </div>
   </div>
 
@@ -1846,6 +1846,38 @@
 //     sprinting player" bonus had the identical gap. Both now gate on the same isPlayerInWater()
 //     check the cost side already uses, so a swum, cost-free sprint no longer grants anything
 //     either -- consistent instead of one half of the mechanic silently not applying.
+//
+// v0.50.2 VFX engine (combat feel). New self-contained module (search "VFX ENGINE") layering hit flashes,
+//   impact/death particles, projectile trails, shockwave rings, heavy-hit screen shake and enemy health bars
+//   (with a draining damage-ghost) over render(). State-diff driven: observe() watches hp/alive each frame
+//   so every damage source is covered without editing call sites; only projectiles are emitted explicitly
+//   (doAttack ranged, resolveSpellAtTile, monsterCastAt). floatingText + VFX now share one rAF loop
+//   (requestAnimRender). New settings: vfxIntensity + per-effect toggles (VFX_TOGGLES). Honors reduceMotion.
+//
+// v0.50.3 City Civic Layout. Cities/capitals now have structure (search "CITY CIVIC LAYOUT"): the open ring around
+//   each district is repaved as a visible street grid, lampposts line the streets, and every non-grand district
+//   gets a themed public square (fountain / market / memorial / garden / well) recorded in settlement.landmarks.
+//   Each district cell is also a distinct QUARTER (civic/noble/market/artisan/old town/gardens) varying building
+//   density+size, yard tint, lamps, tree-lined boulevards and square types, so a capital is no longer 9 identical cells.
+//   Decoration runs last in buildSettlementCore on leftover plain tiles only (own RNG stream); quarter density/size
+//   reshape the layout (CityCivic.layoutVariation=false restores uniform cells). Extend via CITY_SQUARE_TYPES / CIVIC_FEATURES / CityCivic.passes.
+//
+// v0.50.4 Organic City Shapes (search "ORGANIC CITY SHAPES"). Cities/capitals are no longer chunk-aligned squares: each has
+//   a world-coordinate outline (irregular curve), a wall that follows it with towers and gates, radial avenues + ring
+//   roads + a wall lane, a central plaza, a domain-warped Voronoi of quarters whose borders ignore chunk edges, and
+//   buildings only on the street-frontage band with doors facing the street. Wilderness outside the wall stays wild.
+//   Pure function of (SEED, anchor, footprint), cached. CityShape.enabled=false restores the old rectangular cities.
+//
+// v0.50.5 Spawn fix. Starting at a settlement now places you on a street/road tile nearest its real centre (inside the
+//   walls for organic cities), instead of the first open tile from the anchor chunk's top-left corner, which is
+//   outside the wall of an organic or round settlement. See findSettlementSpawn.
+//
+// v0.50.6 City shape archetypes (search "CITY_SHAPE_ARCHETYPES"). Cities/capitals now roll a shape recipe built from lobes
+//   (rects + lumpy blobs): organic blob, bastion (big square fortress), cross, elbow (L), tee, ushape (cities only), and
+//   hybrids citadel (blob + square annex), twin (two blobs), winged (blob + rect wings); plus 'classic', the untouched
+//   original chunk-square city, kept as its own rarer type. Streets, gates, towers, quarters and building layout are
+//   derived from the lobe union, so any new recipe works without touching the rest. settlement.shapeType records it.
+//   CityShape.forceArchetype pins one for testing; add recipes by pushing onto CITY_SHAPE_ARCHETYPES.
 //
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
@@ -10830,7 +10862,7 @@ function drawOpenSidedBoundary(chunk, shape, openSide, gateSide, margin, rng, ma
 function growRoadNetwork(chunk, doorList, rootX, rootY) {
   const markRoad = (x, y) => {
     const t = chunk.tiles[y][x];
-    if (t.walkable && t.building === null && t.feature !== 'door' && t.feature !== 'gate') { t.feature = 'road'; t.glyph = ':'; t.color = '#b09a6a'; }
+    if (t.walkable && t.building === null && !t.street && t.feature !== 'door' && t.feature !== 'gate') { t.feature = 'road'; t.glyph = ':'; t.color = '#b09a6a'; }
   };
   // The seed point (gate or settlement center) can land on a building or wall, especially with
   // grid layouts -- if so, hunt outward for the nearest open, non-building tile instead of
@@ -10890,7 +10922,7 @@ function bfsToExistingRoad(chunk, sx, sy) {
   path.push([sx, sy]);
   return path;
 }
-function isRoadOrGate(chunk, x, y) { const t = chunk.tiles[y][x]; return t.feature === 'road' || t.feature === 'gate'; }
+function isRoadOrGate(chunk, x, y) { const t = chunk.tiles[y][x]; return t.feature === 'road' || t.feature === 'gate' || t.street === true; }
 
 const ROLE_POOLS = {
   hamlet: ['farmer','farmer','farmer','elder','child','shepherd'],
@@ -11271,7 +11303,7 @@ function findSettlementMembership(cx, cy) {
 function scatterCityParks(chunk, rng, margin) {
   const t = chunk.tiles;
   const isPlainPaved = (x, y) => x >= margin && y >= margin && x < CH - margin && y < CH - margin
-    && t[y][x].walkable && t[y][x].building === null && !t[y][x].feature && t[y][x].biome === 'cobblestone';
+    && !t[y][x].street && t[y][x].walkable && t[y][x].building === null && !t[y][x].feature && t[y][x].biome === 'cobblestone';
   const patchCount = randInt(rng, 2, 5);
   for (let p = 0; p < patchCount; p++) {
     let sx, sy, tries = 0;
@@ -11765,7 +11797,7 @@ function tryLayoutBuildingInterior(chunk, rect, doorPos, roleId, rng, isGrand) {
   return findReachableInteriorTiles(chunk, rect, doorPos);
 }
 
-function placeBuildingDoor(chunk, p, flavor, rng, wallSides) {
+function placeBuildingDoor(chunk, p, flavor, rng, wallSides, sideFn) {   // sideFn(rect) -> preferred side (organic cities: face the street)
   if (p.w < 3 || p.h < 3) { // degenerate tiny lot: fall back to the old safe bottom-center spot
     const doorX = p.x + Math.floor(p.w / 2), doorY = p.y + p.h - 1;
     const dt = chunk.tiles[doorY][doorX];
@@ -11791,7 +11823,7 @@ function placeBuildingDoor(chunk, p, flavor, rng, wallSides) {
       !((side === 'left' && leftUnsafe) || (side === 'right' && rightUnsafe) || (side === 'top' && topUnsafe) || (side === 'bottom' && bottomUnsafe)));
     if (filtered.length) options = filtered; // if literally every side were unsafe (shouldn't happen at these sizes), fall back to the unfiltered list
   }
-  const side = weightedChoice(rng, options);
+  const side = (sideFn && sideFn(p)) || weightedChoice(rng, options);
   let doorX, doorY;
   if (side === 'bottom') { doorX = randInt(rng, p.x + 1, p.x + p.w - 2); doorY = p.y + p.h - 1; }
   else if (side === 'top') { doorX = randInt(rng, p.x + 1, p.x + p.w - 2); doorY = p.y; }
@@ -12249,18 +12281,22 @@ function buildSettlementCell(chunk, cx, cy, membership) {
   const [minT, maxT] = tier === 'capital' ? [7, 10] : [7, 9];
   const targetCount = isGrandCell ? Math.max(3, Math.round(randInt(rng, minT, maxT) * 0.5)) : randInt(rng, minT, maxT);
   const guardCount = tier === 'capital' ? 4 : 3;
+  const cityShape = CityShape.get(anchorCx, anchorCy, footprint);   // world-coordinate outline/streets/districts (null = legacy square city)
+  const district = cityShape ? cityShape.cellDistrict(cx, cy) : CityCivic.districtFor(anchorCx, anchorCy, ox, oy, footprint, isGrandCell);
 
   buildSettlementCore(chunk, cx, cy, {
+    district, sizeRange: isGrandCell ? null : district.sizeRange,   // grand cells keep default sizes: bigger ones can't fit around the palace
     tier, flavorId, flavor, kingdom, name, centerBiome, rng,
     // Wide margin on every side: on outer sides it's a generous defensive clearance inside the
     // wall; on inner (adjacent-district-facing) sides, this margin plus the neighboring cell's
     // matching margin is what forms the wide avenue between districts. Simpler than plumbing
     // independent per-side margins through every layout function, and the extra space is exactly
     // the point here, not a cost.
-    margin: 3,
-    wallSides: wantsWalls && isOuterCell ? wallSides : null,
-    gateSide,
-    targetCount,
+    margin: cityShape ? 1 : 3,
+    cityShape, cityWalls: wantsWalls,
+    wallSides: !cityShape && wantsWalls && isOuterCell ? wallSides : null,
+    gateSide: cityShape ? null : gateSide,
+    targetCount: isGrandCell ? targetCount : Math.max(4, Math.round(targetCount * (cityShape ? Math.max(1, district.density) : district.density))),   // organic cities: land is scarce, so quarters may add buildings but never cut the target
     houseCountRatio: 0.3,
     guardCount,
     grand: isGrandCell ? { roleId: grandTheme.roleId, w: randInt(rng, 9, 12), h: randInt(rng, 7, 9) } : null,
@@ -12347,6 +12383,7 @@ function buildSettlementCore(chunk, cx, cy, p) {
   });
 
   for (let ly = 0; ly < CH; ly++) for (let lx = 0; lx < CH; lx++) {
+    if (p.cityShape && !p.cityShape.nearInside(cx * CH + lx, cy * CH + ly)) continue;   // organic city: wilderness outside the wall stays wild
     const cur = chunk.tiles[ly][lx];
     if (!cur.walkable || !BIOMES[cur.biome].walkable) {
       const safeBiome = BIOMES[cur.biome] && BIOMES[cur.biome].walkable ? cur.biome : 'plains';
@@ -12363,8 +12400,9 @@ function buildSettlementCore(chunk, cx, cy, p) {
   const paveFloors = (tier === 'city' || tier === 'capital');
   if (paveFloors) {
     for (let ly = 0; ly < CH; ly++) for (let lx = 0; lx < CH; lx++) {
-      if (chunk.tiles[ly][lx].walkable) chunk.tiles[ly][lx] = makeTile('cobblestone');
+      if (chunk.tiles[ly][lx].walkable && (!p.cityShape || p.cityShape.inside(cx * CH + lx, cy * CH + ly))) chunk.tiles[ly][lx] = makeTile('cobblestone');
     }
+    if (p.cityShape) p.cityShape.paintStreets(chunk, cx, cy);
   }
 
   // ---- NPC Schedules v2: bigger settlements generate extra plain "house" buildings beyond the
@@ -12374,7 +12412,7 @@ function buildSettlementCore(chunk, cx, cy, p) {
   const totalToPlace = targetCount + houseCount;
 
   const layoutStyle = flavor.layoutStyle || (tier === 'capital' ? 'radial' : 'grid');
-  const sizeRange = [4, 6];
+  const sizeRange = p.sizeRange || [4, 6];
 
   // The designated "grand" cell (see buildSettlementCell) gets one massive building placed first,
   // centered in the cell, before the normal roster fills in around it -- a real palace/grand hall,
@@ -12384,6 +12422,7 @@ function buildSettlementCore(chunk, cx, cy, p) {
     const gx = Math.max(margin, Math.floor((CH - grand.w) / 2)), gy = Math.max(margin, Math.floor((CH - grand.h) / 2));
     if (gx + grand.w <= CH - margin && gy + grand.h <= CH - margin) grandRect = { x: gx, y: gy, w: grand.w, h: grand.h };
   }
+  if (grandRect && p.cityShape && !rectFullyInside(grandRect, p.cityShape.innerLocal(cx, cy))) grandRect = null;   // outline cuts this cell: no palace here
   // See gateCorridorRect's comment: reserve the approach just inside the gate from building
   // placement, whichever wall system produced it (new shaped boundary, or the legacy multi-chunk/
   // city-capital-single-chunk-fallback wallSides object).
@@ -12402,7 +12441,7 @@ function buildSettlementCore(chunk, cx, cy, p) {
   // losing interior space to a circular/blob shape nothing will ever outline -- this was a real
   // regression caught via user playtesting: village/town house counts dropped well below their
   // old averages once every settlement started picking up a shape unconditionally.
-  const insideFn = (boundaryMask && (p.wallMaterial || flavor.noWalls)) ? boundaryMask.inside : null;
+  const insideFn = p.cityShape ? p.cityShape.buildableLocal(cx, cy) : ((boundaryMask && (p.wallMaterial || flavor.noWalls)) ? boundaryMask.inside : null);
 
   let placed;
   if (layoutStyle === 'organic') placed = layoutBuildingsOrganic(rng, margin, totalToPlace, sizeRange, avoidForLayout, insideFn);
@@ -12450,7 +12489,7 @@ function buildSettlementCore(chunk, cx, cy, p) {
         t.building = idx;
       }
     }
-    const doorPos = placeBuildingDoor(chunk, pRect, flavor, rng, boundaryMask ? doorWallSides : wallSides);
+    const doorPos = placeBuildingDoor(chunk, pRect, flavor, rng, boundaryMask ? doorWallSides : wallSides, p.cityShape ? (r) => p.cityShape.doorSide(cx, cy, r) : null);
     doorList.push(doorPos);
 
     // NPC Schedules v2: buildings past targetCount (plus the grand building, if any) are plain
@@ -12526,7 +12565,8 @@ function buildSettlementCore(chunk, cx, cy, p) {
   // own wall (still technically inside the chunk's plain margin box, just not inside the actual
   // settlement), which reads as broken ("why is the guard just standing out in the field").
   const spawnInside = (x, y) => !insideFn || insideFn(x, y);
-  for (let i = 0; i < guardCount; i++) {
+  const guardsHere = (p.cityShape && !p.cityShape.cellHasInside(cx, cy)) ? 0 : guardCount;
+  for (let i = 0; i < guardsHere; i++) {
     let gx, gy, t; let tries = 0;
     do { gx = randInt(rng, margin, CH-margin-1); gy = randInt(rng, margin, CH-margin-1); t = chunk.tiles[gy][gx]; tries++; } while ((!t.walkable || t.building !== null || !spawnInside(gx, gy)) && tries < 40);
     const npc = makeNPC((tier === 'city' || tier === 'capital') && i === 0 ? 'captain' : 'guard', chunk.cx * CH + gx, chunk.cy * CH + gy, rng, settlement.name, weightedChoice(rng, settlementSpeciesWeights));
@@ -12543,7 +12583,11 @@ function buildSettlementCore(chunk, cx, cy, p) {
   }
 
   let rootX, rootY;
-  if (boundaryMask && p.wallMaterial) {
+  if (p.cityShape) {
+    for (const row of chunk.tiles) for (const tt of row) if (tt.building !== null) tt.street = false;   // a palace may straddle a street: the building wins
+    if (p.cityWalls) p.cityShape.drawWalls(chunk, cx, cy);
+    ({ rootX, rootY } = p.cityShape.rootFor(cx, cy));
+  } else if (boundaryMask && p.wallMaterial) {
     ({ rootX, rootY } = boundaryMask.drawWall(chunk, gateSide, p.wallMaterial));
   } else if (wallSides) {
     drawWallRingSides(chunk, wallSides, gateSide);
@@ -12567,6 +12611,8 @@ function buildSettlementCore(chunk, cx, cy, p) {
   // Grand cells get a little extra: garden-style decor scattered around the plaza, since a
   // palace/grand hall standing in an empty field looks unfinished.
   if (grand) scatterFlavorDecor(chunk, rng, 'garden', tier);
+  // City Civic Layout: streets, lampposts and a themed district square -- runs last, touches only leftover plain tiles.
+  if (paveFloors) CityCivic.apply({ chunk, cx, cy, margin, grand: !!grand, settlement, district: p.district, shape: p.cityShape });
 }
 
 function scatterFarmingExtras(chunk, rng) {
@@ -17008,6 +17054,9 @@ const DEFAULT_SETTINGS = {
   autoPickupGold: true,
   showDamageNumbers: true,
   combatTextScale: 100,
+  vfxIntensity: 60,          // combat effects strength in % (default 60 = subtle; 100 = full), 0 = all effects off (see VFX ENGINE; reduceMotion also disables them)
+  vfxHitFlash: true, vfxParticles: true, vfxDeathBursts: true, vfxProjectiles: true, vfxRings: true, vfxShake: true,
+  monsterHealthBars: true,   // small bars under damaged enemies, with a draining 'ghost' of recent damage
   confirmQuit: true,
   autosaveEnabled: true,
   autosaveInterval: 50,
@@ -17360,12 +17409,16 @@ function triggerScreenFlash(color, durationMs) {
   el.classList.add('flash-active');
   setTimeout(() => el.classList.remove('flash-active'), settings.reduceMotion ? 10 : (durationMs || 550));
 }
+// Single shared animation loop: floating text and the VFX engine both ask for frames through here,
+// so they never run two competing requestAnimationFrame chains.
+function requestAnimRender() {
+  if (floatingTextAnimRunning || typeof requestAnimationFrame !== 'function') return;
+  floatingTextAnimRunning = true;
+  requestAnimationFrame(floatingTextAnimStep);
+}
 function spawnFloatingText(x, y, text, color) {
   floatingTexts.push({ x, y, text, color, start: performance.now() });
-  if (!floatingTextAnimRunning) {
-    floatingTextAnimRunning = true;
-    requestAnimationFrame(floatingTextAnimStep);
-  }
+  requestAnimRender();
 }
 function floatingTextAnimStep() {
   const now = performance.now();
@@ -17373,12 +17426,231 @@ function floatingTextAnimStep() {
     floatingTexts = floatingTexts.filter(ft => now - ft.start < FLOAT_TEXT_LIFETIME);
   }
   try { render(); } catch (e) {}
-  if (floatingTexts.length > 0) {
+  if (floatingTexts.length > 0 || VFX.active()) {
     requestAnimationFrame(floatingTextAnimStep);
   } else {
     floatingTextAnimRunning = false;
   }
 }
+
+// ===================== VFX ENGINE: combat-feel layer (v0.50.2) =====================
+// Hit flashes, impact particles, death bursts, projectile trails, shockwave rings, screen shake on
+// heavy hits, and enemy health bars with a "damage ghost". Draws on top of render()'s glyph grid.
+//
+// HOW IT WORKS: it is STATE-DIFF DRIVEN. observe() (called once per render) snapshots hp/alive for
+// the player, allies, monsters and NPCs and emits events when something changed -- so melee, spells,
+// poison, fire, traps and every one of the ~60 scattered damage sites get feedback with zero edits.
+// Only projectiles need explicit call sites (VFX.emit('projectile', ...)), because a diff can't know
+// where a bolt came from.
+//
+// EXTENSION CONTRACT (nothing else in the game needs to know this module exists):
+//   * React to an event ........ VFX.on('damage'|'death'|'heal'|'projectile', payload => { ... })
+//   * Add an element colour .... push a [regex, '#hex'] pair onto VFX_ELEMENT_COLORS
+//   * Add a glyph set .......... add a key to VFX_GLYPHS, reference it from a handler
+//   * Add a new effect type .... add a spawner to SPAWNERS and a painter to PAINTERS (same key)
+//   * Emit from new game code .. VFX.emit('projectile', { from, to | toXY, kind, spell, color })
+// Settings (all optional, default on): vfxIntensity (0-200 %, 0 = everything off), reduceMotion, and one
+// per-effect toggle -- vfxHitFlash, vfxParticles, vfxProjectiles, vfxDeathBursts, vfxRings, vfxShake,
+// monsterHealthBars. A new effect type = add its toggle key to VFX_TOGGLES (it appears in Settings).
+const VFX_ELEMENT_COLORS = [
+  [/fire|flame|burn|ember|inferno|magma|sun/i, '#ff8a3a'],
+  [/frost|ice|cold|freez|chill|glacial/i, '#8ae0ff'],
+  [/light|shock|storm|thunder|volt|elec|spark/i, '#ffe860'],
+  [/poison|toxic|plague|venom|acid|rot/i, '#8ac93a'],
+  [/necro|death|shadow|void|curse|blood|drain/i, '#a03ac9'],
+  [/holy|divine|radiant|bless|smite|light/i, '#fff6d8'],
+  [/nature|earth|stone|thorn|root/i, '#7ab04a'],
+  [/cyber|tech|laser|plasma|hack|code/i, '#4af0e0'],
+];
+// Single source of truth for the per-effect toggles: the Settings screen is generated from this list.
+const VFX_TOGGLES = [
+  { key: 'vfxHitFlash', label: 'Hit Flashes', desc: 'Brief white/red flash on a creature when it takes damage.' },
+  { key: 'vfxParticles', label: 'Impact Particles', desc: 'Sparks and debris on hits, and healing motes.' },
+  { key: 'vfxDeathBursts', label: 'Death Bursts', desc: 'A burst of debris when a creature dies.' },
+  { key: 'vfxProjectiles', label: 'Projectile Trails', desc: 'Visible arrows and spell bolts flying to their target.' },
+  { key: 'vfxRings', label: 'Shockwave Rings', desc: 'Expanding ring on heavy hits and deaths.' },
+  { key: 'vfxShake', label: 'Screen Shake', desc: 'Shake when you take a heavy hit or a boss falls.' },
+  { key: 'monsterHealthBars', label: 'Enemy Health Bars', desc: 'Bars under damaged enemies, with a trailing marker of recent damage.' },
+];
+const VFX_GLYPHS = {
+  spark: ['*', '+', '\u00b7'],
+  gore: ['%', '\u00b7', ',', '*'],
+  mote: ['+', '\u00b7', '\u00b0'],
+  dust: ['\u00b7', '.', ','],
+};
+const VFX = (function () {
+  const MAX_FX = 360;          // hard cap on live effects (oldest dropped first)
+  const BOLT_TILES_PER_SEC = 28;
+
+  let fx = [];                 // live effects: { kind, start, life, ... } -- painted by PAINTERS[kind]
+  const tracked = new Map();   // entity -> { cat, hp, maxHp, ghost, alive, visible }
+  const handlers = Object.create(null);
+  let lastPaint = 0;
+
+  const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+  const intensity = () => (settings && settings.vfxIntensity != null ? settings.vfxIntensity : 100) / 100;
+  const opt = key => !(settings && settings[key] === false);   // per-effect toggle (default on)
+  const motionOk = () => intensity() > 0 && !(settings && settings.reduceMotion);
+  const colorFor = key => { const s = String(key || ''); const hit = VFX_ELEMENT_COLORS.find(([re]) => re.test(s)); return hit ? hit[1] : '#c8a0ff'; };
+
+  // ---------- event bus ----------
+  function on(event, fn) { (handlers[event] = handlers[event] || []).push(fn); }
+  function emit(event, payload) {
+    if (!motionOk()) return;
+    for (const fn of handlers[event] || []) { try { fn(payload || {}); } catch (e) { /* VFX must never break gameplay */ } }
+  }
+
+  // ---------- spawners: create effects (all take an optional `delay` in ms so impacts can wait for a bolt) ----------
+  function add(e) { if (fx.length >= MAX_FX) fx.shift(); fx.push(e); if (typeof requestAnimRender === 'function') requestAnimRender(); return e; }
+  const SPAWNERS = {
+    burst(o) {
+      const n = Math.round(o.count * intensity()), start = now() + (o.delay || 0);
+      for (let i = 0; i < n; i++) {
+        const a = rnd(0, Math.PI * 2), s = rnd(0.35, 1) * (o.speed || 4) * Math.sqrt(intensity());
+        add({ kind: 'particle', start, life: rnd(0.6, 1) * (o.life || 520), x: o.x, y: o.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, g: o.gravity || 0, color: o.color, glyph: pick(o.glyphs || VFX_GLYPHS.spark) });
+      }
+    },
+    ring(o) { add({ kind: 'ring', start: now() + (o.delay || 0), life: o.life || 320, x: o.x, y: o.y, radius: o.radius || 1.5, color: o.color }); },
+    flash(o) { add({ kind: 'flash', start: now() + (o.delay || 0), life: o.life || 160, ent: o.ent, color: o.color }); },
+    bolt(o) {
+      const dist = Math.hypot(o.x1 - o.x0, o.y1 - o.y0);
+      add({ kind: 'bolt', start: now(), life: clamp(dist / BOLT_TILES_PER_SEC * 1000, 70, 400), x0: o.x0, y0: o.y0, x1: o.x1, y1: o.y1, color: o.color, glyph: o.glyph || '*', landed: false });
+    },
+  };
+
+  // ---------- painters: draw one effect. (ctx, effect, progress 0..1, tile->screen helpers) ----------
+  const PAINTERS = {
+    particle(ctx, e, p, t, g) {
+      const age = (t - e.start) / 1000;
+      const x = e.x + e.vx * age, y = e.y + e.vy * age + 0.5 * e.g * age * age;
+      ctx.globalAlpha = 1 - p * p; ctx.fillStyle = e.color; ctx.fillText(e.glyph, g.sx(x), g.sy(y));
+    },
+    ring(ctx, e, p, t, g) {
+      const r = (0.25 + p * e.radius), n = 12;
+      ctx.globalAlpha = (1 - p) * 0.9; ctx.fillStyle = e.color;
+      for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2; ctx.fillText('\u00b7', g.sx(e.x + Math.cos(a) * r), g.sy(e.y + Math.sin(a) * r)); }
+    },
+    flash(ctx, e, p, t, g) {
+      const ent = e.ent; if (!ent) return;
+      const px = g.sx(ent.x), py = g.sy(ent.y);
+      ctx.globalAlpha = (1 - p) * 0.4 * Math.min(1, intensity()); ctx.fillStyle = e.color; ctx.fillRect(px - g.ts / 2, py - g.ts / 2, g.ts, g.ts);
+      ctx.globalAlpha = 1 - p; ctx.fillText(ent.glyph || '@', px, py);
+    },
+    bolt(ctx, e, p, t, g) {
+      for (let i = 0; i < 4; i++) {            // bright head + 3 fading trail segments
+        const q = clamp(p - i * 0.07, 0, 1);
+        ctx.globalAlpha = (1 - i * 0.28); ctx.fillStyle = i === 0 ? '#ffffff' : e.color;
+        ctx.fillText(i === 0 ? e.glyph : '\u00b7', g.sx(e.x0 + (e.x1 - e.x0) * q), g.sy(e.y0 + (e.y1 - e.y0) * q));
+      }
+      if (p >= 0.98 && !e.landed) { e.landed = true; SPAWNERS.burst({ x: e.x1, y: e.y1, color: e.color, count: 6, speed: 3, life: 300 }); }
+    },
+  };
+
+  // ---------- state-diff observer ----------
+  function roster() {
+    const out = [[player, 'player']];
+    for (const a of curAllies()) out.push([a, 'ally']);
+    for (const m of curMonsters()) out.push([m, 'monster']);
+    for (const n of curNPCs()) out.push([n, 'npc']);
+    return out;
+  }
+  function observe() {
+    // Runs every render with NO time throttle (a throttle can delay a reaction by a whole turn when turns
+    // are fast). It stays cheap because the line-of-sight test only runs for entities whose hp changed
+    // or that are hurt (the only ones that can produce an event or a health bar).
+    if (!player || (!motionOk() && !(settings && settings.monsterHealthBars))) return;
+    let list; try { list = roster(); } catch (e) { return; }
+    const seen = new Set();
+    for (const [e, cat] of list) {
+      seen.add(e);
+      const hp = e.hp, alive = e.alive !== false && hp > 0, rec = tracked.get(e);
+      if (!rec) { tracked.set(e, { cat, hp, maxHp: e.maxHp || hp, ghost: hp, alive, visible: false }); continue; }
+      const maxHp = e.maxHp || rec.maxHp || 1, delta = rec.hp - hp;
+      const interesting = delta !== 0 || !alive || hp < maxHp || e.boss;
+      const visible = interesting && (e === player || posVisibleToPlayer(e.x, e.y));
+      if (visible && rec.alive) {
+        if (delta > 0) emit('damage', { ent: e, cat, amount: delta, frac: delta / maxHp });
+        else if (-delta / maxHp >= 0.15) emit('heal', { ent: e, cat, amount: -delta, frac: -delta / maxHp });
+        if (!alive) emit('death', { ent: e, cat });
+      }
+      Object.assign(rec, { hp, maxHp, alive, visible });
+    }
+    for (const [e, rec] of tracked) {        // gone from the roster: died (and was removed), or left the loaded area
+      if (seen.has(e)) continue;
+      if (rec.alive && rec.visible && (e.alive === false || e.hp <= 0)) emit('death', { ent: e, cat: rec.cat });
+      tracked.delete(e);
+    }
+  }
+
+  // ---------- painting ----------
+  function drawBars(ctx, v, g, dtSec) {
+    if (!(settings && settings.monsterHealthBars)) return;
+    const w = Math.round(v.ts * 0.82), h = Math.max(2, Math.round(v.ts * 0.12));
+    for (const [e, rec] of tracked) {
+      if (!rec.alive || !rec.visible || rec.cat === 'player' || rec.cat === 'npc') continue;
+      if (rec.ghost > rec.hp) rec.ghost = Math.max(rec.hp, rec.ghost - rec.maxHp * 0.7 * dtSec); else rec.ghost = rec.hp;
+      if (rec.hp >= rec.maxHp && !e.boss) continue;
+      const px = g.sx(e.x), x0 = Math.round(px - w / 2), y0 = Math.round(g.sy(e.y) + v.ts / 2 - h - 1);
+      if (x0 + w < 0 || x0 > v.canvasW || y0 < 0 || y0 > v.canvasH) continue;
+      const frac = clamp(rec.hp / rec.maxHp, 0, 1);
+      ctx.globalAlpha = 0.85; ctx.fillStyle = '#000'; ctx.fillRect(x0 - 1, y0 - 1, w + 2, h + 2);
+      ctx.fillStyle = '#f0f0f0'; ctx.fillRect(x0, y0, Math.round(w * clamp(rec.ghost / rec.maxHp, 0, 1)), h);
+      ctx.fillStyle = rec.cat === 'ally' ? '#4ab0e0' : (frac > 0.5 ? '#6ac04a' : frac > 0.25 ? '#e0c34a' : '#d04030');
+      ctx.fillRect(x0, y0, Math.round(w * frac), h);
+    }
+  }
+  function draw(ctx, v) {
+    const t = now(), dtSec = Math.min(0.1, (t - (lastPaint || t)) / 1000); lastPaint = t;
+    fx = fx.filter(e => t < e.start + e.life);
+    const g = { ts: v.ts, sx: x => (x - player.x + v.halfW) * v.ts + v.ts / 2, sy: y => (y - player.y + v.halfH) * v.ts + v.ts / 2 };
+    ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `bold ${Math.max(8, Math.round(v.ts * 0.8))}px 'Consolas','Courier New',monospace`;
+    if (motionOk()) {
+      for (const e of fx.slice()) { if (t >= e.start) PAINTERS[e.kind](ctx, e, (t - e.start) / e.life, t, g); }
+    }
+    ctx.globalAlpha = 1; drawBars(ctx, v, g, dtSec);
+    ctx.restore();
+  }
+  // True while anything still needs animation frames (live effects, or a health-bar ghost still draining).
+  function active() {
+    if (fx.length) return true;
+    if (opt('monsterHealthBars')) for (const rec of tracked.values()) if (rec.alive && rec.ghost > rec.hp) return true;
+    return false;
+  }
+
+  // ---------- default reactions (the whole "look" of combat lives in these few handlers) ----------
+  function arrivalDelay(ent) {               // hold an impact until the bolt that caused it lands
+    const t = now(); let d = 0;
+    for (const e of fx) if (e.kind === 'bolt' && Math.max(Math.abs(e.x1 - ent.x), Math.abs(e.y1 - ent.y)) <= 3) d = Math.max(d, e.start + e.life - t);
+    return Math.max(0, d);
+  }
+  on('damage', ({ ent, cat, frac }) => {
+    const delay = arrivalDelay(ent), self = cat === 'player', f = clamp(frac, 0, 1);
+    if (opt('vfxHitFlash')) SPAWNERS.flash({ ent, color: self ? '#ff3a2a' : '#ffffff', life: 170, delay });
+    if (opt('vfxParticles')) SPAWNERS.burst({ x: ent.x, y: ent.y, color: self ? '#d04030' : (ent.color || '#d8cdb8'), count: 3 + Math.round(f * 16), speed: 2.5 + f * 5, life: 460, delay, glyphs: VFX_GLYPHS.gore });
+    if (f >= 0.3 && opt('vfxRings')) SPAWNERS.ring({ x: ent.x, y: ent.y, color: '#ffdd55', radius: 1.4 + f, life: 300, delay });
+    if (self && f >= 0.2 && opt('vfxShake')) triggerScreenShake(clamp(0.4 + f * 1.5, 0.4, 2) * Math.min(2, intensity()), 260 + f * 300);
+  });
+  on('death', ({ ent }) => {
+    const n = clamp(10 + Math.round((ent.maxHp || 20) / 8), 12, 40);
+    if (opt('vfxDeathBursts')) SPAWNERS.burst({ x: ent.x, y: ent.y, color: ent.color || '#d8cdb8', count: n, speed: 5, life: 700, gravity: 3, glyphs: VFX_GLYPHS.gore });
+    if (opt('vfxRings')) SPAWNERS.ring({ x: ent.x, y: ent.y, color: ent.color || '#d8cdb8', radius: 2, life: 420 });
+    if (ent.boss && opt('vfxShake')) { triggerScreenShake(1.3 * Math.min(2, intensity()), 650); triggerScreenFlash('rgba(255,255,255,0.8)', 380); }
+  });
+  on('heal', ({ ent }) => opt('vfxParticles') && SPAWNERS.burst({ x: ent.x, y: ent.y, color: '#7fd07f', count: 8, speed: 1.6, life: 650, gravity: -2.5, glyphs: VFX_GLYPHS.mote }));
+  on('projectile', ({ from, to, toXY, kind, spell, color }) => {
+    const x1 = toXY ? toXY.x : (to && to.x), y1 = toXY ? toXY.y : (to && to.y);
+    if (!opt('vfxProjectiles') || !from || x1 == null || (x1 === from.x && y1 === from.y)) return;
+    let glyph = '*';
+    if (kind === 'arrow') { const dx = x1 - from.x, dy = y1 - from.y; glyph = Math.abs(dx) > 2 * Math.abs(dy) ? '-' : Math.abs(dy) > 2 * Math.abs(dx) ? '|' : (dx * dy > 0 ? '\\' : '/'); }
+    SPAWNERS.bolt({ x0: from.x, y0: from.y, x1, y1, glyph, color: color || (kind === 'arrow' ? '#d8cdb8' : colorFor(spell && (spell.element || spell.school || spell.name))) });
+  });
+
+  return { on, emit, observe, draw, active, fx: SPAWNERS, painters: PAINTERS, colorFor, toggles: VFX_TOGGLES };
+})();
 
 // ---------------- init ----------------
 
@@ -21985,6 +22257,7 @@ function render() {
   ctx.font = `bold ${Math.max(6, v.ts-2)}px 'Consolas', 'Courier New', monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  VFX.observe(); // diff hp/alive since the last frame and emit damage/death/heal events (see VFX ENGINE)
   const visRadius = currentVisRadius();
   // Design pass: precompute a lookup of any marked lightning-strike tiles in the CURRENT zone so
   // the main per-tile loop below can flag them cheaply (O(1) per tile) rather than scanning the
@@ -22120,6 +22393,7 @@ function render() {
     ctx.fillStyle = '#fff';
     ctx.fillText('@', playerPx, playerPy);
   }
+  VFX.draw(ctx, v); // flashes, particles, bolts, rings, enemy health bars -- under the floating numbers
 
   if (floatingTexts.length) {
     ctx.save();
@@ -24609,18 +24883,63 @@ function findNearestSettlementTier(tier, maxRadius) {
   }
   return null;
 }
+// findNearestSettlementTier answers from the *candidate* rules, but chunk generation can still reject a candidate
+// (e.g. it overlaps a bigger settlement's footprint) and leave plain wilderness -- about 1 in 10 small-settlement
+// starts used to silently drop the player in the wild. This version only returns a settlement that really exists.
+function findNearestRealSettlement(tier, maxRadius) {
+  for (let r = 0; r <= maxRadius; r++) {
+    for (const [cx, cy] of ringCoords(r)) {
+      let cand = null;
+      if (tier === 'city' || tier === 'capital') {
+        const info = getAnchorSettlementInfo(cx, cy);
+        if (info && info.tier === tier) cand = { cx, cy, footprint: info.footprint };
+      } else {
+        if (cx === 0 && cy === 0) continue;
+        if (coordHash(cx, cy, SEED + 12345) >= 0.11) continue;
+        if (!SETTLEMENT_BIOMES.includes(biomeAtPoint(cx * CH + Math.floor(CH / 2), cy * CH + Math.floor(CH / 2)))) continue;
+        if (getSharedSettlementIdentity(cx, cy).tier === tier) cand = { cx, cy, footprint: 1 };
+      }
+      if (!cand) continue;
+      const s = getChunk(cx, cy).settlement;
+      if (s && (cand.footprint === 1 || (s.anchorCx === cx && s.anchorCy === cy))) return cand;
+    }
+  }
+  return null;
+}
 function placePlayerNearSettlementTier(tier) {
   const maxRadius = tier === 'capital' ? 250 : tier === 'city' ? 150 : 60;
-  const found = findNearestSettlementTier(tier, maxRadius);
+  const found = findNearestRealSettlement(tier, maxRadius);
   if (!found) return false;
   const c = getChunk(found.cx, found.cy);
   if (c.settlement) {
-    for (let ly = 1; ly < CH - 1; ly++) for (let lx = 1; lx < CH - 1; lx++) {
-      const t = c.tiles[ly][lx];
-      if (t.walkable && t.building === null) { player.x = found.cx * CH + lx; player.y = found.cy * CH + ly; return true; }
-    }
+    const spot = findSettlementSpawn(found);
+    if (spot) { player.x = spot.x; player.y = spot.y; return true; }
   }
   return false;
+}
+// Where a settlement-start character appears: the open tile nearest the settlement's real centre, preferring streets
+// and roads. For an organic city that centre and "inside the walls" come from its CityShape; for everything else it is
+// the middle of the anchor chunk (which every boundary shape -- square, circle, blob -- contains).
+function findSettlementSpawn(found) {
+  const fp = found.footprint || 1;
+  const shape = fp > 1 ? CityShape.get(found.cx, found.cy, fp) : null;
+  const centre = shape ? shape.centre : { x: found.cx * CH + (CH - 1) / 2, y: found.cy * CH + (CH - 1) / 2 };
+  const x0 = found.cx * CH + (shape ? 0 : 1), y0 = found.cy * CH + (shape ? 0 : 1), span = shape ? fp * CH : CH - 2;
+  for (let oy = 0; oy < fp; oy++) for (let ox = 0; ox < fp; ox++) getChunk(found.cx + ox, found.cy + oy);   // make sure the tiles exist
+  // Pass 1 wants clear ground (no decor/furniture); pass 2 accepts any walkable non-building tile, so a cluttered
+  // settlement can never fail to place the player (the old code never could).
+  for (const strict of [true, false]) {
+    let best = null;
+    for (let y = y0; y < y0 + span; y++) for (let x = x0; x < x0 + span; x++) {
+      if (shape && (!shape.inside(x, y) || shape.edgeDist(x, y) < (strict ? 3 : 1))) continue;     // inside the walls, not hugging them
+      const t = getTile(x, y);
+      if (!t || !t.walkable || t.building !== null || (strict && t.feature && t.feature !== 'road')) continue;
+      const score = Math.hypot(x - centre.x, y - centre.y) + (t.feature === 'road' ? 0 : 2);
+      if (!best || score < best.score) best = { x, y, score };
+    }
+    if (best) return best;
+  }
+  return null;
 }
 // BALANCE FIX (defense-in-depth backstop): the three targeted fixes elsewhere in this file
 // (search for "BALANCE FIX" in classifyBiomeFull, maybeSpawnOverworldBoss, and the
@@ -25216,6 +25535,433 @@ const TILE_FEATURE_DESCRIPTIONS = {
   megaruin_plaza: 'The bones of a public square built for a population long gone.',
   megaruin_vault: 'A vault door, still sealed, still guarded, still waiting for someone who is never coming back.',
 };
+
+// ===================== CITY CIVIC LAYOUT (v0.50.3) =====================
+// Cities and capitals used to be one flat field of identical cobblestone with buildings scattered on it:
+// the wide open margins between districts were effectively streets, but nothing made them READ as streets,
+// and no district had a centre of its own. This pass adds that structure:
+//   1. STREETS  - the open ring around each district block is repaved in a lighter style, so adjoining cells
+//                 form a visible avenue grid.
+//   2. LAMPPOSTS - line both edges of every street.
+//   3. SQUARE   - each non-grand district gets one themed public square (fountain, market, memorial, ...)
+//                 in the largest free spot nearest its centre.
+//   4. DISTRICTS - every cell is a distinct QUARTER (civic, noble, market, artisan, old town, gardens) chosen
+//                 deterministically from its position: it changes building density/size, yard-floor tint, lamp
+//                 spacing, tree-lined boulevards and which squares it favours -- so a capital stops being nine copies
+//                 of one district. Main avenues stay one neutral style so streets never change colour at a seam.
+// DESIGN RULES (so it can never break existing generation):
+//   * Decoration passes run LAST in buildSettlementCore and only touch "plain" tiles (walkable cobblestone, no building, no
+//     feature), so doors, gates, walls, roads, parks, containers and NPC spots are never overwritten.
+//   * Decoration passes use their own seeded RNG stream. District type does change building density/size
+//     (CityCivic.layoutVariation = false restores the old uniform layout; CityCivic.enabled = false disables all).
+//   * Pure function of chunk coordinates + SEED, like the rest of world-gen: no shared mutable state.
+// EXTENDING:
+//   * New feature ........ add an entry to CIVIC_FEATURES (glyph/colour/blocking/look-description).
+//   * New district type .. push { id, label, rings:{core,inner,outer weights}, density, sizeRange, yard, lamps, trees,
+//                          squares:{squareId: weightMultiplier} } onto CITY_DISTRICT_TYPES.
+//   * New square type .... push { id, weight, label, build(c) } onto CITY_SQUARE_TYPES. build() gets a context
+//                          with put(dx, dy, featureId) relative to the 5x5 square's centre.
+//   * New whole pass ..... CityCivic.passes.push({ id, apply(ctx) })  (runs in order; ctx has chunk, margin, grand, rng, cx, cy).
+const CIVIC_FEATURES = {
+  lamppost:  { glyph: '!', color: '#ffd36a', blocks: false, desc: 'A wrought-iron lamppost. At dusk a lamplighter makes the rounds.' },
+  fountain:  { glyph: 'o', color: '#5a8ac9', blocks: false, desc: 'A stone fountain, water splashing over worn carved edges.' },
+  marketstall: { glyph: 'n', color: '#c9a06a', blocks: false, desc: 'A canvas-roofed market stall, crates and scales stacked beside it.' },
+  gardenbed: { glyph: '"', color: '#5a9a4a', blocks: false, desc: 'A tidy flowerbed edged with low stones.' },
+  monument:  { glyph: '&', color: '#b8b0a0', blocks: true,  desc: 'A weathered monument to the settlement\u2019s founders and the fallen, fresh flowers at its base.' },
+  well:      { glyph: 'o', color: '#5a8ac9', blocks: false, desc: 'An old stone well.' },
+  tree:      { glyph: '\u2663', color: '#2a6a2a', blocks: false, desc: 'A tall tree.' },
+};
+const CITY_STREET_STYLE = { glyph: '\u00b7', color: '#b8ad96', bg: '#34302b' };
+const CITY_PLAZA_STYLE  = { glyph: '\u00b7', color: '#d2c6aa', bg: '#3b362f' };
+
+
+// Quarter archetypes. `rings`: selection weight by position (core = grand/central cell, inner = edge-centre cells of a
+// capital, outer = corner cells / every ordinary city cell). `density` scales the building count, `sizeRange` the
+// building footprint, `lamps` is lamp spacing (0 = none), `trees` adds a tree-lined boulevard, `yard` tints the floor
+// inside the block, and `squares` multiplies the weight of each square type in CITY_SQUARE_TYPES for this quarter.
+const CITY_DEFAULT_DISTRICT = { id: 'standard', label: 'City Quarter', density: 1, sizeRange: [4, 6], yard: null, lamps: 5, trees: false, squares: {} };
+const CITY_DISTRICT_TYPES = [
+  { id: 'civic',   label: 'Civic Quarter',   rings: { core: 1 },                  density: 0.85, sizeRange: [5, 7], yard: { glyph: '.', color: '#aaa292', bg: '#2d2a25' }, lamps: 4, trees: true,  squares: { fountain: 3, memorial: 3, market: 0.3 } },
+  { id: 'noble',   label: 'Noble Quarter',   rings: { inner: 3, outer: 1 },       density: 0.7,  sizeRange: [5, 7], yard: { glyph: '.', color: '#a39ab0', bg: '#2a2830' }, lamps: 4, trees: true,  squares: { fountain: 3, garden: 3, market: 0.2 } },
+  { id: 'market',  label: 'Market Quarter',  rings: { inner: 4, outer: 2, core: 1 }, density: 1.15, sizeRange: [4, 6], yard: { glyph: '.', color: '#a58f6e', bg: '#2e2619' }, lamps: 5, trees: false, squares: { market: 5, well: 2, memorial: 0.3 } },
+  { id: 'artisan', label: 'Artisan Quarter', rings: { inner: 3, outer: 3 },       density: 1.2,  sizeRange: [4, 5], yard: { glyph: '.', color: '#8c97a0', bg: '#252a2e' }, lamps: 5, trees: false, squares: { well: 3, market: 2 } },
+  { id: 'old',     label: 'Old Town',        rings: { outer: 4, inner: 1 },       density: 1.35, sizeRange: [3, 5], yard: { glyph: ',', color: '#85785f', bg: '#262017' }, lamps: 8, trees: false, squares: { well: 4, memorial: 2, fountain: 0.5 } },
+  { id: 'gardens', label: 'Garden Quarter',  rings: { inner: 2, outer: 2 },       density: 0.7,  sizeRange: [4, 6], yard: { glyph: '.', color: '#8fa57e', bg: '#252d22' }, lamps: 6, trees: true,  squares: { garden: 5, fountain: 2, market: 0.2 } },
+];
+
+const CITY_SQUARE_TYPES = [
+  { id: 'fountain', weight: 4, label: 'Fountain Square', build(c) {
+    c.put(0, 0, 'fountain');
+    for (const [dx, dy] of [[-2, -2], [2, -2], [-2, 2], [2, 2]]) c.put(dx, dy, 'gardenbed');
+    for (const [dx, dy] of [[-2, 0], [2, 0], [0, -2], [0, 2]]) c.put(dx, dy, 'lamppost');
+  } },
+  { id: 'market', weight: 4, label: 'Market Square', build(c) {
+    for (const [dx, dy] of [[-2, -1], [-2, 1], [2, -1], [2, 1], [-1, -2], [1, 2]]) c.put(dx, dy, 'marketstall');
+    c.put(0, 0, 'well');
+  } },
+  { id: 'memorial', weight: 2, label: 'Memorial Green', build(c) {
+    c.put(0, 0, 'monument');
+    for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) c.put(dx, dy, 'gardenbed');
+    for (const [dx, dy] of [[-2, -2], [2, -2], [-2, 2], [2, 2]]) c.put(dx, dy, 'lamppost');
+  } },
+  { id: 'garden', weight: 3, label: 'Garden Court', build(c) {
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if ((dx + dy) % 2 === 0 && dx !== 0 && dy !== 0) c.put(dx, dy, 'gardenbed');
+    c.put(0, 0, 'fountain');
+  } },
+  { id: 'well', weight: 2, label: 'Well Court', build(c) {
+    c.put(0, 0, 'well');
+    for (const [dx, dy] of [[-2, 0], [2, 0]]) c.put(dx, dy, 'marketstall');
+    for (const [dx, dy] of [[0, -2], [0, 2]]) c.put(dx, dy, 'lamppost');
+  } },
+];
+
+const CityCivic = (function () {
+  const SQUARE_HALF_SIZES = [2, 1]; // try a 5x5 square first, fall back to 3x3 in cramped districts
+  const isPlain = (t, x, y) => { const k = t[y] && t[y][x]; return !!k && !k.street && k.walkable && k.building === null && !k.feature && k.biome === 'cobblestone'; };
+  // Dirt-road decoration is purely cosmetic and walkable, so a square may pave over it (the tile stays walkable).
+  const isPlainOrRoad = (t, x, y) => { const k = t[y] && t[y][x]; return isPlain(t, x, y) || (!!k && !k.street && k.walkable && k.building === null && k.feature === 'road' && k.biome === 'cobblestone'); };
+  const nearDoor = (t, x, y) => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => { const k = t[y + dy] && t[y + dy][x + dx]; return !!k && k.feature === 'door'; });   // never block a door front
+  const restyle = (tile, s) => { tile.glyph = s.glyph; tile.color = s.color; tile.bg = s.bg; };
+  const setFeature = (tile, id) => { const f = CIVIC_FEATURES[id]; tile.feature = id; tile.glyph = f.glyph; tile.color = f.color; if (f.blocks) tile.walkable = false; if (id === 'tree') initDestructibleFeature(tile); };
+
+  const PASSES = [
+    { id: 'streets', apply({ chunk, margin, shape }) {
+      if (shape) return;                                           // organic cities: CityShape.paintStreets already paved them
+      const t = chunk.tiles;
+      for (let y = 0; y < CH; y++) for (let x = 0; x < CH; x++) {
+        if ((x < margin || y < margin || x >= CH - margin || y >= CH - margin) && isPlain(t, x, y)) restyle(t[y][x], CITY_STREET_STYLE);
+      }
+    } },
+    { id: 'yards', apply({ chunk, margin, district, shape, cx, cy }) {
+      const t = chunk.tiles;
+      if (shape) {                                                 // tint per TILE by the world-space quarter map, so borders ignore chunk edges
+        for (let ly = 0; ly < CH; ly++) for (let lx = 0; lx < CH; lx++) { const d = shape.districtAt(cx * CH + lx, cy * CH + ly); if (d && d.yard && isPlain(t, lx, ly)) restyle(t[ly][lx], d.yard); }
+        return;
+      }
+      if (!district.yard) return;
+      for (let y = margin; y < CH - margin; y++) for (let x = margin; x < CH - margin; x++) if (isPlain(t, x, y)) restyle(t[y][x], district.yard);
+    } },
+    { id: 'lamps', apply({ chunk, margin, district, shape, cx, cy }) {
+      if (shape) {                                                 // lamps / trees on the tiles hugging a street, by that tile's quarter
+        const tl = chunk.tiles, mod = (a, m) => ((a % m) + m) % m;
+        for (let ly = 0; ly < CH; ly++) for (let lx = 0; lx < CH; lx++) {
+          const wx = cx * CH + lx, wy = cy * CH + ly;
+          if (!isPlain(tl, lx, ly) || nearDoor(tl, lx, ly) || !(shape.street(wx + 1, wy) || shape.street(wx - 1, wy) || shape.street(wx, wy + 1) || shape.street(wx, wy - 1))) continue;
+          const d = shape.districtAt(wx, wy); if (!d) continue;
+          const step = d.lamps || 0, k = mod(wx + wy, step || 5);
+          if (step && k === 0) setFeature(tl[ly][lx], 'lamppost');
+          else if (d.trees && k === Math.floor((step || 5) / 2)) setFeature(tl[ly][lx], 'tree');
+        }
+        return;
+      }
+      const t = chunk.tiles, lo = margin - 1, hi = CH - margin;   // the street-edge line on each side
+      const put = (x, y, id) => { if (isPlain(t, x, y) && !nearDoor(t, x, y)) setFeature(t[y][x], id); };
+      const step = district.lamps || 0;
+      if (step) for (let i = lo + 1; i < hi; i += step) { put(i, lo, 'lamppost'); put(i, hi, 'lamppost'); put(lo, i, 'lamppost'); put(hi, i, 'lamppost'); }
+      if (district.trees) {                                        // tree-lined boulevard: trees between the lamps
+        const off = Math.max(2, Math.floor((step || 5) / 2) + 1);
+        for (let i = lo + off; i < hi; i += (step || 5)) { put(i, lo, 'tree'); put(i, hi, 'tree'); put(lo, i, 'tree'); put(hi, i, 'tree'); }
+      }
+      put(lo, lo, 'lamppost'); put(hi, lo, 'lamppost'); put(lo, hi, 'lamppost'); put(hi, hi, 'lamppost');   // crossroads corners
+    } },
+    { id: 'square', apply({ chunk, margin, grand, rng, cx, cy, district, shape }) {
+      if (grand) return;                                           // a palace/cathedral cell is its own centrepiece
+      const t = chunk.tiles;
+      let mid = { x: (CH - 1) / 2, y: (CH - 1) / 2 }, lo = margin;
+      if (shape) {                                                 // aim at the middle of this cell's part of the city
+        let sx = 0, sy = 0, n = 0;
+        for (let ly = 0; ly < CH; ly++) for (let lx = 0; lx < CH; lx++) if (shape.inside(cx * CH + lx, cy * CH + ly)) { sx += lx; sy += ly; n++; }
+        if (n < 40) return;
+        mid = { x: sx / n, y: sy / n }; lo = 0;
+      }
+      let best = null, SQ = 0;
+      for (const half of SQUARE_HALF_SIZES) {
+        for (let y = lo + half; y < CH - lo - half; y++) for (let x = lo + half; x < CH - lo - half; x++) {
+          if (shape && shape.streetDist(cx * CH + x, cy * CH + y) > 3) continue;   // squares open onto a street
+          let ok = true;
+          for (let dy = -half; dy <= half && ok; dy++) for (let dx = -half; dx <= half; dx++) if (!isPlainOrRoad(t, x + dx, y + dy)) { ok = false; break; }
+          const d = Math.hypot(x - mid.x, y - mid.y);
+          if (ok && (!best || d < best.d)) best = { x, y, d };
+        }
+        if (best) { SQ = half; break; }
+      }
+      if (!best) return;
+      const type = weightedChoice(rng, CITY_SQUARE_TYPES.map(s => [s, s.weight * (district.squares[s.id] != null ? district.squares[s.id] : 1)]));
+      for (let dy = -SQ; dy <= SQ; dy++) for (let dx = -SQ; dx <= SQ; dx++) { const k = t[best.y + dy][best.x + dx]; k.feature = null; restyle(k, CITY_PLAZA_STYLE); }
+      type.build({ put: (dx, dy, id) => { if (Math.abs(dx) <= SQ && Math.abs(dy) <= SQ) setFeature(t[best.y + dy][best.x + dx], id); } });
+      const s = chunk.settlement; if (s) (s.landmarks = s.landmarks || []).push({ type: type.id, label: type.label, district: district.id, x: cx * CH + best.x, y: cy * CH + best.y, size: SQ * 2 + 1 });
+    } },
+    { id: 'centrepiece', apply({ chunk, cx, cy, shape }) {
+      if (!shape || shape.footprint !== 2) return;                 // a capital's centre is its palace
+      const lx = Math.round(shape.centre.x) - cx * CH, ly = Math.round(shape.centre.y) - cy * CH, t = chunk.tiles;
+      if (lx < 0 || ly < 0 || lx >= CH || ly >= CH || !t[ly][lx].street || t[ly][lx].feature) return;
+      setFeature(t[ly][lx], 'fountain');
+      for (const [dx, dy] of [[3, 0], [-3, 0], [0, 3], [0, -3]]) { const k = t[ly + dy] && t[ly + dy][lx + dx]; if (k && k.street && !k.feature && k.walkable) setFeature(k, 'lamppost'); }
+    } },
+  ];
+
+  const api = {
+    enabled: true,           // master switch for all civic decoration
+    layoutVariation: true,   // district density/size also reshape building layout (false = old uniform cells)
+    passes: PASSES,
+    // Pure + deterministic: which quarter is cell (ox, oy) of the settlement anchored at (anchorCx, anchorCy)?
+    districtFor(anchorCx, anchorCy, ox, oy, footprint, isGrand) {
+      if (!api.enabled || !api.layoutVariation || footprint < 2) return CITY_DEFAULT_DISTRICT;
+      const mid = (footprint - 1) / 2, edgeCentre = footprint === 3 && (ox === 1) !== (oy === 1);
+      const ring = (isGrand || (ox === mid && oy === mid)) ? 'core' : edgeCentre ? 'inner' : 'outer';
+      const rng = mulberry32((anchorCx * 6113 + anchorCy * 8861 + ox * 31337 + oy * 7127 + SEED + 909) | 0);
+      const pool = CITY_DISTRICT_TYPES.filter(d => d.rings[ring] > 0);
+      return weightedChoice(rng, pool.map(d => [d, d.rings[ring]]));
+    },
+    // Entry point called from buildSettlementCore. `ctx` = { chunk, cx, cy, margin, grand, settlement }.
+    apply(ctx) {
+      if (!api.enabled) return;
+      const rng = mulberry32((ctx.cx * 7331 + ctx.cy * 9173 + SEED + 4242) | 0);   // own stream: old rolls untouched
+      const district = ctx.district || CITY_DEFAULT_DISTRICT;
+      if (ctx.settlement) ctx.settlement.district = { id: district.id, label: district.label };
+      if (ctx.settlement) ctx.settlement.shapeType = ctx.shape ? ctx.shape.archetype : 'classic';   // which CITY_SHAPE_ARCHETYPES recipe built this city
+      for (const pass of api.passes) pass.apply(Object.assign({ rng, district }, ctx, { district }));
+    },
+  };
+  return api;
+})();
+
+// ===================== CITY SHAPES: archetypes built from lobes (v0.50.6) =====================
+// Cities and capitals used to be one chunk-aligned square: they are generated a 24x24 chunk ("cell") at a time, so the
+// wall, districts and building layout all followed chunk edges. This module defines a settlement's shape in WORLD
+// coordinates instead, once per city, so every cell can ask the same question about any tile and agree.
+//
+// A SHAPE is a union of LOBES. A lobe is either a RECT or a lumpy BLOB. Each city rolls an ARCHETYPE (a recipe that
+// places lobes inside the city's footprint), so one engine yields very different cities:
+//   organic  one big lumpy blob                    bastion  one big square fortress with a street grid
+//   cross    two rects crossing (a plus)           elbow    an L of two rects
+//   tee      a bar with a stem                     ushape   two towers joined by a base (cities only)
+//   citadel  a blob with a square annex (hybrid)   twin     two merged blobs (hybrid)
+//   winged   a blob with long rect wings (hybrid)  classic  the ORIGINAL chunk-square city (legacy generator, kept)
+// Everything else is derived from the lobe union, so it works for ANY archetype:
+//   * WALL      inside tiles with an outside 8-neighbour (a sealed ring); towers on convex corners and along straights;
+//               a GATE wherever a main avenue meets the wall.
+//   * STREETS   each lobe contributes its own: rects get a main avenue through the middle of each arm, side streets, and
+//               (big squares) a ring road; blobs get radial avenues and ring roads. A plaza marks the middle of cities.
+//   * DISTRICTS a domain-warped Voronoi over the whole union, so quarter borders ignore chunk edges.
+//   * BUILDINGS only on the street-frontage band, never on streets; doors face the nearest street.
+// PURITY: a shape is a pure function of (SEED, anchor chunk, footprint), built once into per-tile grids and cached.
+// KILL SWITCH: CityShape.enabled = false restores the old square cities. CityShape.forceArchetype = 'cross' (etc.) pins one.
+// EXTENDING: add an entry to CITY_SHAPE_ARCHETYPES -- make(ctx) returns lobes using ctx.rect / ctx.blob (normalised 0..1
+// coords, auto-rotated/mirrored per city). Tune street feel in makeRect().street / makeBlob().street.
+const CITY_SHAPE_ARCHETYPES = [
+  { id: 'organic', weight: 38, make: c => [c.blob(0.5, 0.5, 0.49, { aspect: [0.92, 1], rings: c.footprint === 3 ? [0.38, 0.7] : [0.55], gates: c.footprint === 3 ? 4 : 3, plaza: c.footprint === 2 })] },
+  { id: 'classic', weight: 8, legacy: true, make: () => [] },
+  { id: 'bastion', weight: 8, make: c => [c.rect(0.03, 0.03, 0.97, 0.97)] },
+  { id: 'cross', weight: 9, make: c => { const a = c.rnd(0.17, 0.21); return [c.rect(0.5 - a, 0.03, 0.5 + a, 0.97), c.rect(0.03, 0.5 - a, 0.97, 0.5 + a)]; } },
+  { id: 'elbow', weight: 8, make: c => [c.rect(0.03, 0.03, 0.54, 0.97), c.rect(0.03, 0.46, 0.97, 0.97)] },
+  { id: 'tee', weight: 7, make: c => [c.rect(0.03, 0.03, 0.97, 0.43), c.rect(0.3, 0.38, 0.7, 0.97)] },
+  { id: 'ushape', weight: 5, capitalOk: false, make: c => [c.rect(0.03, 0.03, 0.4, 0.97), c.rect(0.6, 0.03, 0.97, 0.97), c.rect(0.03, 0.6, 0.97, 0.97)] },
+  { id: 'citadel', weight: 8, make: c => [c.blob(0.4, 0.42, 0.4, { rings: [0.55], gates: 2 }), c.rect(0.52, 0.5, 0.97, 0.97)] },
+  { id: 'twin', weight: 6, make: c => [c.blob(0.3, 0.5, 0.36, { rings: [], gates: 2 }), c.blob(0.7, 0.5, 0.36, { rings: [], gates: 2 })] },
+  { id: 'winged', weight: 6, make: c => [c.blob(0.5, 0.5, 0.38, { rings: [0.55], gates: 2 }), c.rect(0.03, 0.35, 0.97, 0.65)] },
+];
+
+const CityShape = (function () {
+  const TAU = Math.PI * 2, cache = new Map(), SIDE_SPACING = 15;
+  const WALL_STYLE = { glyph: '#', color: '#8a7a5a', bg: '#1c150c' }, TOWER_STYLE = { glyph: '#', color: '#b3a47c', bg: '#2a2012' };
+  const angDiff = (a, b) => { let d = a - b; while (d > Math.PI) d -= TAU; while (d < -Math.PI) d += TAU; return d; };
+  const D8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+
+  // ---- lobe constructors: tile-space geometry + a `contains` test + a `street` test ----
+  function makeRect(x0, y0, x1, y1) {
+    const w = x1 - x0 + 1, h = y1 - y0 + 1, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, squarish = w >= h * 0.8 && h >= w * 0.8;
+    return {
+      kind: 'rect', cx, cy,
+      contains: (wx, wy) => wx >= x0 && wx <= x1 && wy >= y0 && wy <= y1,
+      street(wx, wy) {
+        const bd = Math.min(wx - x0, x1 - wx, wy - y0, y1 - wy);
+        if (bd < 0) return false;
+        const alongX = w >= h * 0.8, alongY = h >= w * 0.8;                      // axes that carry a main avenue (both for a square)
+        if (alongX && Math.abs(wy - cy) <= 0.9) return true;
+        if (alongY && Math.abs(wx - cx) <= 0.9) return true;
+        if (bd >= 4) {                                                            // side streets stop short of the wall
+          if (squarish || w >= h) { const k = Math.round((wx - cx) / SIDE_SPACING); if (k !== 0 && Math.abs(wx - (cx + k * SIDE_SPACING)) <= 0.9) return true; }
+          if (squarish || h > w) { const k = Math.round((wy - cy) / SIDE_SPACING); if (k !== 0 && Math.abs(wy - (cy + k * SIDE_SPACING)) <= 0.9) return true; }
+        }
+        return Math.min(w, h) >= 36 && Math.abs(bd - 7) <= 0.75;                  // ring road inside a big square
+      },
+    };
+  }
+  function makeBlob(rng, cx, cy, H, o) {
+    const aspect = o.aspect ? o.aspect[0] + rng() * (o.aspect[1] - o.aspect[0]) : 0.85 + rng() * 0.15, rot = rng() * Math.PI;
+    const harms = [[2, 0.045], [3, 0.04], [5, 0.022]].map(([k, a]) => ({ k, a: a * (0.6 + rng() * 0.8), ph: rng() * TAU }));
+    const ampSum = harms.reduce((s, h) => s + h.a, 0), wobPh = rng() * TAU;
+    const radiusAt = th => { const f = th - rot, e = aspect / Math.sqrt(aspect * aspect * Math.cos(f) ** 2 + Math.sin(f) ** 2); return H * e * (1 + harms.reduce((s, h) => s + h.a * Math.sin(h.k * th + h.ph), 0)) / (1 + ampSum); };
+    const gateCount = o.gates || 3, gateBase = rng() * TAU, rings = o.rings || [];
+    const gateAngles = Array.from({ length: gateCount }, (_, k) => gateBase + k * TAU / gateCount + (rng() - 0.5) * 0.45);
+    const polar = (wx, wy) => { const dx = wx - cx, dy = wy - cy, th = Math.atan2(dy, dx); return { d: Math.hypot(dx, dy), th, rr: radiusAt(th) }; };
+    return {
+      kind: 'blob', cx, cy, plaza: !!o.plaza,
+      contains: (wx, wy) => { const p = polar(wx, wy); return p.d < p.rr; },
+      street(wx, wy) {
+        const p = polar(wx, wy); if (p.d >= p.rr) return false;
+        const wob = 1.2 * Math.sin(p.th * 4 + wobPh);
+        for (const f of rings) if (Math.abs(p.d + wob - f * p.rr) <= 0.75) return true;
+        for (const g of gateAngles) { const dd = angDiff(p.th, g); if (Math.cos(dd) > 0 && p.d >= (o.plaza ? 5 : 2) && p.d * Math.abs(Math.sin(dd)) <= 0.9) return true; }
+        return false;
+      },
+    };
+  }
+
+  function build(acx, acy, footprint, archetype) {
+    const N = footprint * CH, x0 = acx * CH, y0 = acy * CH, rng = mulberry32((acx * 4421 + acy * 9719 + SEED + 31337) | 0);
+    // per-city orientation: rotate the recipe by 0/90/180/270 and maybe mirror it, so one archetype never looks the same twice
+    const rotK = Math.floor(rng() * 4), mirror = rng() < 0.5;
+    const T = (u, v) => { if (mirror) u = 1 - u; for (let i = 0; i < rotK; i++) { const t = u; u = v; v = 1 - t; } return [u, v]; };
+    const ctx = {
+      footprint, rnd: (a, b) => a + rng() * (b - a),
+      rect(u0, v0, u1, v1) { const [a, b] = T(u0, v0), [c, d] = T(u1, v1); return makeRect(x0 + Math.round(Math.min(a, c) * N), y0 + Math.round(Math.min(b, d) * N), x0 + Math.round(Math.max(a, c) * N) - 1, y0 + Math.round(Math.max(b, d) * N) - 1); },
+      blob(u, v, ru, o = {}) { const [a, b] = T(u, v); return makeBlob(rng, x0 + a * N - 0.5, y0 + b * N - 0.5, ru * N - 1, o); },
+    };
+    const lobes = archetype.make(ctx);
+
+    // ---- per-tile grids ----
+    const size = N * N, inside = new Uint8Array(size), street = new Uint8Array(size), plaza = new Uint8Array(size), wall = new Uint8Array(size),
+      gate = new Uint8Array(size), tower = new Uint8Array(size), edge = new Uint8Array(size), dist = new Uint8Array(size).fill(255), dis = new Uint8Array(size);
+    const gi = (wx, wy) => (wx < x0 || wy < y0 || wx >= x0 + N || wy >= y0 + N) ? -1 : (wy - y0) * N + (wx - x0);
+    let sx = 0, sy = 0, count = 0;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (lobes.some(l => l.contains(x0 + x, y0 + y))) { inside[y * N + x] = 1; sx += x0 + x; sy += y0 + y; count++; }
+    const nbIn = (x, y) => { for (const [dx, dy] of D8) { const a = x + dx, b = y + dy; if (a < 0 || b < 0 || a >= N || b >= N || !inside[b * N + a]) return false; } return true; };
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const i = y * N + x; if (inside[i] && !nbIn(x, y)) wall[i] = 1; }
+    // distance to the outside (Chebyshev steps), by BFS from the wall inward
+    { let q = [], d = 1; for (let i = 0; i < size; i++) if (wall[i]) { edge[i] = 1; q.push(i); }
+      while (q.length) { const nq = []; d++; for (const i of q) { const x = i % N, y = (i / N) | 0; for (const [dx, dy] of D8) { const a = x + dx, b = y + dy; if (a < 0 || b < 0 || a >= N || b >= N) continue; const j = b * N + a; if (inside[j] && !edge[j]) { edge[j] = Math.min(255, d); nq.push(j); } } } q = nq; } }
+    // streets: union of every lobe's own network, on non-wall inside tiles
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const i = y * N + x; if (inside[i] && !wall[i] && lobes.some(l => l.street(x0 + x, y0 + y))) street[i] = 1; }
+    // the middle of the city: nearest street tile to the centroid; cities get a plaza there
+    const cen0 = { x: sx / count, y: sy / count }; let centre = { x: Math.round(cen0.x), y: Math.round(cen0.y) }, bd = Infinity;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (street[y * N + x]) { const d = Math.hypot(x0 + x - cen0.x, y0 + y - cen0.y); if (d < bd) { bd = d; centre = { x: x0 + x, y: y0 + y }; } }
+    if (footprint === 2) {
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const i = y * N + x; if (inside[i] && !wall[i] && Math.hypot(x0 + x - centre.x, y0 + y - centre.y) <= 4.2) { plaza[i] = 1; street[i] = 1; } }
+    }
+    // gates: wall tiles with a street within 2 tiles inside (only avenues reach the wall; side streets stop short)
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x; if (!wall[i]) continue;
+      for (let dy = -2; dy <= 2 && !gate[i]; dy++) for (let dx = -2; dx <= 2; dx++) { const a = x + dx, b = y + dy; if (a >= 0 && b >= 0 && a < N && b < N && street[b * N + a] && !wall[b * N + a]) { gate[i] = 1; break; } }
+    }
+    // towers: 3x3 blocks on convex corners, and every 12 tiles along straight runs; never near a gate
+    const nearGate = (x, y) => { for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) { const a = x + dx, b = y + dy; if (a >= 0 && b >= 0 && a < N && b < N && gate[b * N + a]) return true; } return false; };
+    const outside = (x, y) => x < 0 || y < 0 || x >= N || y >= N || !inside[y * N + x];
+    const phase = Math.floor(rng() * 12);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x; if (!wall[i] || gate[i] || nearGate(x, y)) continue;
+      const oN = outside(x, y - 1), oS = outside(x, y + 1), oW = outside(x - 1, y), oE = outside(x + 1, y);
+      const corner = (oN || oS) && (oW || oE), straightH = (oN || oS) && !(oW || oE) && (x + phase) % 12 === 0, straightV = (oW || oE) && !(oN || oS) && (y + phase) % 12 === 0;
+      if (!(corner || straightH || straightV)) continue;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const a = x + dx, b = y + dy; if (a >= 0 && b >= 0 && a < N && b < N && inside[b * N + a]) { tower[b * N + a] = 1; wall[b * N + a] = 1; street[b * N + a] = 0; gate[b * N + a] = 0; } }
+    }
+    // distance-to-street field (Chebyshev, capped at 8)
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      if (!street[y * N + x]) continue;
+      for (let dy = -8; dy <= 8; dy++) for (let dx = -8; dx <= 8; dx++) { const a = x + dx, b = y + dy; if (a < 0 || b < 0 || a >= N || b >= N) continue; const j = b * N + a, d = Math.max(Math.abs(dx), Math.abs(dy)); if (d < dist[j]) dist[j] = d; }
+    }
+    // ---- districts: domain-warped Voronoi over the union ----
+    let ext = 1; for (let i = 0; i < size; i++) if (inside[i]) ext = Math.max(ext, Math.hypot(x0 + (i % N) - centre.x, y0 + ((i / N) | 0) - centre.y));
+    const siteCount = footprint === 3 ? 7 : 4, used = {}, sites = [{ x: centre.x, y: centre.y, type: CITY_DISTRICT_TYPES.find(d => d.id === 'civic') }];
+    for (let k = 0, tries = 0; k < siteCount && tries < 400; tries++) {
+      const x = Math.floor(rng() * N), y = Math.floor(rng() * N), i = y * N + x;
+      if (!inside[i] || edge[i] < 4 || sites.some(s => Math.hypot(s.x - (x0 + x), s.y - (y0 + y)) < N * 0.2)) continue;
+      const ring = Math.hypot(x0 + x - centre.x, y0 + y - centre.y) < ext * 0.55 ? 'inner' : 'outer';
+      const pool = CITY_DISTRICT_TYPES.filter(d => d.rings[ring] > 0).map(d => [d, d.rings[ring] * (used[d.id] ? 0.3 : 1)]);
+      const type = weightedChoice(rng, pool); used[type.id] = (used[type.id] || 0) + 1; sites.push({ x: x0 + x, y: y0 + y, type }); k++;
+    }
+    const wSeed = SEED + acx * 13 + acy * 17;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x; if (!inside[i]) continue;
+      const wx = x0 + x + (fbm(x0 + x, y0 + y, 11, wSeed, 2) - 0.5) * 12, wy = y0 + y + (fbm(x0 + x, y0 + y, 11, wSeed + 99, 2) - 0.5) * 12;
+      let best = 0, b = Infinity;
+      for (let s = 0; s < sites.length; s++) { const d = Math.hypot(wx - sites[s].x, wy - sites[s].y) * (s === 0 ? 0.8 : 1); if (d < b) { b = d; best = s; } }
+      dis[i] = best;
+    }
+    // ---- query API (world tile coords; safe for any input) ----
+    const at = (g, wx, wy) => { const i = gi(wx, wy); return i >= 0 && g[i] === 1; };
+    const shape = {
+      archetype: archetype.id, anchorCx: acx, anchorCy: acy, footprint, centre, sites, area: count,
+      inside: (wx, wy) => at(inside, wx, wy), street: (wx, wy) => at(street, wx, wy), plaza: (wx, wy) => at(plaza, wx, wy),
+      wall: (wx, wy) => at(wall, wx, wy), gate: (wx, wy) => at(gate, wx, wy), tower: (wx, wy) => at(tower, wx, wy),
+      edgeDist: (wx, wy) => { const i = gi(wx, wy); return i < 0 ? -1 : (inside[i] ? edge[i] : 0); },
+      streetDist: (wx, wy) => { const i = gi(wx, wy); return i < 0 ? 255 : dist[i]; },
+      districtAt: (wx, wy) => { const i = gi(wx, wy); return (i >= 0 && inside[i]) ? sites[dis[i]].type : null; },
+      nearInside: (wx, wy, fringe = 2) => { for (let dy = -fringe; dy <= fringe; dy++) for (let dx = -fringe; dx <= fringe; dx++) if (at(inside, wx + dx, wy + dy)) return true; return false; },
+      // A building may stand here: inside, clear of the wall, not on a street, close enough to one to have a frontage.
+      buildable(wx, wy) { const i = gi(wx, wy); return i >= 0 && inside[i] === 1 && !street[i] && !wall[i] && !plaza[i] && edge[i] >= 3 && dist[i] <= 8; },
+      // Local-coordinate closures for one chunk (what the layout code expects).
+      buildableLocal(cx, cy) { return (lx, ly) => shape.buildable(cx * CH + lx, cy * CH + ly); },
+      innerLocal(cx, cy) { return (lx, ly) => { const i = gi(cx * CH + lx, cy * CH + ly); return i >= 0 && inside[i] === 1 && edge[i] >= 3 && !wall[i]; }; },
+      cellHasInside(cx, cy) { for (let ly = 0; ly < CH; ly++) for (let lx = 0; lx < CH; lx++) if (shape.buildable(cx * CH + lx, cy * CH + ly)) return true; return false; },
+      // The quarter a whole cell belongs to (for building density/size): the district at the centre of its inside tiles.
+      cellDistrict(cx, cy) {
+        let ax = 0, ay = 0, n = 0;
+        for (let ly = 0; ly < CH; ly++) for (let lx = 0; lx < CH; lx++) if (at(inside, cx * CH + lx, cy * CH + ly)) { ax += lx; ay += ly; n++; }
+        if (!n) return CITY_DEFAULT_DISTRICT;
+        return shape.districtAt(cx * CH + Math.round(ax / n), cy * CH + Math.round(ay / n)) || shape.districtAt(centre.x, centre.y) || CITY_DEFAULT_DISTRICT;
+      },
+      // Door side for a building (local rect in chunk cx,cy): the side whose outward neighbour is nearest a street.
+      doorSide(cx, cy, r) {
+        const wx = cx * CH, wy = cy * CH, xm = r.x + (r.w >> 1), ym = r.y + (r.h >> 1);
+        const c = [['bottom', xm, r.y + r.h], ['left', r.x - 1, ym], ['right', r.x + r.w, ym], ['top', xm, r.y - 1]];
+        let best = null, b = 254; for (const [s, x, y] of c) { const d = shape.streetDist(wx + x, wy + y); if (d < b) { b = d; best = s; } }
+        return best;
+      },
+      // Pave street/plaza tiles of this chunk (called right after the city floor is paved, before buildings).
+      paintStreets(chunk, cx, cy) {
+        for (let ly = 0; ly < CH; ly++) for (let lx = 0; lx < CH; lx++) {
+          const wx = cx * CH + lx, wy = cy * CH + ly, t = chunk.tiles[ly][lx];
+          if (shape.street(wx, wy) && t.walkable) { t.street = true; t.feature = 'road'; /* decor scatter skips road tiles, so clutter can never block a street or a door front */ const s = shape.plaza(wx, wy) ? CITY_PLAZA_STYLE : CITY_STREET_STYLE; t.glyph = s.glyph; t.color = s.color; t.bg = s.bg; }
+        }
+      },
+      // Wall, towers and gates for this chunk (never overwrites a building).
+      drawWalls(chunk, cx, cy) {
+        for (let ly = 0; ly < CH; ly++) for (let lx = 0; lx < CH; lx++) {
+          const wx = cx * CH + lx, wy = cy * CH + ly, t = chunk.tiles[ly][lx];
+          if (!shape.wall(wx, wy) || t.building) continue;
+          const biome = t.biome;
+          if (shape.gate(wx, wy)) chunk.tiles[ly][lx] = { glyph: '=', color: '#c9a06a', bg: '#241f16', walkable: true, feature: 'gate', items: [], building: null, biome, street: true };
+          else { const s = shape.tower(wx, wy) ? TOWER_STYLE : WALL_STYLE; chunk.tiles[ly][lx] = { glyph: s.glyph, color: s.color, bg: s.bg, walkable: false, feature: 'wall', items: [], building: null, biome }; }
+        }
+      },
+      // Where the road network of this chunk should root: the street tile nearest the chunk centre.
+      rootFor(cx, cy) {
+        let best = null, b = Infinity;
+        for (let ly = 0; ly < CH; ly++) for (let lx = 0; lx < CH; lx++) if (shape.street(cx * CH + lx, cy * CH + ly)) { const d = Math.hypot(lx - CH / 2, ly - CH / 2); if (d < b) { b = d; best = [lx, ly]; } }
+        return best ? { rootX: best[0], rootY: best[1] } : { rootX: CH >> 1, rootY: CH >> 1 };
+      },
+    };
+    return shape;
+  }
+
+  const api = {
+    enabled: true,
+    forceArchetype: null,                       // set to an archetype id to pin every city to it (tests / debugging)
+    archetypes: CITY_SHAPE_ARCHETYPES,
+    clearCache() { cache.clear(); },
+    // Which archetype does this city roll? Deterministic per (SEED, anchor); capitals skip archetypes that can't hold a palace.
+    pick(acx, acy, footprint) {
+      if (api.forceArchetype) return CITY_SHAPE_ARCHETYPES.find(a => a.id === api.forceArchetype);
+      const rng = mulberry32((acx * 2557 + acy * 6841 + SEED + 5150) | 0);
+      return weightedChoice(rng, CITY_SHAPE_ARCHETYPES.filter(a => footprint !== 3 || a.capitalOk !== false).map(a => [a, a.weight]));
+    },
+    // Shape for the city anchored at (acx, acy), or null for the legacy chunk-square city ('classic') / when disabled.
+    get(acx, acy, footprint) {
+      if (!api.enabled || !footprint || footprint < 2) return null;
+      const arch = api.pick(acx, acy, footprint), key = SEED + ':' + acx + ',' + acy + ':' + footprint + ':' + arch.id;
+      if (cache.has(key)) return cache.get(key);
+      const s = arch.legacy ? null : build(acx, acy, footprint, arch);
+      cache.set(key, s); return s;
+    },
+  };
+  return api;
+})();
+
+// Give the new features Look-command descriptions (only where none exists, so nothing is overridden).
+for (const [id, f] of Object.entries(CIVIC_FEATURES)) if (!(id in TILE_FEATURE_DESCRIPTIONS)) TILE_FEATURE_DESCRIPTIONS[id] = f.desc;
+
 // A handful of tile features are dynamic per-tile (their exact flavor lives on the specific POI
 // instance, not the shared dictionary above) -- these get looked up by matching world coordinates
 // against the owning chunk's stored POI, so "a shrine" becomes "Standing Stones, humming faintly
@@ -26202,6 +26948,7 @@ function displaceEntity(e, originX, originY, maxTiles, pull) {
 function gravityPullEntity(e, towardX, towardY, maxTiles) { displaceEntity(e, towardX, towardY, maxTiles, true); }
 function knockbackEntity(e, fromX, fromY, maxTiles) { displaceEntity(e, fromX, fromY, maxTiles, false); }
 function resolveSpellAtTile(spell, wx, wy) {
+  VFX.emit('projectile', { from: player, toXY: { x: wx, y: wy }, kind: 'spell', spell });
   // Data-driven self-buff hook (Action Speed Framework): some spells affect the CASTER in
   // addition to whatever they hit at the target tile -- Time Stop's whole premise is "everything
   // else slows down while you don't," so it needs to buff the player, not just debuff the target.
@@ -26435,6 +27182,7 @@ function doAttack(att, def, skipDuplicate) {
   const spectatorVisible = isPlayer || def === player || posVisibleToPlayer(att.x, att.y) || posVisibleToPlayer(def.x, def.y);
   const log = spectatorVisible ? realLog : () => {};
   const weapon = isPlayer ? player.equipment.hand : null;
+  if (weapon && weapon.ranged) VFX.emit('projectile', { from: att, to: def, kind: 'arrow' });
   const dmgRange = weapon ? weapon.dmg : (att.atk || [1, 3]);
   const attName = isPlayer ? 'You' : att.name;
   const defName = def === player ? 'you' : def.name;
@@ -27383,6 +28131,7 @@ function monsterCastAt(caster, ab, target) {
   const verb = ab.thrown ? 'hurls' : (ab.kind === 'heal' || ab.kind === 'buff' ? 'channels' : 'casts');
   const atWhom = (ab.kind === 'heal' || ab.kind === 'buff') ? '' : ` at ${target === player ? 'you' : target.name}`;
   log(`${caster.name} ${verb} ${ab.name}${atWhom}!`);
+  if (ab.kind !== 'heal' && ab.kind !== 'buff') VFX.emit('projectile', { from: caster, to: target, kind: 'spell', spell: ab });
   Sound.play(ab.kind === 'heal' || ab.kind === 'buff' ? 'castSpell' : (ab.thrown ? 'throw' : 'enemyCast'));
   switch (ab.kind) {
     case 'bolt': case 'drain': {
@@ -34219,7 +34968,7 @@ function resolveThrowAtTile(it, wx, wy, fromSlot) {
       const isVoid = it.dtype === 'void';
       Sound.play('bigExplosion');
       triggerScreenFlash(isVoid ? 'rgba(180,120,255,0.9)' : 'rgba(255,255,255,0.95)', 650);
-      triggerScreenShake(1.6, 600);
+      triggerScreenShake(1, 600);
       const hit = hostilesWithinRadius(wx, wy, outerRadius);
       let hitCount = 0;
       hit.forEach(h => {
@@ -36426,6 +37175,8 @@ function renderSettingsTab(tabId) {
     body += row('Default Zoom Level', `Zoom used when starting/loading a game (${zoomLabels[s.defaultZoom]}).`, sliderHtml('defaultZoom', s.defaultZoom, 0, 8, 1));
     body += row('Auto-Pickup Gold', 'Walk over gold to collect it automatically, no keypress needed.', toggleHtml('autoPickupGold', s.autoPickupGold));
     body += row('Show Damage Numbers', 'Floating combat text above hits and misses.', toggleHtml('showDamageNumbers', s.showDamageNumbers));
+    body += row('Combat Effects Intensity', `Overall strength of hit flashes, particles, bolts and shake (${s.vfxIntensity === 0 ? 'off' : s.vfxIntensity + '%'}).`, sliderHtml('vfxIntensity', s.vfxIntensity, 0, 200, 10));
+    for (const t of VFX.toggles) body += row(t.label, t.desc, toggleHtml(t.key, s[t.key] !== false));
     body += row('Autosave', 'Automatically saves your game periodically.', toggleHtml('autosaveEnabled', s.autosaveEnabled));
     if (s.autosaveEnabled) body += row('Autosave Frequency', `Every ${s.autosaveInterval} turns.`, sliderHtml('autosaveInterval', s.autosaveInterval, 10, 200, 10));
     body += row('Confirm Before Quitting', 'Ask for confirmation when quitting to the title screen mid-game.', toggleHtml('confirmQuit', s.confirmQuit));
