@@ -508,7 +508,7 @@
         <b>o</b> take aim (called shot) &nbsp; <b>Shift+L</b> library<br>
         <b>v</b> toggle sprint<br>
         <b>Shift+G</b> auto-travel &nbsp; <b>Shift+H</b> auto-home<br>
-        <b>Shift+X</b> auto-explore &nbsp; <b>Shift+M</b> dungeon map<br>
+        <b>Shift+X</b> auto-explore &nbsp; <b>Shift+M</b> map (world / dungeon)<br>
         <b>&gt;</b> enter/descend &nbsp; <b>&lt;</b> ascend<br>
         <b>Shift+S</b> search for secrets &nbsp; <b>Shift+D</b> dig (pickaxe in hand)<br>
         <b>Shift+P</b> or <b>Esc</b> menu (save/load/settings)<br>
@@ -540,7 +540,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.6-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.7-alpha</div>
     </div>
   </div>
 
@@ -1878,6 +1878,12 @@
 //   original chunk-square city, kept as its own rarer type. Streets, gates, towers, quarters and building layout are
 //   derived from the lobe union, so any new recipe works without touching the rest. settlement.shapeType records it.
 //   CityShape.forceArchetype pins one for testing; add recipes by pushing onto CITY_SHAPE_ARCHETYPES.
+//
+// v0.50.7 Map system (search "MAP SYSTEM"). The surface had no map at all (Shift+M was dungeon-only). Adds a live minimap
+//   overlay and a full World Map modal (Shift+M on the surface; pan/zoom), both drawn by one layered renderer over tiles the
+//   player has SEEN. Read-only (never generates chunks), shows settlements by tier, dungeon entrances, points of interest,
+//   waypoints and visible creatures. Settings: minimap on/off, size, range, opacity, corner, marker/creature toggles.
+//   Extend via MAP_TILE_RULES / MAP_LAYERS / MAP_MARKER_SOURCES / MAP_TOGGLES.
 //
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
@@ -17054,6 +17060,8 @@ const DEFAULT_SETTINGS = {
   autoPickupGold: true,
   showDamageNumbers: true,
   combatTextScale: 100,
+  minimapEnabled: true, minimapSize: 150, minimapRadius: 30, minimapOpacity: 85, minimapCorner: 'tr',   // live minimap overlay (see MAP SYSTEM)
+  mapShowMarkers: true, mapShowCreatures: true,
   vfxIntensity: 60,          // combat effects strength in % (default 60 = subtle; 100 = full), 0 = all effects off (see VFX ENGINE; reduceMotion also disables them)
   vfxHitFlash: true, vfxParticles: true, vfxDeathBursts: true, vfxProjectiles: true, vfxRings: true, vfxShake: true,
   monsterHealthBars: true,   // small bars under damaged enemies, with a draining 'ghost' of recent damage
@@ -22394,6 +22402,7 @@ function render() {
     ctx.fillText('@', playerPx, playerPy);
   }
   VFX.draw(ctx, v); // flashes, particles, bolts, rings, enemy health bars -- under the floating numbers
+  GameMap.updateMinimap(); // live minimap overlay (cheap: redraws only when the turn/position/settings change)
 
   if (floatingTexts.length) {
     ctx.save();
@@ -25958,6 +25967,238 @@ const CityShape = (function () {
   };
   return api;
 })();
+
+// ===================== MAP SYSTEM: live minimap + world map (v0.50.7) =====================
+// Before this the game had no way to see the surface at all: Shift+M only worked inside dungeons, and a world with
+// sprawling cities (see CITY_SHAPE_ARCHETYPES) gave you nothing to orient against. This module adds
+//   * a live MINIMAP overlay (corner of the play view; size / range / opacity / corner are settings), and
+//   * a full WORLD MAP modal (Shift+M on the surface; arrows/WASD/hjkl pan, +/- zoom, C recentres).
+// Both are drawn by the same code: a VIEW (centre tile + tile radius + pixels-per-tile) is passed through the LAYERS.
+// RULES IT FOLLOWS:
+//   * Memory aid, not reconnaissance: only tiles the player has actually seen (`tile.seen`) are ever drawn.
+//   * Read-only: peek() looks tiles up WITHOUT generating chunks, so drawing a map can never change the world.
+//   * Never throws into the game: every draw is wrapped; a map bug cannot break render().
+// EXTENDING:
+//   * Recolour a terrain type ... add a { id, test(tile), color } to MAP_TILE_RULES (surface) / MAP_DUNGEON_RULES.
+//   * New map layer ............ push { id, draw(view) } onto MAP_LAYERS (draw via view.rect / view.dot / view.text).
+//   * New marker kind .......... add a collector to MAP_MARKER_SOURCES; it returns { kind, x, y, size, color, label }.
+//   * New user toggle .......... add to MAP_TOGGLES (the Settings screen is generated from it).
+const MAP_ZOOMS = [2, 3, 4, 6, 8, 12];                 // pixels per tile on the world map
+const MAP_TIER_MARKERS = {
+  hamlet: { size: 3, color: '#e8c070' }, village: { size: 4, color: '#e8c070' }, town: { size: 5, color: '#f0b45a' },
+  city: { size: 6, color: '#ffb347' }, capital: { size: 8, color: '#ffd34a' },
+};
+const MAP_TOGGLES = [
+  { key: 'mapShowMarkers', label: 'Map: Markers', desc: 'Settlements, dungeon entrances, points of interest and your waypoints on the maps.' },
+  { key: 'mapShowCreatures', label: 'Map: Creatures', desc: 'Creatures you can currently see (hostile red, friendly yellow, allies green).' },
+];
+// Surface tile colours, first match wins; anything unmatched falls back to its biome colour.
+const MAP_TILE_RULES = [
+  { id: 'gate', test: t => t.feature === 'gate', color: '#e8c070' },
+  { id: 'wall', test: t => t.feature === 'wall' || t.feature === 'ruined_wall', color: '#b0a07a' },
+  { id: 'door', test: t => t.feature === 'door', color: '#d0a050' },
+  { id: 'building', test: t => t.building !== null && t.building !== undefined, color: '#6a5a44' },
+  { id: 'street', test: t => t.street === true, color: '#9a9382' },
+  { id: 'road', test: t => t.feature === 'road', color: '#7a6a50' },
+];
+// Dungeon tile colours (mirrors the long-standing dungeon map so both read the same).
+const MAP_DUNGEON_RULES = [
+  { id: 'up', test: t => t.glyph === '<', color: '#e0c34a' }, { id: 'down', test: t => t.glyph === '>', color: '#e05ae0' },
+  { id: 'waystone', test: t => t.feature === 'waystone', color: '#e8ab52' }, { id: 'water', test: t => t.feature === 'water', color: '#2a4a6a' },
+  { id: 'chasm', test: t => t.feature === 'chasm', color: '#141418' }, { id: 'bridge', test: t => t.feature === 'woodbridge', color: '#a07840' },
+  { id: 'fungus', test: t => t.feature === 'fungus', color: '#2f6a44' }, { id: 'statue', test: t => t.feature === 'statue', color: '#6a6a72' },
+  { id: 'door', test: t => t.feature === 'lockeddoor' || t.feature === 'leverdoor', color: '#8a6a3a' }, { id: 'lever', test: t => t.feature === 'lever', color: '#9a8a6a' },
+  { id: 'rubble', test: t => t.feature === 'rubble', color: '#5a5346' }, { id: 'wall', test: t => !t.walkable, color: '#211d18' },
+  { id: 'cave', test: t => t.zone === 'cave', color: '#3a3f34' },
+];
+// Marker sources: each returns the markers of one kind that fall inside the view (and have been discovered).
+const MAP_MARKER_SOURCES = [
+  { id: 'settlements', collect: (view, api) => api.chunksIn(view).flatMap(c => {
+      const s = c.settlement; if (!s) return [];
+      const fp = s.footprint || 1; if (fp > 1 && (s.anchorCx !== c.cx || s.anchorCy !== c.cy)) return [];   // one marker per multi-chunk city
+      const x = fp > 1 ? s.anchorCx * CH + (fp * CH) / 2 : c.cx * CH + CH / 2, y = fp > 1 ? s.anchorCy * CH + (fp * CH) / 2 : c.cy * CH + CH / 2;
+      if (!api.seenNear(x, y, fp > 1 ? 14 : 8)) return [];
+      const m = MAP_TIER_MARKERS[String(s.type || s.tier || '').toLowerCase()] || MAP_TIER_MARKERS.village;   // settlement.type is stored capitalised ("Capital")
+      return [{ kind: 'settlement', x, y, size: m.size, color: m.color, label: s.name }];
+    }) },
+  { id: 'dungeons', collect: (view, api) => api.chunksIn(view).flatMap(c => {
+      const d = c.dungeonEntrance; if (!d || !api.seenAt(d.x, d.y)) return [];
+      return [{ kind: 'dungeon', x: d.x, y: d.y, size: 4, color: '#c07af0', label: d.name }];
+    }) },
+  { id: 'poi', collect: (view, api) => api.chunksIn(view).flatMap(c => {
+      const p = c.poi; if (!p || !api.seenAt(p.x, p.y)) return [];
+      return [{ kind: 'poi', x: p.x, y: p.y, size: 3, color: '#5ad0d0', label: p.name }];
+    }) },
+  { id: 'waypoints', collect: (view, api) => (player.waypoints || []).filter(w => !curIsDimension()).map(w => ({ kind: 'waypoint', x: w.x, y: w.y, size: 4, color: '#6ae0a0', label: w.name })) },
+];
+const MAP_LAYERS = [
+  { id: 'terrain', draw(view, api) {
+      for (let dy = -view.halfH; dy <= view.halfH; dy++) for (let dx = -view.halfW; dx <= view.halfW; dx++) {
+        const wx = view.cx + dx, wy = view.cy + dy, t = api.peek(wx, wy);
+        if (t && t.seen) view.rect(wx, wy, api.tileColor(t));
+      }
+    } },
+  { id: 'markers', setting: 'mapShowMarkers', draw(view, api) {
+      if (curIsDungeon()) return;
+      for (const m of api.markers(view)) {
+        view.dot(m.x, m.y, m.size, m.color);
+        if (view.scale >= 3 && view.labels) view.text(m.x, m.y + m.size / view.scale + 1.2, m.label, m.color);
+      }
+    } },
+  { id: 'creatures', setting: 'mapShowCreatures', draw(view, api) {
+      const vis = currentVisRadius(), near = e => Math.abs(e.x - player.x) <= vis && Math.abs(e.y - player.y) <= vis && posVisibleToPlayer(e.x, e.y);
+      for (const n of curNPCs()) if (near(n)) view.dot(n.x, n.y, 2, '#ffd36a');
+      for (const a of curAllies()) if (near(a)) view.dot(a.x, a.y, 2, '#6ad06a');
+      for (const m of curMonsters()) if (m.alive !== false && near(m)) view.dot(m.x, m.y, 2, '#ff5a4a');
+    } },
+];
+
+const GameMap = (function () {
+  const colorCache = new Map();
+  const hex = h => { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+  const toHex = (r, g, b) => '#' + [r, g, b].map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+  const isHex = h => typeof h === 'string' && /^#[0-9a-f]{6}$/i.test(h);
+  const setting = (k, d) => (settings && settings[k] != null ? settings[k] : d);
+
+  // ---- read-only world access: NEVER generates chunks ----
+  function chunkAt(cx, cy) { return curIsDimension() ? dimensionChunks.get(dimChunkKey(player.dimensionId, cx, cy)) : worldChunks.get(chunkKey(cx, cy)); }
+  function peek(x, y) {
+    if (curIsDungeon()) { const l = curDungeonLevel(); return (l && x >= 0 && y >= 0 && x < l.w && y < l.h) ? l.grid[y][x] : null; }
+    const cx = Math.floor(x / CH), cy = Math.floor(y / CH), c = chunkAt(cx, cy), row = c && c.tiles[y - cy * CH];
+    return row ? row[x - cx * CH] : null;
+  }
+  const seenAt = (x, y) => { const t = peek(x, y); return !!(t && t.seen); };
+  function seenNear(x, y, r) { for (let dy = -r; dy <= r; dy += 3) for (let dx = -r; dx <= r; dx += 3) if (seenAt(Math.round(x + dx), Math.round(y + dy))) return true; return false; }
+  function chunksIn(view) {
+    const out = [], x0 = Math.floor((view.cx - view.halfW) / CH) - 1, x1 = Math.floor((view.cx + view.halfW) / CH) + 1, y0 = Math.floor((view.cy - view.halfH) / CH) - 1, y1 = Math.floor((view.cy + view.halfH) / CH) + 1;
+    for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) { const c = chunkAt(cx, cy); if (c) out.push(c); }
+    return out;
+  }
+  function tileColor(t) {
+    const rules = curIsDungeon() ? MAP_DUNGEON_RULES : MAP_TILE_RULES;
+    for (const r of rules) if (r.test(t)) return r.color;
+    if (curIsDungeon()) return '#4a4536';
+    let c = colorCache.get(t.biome);
+    if (!c) {
+      const b = BIOMES[t.biome];
+      c = b ? (isHex(b.color) && isHex(b.bg) ? (() => { const [r1, g1, b1] = hex(b.color), [r2, g2, b2] = hex(b.bg); return toHex(r1 * 0.72 + r2 * 0.28, g1 * 0.72 + g2 * 0.28, b1 * 0.72 + b2 * 0.28); })() : b.color) : (t.walkable ? '#4a4536' : '#211d18');
+      colorCache.set(t.biome, c);
+    }
+    return c;
+  }
+  const api = { peek, seenAt, seenNear, chunksIn, tileColor };
+  api.markers = view => MAP_MARKER_SOURCES.flatMap(s => { try { return s.collect(view, api); } catch (e) { return []; } });
+
+  // ---- views: a centre tile, a tile radius and a pixel scale, plus drawing helpers in tile coordinates ----
+  function makeView(ctx, wpx, hpx, cx, cy, scale, labels) {
+    const halfW = Math.floor((wpx / scale - 1) / 2), halfH = Math.floor((hpx / scale - 1) / 2);
+    const px = x => Math.floor((x - cx + halfW) * scale), py = y => Math.floor((y - cy + halfH) * scale), sz = Math.max(1, Math.ceil(scale));
+    return {
+      ctx, cx, cy, halfW, halfH, scale, labels: !!labels, wpx, hpx,
+      rect(x, y, color) { ctx.fillStyle = color; ctx.fillRect(px(x), py(y), sz, sz); },
+      dot(x, y, size, color) {                                     // a marker `size` px wide, centred on a tile, with a dark outline
+        const s = Math.max(size, Math.round(scale * 0.9)), cxp = px(x) + Math.floor(sz / 2), cyp = py(y) + Math.floor(sz / 2);
+        ctx.fillStyle = '#000'; ctx.fillRect(cxp - Math.floor(s / 2) - 1, cyp - Math.floor(s / 2) - 1, s + 2, s + 2);
+        ctx.fillStyle = color; ctx.fillRect(cxp - Math.floor(s / 2), cyp - Math.floor(s / 2), s, s);
+      },
+      text(x, y, str, color) {
+        ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+        ctx.fillStyle = '#000'; ctx.fillText(str, px(x) + 1, py(y) + 1); ctx.fillStyle = color; ctx.fillText(str, px(x), py(y));
+      },
+    };
+  }
+  function draw(ctx, view) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, view.wpx, view.hpx);
+    for (const layer of MAP_LAYERS) {
+      if (layer.setting && setting(layer.setting, true) === false) continue;
+      try { layer.draw(view, api); } catch (e) { /* a broken layer must not break the map or the game */ }
+    }
+    // the player is always drawn last so nothing hides it
+    view.dot(player.x, player.y, 4, '#ffffff');
+  }
+
+  // ---- live minimap overlay ----
+  let canvas = null, lastSig = '';
+  function mount() {
+    if (canvas) return canvas;
+    const host = document.getElementById('canvas') && document.getElementById('canvas').parentElement; if (!host) return null;
+    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    canvas = document.createElement('canvas'); canvas.id = 'minimap';
+    canvas.style.cssText = 'position:absolute;z-index:6;pointer-events:none;image-rendering:pixelated;border:1px solid var(--line);box-shadow:0 0 8px #000a;background:#000;';
+    host.appendChild(canvas); return canvas;
+  }
+  function updateMinimap(force) {
+    try {
+      const modalOpen = !document.getElementById('modal').classList.contains('hidden'), titleEl = document.getElementById('title-screen');
+      const show = setting('minimapEnabled', true) && player && player.hp > 0 && !modalOpen && !(titleEl && !titleEl.classList.contains('hidden'));
+      if (!show) { if (canvas) { canvas.style.display = 'none'; lastSig = ''; } return; }
+      const cv = mount(); if (!cv) return;
+      const size = setting('minimapSize', 150), radius = setting('minimapRadius', 30), corner = setting('minimapCorner', 'tr');
+      const sig = [turnCount, player.x, player.y, curIsDungeon() ? 'd' + (curDungeonLevel() || {}).depth : (curIsDimension() ? player.dimensionId : 's'), size, radius, corner, setting('minimapOpacity', 85), setting('mapShowMarkers', true), setting('mapShowCreatures', true)].join('|');
+      if (!force && sig === lastSig && cv.style.display !== 'none') return;
+      lastSig = sig;
+      cv.width = size; cv.height = size; cv.style.display = 'block'; cv.style.opacity = String(setting('minimapOpacity', 85) / 100);
+      cv.style.top = corner[0] === 't' ? '8px' : 'auto'; cv.style.bottom = corner[0] === 'b' ? '8px' : 'auto';
+      cv.style.left = corner[1] === 'l' ? '8px' : 'auto'; cv.style.right = corner[1] === 'r' ? '8px' : 'auto';
+      const ctx = cv.getContext && cv.getContext('2d'); if (!ctx) return;
+      draw(ctx, makeView(ctx, size, size, player.x, player.y, size / (radius * 2 + 1), false));
+    } catch (e) { /* never break render() */ }
+  }
+
+  // ---- world map modal ----
+  const MAP_W = 760, MAP_H = 480; let wm = null;
+  function discovered() {
+    let settlements = 0, dungeons = 0;
+    if (curIsDimension()) return { settlements, dungeons };
+    for (const c of worldChunks.values()) {
+      const s = c.settlement; if (s && ((s.footprint || 1) === 1 || (s.anchorCx === c.cx && s.anchorCy === c.cy)) && seenNear(c.cx * CH + CH / 2, c.cy * CH + CH / 2, 8)) settlements++;
+      if (c.dungeonEntrance && seenAt(c.dungeonEntrance.x, c.dungeonEntrance.y)) dungeons++;
+    }
+    return { settlements, dungeons };
+  }
+  function redrawWorldMap() {
+    const cv = document.getElementById('worldmap-canvas'); if (!cv || !wm) return;
+    const ctx = cv.getContext('2d'); if (!ctx) return;
+    draw(ctx, makeView(ctx, MAP_W, MAP_H, wm.cx, wm.cy, MAP_ZOOMS[wm.zoom], true));
+    const z = document.getElementById('worldmap-zoom'); if (z) z.textContent = MAP_ZOOMS[wm.zoom] + ' px/tile';
+  }
+  function open() {
+    if (curIsDungeon()) { openDungeonMap(); return; }
+    Sound.play('uiOpen'); gameState = 'worldmap';
+    wm = { cx: player.x, cy: player.y, zoom: 2 };
+    const d = discovered(), region = curIsDimension() ? 'Another Plane' : (getKingdom(Math.floor(player.x / CH), Math.floor(player.y / CH)).name || 'Unknown Lands');
+    const html = `
+      <div style="text-align:center;color:var(--text-dim);font-size:1rem;margin-bottom:10px;">
+        ${region} &nbsp;•&nbsp; ${d.settlements} settlement${d.settlements === 1 ? '' : 's'} found &nbsp;•&nbsp; ${d.dungeons} dungeon${d.dungeons === 1 ? '' : 's'} found &nbsp;•&nbsp; <span id="worldmap-zoom"></span>
+      </div>
+      <canvas id="worldmap-canvas" width="${MAP_W}" height="${MAP_H}" style="display:block;margin:0 auto;max-width:100%;image-rendering:pixelated;border:1px solid var(--line);background:#000;"></canvas>
+      <div style="text-align:center;color:var(--text-dim);font-size:0.95rem;margin-top:10px;">
+        <span style="color:#fff">■</span> you &nbsp; <span style="color:#ffd34a">■</span> settlement &nbsp; <span style="color:#c07af0">■</span> dungeon &nbsp;
+        <span style="color:#5ad0d0">■</span> point of interest &nbsp; <span style="color:#6ae0a0">■</span> waypoint &nbsp; <span style="color:#ff5a4a">■</span> hostile
+      </div>`;
+    document.getElementById('modal-inner').classList.add('modal-wide');
+    renderModal('World Map', html, 'Arrows / WASD / hjkl pan (Shift = faster) • +/- zoom • C recentre • Esc to close.');
+    redrawWorldMap();
+  }
+  // Returns true when the key was consumed.
+  function handleKey(key) {
+    if (!wm) return false;
+    if (key === 'Escape' || key === 'M') { closeModal(); wm = null; return true; }
+    const step = Math.max(6, Math.round(90 / MAP_ZOOMS[wm.zoom])), fast = key.length === 1 && key !== key.toLowerCase() ? 4 : 1, k = key.toLowerCase();
+    if (k === 'arrowup' || k === 'w' || k === 'k') wm.cy -= step * fast;
+    else if (k === 'arrowdown' || k === 's' || k === 'j') wm.cy += step * fast;
+    else if (k === 'arrowleft' || k === 'a' || k === 'h') wm.cx -= step * fast;
+    else if (k === 'arrowright' || k === 'd' || k === 'l') wm.cx += step * fast;
+    else if (key === '+' || key === '=') wm.zoom = Math.min(MAP_ZOOMS.length - 1, wm.zoom + 1);
+    else if (key === '-' || key === '_') wm.zoom = Math.max(0, wm.zoom - 1);
+    else if (k === 'c') { wm.cx = player.x; wm.cy = player.y; }
+    else return true;
+    redrawWorldMap(); return true;
+  }
+  return { open, handleKey, updateMinimap, draw, makeView, api, toggles: MAP_TOGGLES, state: () => wm };
+})();
+
 
 // Give the new features Look-command descriptions (only where none exists, so nothing is overridden).
 for (const [id, f] of Object.entries(CIVIC_FEATURES)) if (!(id in TILE_FEATURE_DESCRIPTIONS)) TILE_FEATURE_DESCRIPTIONS[id] = f.desc;
@@ -37177,6 +37418,12 @@ function renderSettingsTab(tabId) {
     body += row('Show Damage Numbers', 'Floating combat text above hits and misses.', toggleHtml('showDamageNumbers', s.showDamageNumbers));
     body += row('Combat Effects Intensity', `Overall strength of hit flashes, particles, bolts and shake (${s.vfxIntensity === 0 ? 'off' : s.vfxIntensity + '%'}).`, sliderHtml('vfxIntensity', s.vfxIntensity, 0, 200, 10));
     for (const t of VFX.toggles) body += row(t.label, t.desc, toggleHtml(t.key, s[t.key] !== false));
+    body += row('Minimap', 'A small live map of everything you have already seen, in a corner of the play view. Shift+M opens the full map.', toggleHtml('minimapEnabled', s.minimapEnabled));
+    body += row('Minimap Size', `On-screen size of the minimap (${s.minimapSize}px).`, sliderHtml('minimapSize', s.minimapSize, 80, 280, 10));
+    body += row('Minimap Range', `How many tiles from you the minimap covers in each direction (${s.minimapRadius}).`, sliderHtml('minimapRadius', s.minimapRadius, 12, 64, 2));
+    body += row('Minimap Opacity', `How see-through the minimap is (${s.minimapOpacity}%).`, sliderHtml('minimapOpacity', s.minimapOpacity, 30, 100, 5));
+    body += row('Minimap Corner', 'Which corner of the play view it sits in.', choiceGroupHtml('minimapCorner', [{ id: 'tl', label: 'Top left' }, { id: 'tr', label: 'Top right' }, { id: 'bl', label: 'Bottom left' }, { id: 'br', label: 'Bottom right' }], s.minimapCorner));
+    for (const t of GameMap.toggles) body += row(t.label, t.desc, toggleHtml(t.key, s[t.key] !== false));
     body += row('Autosave', 'Automatically saves your game periodically.', toggleHtml('autosaveEnabled', s.autosaveEnabled));
     if (s.autosaveEnabled) body += row('Autosave Frequency', `Every ${s.autosaveInterval} turns.`, sliderHtml('autosaveInterval', s.autosaveInterval, 10, 200, 10));
     body += row('Confirm Before Quitting', 'Ask for confirmation when quitting to the title screen mid-game.', toggleHtml('confirmQuit', s.confirmQuit));
@@ -37730,7 +37977,7 @@ const GUIDE_SECTIONS = [
       ['Shift+D','Dig — then a direction, to tunnel through an ordinary wall with a pickaxe (or a heavy hammer/maul/warhammer) in hand. Takes several turns and Stamina, and stops if anything dangerous comes near. See the Dungeons tab.'],
       ['&gt; / &lt;','Descend / ascend stairs.'],
       ['m','Plant a Waystone Shard as a named fast-travel waypoint.'],
-      ['Shift+M','Dungeon map — the full layout of everything you have explored on this floor, at a glance.'],
+      ['Shift+M','Map — on the surface, the world map of everything you have explored (arrows pan, +/- zoom); underground, the layout of the current floor. A live minimap sits in the corner of the view (Settings > Gameplay).'],
       ['Shift+G / Shift+H','Auto-travel to the nearest stairs / back home.'],
       ['Shift+X','Auto-explore the current area.'],
     ])}
@@ -38957,7 +39204,7 @@ function handleKey(e) {
     if (key === 'G') { autoTravelToStairs(); return; }
     if (key === 'H') { autoTravelHome(); return; }
     if (key === 'X') { autoExplore(); return; }
-    if (key === 'M') { openDungeonMap(); return; }
+    if (key === 'M') { GameMap.open(); return; }   // dungeon map underground, world map on the surface
     if (key === '>') { useStairs(); return; }
     if (key === '<') { useStairsUp(); return; }
     if (key === '?') { openHelp(); return; }
@@ -38980,6 +39227,7 @@ function handleKey(e) {
     return;
   }
 
+  if (gameState === 'worldmap') { GameMap.handleKey(key); return; }
   if (gameState === 'dungeonmap') {
     if (key === 'Escape' || key === 'M') { closeModal(); return; }
     return;
