@@ -540,7 +540,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.7-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.8-alpha</div>
     </div>
   </div>
 
@@ -1884,6 +1884,31 @@
 //   player has SEEN. Read-only (never generates chunks), shows settlements by tier, dungeon entrances, points of interest,
 //   waypoints and visible creatures. Settings: minimap on/off, size, range, opacity, corner, marker/creature toggles.
 //   Extend via MAP_TILE_RULES / MAP_LAYERS / MAP_MARKER_SOURCES / MAP_TOGGLES.
+//
+// v0.50.8 Lighting (search "LIGHTING"). Light sources now exist: lampposts, campfires and lit doors in settlements (plus a
+//   faint glow around the player) punch soft holes in the night darkness (offscreen layer + warm additive glow), and
+//   standing in lamplight cuts the night vision penalty by 60% (currentVisRadius). Falls back to the old flat tint if
+//   disabled/unsupported. Settings: dynamicLighting, nightDarkness. Extend via LIGHT_SOURCES / LIGHT_RULES.
+//
+// v0.50.9 Aim system (search "AIM SYSTEM"). Tile targeting was mouse-only (keyboard had Esc + Enter-nearest) and gave no
+//   preview. Adds a cursor movable by keyboard (arrows/WASD/hjkl/yubn, Shift = 4 tiles, Tab/Shift+Tab cycle targets, C
+//   recentre, Enter/Space/F fire) or mouse hover, and a live preview built from the same rules as the real resolution:
+//   line of sight, exact blast area, who is caught (friendly-fire warning), pierce lines, blink/grapple landing, a caption.
+//   Enter on an untouched cursor still auto-targets the nearest enemy. Setting: aimPreview. Extend via AIM_KINDS.
+//
+// v0.50.10 Hover inspect (search "HOVER INSPECT"). A tooltip follows the mouse: creature name/level/HP bar/status effects
+//   (only while visible), items and containers, feature descriptions, and a place line (biome, or settlement + city
+//   district); a building's trade shows once its door has been seen. Registry-driven (INSPECT_SECTIONS /
+//   INSPECT_STATUSES). Settings: hoverInspect, hoverBuildingNames.
+//
+// v0.50.11 Ambient life (search "AMBIENT LIFE"). The world was still between keypresses; biome/time-aware particles now drift
+//   on their own ~24 fps overlay canvas (fireflies at night, leaves, pollen, blown snow/sand, spores, sparks), in the world
+//   frame as you walk, sleeping completely in dungeons/indoors/menus/Reduce Motion. Also: the minimap and lighting scans use a
+//   chunk-cached read-only lookup (about 35-55% cheaper per redraw). Settings: ambientLife, ambientDensity. Extend via AMBIENT_EMITTERS.
+//
+// v0.50.12 Hover tooltip now also shows poison, confusion, fear, slow, heat, frostbite, silence, radiation and sleep (the
+//   game's statusPoison/statusConfuse/... counters and the NPC asleep flag). City shape tuning: 'winged' hybrid wings widened
+//   (they were too thin to build in: 0.31x -> ~0.41x of a classic city's buildings, measured).
 //
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
@@ -16459,6 +16484,7 @@ function beginTileTargeting(kind, opts) {
   closeModal();
   pendingTarget = Object.assign({ kind }, opts);
   gameState = 'tiletarget';
+  Aim.begin(pendingTarget);   // keyboard/hover cursor + live preview (see AIM SYSTEM)
 }
 function cancelTileTargeting() { pendingTarget = null; gameState = 'playing'; closeModal(); log('You hold back.'); }
 function confirmTileTarget(wx, wy) {
@@ -16977,7 +17003,7 @@ function currentVisRadius() {
   // Day/Night Cycle: outdoors, vision shrinks gradually across dawn/dusk (see nightFactor) rather
   // than snapping instantly at the dusk/night boundary, unless the player has some form of night
   // vision. Dungeons are already dark regardless of surface time, so unaffected.
-  if (!curIsDungeon() && !(getBuff('nightvision') > 0) && !player.permaNightVision) radius -= Math.round(5 * nightFactor());
+  if (!curIsDungeon() && !(getBuff('nightvision') > 0) && !player.permaNightVision) radius -= Math.round(5 * nightFactor() * (Lighting.playerLit() ? 0.4 : 1));   // lamplight softens the night vision penalty
   radius += player.visionBonus || 0;
   if (curIsDungeon() && player.permaNightVision) radius += 3;
   if (getBuff('nightvision') > 0) radius += 5;
@@ -17062,6 +17088,10 @@ const DEFAULT_SETTINGS = {
   combatTextScale: 100,
   minimapEnabled: true, minimapSize: 150, minimapRadius: 30, minimapOpacity: 85, minimapCorner: 'tr',   // live minimap overlay (see MAP SYSTEM)
   mapShowMarkers: true, mapShowCreatures: true,
+  ambientLife: true, ambientDensity: 100,          // animated ambient particles between turns (see AMBIENT LIFE)
+  hoverInspect: true, hoverBuildingNames: true,   // mouse-hover tooltips (see HOVER INSPECT)
+  aimPreview: true,                            // cursor preview while aiming spells/throws/blinks (see AIM SYSTEM)
+  dynamicLighting: true, nightDarkness: 100,   // light sources at night (see LIGHTING); 100 = default darkness
   vfxIntensity: 60,          // combat effects strength in % (default 60 = subtle; 100 = full), 0 = all effects off (see VFX ENGINE; reduceMotion also disables them)
   vfxHitFlash: true, vfxParticles: true, vfxDeathBursts: true, vfxProjectiles: true, vfxRings: true, vfxShake: true,
   monsterHealthBars: true,   // small bars under damaged enemies, with a draining 'ghost' of recent damage
@@ -22402,6 +22432,9 @@ function render() {
     ctx.fillText('@', playerPx, playerPy);
   }
   VFX.draw(ctx, v); // flashes, particles, bolts, rings, enemy health bars -- under the floating numbers
+  Aim.draw(ctx, v); // targeting preview: path, blast area, who is caught, caption
+  Inspect.tick(); // hover tooltip: mounts once, refreshes when the turn advances
+  AmbientLife.update(); // biome-aware ambient particles on their own overlay canvas (wakes/sleeps its own loop)
   GameMap.updateMinimap(); // live minimap overlay (cheap: redraws only when the turn/position/settings change)
 
   if (floatingTexts.length) {
@@ -22434,7 +22467,9 @@ function render() {
   // radius already shrinks (see currentVisRadius), this is just the visual read on top of that.
   // Continuous with nightFactor() rather than 4 fixed buckets, so it darkens/lightens gradually
   // turn-by-turn across dawn/dusk instead of snapping at each phase boundary.
-  if (!curIsDungeon()) {
+  // Lighting.drawNight paints the night with light holes/glows around lampposts, campfires and lit doors; it returns
+  // false when disabled or unsupported, in which case the original flat tint below is used unchanged.
+  if (!curIsDungeon() && !Lighting.drawNight(ctx, v, canvas)) {
     const tint = 0.38 * nightFactor();
     if (tint > 0) {
       ctx.save();
@@ -25767,8 +25802,8 @@ const CITY_SHAPE_ARCHETYPES = [
   { id: 'tee', weight: 7, make: c => [c.rect(0.03, 0.03, 0.97, 0.43), c.rect(0.3, 0.38, 0.7, 0.97)] },
   { id: 'ushape', weight: 5, capitalOk: false, make: c => [c.rect(0.03, 0.03, 0.4, 0.97), c.rect(0.6, 0.03, 0.97, 0.97), c.rect(0.03, 0.6, 0.97, 0.97)] },
   { id: 'citadel', weight: 8, make: c => [c.blob(0.4, 0.42, 0.4, { rings: [0.55], gates: 2 }), c.rect(0.52, 0.5, 0.97, 0.97)] },
-  { id: 'twin', weight: 6, make: c => [c.blob(0.3, 0.5, 0.36, { rings: [], gates: 2 }), c.blob(0.7, 0.5, 0.36, { rings: [], gates: 2 })] },
-  { id: 'winged', weight: 6, make: c => [c.blob(0.5, 0.5, 0.38, { rings: [0.55], gates: 2 }), c.rect(0.03, 0.35, 0.97, 0.65)] },
+  { id: 'twin', weight: 6, make: c => [c.blob(0.3, 0.5, 0.36, { rings: [], gates: 2 }), c.blob(0.7, 0.5, 0.36, { rings: [], gates: 2 })] },   // no ring roads: measured, they cost ~20% of the buildings
+  { id: 'winged', weight: 6, make: c => [c.blob(0.5, 0.5, 0.38, { rings: [0.55], gates: 2 }), c.rect(0.03, 0.29, 0.97, 0.71)] },   // wings >= ~18 tiles wide at city size: a street plus a 3-tile wall apron leaves no room to build in anything narrower
 ];
 
 const CityShape = (function () {
@@ -26062,9 +26097,15 @@ const GameMap = (function () {
 
   // ---- read-only world access: NEVER generates chunks ----
   function chunkAt(cx, cy) { return curIsDimension() ? dimensionChunks.get(dimChunkKey(player.dimensionId, cx, cy)) : worldChunks.get(chunkKey(cx, cy)); }
+  // One-entry chunk cache: neighbouring tiles share a chunk, so most lookups skip the string-keyed Map. Reset by resetCache()
+  // at the start of every draw/scan (chunks are only replaced by load/new-game, never mid-draw).
+  let pcx = NaN, pcy = NaN, pc = null;
+  const resetCache = () => { pcx = NaN; pcy = NaN; pc = null; };
   function peek(x, y) {
     if (curIsDungeon()) { const l = curDungeonLevel(); return (l && x >= 0 && y >= 0 && x < l.w && y < l.h) ? l.grid[y][x] : null; }
-    const cx = Math.floor(x / CH), cy = Math.floor(y / CH), c = chunkAt(cx, cy), row = c && c.tiles[y - cy * CH];
+    const cx = Math.floor(x / CH), cy = Math.floor(y / CH);
+    if (cx !== pcx || cy !== pcy) { pcx = cx; pcy = cy; pc = chunkAt(cx, cy) || null; }
+    const row = pc && pc.tiles[y - cy * CH];
     return row ? row[x - cx * CH] : null;
   }
   const seenAt = (x, y) => { const t = peek(x, y); return !!(t && t.seen); };
@@ -26075,9 +26116,13 @@ const GameMap = (function () {
     return out;
   }
   function tileColor(t) {
-    const rules = curIsDungeon() ? MAP_DUNGEON_RULES : MAP_TILE_RULES;
-    for (const r of rules) if (r.test(t)) return r.color;
-    if (curIsDungeon()) return '#4a4536';
+    const dungeon = curIsDungeon();
+    // fast path: a plain surface tile (no feature, building or street) can match none of MAP_TILE_RULES
+    if (dungeon || t.feature || t.street || (t.building !== null && t.building !== undefined)) {
+      const rules = dungeon ? MAP_DUNGEON_RULES : MAP_TILE_RULES;
+      for (const r of rules) if (r.test(t)) return r.color;
+    }
+    if (dungeon) return '#4a4536';
     let c = colorCache.get(t.biome);
     if (!c) {
       const b = BIOMES[t.biome];
@@ -26086,7 +26131,7 @@ const GameMap = (function () {
     }
     return c;
   }
-  const api = { peek, seenAt, seenNear, chunksIn, tileColor };
+  const api = { peek, seenAt, seenNear, chunksIn, tileColor, resetCache };
   api.markers = view => MAP_MARKER_SOURCES.flatMap(s => { try { return s.collect(view, api); } catch (e) { return []; } });
 
   // ---- views: a centre tile, a tile radius and a pixel scale, plus drawing helpers in tile coordinates ----
@@ -26108,6 +26153,7 @@ const GameMap = (function () {
     };
   }
   function draw(ctx, view) {
+    resetCache();
     ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = '#000'; ctx.fillRect(0, 0, view.wpx, view.hpx);
     for (const layer of MAP_LAYERS) {
@@ -26198,6 +26244,549 @@ const GameMap = (function () {
   }
   return { open, handleKey, updateMinimap, draw, makeView, api, toggles: MAP_TOGGLES, state: () => wm };
 })();
+
+// ===================== LIGHTING: light sources at night (v0.50.8) =====================
+// Night used to be one flat dark overlay and nothing in the world gave light, so the lampposts in cities were
+// decoration and a torch-lit street looked exactly like open wilderness. This adds real light:
+//   * VISUAL   the night darkness is drawn on an offscreen layer with soft holes cut out for every light source, then a
+//              warm additive glow is laid over each, so lit streets, doors and campfires pool out of the dark.
+//   * GAMEPLAY standing in lamplight cuts the night vision penalty (see Lighting.playerLit in currentVisRadius), so a
+//              lit city street really is easier to navigate than the dark road outside.
+// Light only comes from tiles the player has SEEN (no spoilers), only outdoors/dimensions (dungeons are lit by their own
+// rules), and a failure anywhere falls back to the old flat tint so lighting can never break rendering.
+// EXTENDING:
+//   * A feature that glows ...... add it to LIGHT_SOURCES keyed by tile.feature.
+//   * A conditional light ....... push { id, test(tile), radius, strength, color } onto LIGHT_RULES.
+//   * Tune the mood ............. LIGHT_NIGHT_BASE (darkness at full night), PLAYER_LIGHT, per-source strength/radius.
+const LIGHT_SOURCES = {
+  lamppost: { radius: 6, strength: 0.95, color: '#ffbf66' },
+  campfire: { radius: 7, strength: 1.0, color: '#ff9a4a', flicker: 0.12 },
+};
+const LIGHT_RULES = [
+  { id: 'settlement-door', test: t => t.feature === 'door' && t.building !== null && t.building !== undefined, radius: 3.2, strength: 0.7, color: '#ffc77a' },
+];
+const PLAYER_LIGHT = { radius: 3, strength: 0.5, color: '#ffe0b0' };   // a faint personal glow so you are never in pitch black
+const LIGHT_NIGHT_BASE = 0.42;                                         // overlay opacity at full night (before the Night Darkness setting)
+const LIGHT_MAX_SOURCES = 160;
+
+const Lighting = (function () {
+  let off = null, cache = { key: '', lights: [] }, litCache = { key: '', val: false };
+  const setting = (k, d) => (settings && settings[k] != null ? settings[k] : d);
+  const rgb = h => { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+  const enabled = () => setting('dynamicLighting', true) && !curIsDungeon();
+
+  function sourceAt(t) {
+    if (!t) return null;
+    const f = t.feature && LIGHT_SOURCES[t.feature]; if (f) return f;
+    for (const r of LIGHT_RULES) if (r.test(t)) return r;
+    return null;
+  }
+  // Every light in (or just beyond) the viewport that the player has seen, as { x, y, radius, strength, color } in tile coords.
+  function sources(v) {
+    const key = [turnCount, player.x, player.y, v.halfW, v.halfH, curIsDimension() ? player.dimensionId : 's'].join('|');
+    if (cache.key === key) return cache.lights;
+    const out = [], pad = 8; GameMap.api.resetCache();
+    for (let dy = -v.halfH - pad; dy <= v.halfH + pad && out.length < LIGHT_MAX_SOURCES; dy++) for (let dx = -v.halfW - pad; dx <= v.halfW + pad; dx++) {
+      const t = GameMap.api.peek(player.x + dx, player.y + dy);   // chunk-cached, read-only lookup (curTileAt would re-resolve the chunk per tile)
+      if (!t || !t.seen) continue;
+      const s = sourceAt(t); if (s) out.push({ x: player.x + dx, y: player.y + dy, radius: s.radius, strength: s.strength, color: s.color, flicker: s.flicker || 0 });
+    }
+    cache = { key, lights: out }; return out;
+  }
+  // Is this tile bathed in lamplight? (used to soften the night vision penalty)
+  function litAt(x, y) {
+    if (!enabled()) return false;
+    const key = turnCount + ':' + x + ',' + y; if (litCache.key === key) return litCache.val;
+    let lit = false;
+    for (let dy = -7; dy <= 7 && !lit; dy++) for (let dx = -7; dx <= 7; dx++) {
+      const s = sourceAt(curTileAt(x + dx, y + dy));
+      if (s && s.strength >= 0.6 && Math.hypot(dx, dy) <= s.radius * 0.85) { lit = true; break; }
+    }
+    litCache = { key, val: lit }; return lit;
+  }
+  const playerLit = () => { try { return litAt(player.x, player.y); } catch (e) { return false; } };
+
+  // Draws the night. Returns false when it declines (disabled / unsupported canvas) so the caller uses the legacy flat tint.
+  function drawNight(ctx, v, canvas) {
+    if (!enabled()) return false;
+    const nf = nightFactor(), tint = LIGHT_NIGHT_BASE * nf * (setting('nightDarkness', 100) / 100);
+    if (tint <= 0) return true;                                      // daytime: nothing to draw, and that is the right answer
+    try {
+      const W = canvas.width, H = canvas.height;
+      if (!off) off = document.createElement('canvas');
+      if (off.width !== W || off.height !== H) { off.width = W; off.height = H; }
+      const o = off.getContext('2d'); if (!o || !o.createRadialGradient || !ctx.createRadialGradient) return false;
+      const lights = sources(v).concat([{ x: player.x, y: player.y, radius: PLAYER_LIGHT.radius, strength: PLAYER_LIGHT.strength, color: PLAYER_LIGHT.color, flicker: 0 }]);
+      const sx = x => (x - player.x + v.halfW) * v.ts + v.ts / 2, sy = y => (y - player.y + v.halfH) * v.ts + v.ts / 2;
+      const calm = typeof settings !== 'undefined' && settings && settings.reduceMotion, now = (typeof performance !== 'undefined' ? performance.now() : 0);
+      const rad = l => l.radius * v.ts * (l.flicker && !calm ? 1 + l.flicker * Math.sin(now * 0.006 + l.x * 1.7 + l.y * 2.3) : 1);
+      // 1) darkness layer with a soft hole punched for each light
+      o.globalCompositeOperation = 'source-over'; o.clearRect(0, 0, W, H);
+      o.fillStyle = `rgba(6,10,30,${tint})`; o.fillRect(0, 0, W, H);
+      o.globalCompositeOperation = 'destination-out';
+      for (const l of lights) {
+        const px = sx(l.x), py = sy(l.y), r = rad(l); if (px < -r || py < -r || px > W + r || py > H + r) continue;
+        const g = o.createRadialGradient(px, py, r * 0.1, px, py, r);
+        g.addColorStop(0, `rgba(0,0,0,${l.strength})`); g.addColorStop(0.55, `rgba(0,0,0,${l.strength * 0.55})`); g.addColorStop(1, 'rgba(0,0,0,0)');
+        o.fillStyle = g; o.fillRect(px - r, py - r, r * 2, r * 2);
+      }
+      o.globalCompositeOperation = 'source-over';
+      ctx.save(); ctx.drawImage(off, 0, 0);
+      // 2) warm additive glow over each light
+      ctx.globalCompositeOperation = 'lighter';
+      const glow = Math.min(1, nf * 1.3) * 0.2;
+      for (const l of lights) {
+        if (l.color === PLAYER_LIGHT.color && l.x === player.x && l.y === player.y) continue;   // the personal glow only lifts the dark, it doesn't tint
+        const px = sx(l.x), py = sy(l.y), r = rad(l) * 0.9; if (px < -r || py < -r || px > W + r || py > H + r) continue;
+        const [cr, cg, cb] = rgb(l.color), g = ctx.createRadialGradient(px, py, 0, px, py, r);
+        g.addColorStop(0, `rgba(${cr},${cg},${cb},${glow * l.strength})`); g.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+        ctx.fillStyle = g; ctx.fillRect(px - r, py - r, r * 2, r * 2);
+      }
+      ctx.restore(); return true;
+    } catch (e) { return false; }
+  }
+  return { drawNight, litAt, playerLit, sources, sourceAt, enabled };
+})();
+
+// ===================== AIM SYSTEM: cursor + live previews for tile targeting (v0.50.9) =====================
+// Tile targeting ("click ANY tile you can see") only worked with a mouse -- the keyboard had Esc and Enter, and Enter
+// just auto-picked the nearest enemy -- and nothing showed what a spell or grenade would actually do before you
+// committed. In a game with friendly-fire area spells, spreading fire and gas, that is a costly way to find out.
+// This module adds:
+//   * a CURSOR you can move with the keyboard (arrows / WASD / hjkl / yubn, Shift = 4 tiles, Tab cycles targets,
+//     C recentres, Enter/Space/F fires) or by hovering the mouse; clicking still fires exactly as before;
+//   * a live PREVIEW computed from the SAME rules the real resolution uses: line of sight, the exact blast area (and
+//     which creatures it catches, with a warning if it would catch you or an ally), pierce lines, blink/grapple landing;
+//   * a one-line CAPTION: spell/item name, range, what is under the cursor, and why a shot would fail.
+// Enter right after starting still behaves as it always did (auto-targets the nearest enemy) until you deliberately move.
+// EXTENDING: add an entry to AIM_KINDS keyed by pendingTarget.kind. footprint(p, x, y, api) returns
+//   { tiles: [[x, y], ...], path: [[x, y], ...], landing: [x, y] | null, damaging: bool, note: string }
+// and the engine adds the range / line-of-sight validity, the creature tally and the drawing.
+const AIM_AOE_THROWS = new Set(['aoefire', 'aoefrost', 'oilsplash', 'aoepoison', 'aoeconfuse']);
+const AIM_REL_COLORS = { foe: '#ff4a3a', ally: '#58e058', self: '#4ad8ff', neutral: '#ffc23a' };
+const AIM_MOVE_KEYS = {
+  ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+  w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0], k: [0, -1], j: [0, 1], h: [-1, 0], l: [1, 0],
+  y: [-1, -1], u: [1, -1], b: [-1, 1], n: [1, 1],
+};
+const AIM_KINDS = {
+  spell: {
+    color: '#ffe3a0', title: p => p.spell.name,          // warm white: the game's own in-range tint is red, so the blast must stand apart from it
+    footprint(p, x, y, api) {
+      const s = p.spell, damaging = ['damage', 'drain', 'debuff', 'execute', 'smite', 'lifetap'].includes(s.type);
+      if (s.aoe) return { tiles: tilesInRadius(x, y, s.aoeRadius || 1).filter(([tx, ty]) => hasLOS(x, y, tx, ty)), damaging };   // blast never punches through walls from its centre
+      if (s.pierceLine) {                                                                                                         // runs along the line, stops at the first wall
+        const line = api.line(player.x, player.y, x, y), tiles = [];
+        for (const [lx, ly] of line) { if (!curWalkable(lx, ly) && !(lx === x && ly === y)) break; tiles.push([lx, ly]); }
+        return { tiles, damaging };
+      }
+      return { tiles: [[x, y]], damaging };
+    },
+  },
+  throw: {
+    color: '#fff0b8', title: p => p.item.name,
+    footprint(p, x, y) {
+      const eff = p.item.effect, radius = (p.item.radius || 3) + (player.throwRadiusBonus || 0);
+      if (!AIM_AOE_THROWS.has(eff)) return { tiles: [[x, y]], damaging: true };
+      const note = eff === 'aoefire' ? 'fire may spread' : (eff === 'aoepoison' || eff === 'aoeconfuse') ? 'leaves a gas cloud' : '';
+      return { tiles: tilesInRadius(x, y, radius), damaging: eff === 'aoefire' || eff === 'aoefrost', note };
+    },
+  },
+  blink: {
+    color: '#5ae0ff', title: p => p.spell.name,
+    footprint(p, x, y, api) {
+      if (p.spell && BLINK_GRAPPLE_STYLE.has(p.spell.id)) {                       // reels you along the line, stopping before walls / the first creature
+        const line = api.line(player.x, player.y, x, y); let land = null;
+        for (const [lx, ly] of line) { const b = entityAt(lx, ly); if ((b && b !== player) || !curWalkable(lx, ly)) break; land = [lx, ly]; }
+        return { tiles: [], landing: land, damaging: false, note: land ? '' : 'nothing to grapple onto' };
+      }
+      const ok = curWalkable(x, y) && !entityAt(x, y);
+      return { tiles: [], landing: ok ? [x, y] : null, damaging: false, note: ok ? '' : "can't land there" };
+    },
+  },
+  companion_goto: { color: '#6ae06a', title: () => 'Send companion', footprint: (p, x, y) => ({ tiles: [[x, y]], damaging: false }) },
+};
+
+const Aim = (function () {
+  let aim = null, listening = false, hints = 0;
+  const setting = (k, d) => (settings && settings[k] != null ? settings[k] : d);
+  const kindOf = p => AIM_KINDS[p && p.kind];
+  const active = () => !!(aim && gameState === 'tiletarget' && pendingTarget);
+
+  // ---- rules helpers (mirror the game's own resolution) ----
+  const api = {
+    line(x0, y0, x1, y1) {                                                   // same stepping the game uses for pierce lines / grapples
+      const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) || 1, out = [];
+      for (let i = 1; i <= steps; i++) out.push([Math.round(x0 + (x1 - x0) * i / steps), Math.round(y0 + (y1 - y0) * i / steps)]);
+      return out;
+    },
+    relation(e) {
+      if (e === player) return 'self';
+      if (curAllies().includes(e)) return 'ally';
+      if (curMonsters().includes(e) || e.hostile) return 'foe';
+      return 'neutral';
+    },
+  };
+  function targets() {                                                       // hostile creatures you could shoot right now, nearest first
+    const p = pendingTarget, out = [];
+    for (const m of curMonsters()) if (m.alive !== false && chebyshev(m.x, m.y, player.x, player.y) <= p.range && hasLOS(player.x, player.y, m.x, m.y)) out.push(m);
+    for (const n of curNPCs()) if (n.alive !== false && n.hostile && chebyshev(n.x, n.y, player.x, player.y) <= p.range && hasLOS(player.x, player.y, n.x, n.y)) out.push(n);
+    return out.sort((a, b) => chebyshev(a.x, a.y, player.x, player.y) - chebyshev(b.x, b.y, player.x, player.y) || a.x - b.x || a.y - b.y);
+  }
+  // Everything the UI shows about aiming at (x, y): validity, footprint, who gets caught, a caption.
+  function analyze(x, y) {
+    const p = pendingTarget, kind = kindOf(p); if (!kind) return null;
+    const dist = chebyshev(x, y, player.x, player.y), inRange = dist <= p.range;
+    const ignoreLOS = p.kind === 'blink' && p.spell && BLINK_IGNORE_LOS.has(p.spell.id), los = ignoreLOS || hasLOS(player.x, player.y, x, y);
+    const fp = kind.footprint(p, x, y, api) || { tiles: [] };
+    const hits = { foe: [], ally: [], self: [], neutral: [] };
+    const seen = new Set();
+    for (const [tx, ty] of fp.tiles) { const e = entityAt(tx, ty); if (e && e.alive !== false && !seen.has(e)) { seen.add(e); hits[api.relation(e)].push(e); } }
+    if (p.kind === 'throw' && AIM_AOE_THROWS.has(p.item.effect)) {            // grenades hurt only hostiles, in a Chebyshev square
+      hits.foe = hostilesWithinRadius(x, y, (p.item.radius || 3) + (player.throwRadiusBonus || 0)); hits.self = []; hits.ally = []; hits.neutral = [];
+    }
+    const under = entityAt(x, y), warnings = [];
+    if (fp.damaging && p.kind === 'spell') { if (hits.self.length) warnings.push('includes YOU'); if (hits.ally.length) warnings.push('includes ' + hits.ally.length + ' ally' + (hits.ally.length > 1 ? 's' : '')); }
+    const ok = inRange && los && !(p.kind === 'blink' && !fp.landing);
+    const problem = !inRange ? 'too far' : !los ? 'no clear line of sight' : (p.kind === 'blink' && !fp.landing ? fp.note : '');
+    return { x, y, dist, inRange, los, ok, fp, hits, under, warnings, problem, kind, color: kind.color, title: kind.title(p) };
+  }
+  function clampToRange(x, y) {
+    const r = pendingTarget.range, dx = Math.max(-r, Math.min(r, x - player.x)), dy = Math.max(-r, Math.min(r, y - player.y));
+    return [player.x + dx, player.y + dy];
+  }
+
+  // ---- lifecycle & input ----
+  function onMouse(evt) {
+    if (!active()) return;
+    const rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : { left: 0, top: 0 }, v = curView();
+    aim.x = player.x + Math.floor((evt.clientX - rect.left) / v.ts) - v.halfW; aim.y = player.y + Math.floor((evt.clientY - rect.top) / v.ts) - v.halfH;
+    aim.moved = true; render();
+  }
+  function begin(p) {
+    if (!setting('aimPreview', true) || !kindOf(p)) { aim = null; return; }
+    const t = targets()[0];
+    aim = { x: t ? t.x : player.x, y: t ? t.y : player.y, moved: false };
+    if (!listening && canvas && canvas.addEventListener) { canvas.addEventListener('mousemove', onMouse); listening = true; }
+    if (hints++ < 2) log('Aim: arrows/WASD move the cursor (Shift = faster), Tab cycles targets, Enter fires, Esc cancels. The preview shows what will be hit.');
+  }
+  // Returns true when the key was consumed.
+  function handleKey(e, key) {
+    if (!active()) return false;
+    const mv = AIM_MOVE_KEYS[key] || AIM_MOVE_KEYS[key.toLowerCase()];
+    if (mv && !(e.ctrlKey || e.metaKey || e.altKey)) {
+      e.preventDefault(); const step = (e.shiftKey || (key.length === 1 && key !== key.toLowerCase())) ? 4 : 1;
+      [aim.x, aim.y] = clampToRange(aim.x + mv[0] * step, aim.y + mv[1] * step); aim.moved = true; render(); return true;
+    }
+    if (key === 'Tab') {
+      e.preventDefault(); const list = targets(); if (!list.length) { log('No enemy in range to cycle to.'); return true; }
+      const cur = list.findIndex(t => t.x === aim.x && t.y === aim.y), next = (cur + (e.shiftKey ? -1 : 1) + list.length) % list.length;
+      aim.x = list[next].x; aim.y = list[next].y; aim.moved = true; render(); return true;
+    }
+    if (key === 'c' || key === 'C' || key === 'Home') { aim.x = player.x; aim.y = player.y; aim.moved = true; render(); return true; }
+    if ((key === 'Enter' || key === ' ' || key === 'f' || key === 'F') && aim.moved) { e.preventDefault(); confirmTileTarget(aim.x, aim.y); return true; }
+    return false;                                                            // untouched cursor: Enter keeps its old "nearest enemy" behaviour
+  }
+
+  // ---- drawing (fillRect/fillText only, so any canvas works; failures never break render) ----
+  function frame(ctx, px, py, ts, color, w) { ctx.fillStyle = color; ctx.fillRect(px, py, ts, w); ctx.fillRect(px, py + ts - w, ts, w); ctx.fillRect(px, py, w, ts); ctx.fillRect(px + ts - w, py, w, ts); }
+  function draw(ctx, v) {
+    if (!active() || !setting('aimPreview', true)) return;
+    try {
+      const a = analyze(aim.x, aim.y); if (!a) return;
+      const sx = x => (x - player.x + v.halfW) * v.ts, sy = y => (y - player.y + v.halfH) * v.ts, ts = v.ts, w = Math.max(2, Math.round(ts / 10));
+      ctx.save();
+      // 1) the line from you to the cursor (green = clear, red = blocked / out of range)
+      ctx.globalAlpha = 0.3; ctx.fillStyle = a.ok ? '#9be09b' : '#ff6a5a';
+      for (const [lx, ly] of api.line(player.x, player.y, a.x, a.y)) ctx.fillRect(sx(lx) + ts * 0.3, sy(ly) + ts * 0.3, ts * 0.4, ts * 0.4);
+      // 2) the footprint
+      ctx.globalAlpha = a.ok ? 0.5 : 0.2; ctx.fillStyle = a.color;
+      for (const [tx, ty] of a.fp.tiles) ctx.fillRect(sx(tx), sy(ty), ts, ts);
+      ctx.globalAlpha = 0.9;
+      if (a.fp.landing) frame(ctx, sx(a.fp.landing[0]), sy(a.fp.landing[1]), ts, '#5ae0ff', w);
+      // 3) a frame around every creature caught, coloured by who they are to you
+      for (const rel of ['foe', 'ally', 'self', 'neutral']) for (const e of a.hits[rel]) frame(ctx, sx(e.x), sy(e.y), ts, AIM_REL_COLORS[rel], w);
+      // 4) the cursor itself
+      frame(ctx, sx(a.x), sy(a.y), ts, a.ok ? '#ffffff' : '#ff5a4a', w + 1);
+      // 5) caption
+      const lines = [`${a.title}  •  ${Math.min(a.dist, 99)}/${pendingTarget.range} tiles` + (a.ok ? '' : `  •  ${a.problem}`)];
+      if (a.under && a.under !== player) lines.push(`${a.under.name || 'Something'}` + (a.under.maxHp ? `  (${Math.max(0, Math.round(a.under.hp))}/${a.under.maxHp})` : '') + `  –  ${api.relation(a.under)}`);
+      const caught = a.hits.foe.length;
+      if (a.fp.tiles.length > 1 || a.fp.damaging) lines.push(`${caught} enem${caught === 1 ? 'y' : 'ies'} in the area` + (a.fp.note ? `  •  ${a.fp.note}` : ''));
+      else if (a.fp.note) lines.push(a.fp.note);
+      if (a.warnings.length) lines.push('WARNING: ' + a.warnings.join(', '));
+      const fs = Math.max(12, Math.round(ts * 0.62)), lh = fs + 4, wid = Math.min(v.canvasW - 8, Math.max(...lines.map(s => s.length)) * fs * 0.56 + 20), cx = v.canvasW / 2, top = v.canvasH - lines.length * lh - 14;
+      ctx.globalAlpha = 0.82; ctx.fillStyle = '#000'; ctx.fillRect(cx - wid / 2, top - 4, wid, lines.length * lh + 8);
+      ctx.globalAlpha = 1; ctx.font = `bold ${fs}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      lines.forEach((s, i) => { ctx.fillStyle = s.startsWith('WARNING') ? '#ff6a4a' : (i === 0 ? (a.ok ? '#ffffff' : '#ff8a7a') : '#d0c8b0'); ctx.fillText(s, cx, top + i * lh); });
+      ctx.restore();
+    } catch (e) { /* the preview must never break render() */ }
+  }
+  return { begin, handleKey, draw, analyze, targets, cursor: () => (active() ? { x: aim.x, y: aim.y, moved: aim.moved } : null), onMouse, kinds: AIM_KINDS };
+})();
+
+// ===================== HOVER INSPECT: tooltips for whatever is under the mouse (v0.50.10) =====================
+// Inspecting anything meant clicking it and reading a modal. A tooltip follows the mouse instead, so you can sweep the
+// cursor across a street and read it. It shows ONLY what the player could actually know:
+//   * creatures only while currently visible (no x-ray through walls); everything else only on tiles already seen;
+//   * a building's role (blacksmith, inn, ...) only once its door has been seen, like a sign outside the shop.
+// SECTIONS are a registry: each is { id, build(ctx) } and returns an HTML string or null; they are joined in order.
+// EXTENDING: push a new section onto INSPECT_SECTIONS (ctx has x, y, tile, visible, chunk, entity, relation); add a
+// status effect by adding a [field, label] pair to INSPECT_STATUSES. Settings: hoverInspect, hoverBuildingNames.
+const INSPECT_STATUSES = [
+  ['frozenSolidTurns', 'Frozen solid'], ['frozenTurns', 'Chilled'], ['stunnedTurns', 'Stunned'], ['bleedTurns', 'Bleeding'],
+  ['burningTurns', 'Burning'], ['oiledTurns', 'Oiled'], ['wetTurns', 'Wet'], ['charmedTurns', 'Charmed'], ['exposedTurns', 'Exposed'],
+  ['statusPoison', 'Poisoned'], ['statusConfuse', 'Confused'], ['statusFear', 'Terrified'], ['statusSlow', 'Slowed'],
+  ['statusHeat', 'Overheated'], ['statusChill', 'Frostbitten'], ['statusSilence', 'Silenced'], ['statusRadiation', 'Irradiated'],
+];
+const INSPECT_FLAGS = [['asleep', 'Asleep']];                   // boolean states
+const INSPECT_REL = { foe: ['#ff6a5a', 'hostile'], ally: ['#6ae06a', 'ally'], neutral: ['#ffc23a', 'neutral'], self: ['#4ad8ff', 'you'] };
+const INSPECT_SECTIONS = [
+  { id: 'creature', build(c) {
+      const e = c.entity; if (!e || !c.visible) return null;
+      const rel = INSPECT_REL[c.relation] || INSPECT_REL.neutral;
+      let html = `<div style="color:${rel[0]};font-weight:bold">${escapeHtml(e.glyph || '')} ${escapeHtml(e.name || 'Something')}${e.level ? ' &middot; Lv ' + e.level : ''} <span style="font-weight:normal;opacity:.8">(${rel[1]})</span></div>`;
+      if (e.maxHp) {
+        const f = Math.max(0, Math.min(1, e.hp / e.maxHp)), n = 12, on = Math.round(f * n);
+        html += `<div><span style="color:${f > 0.5 ? '#6ac04a' : f > 0.25 ? '#e0c34a' : '#d04030'}">${'█'.repeat(on)}</span><span style="opacity:.3">${'█'.repeat(n - on)}</span> ${Math.max(0, Math.round(e.hp))}/${e.maxHp}</div>`;
+      }
+      const st = INSPECT_STATUSES.filter(([k]) => e[k] > 0).map(([, l]) => l).concat(INSPECT_FLAGS.filter(([k]) => e[k] === true).map(([, l]) => l));
+      if (st.length) html += `<div style="color:#d0a050">${st.join(', ')}</div>`;
+      return html;
+    } },
+  { id: 'items', build(c) {
+      if (!c.visible) return null;
+      const names = itemsAt(c.x, c.y).filter(i => i.type !== 'corpse').map(i => i.name), cont = containersAt(c.x, c.y).map(k => k.name + (k.opened ? ' (opened)' : ''));
+      const corpse = itemsAt(c.x, c.y).some(i => i.type === 'corpse');
+      const parts = [];
+      if (cont.length) parts.push('<div>' + escapeHtml(cont.join(', ')) + '</div>');
+      if (names.length) parts.push('<div>' + escapeHtml(names.slice(0, 3).join(', ')) + (names.length > 3 ? ` <span style="opacity:.7">+${names.length - 3} more</span>` : '') + '</div>');
+      if (corpse) parts.push('<div style="opacity:.7">a corpse</div>');
+      return parts.join('') || null;
+    } },
+  { id: 'feature', build(c) {
+      const f = c.tile.feature; if (!f || c.entity) return null;
+      const d = TILE_FEATURE_DESCRIPTIONS[f]; if (!d || ['road', 'floor', 'wall', 'door', 'gate', 'furniture'].includes(f)) return null;
+      const first = String(d).split(/(?<=[.!?])\s/)[0];
+      return `<div style="opacity:.85">${escapeHtml(first.length > 110 ? first.slice(0, 107) + '…' : first)}</div>`;
+    } },
+  { id: 'building', build(c) {
+      if (!settingOn('hoverBuildingNames') || c.tile.building === null || c.tile.building === undefined || !c.chunk || !c.chunk.settlement) return null;
+      const b = c.chunk.settlement.buildings[c.tile.building]; if (!b) return null;
+      const label = buildingRoleLabel(b.role); if (!label) return null;
+      // a role is only "posted" once the player has seen the way in
+      let doorTile = null;                                               // building records don't store the door: find it in the footprint
+      for (let dy = 0; dy < b.h && !doorTile; dy++) for (let dx = 0; dx < b.w; dx++) { const q = c.chunk.tiles[b.y + dy] && c.chunk.tiles[b.y + dy][b.x + dx]; if (q && q.feature === 'door') { doorTile = q; break; } }
+      const known = doorTile ? doorTile.seen : c.tile.seen;
+      return known ? `<div style="color:#e8c070">${escapeHtml(label)}</div>` : null;
+    } },
+  { id: 'place', build(c) {
+      const t = c.tile, bi = BIOMES[t.biome], parts = [];
+      const s = c.chunk && c.chunk.settlement, inCity = s && (t.street || t.building !== null || t.feature === 'gate' || t.biome === 'cobblestone');
+      if (inCity) { parts.push(escapeHtml(s.name)); if (s.district && s.district.label) parts.push(escapeHtml(s.district.label)); }
+      else if (bi && !c.entity) parts.push(escapeHtml(bi.name));
+      return parts.length ? `<div style="opacity:.75;font-size:.92em">${parts.join(' &bull; ')}</div>` : null;
+    } },
+];
+const settingOn = k => !(settings && settings[k] === false);
+
+const Inspect = (function () {
+  let tip = null, mounted = false, last = null, raf = 0, shownTurn = -1;
+  const relation = e => (e === player ? 'self' : curAllies().includes(e) ? 'ally' : (curMonsters().includes(e) || e.hostile) ? 'foe' : 'neutral');
+  function tileAt(evt) {
+    const rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : { left: 0, top: 0 }, v = curView();
+    return { x: player.x + Math.floor((evt.clientX - rect.left) / v.ts) - v.halfW, y: player.y + Math.floor((evt.clientY - rect.top) / v.ts) - v.halfH };
+  }
+  // The tooltip HTML for a world tile, or null when there is nothing the player may know about it.
+  function describe(x, y) {
+    const tile = curTileAt(x, y); if (!tile || !tile.seen) return null;
+    const visible = posVisibleToPlayer(x, y) || (x === player.x && y === player.y);
+    const entity = visible ? entityAt(x, y) : null;
+    const chunk = (curIsDungeon() || curIsDimension()) ? null : getChunk(Math.floor(x / CH), Math.floor(y / CH));
+    const ctx = { x, y, tile, visible, chunk, entity, relation: entity ? relation(entity) : null };
+    const out = [];
+    for (const s of INSPECT_SECTIONS) { try { const h = s.build(ctx); if (h) out.push(h); } catch (e) { /* one bad section must not hide the rest */ } }
+    return out.length ? out.join('') : null;
+  }
+  function hide() { if (tip) tip.style.display = 'none'; last = null; }
+  function show(evt) {
+    if (!settingOn('hoverInspect') || gameState !== 'playing' || !player || player.hp <= 0) { hide(); return; }
+    const modal = document.getElementById('modal'); if (modal && !modal.classList.contains('hidden')) { hide(); return; }
+    last = { clientX: evt.clientX, clientY: evt.clientY };
+    const pos = tileAt(evt), html = describe(pos.x, pos.y);
+    if (!html) { if (tip) tip.style.display = 'none'; return; }
+    tip.innerHTML = html; tip.style.display = 'block'; shownTurn = turnCount;
+    const w = tip.offsetWidth || 220, h = tip.offsetHeight || 60, W = window.innerWidth || 1024, H = window.innerHeight || 768;
+    tip.style.left = Math.max(4, Math.min(W - w - 4, evt.clientX + 16)) + 'px';
+    tip.style.top = Math.max(4, Math.min(H - h - 4, evt.clientY + 18)) + 'px';
+  }
+  function mount() {
+    if (mounted || !canvas || !canvas.addEventListener) return; mounted = true;
+    tip = document.createElement('div'); tip.id = 'inspect-tip';
+    tip.style.cssText = 'position:fixed;z-index:50;display:none;pointer-events:none;max-width:290px;padding:6px 9px;font-size:0.95rem;line-height:1.35;background:rgba(10,9,8,0.94);color:var(--text,#d8cdb8);border:1px solid var(--line,#4a4030);border-radius:4px;box-shadow:0 2px 10px #000b;';
+    document.body.appendChild(tip);
+    canvas.addEventListener('mousemove', evt => { if (raf) return; raf = (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : f => setTimeout(f, 16))(() => { raf = 0; show(evt); }); });
+    canvas.addEventListener('mouseleave', hide);
+    canvas.addEventListener('click', hide);
+    window.addEventListener('keydown', hide);
+  }
+  // Called from render(): mounts once, and refreshes a visible tooltip when the world has moved on a turn.
+  function tick() {
+    try {
+      if (!mounted) mount();
+      if (tip && tip.style.display === 'block' && last && turnCount !== shownTurn) show(last);
+      if (tip && tip.style.display === 'block' && (gameState !== 'playing')) hide();
+    } catch (e) { /* never break render() */ }
+  }
+  return { tick, describe, hide, show, mount, sections: INSPECT_SECTIONS };
+})();
+
+// ===================== AMBIENT LIFE: living atmosphere between turns (v0.50.11) =====================
+// The game is turn-based, so the world was perfectly still between keypresses: weather only "moved" when render() ran.
+// This adds gentle, biome-aware motion -- fireflies on summer nights, leaves drifting through forests, pollen over
+// meadows, blown snow and sand, glowing spores in corrupted and fungal lands, sparks in tech ruins.
+// DESIGN:
+//   * Drawn on its OWN overlay canvas at ~24 fps (a few dozen particles), never by re-rendering the map, so it costs
+//     almost nothing and the loop sleeps entirely when nothing is wanted (dungeons, menus, indoors, Reduce Motion).
+//   * Purely cosmetic: no gameplay effect, no world data read except the biome/time under the player.
+//   * Particles keep their place in the WORLD as you walk (the layer is shifted by your movement), so it doesn't look
+//     like a screen filter.
+// EXTENDING: push an entry onto AMBIENT_EMITTERS --
+//   { id, max, biomes: Set | null, density(ctx) -> 0..1, make(W, H, ctx) -> particle, draw: 'glow' | 'dot' | 'leaf' | 'streak' }
+// ctx = { biome, night (0..1), wet (rain/storm), snowing }. A particle needs { x, y, vx, vy, life, size, color }, and may set
+// `sway` (px/s side-to-side), `twinkle` (alpha pulse speed) and `fade` (false = no fade in/out).
+const AMBIENT_WOODS = new Set(['forest', 'denseforest', 'taiga', 'jungle', 'ancient_grove', 'faerie_glade']);
+const AMBIENT_EMITTERS = [
+  { id: 'firefly', max: 16, draw: 'glow', biomes: new Set(['forest', 'denseforest', 'plains', 'swamp', 'marsh', 'jungle', 'savanna', 'faerie_glade', 'ancient_grove', 'whispering_fen', 'highland_moor']),
+    density: c => (c.wet ? 0 : Math.max(0, (c.night - 0.3) / 0.7)),
+    make: (W, H) => ({ x: Math.random() * W, y: Math.random() * H, vx: (Math.random() - 0.5) * 14, vy: (Math.random() - 0.5) * 10, life: 7 + Math.random() * 8, size: 5 + Math.random() * 2, color: '#d9ff7a', sway: 10, twinkle: 1.2 + Math.random() * 1.5 }) },
+  { id: 'leaf', max: 18, draw: 'leaf', biomes: AMBIENT_WOODS,
+    density: c => (c.wet ? 0 : Math.max(0, 1 - c.night * 1.6) * 0.8),
+    make: (W, H, c) => ({ x: Math.random() * W, y: -6, vx: 8 + Math.random() * 14, vy: 14 + Math.random() * 12, life: 9 + Math.random() * 6, size: 4, sway: 18, color: ['#b07a2a', '#c8962e', '#8a9a2a', '#a8582a'][Math.floor(Math.random() * 4)] }) },
+  { id: 'pollen', max: 16, draw: 'glow', biomes: new Set(['plains', 'savanna', 'faerie_glade', 'highland_moor', 'forest']),
+    density: c => (c.wet ? 0 : Math.max(0, 1 - c.night * 1.8) * 0.7),
+    make: (W, H, c) => ({ x: Math.random() * W, y: Math.random() * H, vx: 4 + Math.random() * 6, vy: -3 + Math.random() * 3, life: 8 + Math.random() * 6, size: 2.4, sway: 6, twinkle: 0.8, color: c.biome === 'faerie_glade' ? '#ffb8e8' : '#fff0a0' }) },
+  { id: 'snowdrift', max: 26, draw: 'dot', biomes: new Set(['tundra', 'taiga']),
+    density: c => (c.snowing ? 0 : 0.8),                       // real snowfall is already drawn by the weather overlay
+    make: (W, H) => ({ x: -4, y: Math.random() * H, vx: 40 + Math.random() * 40, vy: 5 + Math.random() * 14, life: 6 + Math.random() * 4, size: 1.7, sway: 8, color: '#f2f6ff' }) },
+  { id: 'sand', max: 18, draw: 'streak', biomes: new Set(['desert', 'badlands', 'salt_flat']),
+    density: c => (c.wet ? 0 : 0.7),
+    make: (W, H) => ({ x: -10, y: Math.random() * H, vx: 70 + Math.random() * 60, vy: Math.random() * 8 - 2, life: 5 + Math.random() * 3, size: 7, color: '#d8b878', alpha: 0.28 }) },
+  { id: 'spore', max: 16, draw: 'glow', biomes: new Set(['mushroom_forest', 'corrupted_blight', 'whispering_fen', 'crystal_grove', 'void_scar', 'irradiated_wastes', 'bone_moor']),
+    density: c => 0.85,
+    make: (W, H, c) => ({ x: Math.random() * W, y: H + 6, vx: (Math.random() - 0.5) * 8, vy: -(6 + Math.random() * 10), life: 8 + Math.random() * 6, size: 4 + Math.random() * 2, sway: 9, twinkle: 0.9 + Math.random(), color: { mushroom_forest: '#7affd8', corrupted_blight: '#c060ff', whispering_fen: '#9aff8a', crystal_grove: '#a8d8ff', void_scar: '#8a50d0', irradiated_wastes: '#c8ff40', bone_moor: '#b0c0a0' }[c.biome] || '#c0ffd0' }) },
+  { id: 'spark', max: 10, draw: 'dot', biomes: new Set(['tech_ruins', 'crashed_debris_field', 'nanite_swarm_zone', 'ancient_megaruins']),
+    density: c => 0.6,
+    make: (W, H, c) => ({ x: Math.random() * W, y: Math.random() * H, vx: (Math.random() - 0.5) * 30, vy: (Math.random() - 0.5) * 30, life: 0.6 + Math.random() * 0.9, size: 1.8, twinkle: 9, fade: false, color: c.biome === 'nanite_swarm_zone' ? '#4af0e0' : '#ffb04a' }) },
+];
+
+const AmbientLife = (function () {
+  const FRAME_MS = 41;                     // ~24 fps
+  let layer = null, particles = [], raf = 0, lastT = 0, running = false, lastPos = null, ctxNow = null;
+  const setting = (k, d) => (settings && settings[k] != null ? settings[k] : d);
+  const wantOn = () => setting('ambientLife', true) && !(settings && settings.reduceMotion);
+
+  // What the world is like under the player right now (null = no ambient life here: dungeons, indoors, menus off...).
+  function contextNow() {
+    if (!player || player.hp <= 0 || curIsDungeon() || curIsDimension()) return null;
+    const t = curTileAt(player.x, player.y); if (!t || (t.building !== null && t.building !== undefined)) return null;    // indoors
+    let biome = t.biome; if (biome === 'cobblestone') { try { biome = biomeAtPoint(player.x, player.y); } catch (e) { return null; } }   // town streets: the land around them
+    const wid = currentWeatherId(), kind = WEATHER_PARTICLE_KIND[wid];
+    return { biome, night: nightFactor(), wet: kind === 'rain', snowing: kind === 'snow' };
+  }
+  const targetFor = (em, c) => (c && em.biomes && em.biomes.has(c.biome) ? Math.round(em.max * Math.max(0, Math.min(1, em.density(c))) * (setting('ambientDensity', 100) / 100)) : 0);
+  const count = id => particles.reduce((n, p) => n + (p.em === id && !p.dying ? 1 : 0), 0);
+
+  // ---- simulation ----
+  function tick(dt, W, H) {
+    const c = ctxNow;
+    for (const em of AMBIENT_EMITTERS) {
+      const want = targetFor(em, c), have = count(em.id);
+      if (have < want) {
+        const first = have === 0;                       // an emitter waking up starts mid-flight (not as one synchronised wave)
+        for (let i = have, guard = 0; i < want && guard < (first ? want : 3); i++, guard++) {
+          const p = Object.assign({ em: em.id, age: Math.random() * 2, phase: Math.random() * 6.283, kind: em.draw, alpha: 1 }, em.make(W, H, c));
+          if (first) { const a = Math.random() * 0.7 * p.life; p.age = a; p.x += p.vx * a; p.y += p.vy * a; }
+          particles.push(p);
+        }
+      }
+      else if (have > want) { let extra = have - want; for (const p of particles) if (extra > 0 && p.em === em.id && !p.dying) { p.dying = true; p.age = Math.max(p.age, p.life - 1); extra--; } }
+    }
+    for (const p of particles) {
+      p.age += dt; p.x += (p.vx + (p.sway ? Math.sin(p.age * 1.3 + p.phase) * p.sway : 0)) * dt; p.y += p.vy * dt;
+    }
+    particles = particles.filter(p => p.age < p.life && p.x > -30 && p.x < W + 30 && p.y > -30 && p.y < H + 30);
+  }
+  function drawTo(g, W, H) {
+    g.clearRect && g.clearRect(0, 0, W, H);
+    for (const p of particles) {
+      const f = p.fade === false ? 1 : Math.sin(Math.PI * Math.min(1, p.age / p.life)), tw = p.twinkle ? 0.55 + 0.45 * Math.sin(p.age * p.twinkle + p.phase) : 1, a = Math.max(0, f * tw * p.alpha);
+      if (a <= 0.01) continue;
+      g.globalAlpha = a;
+      if (p.kind === 'glow') {                                      // soft additive-looking halo + bright core
+        const r = p.size * 2.2, grad = g.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+        grad.addColorStop(0, p.color); grad.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = grad; g.fillRect(p.x - r, p.y - r, r * 2, r * 2);
+        g.globalAlpha = Math.min(1, a * 1.4); g.fillStyle = '#ffffff'; g.fillRect(p.x - 1, p.y - 1, 2, 2);
+      } else if (p.kind === 'leaf') { g.fillStyle = p.color; g.fillRect(p.x, p.y, 5, 3); g.fillRect(p.x + 1, p.y + 3, 3, 1); g.fillStyle = 'rgba(255,255,255,0.35)'; g.fillRect(p.x, p.y, 5, 1); }
+      else if (p.kind === 'streak') { g.fillStyle = p.color; g.fillRect(p.x, p.y, p.size, 1); }
+      else { g.fillStyle = p.color; g.fillRect(p.x, p.y, p.size, p.size); }
+    }
+    g.globalAlpha = 1;
+  }
+
+  // ---- overlay canvas + loop ----
+  function mount() {
+    if (layer) return layer;
+    const host = canvas && canvas.parentElement; if (!host) return null;
+    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    layer = document.createElement('canvas'); layer.id = 'ambient-layer';
+    layer.style.cssText = 'position:absolute;z-index:4;pointer-events:none;';
+    host.insertBefore(layer, canvas.nextSibling); return layer;
+  }
+  function sync() {
+    if (layer.width !== canvas.width || layer.height !== canvas.height) { layer.width = canvas.width; layer.height = canvas.height; }
+    layer.style.left = (canvas.offsetLeft || 0) + 'px'; layer.style.top = (canvas.offsetTop || 0) + 'px';
+    layer.style.width = (canvas.clientWidth || canvas.width) + 'px'; layer.style.height = (canvas.clientHeight || canvas.height) + 'px';
+  }
+  function visibleNow() {
+    const modal = document.getElementById('modal'), title = document.getElementById('title-screen');
+    return gameState !== 'gameover' && !(modal && !modal.classList.contains('hidden')) && !(title && !title.classList.contains('hidden'));
+  }
+  function frame(ts) {
+    raf = 0; if (!running) return;
+    if (ts - lastT >= FRAME_MS) {
+      const dt = Math.min(0.1, (ts - lastT) / 1000 || 0.04); lastT = ts;
+      try {
+        if (!wantOn() || !ctxNow || !visibleNow()) { if (!particles.length) { stop(); return; } ctxNow = null; }
+        const g = layer.getContext && layer.getContext('2d');
+        if (g) { sync(); tick(dt, layer.width, layer.height); drawTo(g, layer.width, layer.height); layer.style.display = 'block'; }
+        if (!particles.length && !ctxNow) { stop(); return; }
+      } catch (e) { stop(); return; }
+    }
+    raf = requestAnimationFrame(frame);
+  }
+  function stop() { running = false; if (raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf); raf = 0; if (layer) layer.style.display = 'none'; }
+  function start() { if (running || typeof requestAnimationFrame !== 'function') return; running = true; lastT = 0; raf = requestAnimationFrame(frame); }
+
+  // Called from render(): keeps the context fresh, follows the player's movement, and wakes/sleeps the loop.
+  function update() {
+    try {
+      if (!wantOn()) { ctxNow = null; if (running) stop(); else if (layer) layer.style.display = 'none'; return; }
+      ctxNow = visibleNow() ? contextNow() : null;
+      if (player && lastPos && layer && (player.x !== lastPos.x || player.y !== lastPos.y)) {          // keep particles in the world frame
+        const v = curView(), dx = (player.x - lastPos.x) * v.ts, dy = (player.y - lastPos.y) * v.ts;
+        if (Math.abs(dx) < v.ts * 6 && Math.abs(dy) < v.ts * 6) for (const p of particles) { p.x -= dx; p.y -= dy; } else particles = [];
+      }
+      lastPos = player ? { x: player.x, y: player.y } : null;
+      if (ctxNow && AMBIENT_EMITTERS.some(em => targetFor(em, ctxNow) > 0)) { mount(); if (layer) start(); }
+    } catch (e) { /* cosmetic only: never break render() */ }
+  }
+  return { update, tick, drawTo, contextNow, targetFor, count, mount, start, stop, emitters: AMBIENT_EMITTERS, state: () => ({ running, particles: particles.length, ctx: ctxNow, byKind: particles.reduce((o, p) => (o[p.em] = (o[p.em] || 0) + 1, o), {}) }), setContext: c => { ctxNow = c; }, reset: () => { particles = []; } };
+})();
+
+
+
+
 
 
 // Give the new features Look-command descriptions (only where none exists, so nothing is overridden).
@@ -37424,6 +38013,13 @@ function renderSettingsTab(tabId) {
     body += row('Minimap Opacity', `How see-through the minimap is (${s.minimapOpacity}%).`, sliderHtml('minimapOpacity', s.minimapOpacity, 30, 100, 5));
     body += row('Minimap Corner', 'Which corner of the play view it sits in.', choiceGroupHtml('minimapCorner', [{ id: 'tl', label: 'Top left' }, { id: 'tr', label: 'Top right' }, { id: 'bl', label: 'Bottom left' }, { id: 'br', label: 'Bottom right' }], s.minimapCorner));
     for (const t of GameMap.toggles) body += row(t.label, t.desc, toggleHtml(t.key, s[t.key] !== false));
+    body += row('Dynamic Lighting', 'Lampposts, campfires and lit doors glow and cut through the night. Standing in lamplight also eases the night vision penalty. Off restores the plain night tint.', toggleHtml('dynamicLighting', s.dynamicLighting));
+    body += row('Ambient Life', 'Gentle motion between turns: fireflies at night, drifting leaves, pollen, blowing snow and sand, glowing spores. Cosmetic only; off in dungeons and with Reduce Motion.', toggleHtml('ambientLife', s.ambientLife));
+    body += row('Ambient Density', `How many ambient particles appear (${s.ambientDensity}%).`, sliderHtml('ambientDensity', s.ambientDensity, 25, 200, 25));
+    body += row('Hover Tooltips', 'Move the mouse over a creature, item or tile to see what it is: health and status effects, items, features, the city district. Only shows what you can actually see or have seen.', toggleHtml('hoverInspect', s.hoverInspect));
+    body += row('Building Names on Hover', 'Hovering a building whose door you have seen names its trade (blacksmith, inn, ...), like a sign outside the shop.', toggleHtml('hoverBuildingNames', s.hoverBuildingNames));
+    body += row('Aim Preview', 'While aiming a spell, throw or blink: shows the line, the blast area, who would be hit (with a warning if it includes you or an ally) and a caption. The keyboard cursor always works.', toggleHtml('aimPreview', s.aimPreview));
+    body += row('Night Darkness', `How dark the night is (${s.nightDarkness}%). 0 removes the night tint entirely.`, sliderHtml('nightDarkness', s.nightDarkness, 0, 150, 10));
     body += row('Autosave', 'Automatically saves your game periodically.', toggleHtml('autosaveEnabled', s.autosaveEnabled));
     if (s.autosaveEnabled) body += row('Autosave Frequency', `Every ${s.autosaveInterval} turns.`, sliderHtml('autosaveInterval', s.autosaveInterval, 10, 200, 10));
     body += row('Confirm Before Quitting', 'Ask for confirmation when quitting to the title screen mid-game.', toggleHtml('confirmQuit', s.confirmQuit));
@@ -39279,6 +39875,7 @@ function handleKey(e) {
     return;
   }
   if (gameState === 'tiletarget') {
+    if (Aim.handleKey(e, key)) return;   // cursor movement, Tab cycling, Enter-at-cursor
     if (key === 'Escape') { cancelTileTargeting(); return; }
     if (key === 'Enter' || key === ' ') { e.preventDefault(); quickConfirmTileTarget(); return; }
     return;
