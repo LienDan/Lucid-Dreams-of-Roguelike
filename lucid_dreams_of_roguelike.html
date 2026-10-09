@@ -508,7 +508,7 @@
         <b>o</b> take aim (called shot) &nbsp; <b>Shift+L</b> library<br>
         <b>v</b> toggle sprint<br>
         <b>Shift+G</b> auto-travel &nbsp; <b>Shift+H</b> auto-home<br>
-        <b>Shift+X</b> auto-explore &nbsp; <b>Shift+M</b> map (world / dungeon)<br>
+        <b>Shift+X</b> auto-explore &nbsp; <b>Shift+M</b> map (world / dungeon) &nbsp; <b>Shift+N</b> message history<br>
         <b>&gt;</b> enter/descend &nbsp; <b>&lt;</b> ascend<br>
         <b>Shift+S</b> search for secrets &nbsp; <b>Shift+D</b> dig (pickaxe in hand)<br>
         <b>Shift+P</b> or <b>Esc</b> menu (save/load/settings)<br>
@@ -540,7 +540,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.8-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.9-alpha</div>
     </div>
   </div>
 
@@ -1909,6 +1909,15 @@
 // v0.50.12 Hover tooltip now also shows poison, confusion, fear, slow, heat, frostbite, silence, radiation and sleep (the
 //   game's statusPoison/statusConfuse/... counters and the NPC asleep flag). City shape tuning: 'winged' hybrid wings widened
 //   (they were too thin to build in: 0.31x -> ~0.41x of a classic city's buildings, measured).
+//
+// v0.50.13 Shop signs (search "SHOP SIGNS"). Doors of role-bearing buildings carry their trade's glyph and colour
+//   ($ shops, Omega smiths, arch inns, dagger temples/healers, Psi scholars/trainers; other trades use '+' in their role colour),
+//   so a street reads at a glance. Pure styling: still walkable feature 'door'; houses keep the plain door. Extend via SHOP_SIGN_RULES.
+//
+// v0.50.14 Log view (search "LOG VIEW"). The message log folds consecutive repeats ("x3" -- 36% of lines in real playthroughs were
+//   immediate repeats), classifies lines (combat/loot/talk/world) by display-time rules with a clickable filter bar and
+//   colour-coded edges, and Shift+N opens the whole retained log with the same filters. Display-only: logMessages, saves and the
+//   death recap are unchanged. Settings: logFold, logColors, logFilter. Extend via LOG_CATEGORIES.
 //
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
@@ -12644,6 +12653,7 @@ function buildSettlementCore(chunk, cx, cy, p) {
   if (grand) scatterFlavorDecor(chunk, rng, 'garden', tier);
   // City Civic Layout: streets, lampposts and a themed district square -- runs last, touches only leftover plain tiles.
   if (paveFloors) CityCivic.apply({ chunk, cx, cy, margin, grand: !!grand, settlement, district: p.district, shape: p.cityShape });
+  ShopSigns.apply(chunk);   // trade-coloured door glyphs, once roles are assigned (see SHOP SIGNS)
 }
 
 function scatterFarmingExtras(chunk, rng) {
@@ -16980,11 +16990,7 @@ function renderModal(title, body, hint) {
 
 // ---------------- sidebar / log ----------------
 
-function renderLog() {
-  const el = document.getElementById('log');
-  el.innerHTML = logMessages.slice(-60).map(m => `<div>${m}</div>`).join('');
-  el.scrollTop = el.scrollHeight;
-}
+function renderLog() { LogView.render(); }   // folding, categories, filter bar (see LOG VIEW); falls back to the plain log on any error
 
 // ---------------- vision / seen tracking ----------------
 // Single source of truth for "how far can the player currently see," used by markSeen(), the
@@ -17088,6 +17094,7 @@ const DEFAULT_SETTINGS = {
   combatTextScale: 100,
   minimapEnabled: true, minimapSize: 150, minimapRadius: 30, minimapOpacity: 85, minimapCorner: 'tr',   // live minimap overlay (see MAP SYSTEM)
   mapShowMarkers: true, mapShowCreatures: true,
+  logFilter: 'all', logFold: true, logColors: true,   // message log: category filter, fold repeats, colour-code (see LOG VIEW)
   ambientLife: true, ambientDensity: 100,          // animated ambient particles between turns (see AMBIENT LIFE)
   hoverInspect: true, hoverBuildingNames: true,   // mouse-hover tooltips (see HOVER INSPECT)
   aimPreview: true,                            // cursor preview while aiming spells/throws/blinks (see AIM SYSTEM)
@@ -26783,6 +26790,167 @@ const AmbientLife = (function () {
   }
   return { update, tick, drawTo, contextNow, targetFor, count, mount, start, stop, emitters: AMBIENT_EMITTERS, state: () => ({ running, particles: particles.length, ctx: ctxNow, byKind: particles.reduce((o, p) => (o[p.em] = (o[p.em] || 0) + 1, o), {}) }), setContext: c => { ctxNow = c; }, reset: () => { particles = []; } };
 })();
+
+// ===================== SHOP SIGNS: readable doors (v0.50.13) =====================
+// Every door in every settlement looked identical (a brown '+'), so telling a smithy from a house meant walking in or
+// hovering. Doors now carry a SIGN: a glyph for the kind of trade and the trade's own colour (ROLES[].color), so a
+// street can be read at a glance -- gold '$' for shops, 'Omega' for smiths, an arch for inns, a dagger for temples and
+// healers, 'Psi' for scholars and trainers. Houses keep the plain door.
+// It is pure styling: the tile stays walkable feature 'door', no game logic reads door glyphs, and old saves simply
+// keep their old doors. Applied once per settlement chunk, after roles have been assigned to buildings.
+// EXTENDING: add a rule to SHOP_SIGN_RULES ({ id, glyph, roles }); roles not matched by any rule get the default '+'
+// in their own colour. Set ShopSigns.enabled = false to restore the plain doors on newly generated settlements.
+const SHOP_SIGN_RULES = [
+  { id: 'smith', glyph: '\u03a9', roles: ['blacksmith', 'cybersmith', 'armorer', 'silversmith', 'farrier', 'blacksmith_apprentice'] },
+  { id: 'inn', glyph: '\u2229', roles: ['innkeeper', 'tavernkeeper'] },
+  { id: 'holy', glyph: '\u2020', roles: ['priest', 'monk', 'healer', 'midwife'] },
+  { id: 'arcane', glyph: '\u03a8', roles: ['trainer', 'necromancer_trainer', 'scholar', 'archivist', 'scribe', 'curator', 'cartographer', 'oracle'] },
+  { id: 'trade', glyph: '$', roles: ['merchant', 'alchemist', 'jeweler', 'baker', 'butcher', 'fishmonger', 'cheesemonger', 'confectioner', 'tailor', 'seamstress', 'furrier', 'tanner', 'dyer', 'candlemaker', 'cobbler', 'potter', 'weaver', 'glassblower', 'cooper', 'vintner', 'distiller', 'locksmith', 'fence', 'dealer', 'quartermaster', 'fletcher', 'storagekeeper'] },
+];
+const ShopSigns = (function () {
+  const byRole = new Map();
+  for (const rule of SHOP_SIGN_RULES) for (const r of rule.roles) byRole.set(r, rule);
+  const lift = (hex, min) => {                              // keep dark role colours legible against the dark door background
+    if (typeof hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(hex)) return '#d8c08a';
+    const n = parseInt(hex.slice(1), 16); let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    const lum = r * 0.3 + g * 0.59 + b * 0.11;
+    if (lum < min) { const k = (min - lum) / (255 - lum); r += (255 - r) * k; g += (255 - g) * k; b += (255 - b) * k; }
+    return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+  };
+  const api = {
+    enabled: true,
+    ruleFor: role => byRole.get(role) || null,
+    signFor(role) {                                         // { glyph, color } for a building role, or null for houses / unknown roles
+      if (!role || role === 'house') return null;
+      const def = ROLES.find(r => r.id === role); if (!def) return null;
+      const rule = byRole.get(role);
+      return { glyph: rule ? rule.glyph : '+', color: lift(def.color, 150), rule: rule ? rule.id : null };
+    },
+    // Style the door of every role-bearing building in this settlement chunk.
+    apply(chunk) {
+      if (!api.enabled || !chunk || !chunk.settlement || !chunk.settlement.buildings) return 0;
+      let n = 0;
+      chunk.settlement.buildings.forEach((b, i) => {
+        const sign = api.signFor(b.role); if (!sign) return;
+        for (let dy = 0; dy < b.h; dy++) for (let dx = 0; dx < b.w; dx++) {
+          const t = chunk.tiles[b.y + dy] && chunk.tiles[b.y + dy][b.x + dx];
+          if (t && t.feature === 'door' && t.building === i) { t.glyph = sign.glyph; t.color = sign.color; n++; }
+        }
+      });
+      return n;
+    },
+  };
+  return api;
+})();
+
+// ===================== LOG VIEW: folding, categories and history (v0.50.14) =====================
+// The message log was a flat stream of the last 60 lines. Measured on real bot playthroughs, 36% of all lines were
+// immediate repeats ("Wolf notices you!" x6), which pushed everything useful off the pane. This adds:
+//   * FOLDING     consecutive identical lines collapse into one with a count ("... x3");
+//   * CATEGORIES  every line is classified (combat / loot / talk / world) by a rule list, colour-coded with a thin
+//                 left border, and a filter bar above the log shows one category at a time;
+//   * HISTORY     Shift+N opens the whole retained log (200 lines) in a window with the same filters (keys 1-5).
+// Nothing in the ~950 existing log() call sites changes: classification and folding happen purely at DISPLAY time from
+// the existing logMessages strings, so the log's data, saves and death recap behave exactly as before.
+// EXTENDING: add a category to LOG_CATEGORIES (first matching test wins; order matters), or tune a regex. The filter bar
+// and history window are generated from the list.
+const LOG_CATEGORIES = [
+  { id: 'combat', label: 'Combat', color: '#b8483a',
+    test: s => /\b(hits|misses|strikes|dies|slain|killed|pounces|bleeding|bruised|critical|stunned|You hit|You miss|You cast|casts|attacks|bites|claws|stings|slams|burns|burning|poisoned|knocks|flees|notices|shoots|explodes|damage|wounded|defeated|collapses|struck|blocks|dodges|parries)\b/.test(s) },
+  { id: 'loot', label: 'Loot', color: '#c9a53a',
+    // verbs only count after "You" (so "Hand-crafted" or "everyone finds you" don't), amounts need a number, containers need "from the ..."
+    test: s => /\bYou (take|pick up|find|found|gain|buy|bought|sell|sold|equip|unequip|drop|drink|eat|read|wield|put on|wear|craft|brew|forge|loot|open|receive|now have|stash)\b|\b\d+\s?(XP|xp|g|gold|coins?)\b|\bfrom the (sack|crate|barrel|chest|container|corpse)\b/.test(s) },
+  { id: 'talk', label: 'Talk', color: '#5a8ac9',
+    test: s => /(: ["\u201c]|\bquest\b|affection|standing|reputation|\bsays\b|\basks\b|\btells\b|You give|rumou?r|Main Quest|waves|greets|thanks you)/i.test(s) },
+];
+const LOG_OTHER = { id: 'world', label: 'World', color: '#6a7a6a' };   // anything no rule claims: travel, weather, discoveries, prompts
+const LOG_FILTERS = [{ id: 'all', label: 'All' }].concat(LOG_CATEGORIES.map(c => ({ id: c.id, label: c.label })), [{ id: LOG_OTHER.id, label: LOG_OTHER.label }]);
+
+const LogView = (function () {
+  const cache = new Map(), RENDER_GROUPS = 60;
+  const setting = (k, d) => (settings && settings[k] != null ? settings[k] : d);
+  const strip = m => String(m).replace(/<[^>]*>/g, '');
+  const category = m => {
+    let c = cache.get(m); if (c) return c;
+    const s = strip(m); c = LOG_OTHER;
+    for (const cat of LOG_CATEGORIES) { try { if (cat.test(s)) { c = cat; break; } } catch (e) { /* a bad rule just doesn't match */ } }
+    if (cache.size > 2000) cache.clear(); cache.set(m, c); return c;
+  };
+  // Collapse runs of identical consecutive lines: [{ msg, count }].
+  function fold(list) {
+    const out = [];
+    for (const m of list) { const last = out[out.length - 1]; if (last && last.msg === m) last.count++; else out.push({ msg: m, count: 1 }); }
+    return out;
+  }
+  // The groups to show for a filter, newest last. Folding happens BEFORE filtering so a run never splits.
+  function groups(list, filter, doFold) {
+    let g = doFold ? fold(list) : list.map(m => ({ msg: m, count: 1 }));
+    if (filter !== 'all') g = g.filter(x => category(x.msg).id === filter);
+    return g;
+  }
+  const lineHtml = (g, colored) => `<div class="logline${colored ? ' lc-' + category(g.msg).id : ''}">${g.msg}${g.count > 1 ? ` <span class="logx">\u00d7${g.count}</span>` : ''}</div>`;
+
+  // ---- the live log pane ----
+  let barMounted = false, pending = false, paints = 0;
+  function mount() {
+    if (barMounted) return; barMounted = true;
+    const log = document.getElementById('log'); if (!log) return;
+    const style = document.createElement('style');
+    style.textContent = `.logline{border-left:3px solid transparent;padding-left:6px}` +
+      [...LOG_CATEGORIES, LOG_OTHER].map(c => `.log.colored .lc-${c.id}{border-left-color:${c.color}}`).join('') +
+      `.logx{color:#e0c34a;font-weight:bold}#log-filter{position:sticky;top:0;z-index:2;display:flex;gap:4px;padding:3px 4px;flex-wrap:wrap;background:var(--panel,#0f0d0a)}` +
+      `#log-filter button{background:transparent;border:1px solid var(--line,#4a4030);color:var(--text-dim,#a89c80);border-radius:3px;padding:1px 8px;font-size:.85rem;cursor:pointer}` +
+      `#log-filter button.on{background:var(--line,#4a4030);color:var(--text,#d8cdb8)}#log-filter button .n{opacity:.6;margin-left:4px}`;
+    document.head.appendChild(style);
+    log.addEventListener('click', e => { const b = e.target.closest && e.target.closest('#log-filter button'); if (b) setFilter(b.dataset.f); });   // delegated: the bar lives INSIDE #log and is rebuilt each paint
+  }
+  function setFilter(id) { try { setSetting('logFilter', id, true); } catch (e) { if (settings) settings.logFilter = id; } render(); }
+  // log() can fire dozens of times in one turn: coalesce repaints into one per animation frame (flush() paints immediately).
+  function render() {
+    if (pending) return;
+    if (typeof requestAnimationFrame !== 'function') { paint(); return; }
+    pending = true; requestAnimationFrame(() => { pending = false; paint(); });
+  }
+  function paint() {
+    paints++;
+    try {
+      mount();
+      const el = document.getElementById('log'), filter = setting('logFilter', 'all'), doFold = setting('logFold', true), colored = setting('logColors', true);
+      el.classList.toggle('colored', colored);
+      const g = groups(logMessages.slice(-200), filter, doFold).slice(-RENDER_GROUPS);
+      const bar = `<div id="log-filter">${LOG_FILTERS.map(f => `<button data-f="${f.id}" class="${f.id === filter ? 'on' : ''}">${f.label}</button>`).join('')}</div>`;
+      el.innerHTML = bar + g.map(x => lineHtml(x, colored)).join('');   // the filter bar rides inside the log (sticky), so it follows the pane in a floating HUD too
+      el.scrollTop = el.scrollHeight;
+    } catch (e) {                                                      // never lose messages to a display bug: fall back to the plain log
+      const el = document.getElementById('log'); if (el) { el.innerHTML = logMessages.slice(-60).map(m => `<div>${m}</div>`).join(''); el.scrollTop = el.scrollHeight; }
+    }
+  }
+
+  // ---- history window (Shift+N) ----
+  let histFilter = 'all';
+  function openHistory() {
+    Sound.play('uiOpen'); gameState = 'loghistory';
+    drawHistory();
+  }
+  function drawHistory() {
+    const g = groups(logMessages, histFilter, setting('logFold', true)), colored = setting('logColors', true);
+    const chips = LOG_FILTERS.map((f, i) => `<span style="display:inline-block;margin:0 5px 6px 0;padding:1px 9px;border:1px solid var(--line);border-radius:3px;${f.id === histFilter ? 'background:var(--line);' : 'opacity:.7;'}"><b>${i + 1}</b> ${f.label}</span>`).join('');
+    const body = `<div style="text-align:center">${chips}</div><div class="log${colored ? ' colored' : ''}" style="max-height:60vh;overflow:auto;text-align:left;border:1px solid var(--line);padding:6px">${g.length ? g.map(x => lineHtml(x, colored)).join('') : '<div style="opacity:.6">Nothing in this category yet.</div>'}</div>`;
+    document.getElementById('modal-inner').classList.add('modal-wide');
+    renderModal('Message History', body, '1-' + LOG_FILTERS.length + ' switch category \u2022 Esc or Shift+N to close.');
+    const box = document.querySelector('#modal-body .log'); if (box) box.scrollTop = box.scrollHeight;
+  }
+  // Returns true when the key was consumed.
+  function handleKey(key) {
+    if (key === 'Escape' || key === 'N') { closeModal(); return true; }
+    const i = parseInt(key, 10) - 1;
+    if (i >= 0 && i < LOG_FILTERS.length) { histFilter = LOG_FILTERS[i].id; drawHistory(); return true; }
+    return true;
+  }
+  return { render, flush: paint, paints: () => paints, category, fold, groups, openHistory, handleKey, setFilter, filters: LOG_FILTERS, categories: LOG_CATEGORIES };
+})();
+
+
 
 
 
@@ -38014,6 +38182,8 @@ function renderSettingsTab(tabId) {
     body += row('Minimap Corner', 'Which corner of the play view it sits in.', choiceGroupHtml('minimapCorner', [{ id: 'tl', label: 'Top left' }, { id: 'tr', label: 'Top right' }, { id: 'bl', label: 'Bottom left' }, { id: 'br', label: 'Bottom right' }], s.minimapCorner));
     for (const t of GameMap.toggles) body += row(t.label, t.desc, toggleHtml(t.key, s[t.key] !== false));
     body += row('Dynamic Lighting', 'Lampposts, campfires and lit doors glow and cut through the night. Standing in lamplight also eases the night vision penalty. Off restores the plain night tint.', toggleHtml('dynamicLighting', s.dynamicLighting));
+    body += row('Fold Repeated Messages', 'Identical consecutive log lines collapse into one with a count (\u00d73), so a long fight no longer pushes everything useful off the pane.', toggleHtml('logFold', s.logFold));
+    body += row('Color-code Message Log', 'A thin colored edge marks each log line by kind: combat, loot, talk and quests, world events.', toggleHtml('logColors', s.logColors));
     body += row('Ambient Life', 'Gentle motion between turns: fireflies at night, drifting leaves, pollen, blowing snow and sand, glowing spores. Cosmetic only; off in dungeons and with Reduce Motion.', toggleHtml('ambientLife', s.ambientLife));
     body += row('Ambient Density', `How many ambient particles appear (${s.ambientDensity}%).`, sliderHtml('ambientDensity', s.ambientDensity, 25, 200, 25));
     body += row('Hover Tooltips', 'Move the mouse over a creature, item or tile to see what it is: health and status effects, items, features, the city district. Only shows what you can actually see or have seen.', toggleHtml('hoverInspect', s.hoverInspect));
@@ -38584,6 +38754,7 @@ const GUIDE_SECTIONS = [
       ['Shift+T','Talents.'],
       ['Shift+K','Crafting &amp; Cooking.'],
       ['q','Quest Log — including a "Where to look" hint for your current main quest stage, plus your city rank, civic offices, and any noble title or crown.'],
+      ['Shift+N','Message history — the whole retained log with the same category filters as the log pane (keys 1-5 switch category). The pane itself folds repeats and has clickable filters.'],
       ['Shift+L','Library — every book you have read, kept for reference even after you have sold or dropped the physical copy.'],
       ['Shift+Y','Cybernetics management.'],
       ['Shift+U','Eldritch/mutation screen.'],
@@ -39788,6 +39959,7 @@ function handleKey(e) {
     if (key === 'K') { openCraft(); return; }
     if (key === 'T') { openTalents(); return; }
     if (key === 'q') { openQuestLog(); return; }
+    if (key === 'N') { LogView.openHistory(); return; }   // message history
     if (key === 'L') { openLibrary(); return; }
     if (key === 'Y') { openCybernetics(); return; }
     if (key === 'U') { openEldritch(); return; }
@@ -39823,6 +39995,7 @@ function handleKey(e) {
     return;
   }
 
+  if (gameState === 'loghistory') { LogView.handleKey(key); return; }
   if (gameState === 'worldmap') { GameMap.handleKey(key); return; }
   if (gameState === 'dungeonmap') {
     if (key === 'Escape' || key === 'M') { closeModal(); return; }
