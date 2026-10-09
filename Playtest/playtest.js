@@ -262,6 +262,9 @@ const PROFILES = {
 // 'casual' (this toolkit's original tuned baseline); call applyProfile(name) or mutate fields
 // on BOT_PROFILE directly to change behavior for anything called after that point.
 const BOT_PROFILE = { ...PROFILES.casual };
+// Per-run flags that low-level helpers (outside playOneLife's closure) need to know about.
+// Set once at the top of playOneLife. Keep this tiny: anything profile-like belongs in PROFILES.
+const RUN_FLAGS = { invincible: false };
 function applyProfile(name) {
   if (!PROFILES[name]) throw new Error(`Unknown profile "${name}". Known profiles: ${Object.keys(PROFILES).join(', ')}`);
   Object.assign(BOT_PROFILE, PROFILES[name]);
@@ -672,7 +675,10 @@ function resolveChoiceMenu(win, log, { prefer = [], avoid = [], logPrefix = null
     idx = labels.findIndex((l) => !avoid.some((re) => re.test(l)));
   }
   if (idx === -1) idx = 0;
-  key(win, String.fromCharCode(97 + idx));
+  // Menus paginate at 26 options (see the game's CHOICE_PAGE_SIZE): turn to the right page, then press the letter.
+  const PAGE = 26;
+  for (let pg = Math.floor(idx / PAGE); pg > 0; pg--) key(win, ']');
+  key(win, String.fromCharCode(97 + (idx % PAGE)));
   if (log && logPrefix) log(`${logPrefix}${labels[idx]}`);
   return labels[idx];
 }
@@ -714,6 +720,295 @@ const MOVE_DIRS = [
 // fully play out. This is an expected cost of the async-jsdom-driven approach, not a hang or an
 // infinite loop -- don't mistake a long-running batch for evidence of a bug without checking
 // actionsUsed/turnCount progress first (report.json's per-life actionsUsed is the ground truth).
+/** True if the game's most recent auto-action refusal was "Danger nearby" -- i.e. X/G stopped
+ * because a hostile is in view, NOT because the floor is fully explored. The two look identical
+ * from the outside (no turn passes either way), and conflating them made the bot "leave" every
+ * freshly-entered dungeon that had a visible monster near the entrance. */
+function autoActionHaltedByDanger(win) {
+  return !!evalGame(win, `(function(){ const m = logMessages[logMessages.length - 1] || ''; return /Danger nearby/i.test(m); })()`).value;
+}
+
+/** True while the active main-quest stage is satisfied simply by reaching the bottom of a dungeon
+ * (type 'dungeon_tier': descend, then press '>' on the deepest floor's stairs). In that case an
+ * invincible bot should head for the stairs instead of clearing every floor first. */
+function stageWantsDepth(win) {
+  // NOTE: evalGame returns {ok, value} -- an object, always truthy. Reading .value is essential; the earlier
+  // `!!evalGame(...)` made this return true unconditionally, so "dive first" ran everywhere, including on the
+  // overworld, where G auto-travels to the nearest dungeon and enters it.
+  return !!evalGame(win, `(function(){
+    const s = curStoryStage(); if (!s || s.done) return false;
+    if (s.type === 'dungeon_tier') return true;
+    // dimension_trail whose gate is OPEN but not yet entered: the rift lives on the gatekeeper's boss floor
+    // (the deepest), so while inside that dungeon the right move is down.
+    if (s.type === 'dimension_trail' && curIsDungeon() && riftPending(s)) return true;
+    return false;
+  })()`).value;
+}
+/** In-game helper source: is the stage's target dimension unlocked (rift exists) but not yet entered? Injected
+ * once into the game scope so several strategies share one definition. */
+function installRiftHelpers(win) {
+  evalGame(win, `if (typeof riftPending === 'undefined') { window.riftPending = function (s) {
+    const d = s && s.targetDimensionId; if (!d) return false;
+    return (player.discoveredDimensions || []).includes(d) && !(player.visitedDimensions || []).includes(d);
+  }; }`);
+}
+/**
+ * Search the target dimension outward from where you arrived. A dimension's signature dungeon sits at a fixed
+ * spot near the arrival point (the Undertow's is ~50 tiles away), and the hint does not say where. The generic
+ * explorer chases the unexplored tile nearest to the PLAYER, which drifts away in one direction forever -- the
+ * bot ended up 2,000 tiles out while the dungeon was 50 tiles from the portal. A sensible human searches in
+ * rings around the arrival; this picks the reachable unexplored tile closest to the ARRIVAL point instead.
+ * Honest by construction: it uses only the arrival location and what has been seen, not the dungeon's coordinates.
+ * Acts only while inside the stage's target dimension and no dungeon of that dimension has been discovered.
+ */
+function tryExploreNearArrival(win, log, lock) {
+  const plan = evalGame(win, `(function(){
+    const s = curStoryStage(); if (!s || s.type !== 'dimension_trail' || s.done || !curIsDimension() || curIsDungeon()) return null;
+    if (player.dimensionId !== s.targetDimensionId) return null;
+    if (DIMENSION_SUBDUNGEONS.some(d => d.dimId === player.dimensionId)) return null;   // found one: the normal quest nav takes over
+    const a = DIMENSIONS[player.dimensionId].arrival, ax = a.cx * CH + a.lx, ay = a.cy * CH + a.ly;
+    const R = 160, key = (x, y) => x + ',' + y, seen = new Set([key(player.x, player.y)]), q = [[player.x, player.y, 0]];
+    let best = null;
+    for (let h = 0; h < q.length && q.length < 40000; h++) {
+      const [x, y, d] = q[h];
+      const t = curTileAt(x, y);
+      if (d > 0 && t && t.walkable && !t.seen) {
+        const da = Math.max(Math.abs(x - ax), Math.abs(y - ay));
+        if (!best || da < best.da || (da === best.da && d < best.d)) best = { x, y, da, d };
+      }
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+        if (!dx && !dy) continue;
+        const nx = x + dx, ny = y + dy; if (Math.abs(nx - player.x) > R || Math.abs(ny - player.y) > R) continue;
+        const k = key(nx, ny); if (seen.has(k)) continue;
+        const nt = curTileAt(nx, ny); if (!nt || !nt.walkable) continue;
+        seen.add(k); q.push([nx, ny, d + 1]);
+      }
+    }
+    return best;
+  })()`).value;
+  if (!plan) return false;
+  // Commit to a target until reached/seen (re-picking each call is the ping-pong this bot has been bitten by).
+  if (!lock.goal || (lock.goal.x === plan.x && lock.goal.y === plan.y) === false) {
+    const still = lock.goal && evalGame(win, `(function(){ const t = curTileAt(${lock.goal.x}, ${lock.goal.y}); return !!(t && !t.seen); })()`).value;
+    if (!still) lock.goal = { x: plan.x, y: plan.y };
+  }
+  const st = followPathToward(win, lock.nav || (lock.nav = {}), lock.goal, { maxNodes: 40000 });
+  if (st === 'unreachable' || st === 'arrived') { lock.goal = null; lock.nav = null; return st === 'arrived'; }
+  return true;
+}
+/**
+ * Fear management. Fear blocks EVERY offensive action -- melee, spells, wands and thrown weapons all check
+ * player.statusFear > 0 -- so a character who is afraid simply cannot fight back. Near fear monsters (Night Terrors
+ * re-apply it on 35% of their hits) the bot froze: it had 90 unread spell tomes, never learned a spell, and nothing
+ * in its strategy list could clear fear. This strategy, run BEFORE combat:
+ *   1. while afraid, cast a fear-clearing spell it knows ('purify' / 'cleanse'; both set statusFear = 0), else
+ *   2. learn one from a tome in the pack (useItem on the tome teaches the spell), else
+ *   3. do nothing (no cure available -- the other strategies carry on).
+ * Casting costs a turn, which is the point: a cure-then-strike rhythm instead of an endless lockout.
+ * Extend FEAR_CURE_SPELLS if a new fear-clearing spell is added to the game.
+ */
+const FEAR_CURE_SPELLS = ['purify', 'cleanse'];
+function tryManageFear(win, log) {
+  const r = evalGame(win, `(function(){
+    if (!(player.statusFear > 0) || gameState !== 'playing') return 'none';
+    const cures = ${JSON.stringify(FEAR_CURE_SPELLS)};
+    // Dread Gaze (a 'debuff' ability) applies fear with NO saving throw, so a cure alone is undone by the very next
+    // monster turn: cast, gaze, cast, gaze... forever. The way out is a second action per round: sprinting grants a
+    // bonus action (computeBonusActionsDetailed), and endTurn skips the world tick while one is banked -- so cure
+    // (bonus action), then strike before any monster acts. Free for an invincible run (stamina is infinite).
+    if (${RUN_FLAGS.invincible ? 'true' : 'false'} && !player.sprinting && (player.stamina || 0) > 0) toggleSprint();
+    const known = cures.find(id => player.knownSpells.includes(id));
+    if (known) { castSpell(known); return 'cast:' + known; }
+    const tome = player.inventory.find(i => i.type === 'tome' && cures.includes(i.spellId) && !player.knownSpells.includes(i.spellId));
+    if (tome) { useItem(tome); return 'learn:' + tome.spellId; }
+    return 'no-cure';
+  })()`).value;
+  if (!r || r === 'none' || r === 'no-cure') return false;
+  if (log && r.startsWith('learn')) log(`Learned a fear-clearing spell (${r.slice(6)}) from a tome.`);
+  return true;
+}
+/**
+ * Go straight for the stage's boss when it is on the current level (invincible runs only). The generic combat
+ * strategies all run before the quest-kill strategy, so in a crowded boss dungeon (the Threshold is full of imps,
+ * Night Terrors and walkers) the bot always found something nearer to fight and the God -- idle 3 tiles away --
+ * stayed at 17,000/17,000 HP for thousands of actions. This walks to the boss with a small A* budget and attacks it by
+ * moving into it; whatever stands in the way is simply attacked first by that same movement. A character that can
+ * actually die must NOT do this (ignoring the swarm would kill it), hence the invincible gate.
+ * Fear: attacking while afraid just burns a turn, so this yields (returns false) while statusFear > 0 and lets
+ * tryManageFear clear it first.
+ */
+function tryEngageQuestBoss(win, log, lock) {
+  if (!RUN_FLAGS.invincible) return false;
+  const t = evalGame(win, `(function(){
+    const s = curStoryStage(); if (!s || s.done || s.type !== 'kill_boss' || !curIsDungeon()) return null;
+    const m = (curMonsters() || []).find(m => m.alive && m.monsterId === s.targetBossId);
+    if (!m) return null;
+    return { x: m.x, y: m.y, d: chebyshev(m.x, m.y, player.x, player.y), afraid: player.statusFear > 0 };
+  })()`).value;
+  if (!t || t.afraid) return false;
+  const before = evalGame(win, '({x:player.x,y:player.y,t:turnCount})').value;
+  if (t.d <= 1) {
+    key(win, MOVE_KEY_BY_DELTA[`${Math.sign(t.x - before.x)},${Math.sign(t.y - before.y)}`]);
+  } else {
+    const plan = planBestEffortPath(win, { x: t.x, y: t.y }, { maxNodes: 8000 });
+    if (!plan.path.length) return false;
+    key(win, MOVE_KEY_BY_DELTA[`${plan.path[0][0]},${plan.path[0][1]}`]);
+  }
+  const after = evalGame(win, '({x:player.x,y:player.y,t:turnCount})').value;
+  return after.x !== before.x || after.y !== before.y || after.t !== before.t;
+}
+/**
+ * Leave a dimension that is no longer the objective. After a trail stage is done the next one usually needs
+ * the OVERWORLD again (the next gatekeeper's dungeon lives out here), but the bot kept idling inside the
+ * dimension it had just finished -- the story-dungeon guarantee and the quest navigation both key off
+ * overworld movement. Two phases, mirroring how the game builds dimensions:
+ *   inside a sub-dungeon : climb out via the up stairs ('<'; on depth 1 that returns to the dimension surface)
+ *   on the dimension surface : walk to the arrival rift_portal and press '>' (travelThroughRift)
+ * Only acts while the active stage is a dimension_trail whose target is a DIFFERENT dimension.
+ */
+function tryLeaveDimension(win, log, lock) {
+  const where = evalGame(win, `(function(){
+    const s = curStoryStage(); if (!s || s.done || !player.dimensionId) return null;
+    // Stay only while this dimension IS the objective. Every other stage (the next trail realm's gatekeeper, the finale's
+    // Threshold, ...) is found on the overworld, so leave.
+    if (s.type === 'dimension_trail' && player.dimensionId === s.targetDimensionId) return null;
+    if (curIsDungeon()) { const L = curDungeonLevel(); return L && L.upStairs ? { kind: 'dungeon', x: L.upStairs.x, y: L.upStairs.y, here: player.x === L.upStairs.x && player.y === L.upStairs.y } : null; }
+    const a = DIMENSIONS[player.dimensionId] && DIMENSIONS[player.dimensionId].arrival; if (!a) return null;
+    const x = a.cx * CH + a.lx, y = a.cy * CH + a.ly;
+    return { kind: 'surface', x, y, here: player.x === x && player.y === y };
+  })()`).value;
+  if (!where) return false;
+  if (where.here) {
+    key(win, where.kind === 'dungeon' ? '<' : '>');
+    if (log) log(where.kind === 'dungeon' ? 'Climbing out of the dimension dungeon.' : 'Stepped back through the rift to the overworld.');
+    lock.nav = null;
+    return true;
+  }
+  const st = followPathToward(win, lock.nav || (lock.nav = {}), { x: where.x, y: where.y }, { maxNodes: 60000 });
+  if (st === 'unreachable') { lock.nav = null; return false; }
+  return true;
+}
+/**
+ * Walk to the rift tile of the stage's target dimension and cross it. Found missing the hard way: once a
+ * boss_kill gate opens, the rift is a TILE in the gatekeeper's dungeon (unlockDimension mutates the boss
+ * floor's grid), and the bot had no concept of it -- it wandered 1,900 tiles from the lair. Crossing is the
+ * game's own handler: pressing '>' on a rift_portal tile calls travelThroughRift().
+ * Returns true if it acted.
+ */
+function tryUseRift(win, log, lock) {
+  installRiftHelpers(win);
+  const info = evalGame(win, `(function(){
+    const s = curStoryStage(); if (!s || s.type !== 'dimension_trail' || s.done || !riftPending(s) || curIsDimension() || !curIsDungeon()) return null;
+    const L = curDungeonLevel(); if (!L || !L.grid) return null;
+    for (let y = 0; y < L.h; y++) for (let x = 0; x < L.w; x++) { const t = L.grid[y][x]; if (t && t.feature === 'rift_portal' && t.dimensionId === s.targetDimensionId) return { x, y, here: player.x === x && player.y === y }; }
+    return null; })()`).value;
+  if (!info) return false;
+  if (info.here) {
+    key(win, '>');
+    if (log) log('Stepped through the rift.');
+    return true;
+  }
+  const st = followPathToward(win, lock.nav || (lock.nav = {}), { x: info.x, y: info.y }, { maxNodes: 60000 });
+  if (st === 'unreachable') { lock.nav = null; return false; }
+  return true;
+}
+
+/** Distance (tiles) beyond which an invincible bot with a known quest target stops fighting and just walks. */
+const INVINCIBLE_TRAVEL_MIN_DISTANCE = 40;
+/**
+ * Is an invincible character currently on a long quest trip? True when tryAdvanceMainQuest has a committed
+ * target (lock.stageId/x/y) more than INVINCIBLE_TRAVEL_MIN_DISTANCE tiles away. Used to keep optional combat
+ * from starving navigation: in swarm-heavy realms (the Undertow: 6,000-19,000 HP aggressive monsters, always
+ * several adjacent) every action went to fighting, because all combat strategies run BEFORE quest navigation,
+ * which only runs when nothing else acted -- so the bot never walked the 2,000 tiles to its destination.
+ * A mortal character must still fight; an invincible one has nothing to fear and walks past.
+ */
+function onInvincibleTravel(win, lock) {
+  if (!RUN_FLAGS.invincible || lock.stageId === undefined || lock.x === undefined) return false;
+  const p = evalGame(win, '({x:player.x,y:player.y,d:curIsDungeon()})').value;
+  if (!p || p.d) return false;   // inside a dungeon, normal behavior (floors are small and fights are the content)
+  return Math.max(Math.abs(lock.x - p.x), Math.abs(lock.y - p.y)) > INVINCIBLE_TRAVEL_MIN_DISTANCE;
+}
+
+/** Longest walking path (in steps) at which an invincible character will go out of its way to engage a
+ * hostile that is blocking auto-actions. Beyond this the monster is treated as scenery and the bot
+ * keeps walking by hand (see manualDungeonStep) -- otherwise a monster that is merely VISIBLE across a
+ * chasm or wall makes the two behaviors pull in opposite directions and the character dithers. */
+const ENGAGE_MAX_PATH = 24;
+/** Consecutive no-progress exploration calls an invincible bot tolerates inside a dungeon before it gives
+ * up on the floor and heads for the exit. */
+const INVINCIBLE_LEAVE_PATIENCE = 30;
+/** After a danger-blocked auto-action forced a manual step, this many following exploreStep calls go
+ * straight to manual/engage mode (no X attempt in between). */
+const MANUAL_LOCK_CALLS = 12;
+/**
+ * Close with (and attack) the nearest visible hostile. For a character that cannot die this is the
+ * way to make progress when auto-explore/auto-travel are blocked by "danger nearby": the blocker has
+ * to be removed -- if it can actually be reached. Replans every call (the target moves every turn)
+ * with a small A* budget, and attacks by moving into the monster once adjacent. Returns true if it
+ * spent a turn; false means "don't engage, do something else".
+ */
+function engageNearestHostile(win) {
+  const t = evalGame(win, `(function(){ const m = nearestHostile(16); return m ? { x: m.x, y: m.y, d: chebyshev(m.x, m.y, player.x, player.y) } : null; })()`).value;
+  if (process.env.PT_DEBUG) console.error('[PT_DEBUG] engage target:', JSON.stringify(t));
+  if (!t) return false;
+  const before = evalGame(win, 'turnCount').value;
+  if (t.d <= 1) {
+    const p = evalGame(win, '({x:player.x,y:player.y})').value;
+    key(win, MOVE_KEY_BY_DELTA[`${Math.sign(t.x - p.x)},${Math.sign(t.y - p.y)}`]);
+  } else {
+    const plan = planBestEffortPath(win, { x: t.x, y: t.y }, { maxNodes: 2500 });
+    if (process.env.PT_DEBUG) console.error('[PT_DEBUG] engage plan:', plan.complete, plan.path.length);
+    if (!plan.complete || !plan.path.length || plan.path.length > ENGAGE_MAX_PATH) return false;
+    key(win, MOVE_KEY_BY_DELTA[`${plan.path[0][0]},${plan.path[0][1]}`]);
+  }
+  return evalGame(win, 'turnCount').value !== before;
+}
+
+/**
+ * Manual stand-in for auto-explore / auto-travel when the game refuses to run them ("Danger
+ * nearby" is triggered by ANY living monster within 6 tiles in line of sight -- including one that
+ * cannot reach us, or that we cannot reach, e.g. across a chasm). A human just walks by hand; this
+ * does the same, one step per call: toward the nearest unexplored tile, else toward the down
+ * stairs. Uses the game's own findFrontierByPath (walking-distance frontier) when present.
+ * Returns true if a turn was spent.
+ */
+function manualDungeonStep(win, nav, { preferStairs = false } = {}) {
+  const t0 = evalGame(win, 'turnCount').value;
+  const here = () => evalGame(win, '({x:player.x,y:player.y,d:player.dungeonDepth})').value;
+  const p0 = here();
+  // The target is COMMITTED across calls (re-deciding every call is what makes two walkers -- or one
+  // walker and the game's own auto-explore -- undo each other's steps: each new position changes
+  // which frontier looks "nearest"). Dropped when reached, revealed, depth changes, or unroutable.
+  if (nav.goal) {
+    const g = nav.goal;
+    const gone = evalGame(win, `(function(){ const t = curTileAt(${g.x}, ${g.y}); return !t || (${g.kind === 'frontier'} && t.seen) || (player.x === ${g.x} && player.y === ${g.y}); })()`).value;
+    if (gone || nav.depth !== p0.d) nav.goal = null;
+  }
+  if (!nav.goal) {
+    const frontier = preferStairs ? 'null' : evalGame(win, "typeof findFrontierByPath === 'function' ? JSON.stringify(findFrontierByPath(90)) : 'null'").value;
+    let f = null; try { f = JSON.parse(frontier); } catch (e) { /* none */ }
+    if (f) nav.goal = { x: f.x, y: f.y, kind: 'frontier' };
+    else {
+      // Only a goal if there is actually a floor below. On the deepest floor '>' does nothing and spends no
+      // turn, and treating "stand on the stairs and press >" as progress made this walker spin forever
+      // (11,000+ calls on one tile in an unrelated dungeon) instead of letting the bot leave.
+      const st = evalGame(win, "(function(){ const l = curDungeonLevel(), dg = curDungeon(); return l && l.downStairs && dg && player.dungeonDepth < dg.maxDepth ? { x: l.downStairs.x, y: l.downStairs.y } : null; })()").value;
+      if (st) nav.goal = { x: st.x, y: st.y, kind: 'stairs' };
+    }
+    nav.depth = p0.d;
+  }
+  if (!nav.goal) return false;
+  if (nav.goal.kind === 'stairs' && p0.x === nav.goal.x && p0.y === nav.goal.y) { key(win, '>'); nav.goal = null; return true; }
+  // Plan AROUND monsters/NPCs (the game answers "You can't go that way" without advancing time when
+  // something stands on the next tile, which a plan that ignores entities walks straight into).
+  const plan = planBestEffortPath(win, nav.goal, { maxNodes: 30000, avoidEntities: true });
+  if (!plan.path.length) { nav.goal = null; return false; }
+  key(win, MOVE_KEY_BY_DELTA[`${plan.path[0][0]},${plan.path[0][1]}`]);
+  const p1 = here();
+  return p1.x !== p0.x || p1.y !== p0.y || p1.d !== p0.d || evalGame(win, 'turnCount').value !== t0;
+}
+
 async function exploreStep(win, wanderState) {
   const before = evalGame(win, 'turnCount').value;
 
@@ -742,27 +1037,107 @@ async function exploreStep(win, wanderState) {
     // the wide-frontier search / wander below, same as the non-leaving path does, but still
     // WITHOUT touching X/G/'>' while this flag remains set.
   } else {
+    // DIVE FIRST when the quest only needs depth: head for the stairs (G knows where they are; manual
+    // walking handles the case where a visible monster makes the game refuse G). Exploring the rest of a
+    // huge floor is optional, and on "Vast" floors full of interrupting monsters it takes thousands of
+    // actions. X below remains the fallback if the stairs can't be reached.
+    if (RUN_FLAGS.invincible && stageWantsDepth(win)) {
+      await keyAndWait(win, 'G', 4000);
+      if (evalGame(win, 'turnCount').value !== before) { wanderState.dungeonStalls = 0; return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value }; }
+      if (autoActionHaltedByDanger(win)) {
+        if (engageNearestHostile(win) || manualDungeonStep(win, wanderState.manualNav || (wanderState.manualNav = {}), { preferStairs: true })) {
+          return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+        }
+      }
+      // Standing on the stairs already? '>' descends -- or, on the deepest floor, completes the stage
+      // ("This is the deepest level." spends no turn, so success is judged by the stage advancing).
+      const stageBefore = evalGame(win, 'curStoryStage().id').value;
+      key(win, '>');
+      if (evalGame(win, 'turnCount').value !== before || evalGame(win, 'curStoryStage().id').value !== stageBefore) return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+    }
+    // While a hostile keeps blocking auto-actions, stay in manual mode for a window of calls instead
+    // of re-trying X each time: X would take one step toward ITS frontier and the manual walker would
+    // step back toward its own, forever.
+    if (RUN_FLAGS.invincible && (wanderState.manualLock || 0) > 0) {
+      wanderState.manualLock--;
+      if (engageNearestHostile(win) || manualDungeonStep(win, wanderState.manualNav || (wanderState.manualNav = {}))) {
+        return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+      }
+    }
     await keyAndWait(win, 'X', 4000);
-    if (evalGame(win, 'turnCount').value !== before) return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+    if (evalGame(win, 'turnCount').value !== before) { wanderState.dungeonStalls = 0; return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value }; }
 
-    await keyAndWait(win, 'G', 4000);
-    if (evalGame(win, 'turnCount').value !== before) return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+    // X refused because a hostile is in view (not because there is nothing left to explore).
+    // An invincible character removes the blocker; a mortal one falls through to the original
+    // chain below, whose retreat behavior is the right call when danger outweighs the character.
+    if (RUN_FLAGS.invincible && autoActionHaltedByDanger(win)) {
+      if (engageNearestHostile(win)) {
+        return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+      }
+      // The blocker can't be engaged (unreachable, e.g. across a chasm): walk by hand instead.
+      if (manualDungeonStep(win, wanderState.manualNav || (wanderState.manualNav = {}))) {
+        wanderState.manualLock = MANUAL_LOCK_CALLS;
+        return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+      }
+    }
 
-    key(win, '>');
-    if (evalGame(win, 'turnCount').value !== before) return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+    // 'G' (travel to stairs) is only meaningful INSIDE a dungeon too: on the overworld it auto-travels to the
+    // nearest known dungeon entrance and ENTERS it, so every time autoexplore came up empty the bot walked into
+    // the closest dungeon (here: the Wyrmreach lair it had already finished) and dove it again, forever.
+    if (evalGame(win, 'curIsDungeon()').value) {
+      await keyAndWait(win, 'G', 4000);
+      if (evalGame(win, 'turnCount').value !== before) return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+    }
+
+    // '>' is only meaningful INSIDE a dungeon (descend). On the overworld it enters whatever dungeon the
+    // character happens to be standing on -- and right after leaving one the bot IS standing on its
+    // entrance, so this press re-entered it every time, forever (observed: enter -> dive -> H out -> '>' in,
+    // 400+ actions on one dungeon at level 48), and it ran before the far-frontier exploration below ever got
+    // a chance. Skip it outside dungeons.
+    if (evalGame(win, 'curIsDungeon()').value) {
+      key(win, '>');
+      if (evalGame(win, 'turnCount').value !== before) return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+    }
 
     // X, G, and '>' all made no progress. If this is happening inside a dungeon, that's exactly
     // the "nothing left to do on this floor" signal -- start heading OUT via 'H' from now on,
     // rather than repeating this same exhausted chain (and its '>'-triggered ping-pong) again
     // next call.
     if (evalGame(win, 'curIsDungeon()').value) {
+      // An invincible character has nothing to flee from, and a single failed exploration attempt is
+      // weak evidence the floor is finished (it also happens when a wounded leg buckles, a monster
+      // blocks a corridor, or auto-actions refuse while one monster is merely visible). Require
+      // INVINCIBLE_LEAVE_PATIENCE consecutive no-progress calls, nudging with a manual step or a random
+      // step each time, before committing to leave. Mortal characters keep the original behavior.
+      if (RUN_FLAGS.invincible) {
+        wanderState.dungeonStalls = (wanderState.dungeonStalls || 0) + 1;
+        if (wanderState.dungeonStalls < INVINCIBLE_LEAVE_PATIENCE) {
+          if (manualDungeonStep(win, wanderState.manualNav || (wanderState.manualNav = {}))) {
+            return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+          }
+          const dirs = Object.values(MOVE_KEY_BY_DELTA);
+          key(win, dirs[Math.floor(Math.random() * dirs.length)]);
+          return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
+        }
+        wanderState.dungeonStalls = 0;
+      }
+      if (process.env.PT_DEBUG) console.error('[PT_DEBUG] exploreStep: committing to leave dungeon. last log:', evalGame(win, 'logMessages.slice(-2)').value, '| hostiles<=8:', evalGame(win, 'curMonsters().filter(m=>m.alive&&chebyshev(m.x,m.y,player.x,player.y)<=8).length').value, '| invincible:', RUN_FLAGS.invincible);
       wanderState.leavingDungeon = true;
       await keyAndWait(win, 'H', 4000);
       if (evalGame(win, 'turnCount').value !== before) return { progressed: true, turnCountAfter: evalGame(win, 'turnCount').value };
     }
   }
 
-  const far = evalGame(win, 'findNearestFrontier(220)').value;
+  // Inside a dungeon, findNearestFrontier(220) scans Chebyshev rings far beyond the level's real bounds
+  // (190k+ tile lookups per call -- profiled at ~450ms per action on a fully explored floor). The game's
+  // findFrontierByPath only walks tiles reachable from the player, so its cost tracks the level, not the
+  // search radius, and it returns the same {x,y} the code below expects. Overworld keeps the old scan:
+  // it is unbounded, and 'nearest unexplored' there genuinely needs the wide look.
+  // Overworld too (found later): the nearest *straight-line* unexplored tile can sit across a solid block of
+  // water/mountain, unreachable -- the old scan returned it, bfsFirstStep found no route, and the bot logged
+  // "No navigable progress" forever. Prefer the reachable frontier everywhere; only if none is reachable
+  // within the window fall back to the wide straight-line scan (which then at least picks *something*).
+  const far = evalGame(win, "(function(){ if (typeof findFrontierByPath === 'function') { const f = findFrontierByPath(curIsDungeon() ? 120 : 160); if (f) return f; if (curIsDungeon()) return null; } return findNearestFrontier(220); })()").value;
   if (far) {
     // Distance-proportional maxRadius (not a flat number) -- see the shared comment on the other
     // five bfsFirstStep call sites in this file for why: after game.html's own BUG FIX scaled
@@ -1297,6 +1672,12 @@ function tryCalledShot(win, log, chance = BOT_PROFILE.calledShotChance) {
 
 /** If a monster is adjacent, bump-attack it. Returns true if it acted. */
 async function tryFightAdjacent(win) {
+  // Fear blocks melee outright: movePlayer logs "You're too terrified to attack!" and just burns the turn. While
+  // afraid, stand down so the spell / ranged / item strategies below get their turn. Without this the bot swung
+  // forever at two Night Terrors (each re-applies 3 turns of fear on 35% of hits -> a permanent fear-lock for a
+  // melee-only attacker), dealt zero damage for thousands of actions, and never reached its spells -- which are
+  // NOT blocked by fear.
+  if (evalGame(win, 'player.statusFear > 0').value) return false;
   const dir = directionToAdjacentMonster(win);
   if (!dir) return false;
   key(win, dir);
@@ -2388,7 +2769,16 @@ function tryEquipUpgrades(win, log) {
           // single-digit damage but silently misjudges upgrades once damage reaches double
           // digits (e.g. "10,20" sorts LOWER than "9,15" as strings). Averaging the range into
           // a real number here is what every score computation below should have been doing.
-          const scoreOf = (x) => (Array.isArray(x.dmg) ? (x.dmg[0]+x.dmg[1])/2 : (x.dmg||0)) + (x.armor||0) + (x.acc||0);
+          // CONDITION MATTERS: a broken weapon does near-fist damage (observed: a "Godslayer Thunder Maul" at durability 0
+          // landed hits for 4-28 on the final boss), but this score looked only at BASE stats, so after ~100k actions of
+          // wear the broken maul outranked every working weapon in a 177-weapon pack and was never replaced. Broken
+          // gear now scores zero and low durability is discounted, so a working item takes over automatically.
+          const condition = (x) => {
+            if (x.broken) return 0;
+            if (x.maxDurability && x.maxDurability !== Infinity && x.durability != null) return Math.max(0.1, x.durability / x.maxDurability);
+            return 1;
+          };
+          const scoreOf = (x) => ((Array.isArray(x.dmg) ? (x.dmg[0]+x.dmg[1])/2 : (x.dmg||0)) + (x.armor||0) + (x.acc||0)) * condition(x);
           const itScore = scoreOf(it);
           const curScore = cur ? scoreOf(cur) : -999;
           if (!cur || itScore > curScore) { equipItem(it); msgs.push(it.name); }
@@ -3663,6 +4053,8 @@ function tryTalkToAdjacentNpc(win, log, talkedNpcUids) {
  * dungeon of this theme exist," and forcing it into this function's shape would be worse than a
  * dedicated one.
  */
+/** Tiles of travel the bot is willing to trade for one level of dungeon over-recommendation. */
+const DUNGEON_LEVEL_PENALTY_PER_LEVEL = 60;
 function getMainQuestNavigationTarget(win) {
   // Node-scope capture for interpolation below -- see draftCustomCharacter's own comment on why
   // BOT_PROFILE can't be referenced directly inside an evalGame template string.
@@ -3679,7 +4071,17 @@ function getMainQuestNavigationTarget(win) {
       // this single guard at the top covers every branch below at once (kill_boss, dungeon_tier,
       // dimension_trail, and the boss_bounty side-quest check), rather than patching each branch
       // separately the way an earlier, narrower version of this fix (dungeon_tier-only) did.
-      if (curIsDungeon() || curIsDimension()) return null;
+      if (curIsDungeon()) return null;
+      if (curIsDimension()) {
+        // The one valid case inside a dimension: the stage's own target dimension, whose guardian dungeon is
+        // registered in THAT dimension's coordinates (the same space player.x/y now use). Without this the bot
+        // had no navigation target at all once inside the Undertow and wandered 2,000 tiles away, fighting.
+        const ds = curStoryStage();
+        if (!ds || ds.type !== 'dimension_trail' || player.dimensionId !== ds.targetDimensionId) return null;
+        const g = typeof DIMENSION_TRAIL_GUARDIANS !== 'undefined' ? DIMENSION_TRAIL_GUARDIANS[ds.targetDimensionId] : null;
+        const f = g ? nearestRegisteredDungeonOfTheme(g.theme, player.x, player.y) : null;
+        return f ? { x: f.dg.x, y: f.dg.y, why: 'dimension_trail guardian (in dimension) -> ' + f.dg.name } : null;
+      }
       const stage = curStoryStage();
       if (stage) {
         if (stage.type === 'kill_boss') {
@@ -3700,10 +4102,15 @@ function getMainQuestNavigationTarget(win) {
           // already-discovered dungeon is still worth heading toward this turn) and finally to
           // normal exploration if neither has anything concrete yet.
         } else if (stage.type === 'dungeon_tier') {
+          // Pick the way a sensible player would: tier alone doesn't imply difficulty (a 'common'
+          // dungeon's recommendedLevel ranges ~10-57 in a single world -- measured), so the
+          // nearest match can be wildly out of depth. Score = travel distance + a steep penalty
+          // per level the dungeon's recommendation exceeds the character's level (+4 grace).
           let best = null, bestD = Infinity;
           for (const dg of dungeonRegistry.values()) {
             if (dg.tier !== stage.targetTier) continue;
-            const d = chebyshev(player.x, player.y, dg.x, dg.y);
+            const over = Math.max(0, (dg.recommendedLevel || 1) - (player.level + 4));
+            const d = chebyshev(player.x, player.y, dg.x, dg.y) + over * ${DUNGEON_LEVEL_PENALTY_PER_LEVEL};
             if (d < bestD) { bestD = d; best = dg; }
           }
           if (best) return { x: best.x, y: best.y, why: 'dungeon_tier -> ' + best.name };
@@ -3720,9 +4127,14 @@ function getMainQuestNavigationTarget(win) {
               const found = guardTheme ? nearestRegisteredDungeonOfTheme(guardTheme, player.x, player.y) : null;
               if (found) return { x: found.dg.x, y: found.dg.y, why: 'dimension_trail guardian -> ' + found.dg.name };
             }
-            // Rift is open somewhere but no registry tracks exactly where -- same real
-            // limitation the game's own hint text has here (it says "find the rift you opened",
-            // not a coordinate) -- falls through to exploration, faithfully.
+            // Gate open but never entered: the rift is a tile on the gatekeeper's boss floor (see tryUseRift),
+            // so head back to that dungeon. (The game's own hint only says "find the rift you opened" and does
+            // not say where -- a discoverability gap worth a design look.)
+            if (!(player.visitedDimensions || []).includes(dimId) && gate && gate.bossId && gate.kind === 'boss_kill' && typeof BOSS_DUNGEON_THEME !== 'undefined' && BOSS_DUNGEON_THEME[gate.bossId]) {
+              const gd = nearestRegisteredDungeonOfTheme(BOSS_DUNGEON_THEME[gate.bossId].theme, player.x, player.y);
+              if (gd) return { x: gd.dg.x, y: gd.dg.y, why: 'dimension_trail rift -> ' + gd.dg.name };
+            }
+            // Otherwise falls through to exploration.
           } else if (gate && gate.bossId) {
             // Covers both 'boss_kill' gates (defeating this boss opens the dimension) and
             // 'item_structure' gates (this boss drops the item needed at the gate structure) --
@@ -3823,10 +4235,17 @@ function tryAdvanceMainQuest(win, log, lock) {
     // "arrive at a registered dungeon" path, so this single gap plausibly explains a meaningful
     // share of why deep main-quest progress has been hard to observe organically all session --
     // reaching the right area is not the same as actually going in.
-    if (evalGame(win, 'curIsDungeon() || curIsDimension()').value) return false; // already inside -- nothing more to do here
+    // Only a DUNGEON counts as "already inside". A dimension's surface is not -- its own guardian dungeon is entered from
+    // there with this same '>' press (the old `|| curIsDimension()` meant the bot reached the Drowned Choir's door and
+    // never went in).
+    if (evalGame(win, 'curIsDungeon()').value) return false;
     const before = evalGame(win, 'turnCount').value;
     key(win, '>');
-    if (evalGame(win, 'turnCount').value !== before) {
+    // BUG FIX: entering a dungeon does NOT advance turnCount (confirmed by pressing '>' on a
+    // dungeon_entrance tile: mode flips to 'dungeon', turnCount unchanged). Judging success by
+    // turnCount alone made a successful entry look like a failure -- the lock was dropped and the
+    // remaining strategies then ran against the fresh dungeon as if nothing had happened.
+    if (evalGame(win, 'turnCount').value !== before || evalGame(win, 'curIsDungeon()').value) {
       if (log) log(`Entered dungeon for main quest target (${target.why}).`);
       return true;
     }
@@ -3845,44 +4264,18 @@ function tryAdvanceMainQuest(win, log, lock) {
   // (with a 1.5x/+20 buffer for realistically winding paths, still capped at the original 300)
   // keeps nearby, common-case targets fast while still allowing genuinely distant ones their
   // full budget.
-  const MOVE_DIRS = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
-  // PERFORMANCE FIX: the proportional-maxRadius fix above (see its own comment) still caps at
-  // 300, and bfsFirstStep's internal node budget is 6*maxRadius^2 -- so for a target more than
-  // ~190 tiles out (not rare: a main-quest boss/dungeon can easily be 1000+ tiles from spawn),
-  // every single call still pays the FULL capped-budget search, confirmed directly via timing at
-  // 1.8-3.2 real seconds per action on such targets. Open terrain rarely needs full BFS to take
-  // one sensible step toward something 100+ tiles away in a straight line -- a simple greedy
-  // "try the 8 directions, ranked by how much closer each gets you, use the first that's
-  // actually walkable" step is nearly always just as good there and vastly cheaper. Only falls
-  // back to the full bfsFirstStep (which correctly handles mazes/dead-ends BFS exists for in the
-  // first place) once close enough that getting it exactly right matters more than speed, or if
-  // greedy stepping is blocked in every ranked direction (a real obstacle, not just "far away").
-  const distToTarget = evalGame(win, `Math.max(Math.abs(${target.x}-player.x), Math.abs(${target.y}-player.y))`).value;
-  let step = null;
-  if (typeof distToTarget === 'number' && distToTarget > 100) {
-    const greedy = evalGame(win, `
-      (function(){
-        const dirs = ${JSON.stringify(MOVE_DIRS)};
-        const dx0 = ${target.x} - player.x, dy0 = ${target.y} - player.y;
-        const ranked = dirs.map(([k,dx,dy]) => ({k,dx,dy,dist: Math.abs((dx0-dx))+Math.abs((dy0-dy))})).sort((a,b) => a.dist-b.dist);
-        for (const r of ranked) {
-          const nx = player.x+r.dx, ny = player.y+r.dy;
-          if (curWalkable(nx,ny) && !entityAt(nx,ny)) return {dx:r.dx, dy:r.dy};
-        }
-        return null;
-      })()
-    `).value;
-    if (greedy) step = greedy;
-  }
-  if (!step) {
-    step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, Math.min(300, Math.ceil(Math.max(Math.abs(${target.x}-player.x), Math.abs(${target.y}-player.y))*1.5)+20))`).value;
-  }
-  if (!step) { lock.stageId = undefined; return false; } // unreachable -- drop the lock, let a fresh pick happen next time
-  const dirEntry = MOVE_DIRS.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
-  if (!dirEntry) return false;
-  const before = evalGame(win, 'turnCount').value;
-  key(win, dirEntry[0]);
-  if (evalGame(win, 'turnCount').value === before) { lock.stageId = undefined; return false; } // blocked -- drop the lock, let normal explore handle it
+  // NAVIGATION (rewritten after two soft-locks traced to the same root cause): the earlier
+  // "greedy step if far, exact-goal BFS if near" hybrid had a local-minimum trap -- a wall or
+  // ruin between character and target made the greedy step bounce between two tiles forever
+  // (see planBestEffortPath for the full write-up). followPathToward plans around obstacles with
+  // BFS, caches the path so per-action cost stays low even for far targets, and replans on
+  // arrival/blocked. If the target is unreachable within the planner's search area we drop the
+  // lock and let exploration reveal more of the map, exactly as the old code did on "no path".
+  lock.nav = lock.nav || {};
+  const status = followPathToward(win, lock.nav, target);
+  if (status === 'unreachable') { lock.stageId = undefined; lock.nav = null; return false; }
+  if (status === 'arrived') return false;
+  if (status === 'turn') { return true; }
   if (log && Math.random() < 0.05) log(`Heading toward main quest target (${target.why}).`); // sampled, not every step
   return true;
 }
@@ -4379,111 +4772,165 @@ function tryAdvanceDimensionGateStructure(win, log, memory) {
  *   note below (added proactively, same session, right after finding and fixing the identical
  *   pattern in tryPathTowardAnyDungeon/tryAdvanceMainQuest)
  */
+// ---- Best-effort pathing toward a target that may be unreachable or sit in unexplored ground ----
+// WHY THIS EXISTS (found by tracing debug-invincible runs that sat on one stage for thousands of
+// actions -- TWICE, in two different strategies): the old movement code tried a BFS to the EXACT
+// target tile and, when that came back null (target unexplored, or itself a tree/water tile) or
+// the target was far away, fell back to a greedy "rank the 8 neighbours by straight-line
+// distance" step. Greedy descent has local minima: standing at a wall of a building or ruin
+// between the character and the target, the best neighbour is always "into the wall", the
+// next-best bounces sideways, and the character oscillated between two tiles forever
+// (e.g. keys k,u,b,l,y,h repeating -- 2,000+ actions inside ~3 tiles).
+// The fix is real pathfinding that never needs the exact goal to be walkable: BFS the reachable
+// region and walk to the reachable tile NEAREST the target, then replan from there. BFS goes
+// *around* obstacles by construction, so no local minimum exists, and each replan must strictly
+// reduce the remaining distance or the target is declared unreachable.
+const MOVE_KEY_BY_DELTA = { '-1,0': 'h', '1,0': 'l', '0,-1': 'k', '0,1': 'j', '-1,-1': 'y', '1,-1': 'u', '-1,1': 'b', '1,1': 'n' };
 /**
- * Shared movement toward a committed lock.pushX/pushY "hoping to find a roaming boss by pushing
- * into unexplored, biome-matching ground" target (see tryPathTowardBossBiome's two BUG FIX
- * comments on the oscillation this exists to avoid, and its own comment above for the overall
- * mechanism). Tries the real bfsFirstStep pathfinder first, then falls back to a cheap greedy
- * multi-directional step ranked by Manhattan distance if that comes back null/blocked (expected
- * and common for a target this far into unexplored ground -- see the greedy fallback's own BUG
- * FIX comment). Returns true/false same as any other strategy function; never clears the lock
- * itself on failure -- a `false` here just means "no progress THIS call", and the same
- * committed target is retried next call rather than abandoned (abandoning on any single blocked
- * call was the OLD bug; see the comments this replaced).
+ * Plan a path (array of [dx,dy] steps) from the player toward `target` with weighted A*.
+ *
+ * Why A* and not the plain BFS this replaced: a radius-limited BFS can only detour around
+ * obstacles that fit inside its window. Measured case: the chosen dungeon was ~1,300 tiles away
+ * across a lake; BFS (radius 90) walked to the nearest shore point, saw no improvement, and the
+ * bot wandered off and came back, forever. A* has no window -- it routes around obstacles of any
+ * size, expanding only as far as the heuristic says is promising. Weight 3 trades exact
+ * optimality for far fewer expansions (we want a good path cheaply, not the provably shortest).
+ *
+ * If the goal is not reached within `maxNodes` expansions (or is unreachable), the path leads to
+ * the expanded tile CLOSEST to the target, so callers still make progress and can replan; the
+ * result's `complete` flag says which case occurred. The goal tile need not be walkable.
+ * `avoidEntities` treats tiles occupied by non-swappable entities (monsters, hostile/sleeping NPCs,
+ * player constructs) as blocked, except the goal itself; friendly NPCs and allies swap places and stay passable.
+ * @returns {{path:number[][], endDist:number, complete:boolean, expanded:number}}
+ */
+const PLAN_STATS = { calls: 0, ms: 0, byCaller: {} };   // diagnostics, printed when PT_DEBUG is set
+function planBestEffortPath(win, target, opts = {}) {
+  const t0 = Date.now();
+  const out = planBestEffortPathImpl(win, target, opts);
+  if (process.env.PT_DEBUG) {
+    const dt = Date.now() - t0, who = ((new Error().stack || '').split('\n')[2] || '').trim().replace(/\(.*\/|\)/g, '').slice(0, 40);
+    PLAN_STATS.calls++; PLAN_STATS.ms += dt;
+    const c = (PLAN_STATS.byCaller[who] = PLAN_STATS.byCaller[who] || { n: 0, ms: 0, expanded: 0 }); c.n++; c.ms += dt; c.expanded += out.expanded || 0;
+  }
+  return out;
+}
+function planBestEffortPathImpl(win, target, { maxNodes = 120000, weight = 3, avoidEntities = false } = {}) {
+  const r = evalGame(win, `
+    (function(){
+      const sx = player.x, sy = player.y, tx = ${target.x}, ty = ${target.y}, W = ${weight}, CAP = ${maxNodes}, AVOID = ${avoidEntities ? 'true' : 'false'};
+      const OFF = 1 << 20, K = 1 << 21;
+      const id = (x, y) => (x + OFF) * K + (y + OFF);
+      const h = (x, y) => { const dx = Math.abs(tx - x), dy = Math.abs(ty - y); return Math.max(dx, dy) + 0.001 * (dx + dy); };
+      // Binary min-heap of [f, tie, x, y, g]
+      const heap = [];
+      const push = (n) => { heap.push(n); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+      const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { let l = 2 * i + 1, r = l + 1, m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+      const gBest = new Map([[id(sx, sy), 0]]);
+      const parent = new Map([[id(sx, sy), null]]);
+      push([W * h(sx, sy), 0, sx, sy, 0]);
+      const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+      let best = { x: sx, y: sy, h: h(sx, sy) }, expanded = 0, complete = false, goal = null;
+      while (heap.length && expanded < CAP) {
+        const [, , x, y, g] = pop();
+        if (g > gBest.get(id(x, y))) continue;       // stale heap entry
+        expanded++;
+        if (x === tx && y === ty) { complete = true; goal = { x, y }; break; }
+        const hv = h(x, y);
+        if (hv < best.h) best = { x, y, h: hv };
+        for (const [dx, dy] of dirs) {
+          const nx = x + dx, ny = y + dy, k = id(nx, ny), ng = g + 1;
+          if (ng >= (gBest.has(k) ? gBest.get(k) : Infinity)) continue;
+          if (!curWalkable(nx, ny)) continue;   // an unwalkable goal is never expanded; 'best' ends up adjacent to it
+          if (AVOID && !(nx === tx && ny === ty)) {
+            // Only entities the player cannot simply walk through count as blocked. Bumping a friendly
+            // awake NPC / companion / ally SWAPS places (see movePlayer), so they are passable -- treating
+            // them as walls sent the planner on a long detour away from the stairs while the game's own
+            // travel went straight through (found with a companion standing in a 1-wide corridor).
+            const e = entityAt(nx, ny);
+            if (e && e !== player && (e.kind === 'monster' || (e.kind === 'npc' && (e.hostile || e.asleep)) || (e.kind === 'ally' && e.isPlayerConstruct))) continue;
+          }
+          gBest.set(k, ng); parent.set(k, [x, y]);
+          push([ng + W * h(nx, ny), -ng, nx, ny, ng]);
+        }
+      }
+      const end = goal || best;
+      const path = []; let cur = [end.x, end.y];
+      for (;;) { const p = parent.get(id(cur[0], cur[1])); if (!p) break; path.push([cur[0] - p[0], cur[1] - p[1]]); cur = p; }
+      path.reverse();
+      return JSON.stringify({ path, endDist: Math.max(Math.abs(tx - end.x), Math.abs(ty - end.y)), complete, expanded });
+    })()
+  `);
+  if (!r.ok) return { path: [], endDist: Infinity, complete: false, expanded: 0 };
+  try { return JSON.parse(r.value); } catch (e) { return { path: [], endDist: Infinity, complete: false, expanded: 0 }; }
+}
+
+/**
+ * followPathToward -- the one reusable, obstacle-robust "walk toward (x,y)" primitive.
+ *
+ * Any strategy that needs to travel more than a few tiles should use this instead of rolling its
+ * own greedy/BFS hybrid (two separate copies of the greedy version caused two separate
+ * soft-locks -- see planBestEffortPath's comment). State lives in `nav`, an object the CALLER
+ * owns and keeps between calls (typically a property of its lock). It follows a cached path,
+ * replanning when the path runs out or is blocked; each replan must strictly reduce the
+ * remaining distance, which is what guarantees termination ("unreachable") instead of looping.
+ *
+ * @returns {'moved'|'turn'|'arrived'|'unreachable'}
+ *   moved       the character changed tile
+ *   turn        a turn passed without moving (blocked / leg buckle) -- caller should treat as acted
+ *   arrived     already standing on the target
+ *   unreachable no strictly-closer reachable tile exists; caller should pick a new target
+ */
+function followPathToward(win, nav, target, opts = {}) {
+  if (nav.tx !== target.x || nav.ty !== target.y) {
+    Object.assign(nav, { tx: target.x, ty: target.y, path: [], idx: 0, fails: 0, staleDrops: 0, lastBest: Infinity });
+  }
+  const pos = () => evalGame(win, '({x:player.x,y:player.y,t:turnCount})').value;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const before = pos();
+    if (before.x === target.x && before.y === target.y) return 'arrived';
+    if (nav.idx >= nav.path.length) {
+      const plan = planBestEffortPath(win, target, { maxNodes: opts.maxNodes, avoidEntities: !!opts.avoidEntities });
+      if (!plan.path.length || plan.endDist >= nav.lastBest - 0.5) return 'unreachable';
+      nav.path = plan.path; nav.idx = 0; nav.lastBest = plan.endDist; nav.fails = 0;
+    }
+    const [dx, dy] = nav.path[nav.idx];
+    key(win, MOVE_KEY_BY_DELTA[`${dx},${dy}`]);
+    const after = pos();
+    if (after.x !== before.x || after.y !== before.y) { nav.idx++; nav.fails = 0; nav.staleDrops = 0; return 'moved'; }
+    // Blocked or a turn lost without moving. After 3 straight failures the cached path is stale
+    // (e.g. an NPC now stands in a doorway): drop it and replan on the next loop pass.
+    // Resetting lastBest matters: a path that was BLOCKED says nothing about whether a better
+    // position exists, but leaving the old lastBest in place made the replan look like "no
+    // improvement" and wrongly return 'unreachable' (seen in practice: a leg-injured character
+    // whose moves kept buckling). A separate cap on consecutive stale drops still prevents a
+    // livelock against a genuinely permanent blocker.
+    if (++nav.fails >= 3) {
+      nav.path = []; nav.idx = 0; nav.fails = 0; nav.lastBest = Infinity;
+      if (++nav.staleDrops > 6) { nav.staleDrops = 0; return 'unreachable'; }
+    }
+    if (after.t !== before.t) return 'turn';
+  }
+  return 'turn';
+}
+
+/**
+ * Movement toward a committed lock.pushX/pushY "hoping to find a roaming boss by pushing into
+ * unexplored, biome-matching ground" target (see tryPathTowardBossBiome). On 'unreachable' the
+ * target's chunk goes in lock.deadChunks so the ring search never re-picks it.
  */
 function pushTowardLockedTarget(win, log, info, lock) {
   const target = { x: lock.pushX, y: lock.pushY };
-  // NOT the shared distance-proportional formula the other bfsFirstStep call sites in this
-  // file use -- this one is different in kind, not just placement: every other call site
-  // paths through terrain that's a mix of already-generated (cheap to check) and occasionally-
-  // new ground, but this one is BY DESIGN always heading toward genuinely unexplored chunks
-  // (see tryPathTowardBossBiome's 'alreadyHere' comment -- that's the entire point, to trigger
-  // their spawn roll), so the BFS itself keeps triggering real chunk generation as a side effect
-  // of exploring, which is inherently far more expensive per node than reading already-cached
-  // terrain. Measured directly: a call reaching ~85 tiles into unexplored ground took 2.5 real
-  // seconds even after the distance-proportional formula, since that formula's own 1.5x buffer
-  // combined with the quadratic node-cost relationship still saturates the outer 60000 cap well
-  // before 85 tiles. Capped at a flat, modest 80 here instead (matching what the actual game's
-  // own autoTravelHome/autoTravelToStairs consider a normal travel radius, per their own
-  // maxRadius arguments), trading some reach for keeping this responsive -- an 8-ring (192 tile)
-  // search that can only successfully path to targets within roughly 80 tiles of that will still
-  // very often find something inside its own effective range, and this function is called
-  // repeatedly every turn regardless, so a farther candidate simply becomes reachable on a later
-  // call as the character naturally moves closer to it via other actions.
-  // BUG FIX (found via direct checkpoint-state tracing on a debug-invincible completability run
-  // that spent 10,000+ turns reporting success every call while never actually changing tile):
-  // every movement call site in this file (including the two below) historically judged success
-  // by "did turnCount change", which is WRONG specifically for movement -- movePlayer() in
-  // game.html burns a full turn via endTurn() on several failure paths that never relocate the
-  // player at all (a frozen/stunned character, a confused random stumble, a Slow fumble, and
-  // critically here, a wounded leg "buckling underfoot" -- player.legInjuryPenalty, a PERMANENT
-  // per-step chance that applies to every move attempt for the rest of that leg injury's
-  // duration). A character with a 75% legInjuryPenalty burns a turn on roughly 3 of every 4 move
-  // attempts WITHOUT moving, and the old turnCount check happily accepted the very first such
-  // failure as "progress" and returned true -- which is exactly why a character could sit
-  // reporting a successful "push" every single call for 10,000+ turns while its x/y never
-  // changed once. For PURE MOVEMENT specifically (unlike autoExplore/autoTravelToStairs, which
-  // legitimately do other useful things like search/pick up loot on a turn that doesn't relocate
-  // the player, and correctly keep using turnCount), the only honest success signal is "did
-  // player.x/player.y actually change" -- checked directly here instead.
-  const posBefore = evalGame(win, '({x:player.x,y:player.y})').value;
-  const step = evalGame(win, `bfsFirstStep(player.x, player.y, ${target.x}, ${target.y}, 80)`).value;
-  const MOVE_DIRS_U = [['h',-1,0],['l',1,0],['k',0,-1],['j',0,1],['y',-1,-1],['u',1,-1],['b',-1,1],['n',1,1]];
-  if (step) {
-    const dirEntry = MOVE_DIRS_U.find(([, dx, dy]) => dx === step.dx && dy === step.dy);
-    if (dirEntry) {
-      key(win, dirEntry[0]);
-      const posAfter = evalGame(win, '({x:player.x,y:player.y})').value;
-      if (posAfter.x !== posBefore.x || posAfter.y !== posBefore.y) {
-        if (log && Math.random() < 0.1) log(`Pushing into unexplored ${info.join('/')} terrain, hoping to cross paths with the boss.`);
-        return true;
-      }
-      // A turn may well have passed (a leg buckle, a confused stumble, etc.) without actually
-      // moving -- that still counts as "acted" for this call (something real happened, and the
-      // caller's main loop should move on rather than trying a second action on the same turn),
-      // but it's NOT success for pushing toward the target, so fall through to the greedy
-      // fallback below rather than returning true on a turn that went nowhere.
-    }
+  const status = followPathToward(win, lock.nav || (lock.nav = {}), target);
+  if (status === 'unreachable' || status === 'arrived') {
+    const CHUNK = 24;
+    (lock.deadChunks = lock.deadChunks || []).push(Math.floor(target.x / CHUNK) + ',' + Math.floor(target.y / CHUNK));
+    if (lock.deadChunks.length > 300) lock.deadChunks.shift();
+    lock.pushX = undefined; lock.pushY = undefined; lock.nav = null;
+    if (log && status === 'unreachable') log(`Push target (${target.x},${target.y}) unreachable -- abandoning it and picking another.`);
+    return false;
   }
-  // BUG FIX (found via direct checkpoint-state tracing on a debug-invincible completability
-  // run): an earlier version of this fallback stopped here on a null/blocked bfsFirstStep
-  // result, deferring entirely to generic exploration -- and a target 80+ tiles into
-  // unexplored ground is exactly the case where bfsFirstStep (capped at 80) is MOST likely to
-  // come back null, since the real path there hasn't been discovered/generated yet for it to
-  // search. Traced one specific life that got stuck for 45,000+ turns pushing at the same
-  // single blocked tile, because its one computed direction never changed. A greedy
-  // multi-directional step is a much better fallback here specifically: rank all 8 directions
-  // by how much closer each gets to the target (pure Manhattan distance, no pathfinding needed)
-  // and try them in that order until one is actually walkable AND causes real POSITION progress
-  // (see the posBefore/posAfter comment above for why this checks position, not turnCount) --
-  // trivially cheap (no search budget at all) and, unlike a single best-direction-only
-  // candidate, never permanently stalls just because the single nearest direction happens to
-  // be one blocked tile; the 2nd/3rd-ranked directions route around exactly that case.
-  const greedy = evalGame(win, `
-    (function(){
-      const dirs = ${JSON.stringify(MOVE_DIRS_U)};
-      const dx0 = ${target.x} - player.x, dy0 = ${target.y} - player.y;
-      const ranked = dirs.map(([k,dx,dy]) => ({k,dx,dy,dist: Math.abs((dx0-dx))+Math.abs((dy0-dy))})).sort((a,b) => a.dist-b.dist);
-      return ranked.map(r => r.k);
-    })()
-  `).value;
-  if (greedy && greedy.length) {
-    for (const k of greedy) {
-      const before = evalGame(win, '({x:player.x,y:player.y})').value;
-      key(win, k);
-      const after = evalGame(win, '({x:player.x,y:player.y})').value;
-      if (after.x !== before.x || after.y !== before.y) {
-        if (log && Math.random() < 0.1) log(`Pushing into unexplored ${info.join('/')} terrain (greedy fallback), hoping to cross paths with the boss.`);
-        return true;
-      }
-    }
-  }
-  // Every direction either was blocked or burned a turn without relocating (e.g. that same leg
-  // buckling again) -- report honestly that no PUSH progress happened this call. The caller's
-  // main loop will simply try the next-lower-priority strategy or move on to the next action;
-  // the committed lock itself (lock.pushX/pushY, set by the caller) is untouched, so the very
-  // next call retries toward the same target rather than abandoning it over one unlucky turn.
-  return false;
+  if (status === 'moved' && log && Math.random() < 0.05) log(`Pushing toward unexplored ${info.join('/')} ground, hoping to cross paths with the boss.`);
+  return true;
 }
 function tryPathTowardBossBiome(win, log, memory, lock) {
   // Node-scope capture for interpolation below -- see draftCustomCharacter's own comment on why
@@ -4588,6 +5035,7 @@ function tryPathTowardBossBiome(win, log, memory, lock) {
     const found = evalGame(win, `
       (function(){
         const biomes = ${JSON.stringify(info)};
+        const dead = new Set(${JSON.stringify(lock.deadChunks || [])});
         const CHUNK = 24;
         const pcx = Math.floor(player.x / CHUNK), pcy = Math.floor(player.y / CHUNK);
         // Capped at 8 rings (<=192 tiles chebyshev to a chunk's center), deliberately well under
@@ -4601,6 +5049,7 @@ function tryPathTowardBossBiome(win, log, memory, lock) {
               if (Math.max(Math.abs(dcx), Math.abs(dcy)) !== ring) continue; // ring perimeter only
               const cx = pcx + dcx, cy = pcy + dcy;
               if (worldChunks.has(cx + ',' + cy)) continue; // already generated -- its spawn roll already happened
+              if (dead.has(cx + ',' + cy)) continue; // previously proven unreachable (see pushTowardLockedTarget)
               const wx = cx * CHUNK + Math.floor(CHUNK / 2), wy = cy * CHUNK + Math.floor(CHUNK / 2);
               if (biomes.includes(classifyBiomeFull(wx, wy))) return { x: wx, y: wy };
             }
@@ -4610,7 +5059,7 @@ function tryPathTowardBossBiome(win, log, memory, lock) {
       })()
     `).value;
     if (!found) return false; // nothing predictable within range right now -- fall back to generic explore same as before
-    lock.pushX = found.x; lock.pushY = found.y;
+    lock.pushX = found.x; lock.pushY = found.y; lock.nav = null;
     return pushTowardLockedTarget(win, log, info, lock);
   }
 
@@ -4710,7 +5159,7 @@ const strat = {
   tryCureMinorStatusAilment, tryUseSmokeBombEscape, tryRestoreResourcePotion, tryUseMinorUtilityItem,
   tryUseSplintIfMaimed, tryRepairEquipmentItem,
   tryEquipUpgrades, tryPickUpHere, tryFarm, tryCraftUseful, tryCookUseful, tryCraftGearUpgrade, tryShopIfTrading, tryTrainIfOffered,
-  tryGiftIfOffered, tryHandleDialogueIfOpen, tryTalkToAdjacentNpc, tryAdvanceMainQuest, tryPathTowardQuestNpc,
+  tryGiftIfOffered, tryHandleDialogueIfOpen, tryTalkToAdjacentNpc, tryAdvanceMainQuest, tryUseRift, tryLeaveDimension, tryExploreNearArrival, tryManageFear, tryEngageQuestBoss, tryPathTowardQuestNpc,
   tryAdvanceDimensionGateStructure, tryPathTowardAnyDungeon, tryPathTowardBossBiome,
   getMainQuestNavigationTarget, tryEscapeUnknownMenu, trySpendStatPoints, trySpendTalentPoints,
   tryInstallCybernetics, tryPerformRitual, trySeekSupplies,
@@ -5581,6 +6030,7 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     debugInvincible = false,   // makes the character unkillable (debug.setVitalFlags) and relaxes profile dials that only make sense for a mortal character
   } = opts;
   const win = dom.window;
+  RUN_FLAGS.invincible = !!debugInvincible;
   const events = [];
   const errors = [];
   const errCapture = attachErrorCapture(win);
@@ -5598,6 +6048,9 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
   const questNpcLock = { uid: null }; // see tryPathTowardQuestNpc's BUG FIX comment for why this exists
   const questKillTargetLock = { uid: null }; // see tryPathTowardQuestKillTarget's own comment
   const mainQuestNavLock = {}; // see tryAdvanceMainQuest's BUG FIX comment for why this exists
+  const riftLock = {};         // tryUseRift's path cache
+  const dimExitLock = {};      // tryLeaveDimension's path cache
+  const arrivalLock = {};      // tryExploreNearArrival's committed target + path cache
   const anyDungeonLock = {}; // see tryPathTowardAnyDungeon's BUG FIX comment for why this exists
   const bossBiomeMemory = {}; // see tryPathTowardBossBiome for what this holds
   const bossBiomeLock = {}; // see tryPathTowardBossBiome's BUG FIX comment for why this exists
@@ -5761,6 +6214,16 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
       resolveChoiceMenu(win, log, { logPrefix: 'Main quest decision: ' });
       continue;
     }
+    // Chasm prompt. A mortal bot declines (see the confirmchasm note in GENERIC_CLOSE_STATES: stairs
+    // already cover descending, and the fall hurts). An INVINCIBLE bot jumps: the fall is free, a
+    // chasm is a legitimate way down, and -- found in practice -- pathing treats chasm tiles as
+    // walkable, so declining makes the bot step onto the same chasm over and over, cancel, and never
+    // leave the pocket of floor the chasm cuts off from the stairs.
+    if (gs === 'confirmchasm' && debugInvincible) {
+      evalGame(win, "confirmChasmJumpChoice('y')");
+      log('Jumped into a chasm (invincible: the fall is free, and it is a way down).');
+      continue;
+    }
     if (gs === 'playing') { hasBeenPlaying = true; }
     // BUG FIX (found via a "died: bleeding" life whose event log inexplicably restarted mid-
     // way through, complete with a second "Pick up A Crumpled Note" at the exact same early
@@ -5871,6 +6334,17 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     if (!acted) { acted = strat.tryRepairEquipmentItem(win, log); if (acted) actionLabel = 'repair-gear'; }
     if (!acted) { acted = strat.tryUseMinorUtilityAbility(win, log); if (acted) actionLabel = 'minor-utility'; }
     if (!acted) { acted = strat.tryUseMinorUtilityItem(win, log); if (acted) actionLabel = 'minor-utility-item'; }
+    if (!acted) { acted = strat.tryManageFear(win, log); if (acted) actionLabel = 'fear-cure'; }
+    if (!acted) { acted = strat.tryEngageQuestBoss(win, log, {}); if (acted) actionLabel = 'boss'; }
+    // Invincible long-distance travel: navigation takes priority over optional combat (see onInvincibleTravel).
+    // The lock is seeded every 25 actions even when combat keeps winning the priority race, since tryAdvanceMainQuest
+    // is what populates it.
+    // Gear upkeep during fights: the normal upgrade check only runs when no monster is near, which in a boss dungeon is never.
+    if (!acted && debugInvincible && i % 60 === 7) { acted = strat.tryEquipUpgrades(win, log); if (acted) actionLabel = 'gear'; }
+    if (!acted && debugInvincible) {
+      if (i % 25 === 0 && mainQuestNavLock.stageId === undefined) { acted = strat.tryAdvanceMainQuest(win, log, mainQuestNavLock); if (process.env.PT_DEBUG) console.error('[PT_DEBUG] travel seed ->', acted, JSON.stringify({ s: mainQuestNavLock.stageId, x: mainQuestNavLock.x, y: mainQuestNavLock.y })); if (acted) actionLabel = 'travel'; }
+      else if (onInvincibleTravel(win, mainQuestNavLock)) { acted = strat.tryAdvanceMainQuest(win, log, mainQuestNavLock); if (acted) actionLabel = 'travel'; }
+    }
     if (!acted) { acted = strat.tryUseHackChip(win, log); if (acted) actionLabel = 'hack'; }
     if (!acted) { acted = strat.tryCastBuffAbility(win, log); if (acted) actionLabel = 'buff'; }
     if (!acted) { acted = strat.tryUseBuffPotion(win, log); if (acted) actionLabel = 'buff-potion'; }
@@ -5897,7 +6371,10 @@ async function playOneLife(dom, maxActions, maxStuckActions, opts = {}) {
     if (!acted && i % 45 === 0) acted = strat.tryManageSockets(win, log);
     if (!acted && i % 60 === 0) acted = strat.tryManageProperty(win, log);
     if (!acted && i % 20 === 0) acted = strat.tryManageFamilyMenu(win, log);
+    if (!acted) acted = strat.tryLeaveDimension(win, log, dimExitLock);
+    if (!acted) acted = strat.tryUseRift(win, log, riftLock);
     if (!acted) acted = strat.tryAdvanceMainQuest(win, log, mainQuestNavLock);
+    if (!acted) acted = strat.tryExploreNearArrival(win, log, arrivalLock);
     if (!acted) acted = strat.tryPathTowardQuestNpc(win, log, questNpcLock);
     if (!acted) acted = strat.tryPathTowardQuestKillTarget(win, log, questKillTargetLock);
     // Proactive top-off: tryRecoverHp already ran once above at each profile's own reactive
@@ -8413,6 +8890,7 @@ function restoreFromFile(win, filePath) {
 module.exports = {
   // -- low-level game control (SECTION 1/2) --
   boot, evalGame, key, keyAndWait, waitForAutoAction, attachErrorCapture,
+  planBestEffortPath, followPathToward, PLAN_STATS,
   nav,
   getState, getInventorySummary, nearbyMonster, directionToAdjacentMonster,
   readPendingChoiceLabels, resolveChoiceMenu, bestRetreatStep,
