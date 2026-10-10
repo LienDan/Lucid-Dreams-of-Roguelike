@@ -540,7 +540,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.9-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.10-alpha</div>
     </div>
   </div>
 
@@ -1918,6 +1918,136 @@
 //   immediate repeats), classifies lines (combat/loot/talk/world) by display-time rules with a clickable filter bar and
 //   colour-coded edges, and Shift+N opens the whole retained log with the same filters. Display-only: logMessages, saves and the
 //   death recap are unchanged. Settings: logFold, logColors, logFilter. Extend via LOG_CATEGORIES.
+//
+// v0.50.15 Found by an automated invincible-character playtest (not reported by a player): AUTO-EXPLORE
+// PING-PONG IN MAZE DUNGEONS. In a Massive Sewer the 'X' command made the player alternate between two
+// tiles, (86,53) <-> (87,54), for its entire 400-tick budget -- ~134 turns of game progress in 900 bot
+// actions -- while the sewer's disease ticks fired every turn. Root cause: autoExplore re-picked its
+// target every tick via findNearestFrontier(), which ranks unexplored tiles by Chebyshev (straight-line)
+// distance and ignores walls. With a wall between them, two frontier tiles each look "nearest" from
+// alternating positions, and each step toward one moves the player to where the other wins.
+//   - NEW findFrontierByPath(maxR): breadth-first search by WALKING distance, returning the frontier
+//     tile plus the first step of its shortest path in one pass. Respects walls by construction.
+//   - autoExplore now COMMITS to the chosen frontier until it is reached, revealed, or no longer
+//     routable, instead of re-deciding each tick. Two independent guards against the same failure.
+//   - Dungeon search window widened from 20 to 90 tiles (floors are bounded); the overworld keeps 20 so
+//     'explore' still doesn't wander off across an unbounded map. The old fixed 20-tile cap also made
+//     autoexplore report "Nothing new to explore nearby" on dungeon floors that still had unexplored
+//     rooms further away; the dungeon message is now "Nothing left to explore on this floor." and is
+//     only shown when that is actually true.
+//   - findNearestFrontier() is intentionally left in place (external tooling calls it).
+//
+// v0.50.16 Second bug from the same invincible-character playtest: AUTO-TRAVEL TO STAIRS FAILED ON LARGE
+// DUNGEON FLOORS. In a Massive Sewer the down stairs were known, walkable-reachable and 67 tiles away, yet
+// Shift+G answered "No path found." Root cause: every auto-travel caller hard-coded a search window
+// (60 in dungeons, 80 overworld) and bfsFirstStep() returns null for any goal outside that square -- the
+// goal here sat at dx=67. "Massive"-sized floors are bigger than that window, so the one command a player
+// uses to progress could not work on exactly the biggest dungeons, and the story stage "An Omen" (clear a
+// dungeon to its deepest floor) runs through one. The older version of this function's comment already
+// recorded the cap as "known and accepted"; it turns out to block real progression.
+//   - NEW pathFirstStep(): A* with a Chebyshev heuristic (admissible + consistent for 8-way uniform-cost
+//     movement), so it returns the same shortest paths while expanding only tiles near the route. The old
+//     BFS's flat node cap (and the paragraph of calibration behind it) is no longer the binding limit.
+//   - NEW pathRadiusFor(): sizes the search window from the actual start->goal distance (+40 slack) with
+//     the old values as a floor. autoTravelToStairs, autoTravelHome (both branches) and autoExplore use it.
+//   - bfsFirstStep() stays as a thin back-compat wrapper over pathFirstStep -- external tooling and older
+//     call sites address it by name, and its contract (first step or null) is unchanged.
+//   - Measured: the failing save now walks the whole 67+ tile route and descends in ~100 turns.
+//
+// v0.50.17 STORY-BOSS HUNT PITY SYSTEM. Found by the same invincible playtest: after the stage "Fully Warned"
+// (kill the roaming boss Skarn Windrender) became active the bot generated 1,070 chunks and still hadn't
+// met it. The roaming-boss roll only happens at chunk GENERATION (flat 5% per eligible chunk), which is
+// an engine event rather than a player experience: pathfinding probes (auto-travel, BFS/A*) generate chunks
+// the player never visits, chunks generated before the stage activated never get the boosted roll, and the
+// flat roll has no memory so a bad streak never ends. For a mandatory story beat that is a pacing and
+// fairness problem for ordinary players, not a bot quirk.
+//   - onPlayerEnteredChunk(): when the player enters a chunk (hooked from markPlayerAreaDirty), an eligible
+//     chunk (correct biome for the active boss, past the 45-tile spawn-safety radius, no live copy of the
+//     boss within 120 tiles) counts toward a pity ramp: 5% on the first, +4 points per further chunk, cap 85%.
+//     Expected search is ~7 eligible chunks instead of ~20, with a hard practical ceiling around 20.
+//   - On success the boss is placed at least 12 tiles from the player (placeOverworldBoss gained an optional
+//     `avoid` zone for this) with a light flavor line, and the chunk is marked dirty so it persists.
+//   - Each chunk rolls at most once per stage; state lives in player.story.hunt; all tuning is in STORY_HUNT.
+//   - The generation-time roll is untouched; this only fills the gap it leaves.
+//
+// v0.50.18 STORY-DUNGEON GUARANTEE. Third finding from the same invincible playtest, one level up from the
+// roaming-boss hunt: the active stage "The Source" requires killing Seraphiel, who lives in a Sky Bastion --
+// and nothing guaranteed a Sky Bastion exists. Dungeon themes are chosen per chunk by weighted dice under
+// biome/distance caps, and sky_bastion (rare, dtierMax 4) is allowed in only 13 exotic biomes (~12% of
+// chunks). Measured after 1,722 generated chunks: 351 dungeons, none of that theme; the bot had explored
+// 5,000+ tiles. The in-game hint even says "nothing matching that has turned up on any map you've seen yet".
+//   - placeDungeonEntrance() gained opts.forcedTheme: bypasses the biome/dtier caps for that one theme, keeps
+//     the theme's full depth range (story content for the act the player is in), searches 40 tiles for a
+//     walkable spot, caps the variant at Ancient, and now returns true/false (existing callers ignore it).
+//   - ensureStoryDungeon(): when the active kill_boss stage needs a themed dungeon and none is registered
+//     within 400 tiles of the player, after the player enters 8 chunks it places one in a fresh chunk 4-8
+//     chunks away (never in the spawn-safety radius, a settlement, or water) and marks it dirty so it saves.
+//     Bosses whose dungeon lives inside a dimension (item_structure / discovery gates) are excluded;
+//     boss_kill gatekeepers like Seraphiel ARE covered -- they are fought in an overworld dungeon.
+//   - Hooked from onPlayerEnteredChunk (the same player-entry hook as the v0.50.17 boss hunt); all tuning
+//     lives in STORY_DUNGEON; state in player.story.dungeonHunt.
+//   - storyBossNeedingDungeon(stage) resolves which boss's dungeon a stage needs, so the guarantee also covers
+//     dimension_trail / visit_dimension stages whose realm opens when a boss_kill gatekeeper falls (found next:
+//     'A Door Where There Shouldn't Be One' needs Wyrmreach, whose gatekeeper Aurelith lives in a dragon's lair).
+//     One case per stage type; extend it when a new story beat needs a specific overworld location.
+//
+// v0.50.19 THE FINALE HAD NO WAY TO BE FOUND. An invincible playtest reached the last stage ("The Foretold Hour") and
+// found that its boss, the Antagonist, spawns ONLY at the bottom of a gods_threshold dungeon ("The Threshold": rare,
+// depth 10-12) -- yet (1) BOSS_DUNGEON_THEME had no entry for the Antagonist, so no hint could point at such a dungeon;
+// (2) questStageHint short-circuited with "This confrontation finds you once everything before it is finished -- there is
+// nowhere else useful to look yet", which is false (it is waiting in a specific dungeon) and tells the player to stop
+// looking; and (3) the story-dungeon guarantee (v0.50.18) keys off that table, so it could not cover the finale either.
+// Nothing else places a Threshold: it only appears if the per-chunk theme dice roll it. In the measured seed exactly one of
+// 726 dungeons was a Threshold; in a typical explored area the finale would simply not exist.
+//   - BOSS_DUNGEON_THEME.the_antagonist -> gods_threshold, with flavor text. That one table entry feeds the hint
+//     ("...and <name> matches that description, NW of here") and the story-dungeon guarantee, which now places a Threshold
+//     (recommended level ~82, depth 10) in a fresh chunk near the player when none is registered within 400 tiles.
+//   - questStageHint keeps the old "finds you" line only for a boss with NO known location (the 'god', which is revealed
+//     in the same dungeon), never for one that has a dungeon theme.
+//   - Verified on the playtest seed: with the natural Threshold present the hint points at it; with it removed the hint
+//     says to keep exploring, and the guarantee then places one and the hint points there.
+//
+// v0.50.20 CHOICE MENUS COULD NOT SELECT PAST OPTION 26. Found because an invincible bot standing on a boss hoard in The
+// Threshold (a pile of 100+ items) pressed pickup and then looped forever with no turn passing. presentChoice labelled
+// option i with String.fromCharCode(97 + i) and resolveChoiceKey only accepted /^[a-z]$/, so the 27th option onward was
+// shown with characters like '{' and '|' and could not be chosen by key OR by click (the click handler just sends that
+// letter back through the same filter). pickUp() appended "Pick up everything" after every item, so in a big pile the one
+// option most players want was last and unreachable; only the first 26 items could ever be taken one at a time.
+//   - Choice menus now PAGINATE (CHOICE_PAGE_SIZE = 26): '[' / ']' (PageUp/PageDown) or the on-screen prev/next turn pages,
+//     letters pick within the current page, the title shows "(page/pages)". Every presentChoice caller benefits; menus of
+//     26 or fewer look and behave exactly as before.
+//   - pickUp() lists "Pick up everything" first among the item options.
+//
+// v0.50.21 FEAR HAD NO CEILING. Found at the final boss: a level-99 invincible bot stood in front of two Night Terrors dealing
+// zero damage for thousands of actions because "You're too terrified to attack!". player.statusFear read 4,862. Fear is added
+// (never maxed) in a dozen places -- Night Terror hits (+3 on 35% of hits), the God's own move, fear abilities, eldritch
+// effects -- and decays by 1 per turn (a Willpower roll sometimes makes it 2), so any sustained contact with fear monsters
+// banks thousands of turns of lockout. For a melee-only build that is a permanent inability to attack, at the point in the
+// game (the last dungeon) where that is least survivable; only a curefear potion lifts it.
+//   - NEW FEAR_MAX_TURNS (12) and addFearTurns(current, add): every additive statusFear site now goes through the helper.
+//     Fear still locks melee while a Night Terror is on you (it re-applies), but it ends ~12 turns after contact ends.
+//   - Matches the pre-existing intent: the random-event path already capped fear at 10 via addCapped.
+//   - The max()-style sites (which set fear to at least N and never grow past it) are untouched.
+//
+// v0.50.22 COMPACT CHUNK SAVES (tile deltas) + DETERMINISTIC WORLD GENERATION. The biggest finding of the invincible playtest after the
+// story-blocking ones: save size grew linearly with distance walked, because every dirty chunk (the 3x3 block around the player, every
+// turn) was saved with its FULL tile grid (~76 KB). Measured: 32 MB for 407 chunks; 231.7 MB for a character that had walked ~10,000 tiles --
+// against a browser localStorage quota of about 5 MB, with autosave failures swallowed silently (a real long game would stop saving without
+// telling the player), and every save/load stalling on tens of MB of JSON (profiled: 49% of all CPU was serializing saves).
+//   - Chunks are saved as a DELTA against their regenerated pristine form: only tiles whose hash differs from the pristine hash are stored,
+//     the fog-of-war flag is a hex bitmap, everything else on the chunk (npcs, monsters, settlement, dungeonEntrance...) is stored as before.
+//     Loading is LAZY: a packed chunk's `tiles` is an accessor that regenerates and applies the delta on first touch, so every existing
+//     access path works unchanged and chunks the player never revisits cost nothing. Untouched packed chunks re-save without regeneration.
+//   - Legacy full-tile saves still load; their chunks migrate a few per save (SAVE_LEGACY_MIGRATIONS_PER_SAVE) so no single autosave hitches.
+//     Saves are version 3.
+//   - Making "regenerate" mean "reproduce" required: generateChunkSeeded (Math.random is seeded from SEED+chunk coords while a chunk is
+//     generated -- tree HP, trap placement and item uids were unseeded before); hashing that ignores `seen`, item/container uids, undamaged
+//     hp/maxHp and the loot of UNOPENED containers (all re-rolled by regeneration and not player state); and TILE_ENTITY_REF_KEYS (house doors
+//     point at their owner NPC by a counter-minted uid, so those tiles are always stored). Regeneration fences off its side effects (uid
+//     counters, dungeon registry, dimension sub-dungeons) so it is invisible to the rest of the game.
+//   - Verified: 121-chunk world, 32x smaller (8.9 MB of tile data -> 275 KB); after a save/load round trip 0 tile-state mismatches, identical
+//     fog-of-war, door-owner links unchanged, and an opened-and-looted container plus damaged trees persisted exactly. A real 231.7 MB
+//     checkpoint converted to 24.3 MB (restore 1.8 s).
 //
 // ===================== SOUND MANAGER =====================
 // Everything below is synthesized live with the Web Audio API — there are no
@@ -7901,7 +8031,7 @@ const STORY_BOSS_AI = {
     }
     if (seesPlayer && dist >= 2 && dist <= 7 && bossReady(m, 'gaze')) {
       bossCool(m, 'gaze', 5);
-      player.statusFear = (player.statusFear || 0) + 3;
+      player.statusFear = addFearTurns(player.statusFear, 3);
       player.statusConfuse = (player.statusConfuse || 0) + 2;
       log(`${m.name}'s gaze finds you. Your mind recoils from what it sees.`);
       return true;
@@ -8037,7 +8167,7 @@ STORY_BOSS_AI.archdemon_malphegor = function (m, dist, seesPlayer) {
   }
   if (seesPlayer && bossReady(m, 'roar') && Math.random() < 0.2) {
     bossCool(m, 'roar', 7);
-    player.statusFear = (player.statusFear || 0) + 3;
+    player.statusFear = addFearTurns(player.statusFear, 3);
     log(`${m.name} unleashes an Infernal Roar!`);
     return true;
   }
@@ -9079,7 +9209,7 @@ STORY_BOSS_AI.the_antagonist = function (m, dist, seesPlayer) {
   if (!seesPlayer && !m.engaged) { wander(m); return true; }
   if (bossReady(m, 'despair') && Math.random() < 0.25) {
     bossCool(m, 'despair', 6);
-    player.statusFear = (player.statusFear || 0) + 3;
+    player.statusFear = addFearTurns(player.statusFear, 3);
     log(`${m.name} radiates a Despair Aura!`);
     return true;
   }
@@ -9200,7 +9330,7 @@ function executeGodMove(m, move) {
     case 'status': {
       if (move.poison) player.statusPoison = (player.statusPoison || 0) + move.poison;
       if (move.slow) player.statusSlow = Math.max(player.statusSlow || 0, move.slow);
-      if (move.fear) player.statusFear = (player.statusFear || 0) + move.fear;
+      if (move.fear) player.statusFear = addFearTurns(player.statusFear, move.fear);
       if (move.confuse) player.statusConfuse = (player.statusConfuse || 0) + move.confuse;
       break;
     }
@@ -9862,6 +9992,8 @@ function markLocationDirty(wx, wy) {
 function markPlayerAreaDirty() {
   if (curIsDungeon()) return;
   const cx0 = Math.floor(player.x / CH), cy0 = Math.floor(player.y / CH);
+  const huntKey = cx0 + ',' + cy0;
+  if (huntKey !== lastHuntChunkKey) { lastHuntChunkKey = huntKey; try { onPlayerEnteredChunk(cx0, cy0); } catch (e) { /* the hunt is a convenience; never let it break movement */ } }
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) markLocationDirty((cx0 + dx) * CH, (cy0 + dy) * CH);
 }
 // How long (in turns) an area has to sit unvisited before it's even eligible to repopulate, and
@@ -9950,11 +10082,161 @@ function makeTile(biomeId) {
 }
 
 
+// ===================== COMPACT CHUNK SAVES (tile deltas) =====================
+// PROBLEM: a dirty chunk used to be saved with its FULL tile grid (~76 KB each), and chunks go dirty in a 3x3
+// block around the player every turn. Save size therefore grows linearly with distance walked: measured 32 MB
+// for 407 chunks, and 231 MB for a character that had walked ~10,000 tiles -- against a browser localStorage
+// quota of about 5 MB. Autosave failures are swallowed silently, so a real long game would stop saving without
+// telling the player; and every save/load of that much JSON stalls the game.
+// KEY OBSERVATION (measured on all 407 chunks): tiles are deterministic from SEED, and only ~1% of tiles ever
+// really change (felled trees, burned ground, looted containers). ~84% of the differences between a saved tile
+// and a freshly generated one were just the fog-of-war flag `seen`, and most of the rest were lazily-assigned
+// hp/maxHp. So a chunk can be saved as a DELTA against its own regenerated pristine form.
+// DESIGN
+//   - At generation (getChunk) a Uint32 hash per tile of the PRISTINE tile (ignoring `seen`) is recorded in a
+//     non-enumerable `_pristineHash`, so it is never serialized and costs ~2 KB of memory per chunk.
+//   - At save, tiles whose hash differs are stored whole; `seen` is stored as a bitmap (hex); everything else
+//     on the chunk (npcs, monsters, settlement, dungeonEntrance, ...) is stored exactly as before.
+//   - At load, a chunk is LAZY: its `tiles` is an accessor that, on first touch, regenerates the pristine grid
+//     (side effects fenced off, see materializePackedChunk), applies the delta, and replaces itself with a plain
+//     data property. Nothing is regenerated for chunks the player never revisits, and every existing
+//     `chunk.tiles` / getTile access path works unchanged. An untouched packed chunk re-saves as its own record
+//     with no regeneration at all.
+//   - Chunks without a `_pristineHash` (loaded from an old full-tile save) simply keep saving in the old full
+//     format, so old saves load fine and migrate as their chunks are regenerated. Saves are version 3.
+/** Run fn with Math.random replaced by a PRNG seeded from (SEED, cx, cy), then restore it. World generation
+ * mixes seeded rngs with bare Math.random calls (tree HP, hazard/trap placement, item uids...), so a chunk
+ * regenerated later was NOT identical to the one first generated -- fine while only never-mutated chunks were
+ * regenerated, but a delta save needs "regenerate" to mean "reproduce". Seeding Math.random for the duration of
+ * generateChunk makes the whole call tree (including helpers it reaches) a pure function of (seed, chunk).
+ * Re-entrant: a nested generation (e.g. a helper that generates a neighbour) saves and restores the outer one. */
+function withChunkSeededRandom(cx, cy, fn) {
+  const real = Math.random;
+  Math.random = mulberry32((SEED * 73856093) ^ (cx * 19349663) ^ (cy * 83492791) ^ 0x5bd1e995);
+  try { return fn(); } finally { Math.random = real; }
+}
+function generateChunkSeeded(cx, cy) { return withChunkSeededRandom(cx, cy, () => generateChunk(cx, cy)); }
+function tileSigHash(t) {
+  // `seen` is stored separately (bitmap). hp/maxHp are ignored WHILE UNDAMAGED: initDestructibleFeature rolls
+  // them with Math.random at generation, so a regenerated tree legitimately has a different roll within the
+  // same range -- that is not state worth saving. A damaged tile (hp < maxHp) is real state, hashes in full,
+  // and is therefore stored in the delta.
+  const skipHp = t.hp != null && t.hp === t.maxHp;
+  const sig = JSON.stringify(t, function (k, v) {
+    if (this === t && (k === 'seen' || (skipHp && (k === 'hp' || k === 'maxHp')))) return undefined;
+    // Item/container uids are random strings minted at generation; an untouched item regenerated later gets a
+    // new one. Nothing can reference an item the player never touched (touching it mutates the tile, which is
+    // then saved in full), so they are noise for "has this tile changed".
+    if (k === 'uid' || k === 'cuid') return undefined;   // cuid: container counter id, assigned once and never read anywhere
+    // An UNOPENED container's loot is a roll nobody has interacted with, and a few generators draw on state
+    // outside the seeded PRNG (e.g. which procedural diary a shelf holds), so regenerating an equivalent roll is
+    // fine. Once opened/looted (`opened`), its contents are real state and hash -- and save -- in full.
+    if (k === 'contents' && this && this.cuid !== undefined && !this.opened) return undefined;
+    return v;
+  });
+  let h = 0x811c9dc5;                                   // FNV-1a, 32 bit
+  for (let i = 0; i < sig.length; i++) { h ^= sig.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return h >>> 0;
+}
+function hashChunkTiles(tiles) {
+  const out = new Uint32Array(CH * CH);
+  for (let y = 0; y < CH; y++) for (let x = 0; x < CH; x++) out[y * CH + x] = tileSigHash(tiles[y][x]);
+  return out;
+}
+function packSeenBits(tiles) {                          // CH*CH booleans -> hex string, 4 tiles per digit
+  let hex = '';
+  for (let i = 0; i < CH * CH; i += 4) {
+    let n = 0;
+    for (let b = 0; b < 4; b++) { const j = i + b; if (j < CH * CH && tiles[Math.floor(j / CH)][j % CH].seen) n |= (1 << b); }
+    hex += n.toString(16);
+  }
+  return hex;
+}
+function applySeenBits(tiles, hex) {
+  for (let i = 0; i < CH * CH; i++) {
+    const t = tiles[Math.floor(i / CH)][i % CH];
+    if (parseInt(hex[i >> 2], 16) & (1 << (i & 3))) t.seen = true; else delete t.seen;
+  }
+}
+function defineHidden(obj, name, value) { Object.defineProperty(obj, name, { value, writable: true, enumerable: false, configurable: true }); }
+/** Copy a chunk's own enumerable fields except `tiles`, WITHOUT touching the lazy `tiles` accessor. */
+function chunkFieldsWithoutTiles(c) {
+  const out = {};
+  for (const k of Object.keys(c)) if (k !== 'tiles') out[k] = c[k];
+  return out;
+}
+/** The record written to a save for one dirty chunk (see the design note above). */
+// Legacy chunks (loaded from a pre-delta save) have no pristine reference. Converting one costs one regeneration
+// (tens of ms), so autosave converts only a few per save -- the rest keep saving in the old full format, which
+// is still valid -- and the world migrates itself over a handful of saves with no single hitch. Tooling can pass
+// Infinity to convert everything at once (see getSaveData's options).
+const SAVE_LEGACY_MIGRATIONS_PER_SAVE = 6;
+// Tile fields that POINT AT a live entity by its counter-minted uid (currently: a house door -> its owner NPC).
+// Regeneration mints different uids, so a tile holding one can never be reproduced from the seed: it is always
+// stored in the delta, never inferred. Add a key here if a new feature ever puts an entity reference on a tile.
+const TILE_ENTITY_REF_KEYS = ['homeOwnerUid'];
+function tileHoldsEntityRef(t) { for (const k of TILE_ENTITY_REF_KEYS) if (t[k] != null) return true; return false; }
+function chunkSaveRecord(c, migrationBudget) {
+  const d = Object.getOwnPropertyDescriptor(c, 'tiles');
+  if (d && d.get && c._packed) return Object.assign(chunkFieldsWithoutTiles(c), { packed: c._packed }); // never materialized: re-save as-is
+  if (!c._pristineHash) {
+    if (migrationBudget && migrationBudget.left > 0) { migrationBudget.left--; defineHidden(c, '_pristineHash', hashChunkTiles(regeneratePristineTiles(c.cx, c.cy))); }
+    else return c;                                      // legacy chunk, no budget left: keep the old full format
+  }
+  const diffs = [];
+  for (let y = 0; y < CH; y++) for (let x = 0; x < CH; x++) {
+    const i = y * CH + x;
+    const t = c.tiles[y][x];
+    if (tileSigHash(t) !== c._pristineHash[i] || tileHoldsEntityRef(t)) diffs.push([i, t]);
+  }
+  return Object.assign(chunkFieldsWithoutTiles(c), { packed: { seen: packSeenBits(c.tiles), tiles: diffs } });
+}
+/** Turn a loaded save record back into a chunk object (lazy if it carries a delta). */
+function chunkFromSaveRecord(rec) {
+  if (!rec.packed) return rec;                          // old full-tile record
+  const packed = rec.packed;
+  const c = chunkFieldsWithoutTiles(rec); delete c.packed;
+  defineHidden(c, '_packed', packed);
+  Object.defineProperty(c, 'tiles', {
+    configurable: true, enumerable: true,
+    get() { return materializePackedChunk(c); },
+    set(v) { Object.defineProperty(c, 'tiles', { value: v, writable: true, enumerable: true, configurable: true }); },
+  });
+  return c;
+}
+/** Regenerate a chunk's pristine tile grid. Generation is not perfectly pure -- it can bump the entity UID
+ * counters and register dungeons for the chunk it returns -- and here we throw that chunk away, so every such
+ * side effect is rolled back to keep regeneration invisible to the rest of the game. */
+function regeneratePristineTiles(cx, cy) {
+  const uids = [uidCounter, containerUidCounter, procBookUidCounter];
+  const regKeys = new Set(dungeonRegistry.keys()), subCount = DIMENSION_SUBDUNGEONS.length;
+  try { return generateChunkSeeded(cx, cy).tiles; }
+  finally {
+    [uidCounter, containerUidCounter, procBookUidCounter] = uids;
+    for (const k of Array.from(dungeonRegistry.keys())) if (!regKeys.has(k)) dungeonRegistry.delete(k);
+    DIMENSION_SUBDUNGEONS.length = subCount;
+  }
+}
+function materializePackedChunk(c) {
+  if (c._materializing) throw new Error('materializePackedChunk re-entered for chunk ' + c.cx + ',' + c.cy);
+  c._materializing = true;
+  let tiles;
+  try { tiles = regeneratePristineTiles(c.cx, c.cy); } finally { delete c._materializing; }
+  const packed = c._packed;
+  defineHidden(c, '_pristineHash', hashChunkTiles(tiles));   // hash the PRISTINE grid, before the delta is applied
+  for (const [i, t] of packed.tiles) tiles[Math.floor(i / CH)][i % CH] = t;
+  applySeenBits(tiles, packed.seen);
+  Object.defineProperty(c, 'tiles', { value: tiles, writable: true, enumerable: true, configurable: true });
+  c._packed = null;
+  return tiles;
+}
+
 function getChunk(cx, cy) {
   const key = chunkKey(cx, cy);
   let c = worldChunks.get(key);
   if (c) return c;
-  c = generateChunk(cx, cy);
+  c = generateChunkSeeded(cx, cy);
+  defineHidden(c, '_pristineHash', hashChunkTiles(c.tiles));   // reference for delta saves (see COMPACT CHUNK SAVES)
   worldChunks.set(key, c);
   return c;
 }
@@ -11484,17 +11766,27 @@ const BIOME_DUNGEON_AFFINITY = {
   crashed_debris_field: ['ruins'], nanite_swarm_zone: ['labyrinth', 'sewer'],
   ancient_megaruins: ['fortress', 'tower', 'labyrinth'],
 };
-function placeDungeonEntrance(chunk, cx, cy, seedVal, centerBiome) {
+// opts.forcedTheme: place THIS theme regardless of the biome/distance eligibility caps (used by the
+// story-dungeon guarantee -- see ensureStoryDungeon). A forced placement keeps the theme's own full depth
+// range (the biome floor exists to protect low-level players from out-of-place lairs; a story dungeon is
+// deliberately content for the act the player is in), searches a few tiles for a walkable spot instead of
+// giving up on the first, and caps the difficulty variant at Ancient so a mandatory beat can't roll a
+// Corrupted/Legendary spike. Returns true when an entrance was actually placed (existing callers ignore it).
+function placeDungeonEntrance(chunk, cx, cy, seedVal, centerBiome, opts) {
+  const forced = opts && opts.forcedTheme;
   const rng = mulberry32((cx * 3331 + cy * 9091 + SEED + 4242) | 0);
-  const lx = randInt(rng, 3, CH - 4), ly = randInt(rng, 3, CH - 4);
+  let lx = randInt(rng, 3, CH - 4), ly = randInt(rng, 3, CH - 4);
+  if (forced) {
+    for (let i = 0; i < 40 && !chunk.tiles[ly][lx].walkable; i++) { lx = randInt(rng, 3, CH - 4); ly = randInt(rng, 3, CH - 4); }
+  }
   const t = chunk.tiles[ly][lx];
-  if (!t.walkable) return;
+  if (!t.walkable) return false;
   const distFromOrigin = Math.sqrt(cx*cx + cy*cy);
   // REBALANCE PASS 2: dtier cap comes first now, and it's a hard filter, not a soft weight -- a
   // biome's family (see biomeDtierCap/BIOMES) decides which dungeon themes are even eligible here
   // before rarity/affinity get a say, so an ordinary Plains chunk physically cannot roll a dtier-5
   // superboss lair regardless of how the rarity dice land.
-  const maxAllowedDtier = biomeDtierCap(centerBiome, distFromOrigin);
+  const maxAllowedDtier = forced ? Infinity : biomeDtierCap(centerBiome, distFromOrigin);
   let tierWeights = Object.entries(DUNGEON_TIER_WEIGHTS).map(([k,v]) => [k,v]);
   // rare dungeons are now genuinely rare close to spawn (was 0.2x, letting one appear right next
   // to town and be reachable at level 1-2 with nothing to show for the "rare" label but a
@@ -11506,8 +11798,8 @@ function placeDungeonEntrance(chunk, cx, cy, seedVal, centerBiome) {
   // (flavor: how ornate/rare-labeled it reads) and by biome affinity (flavor: does this biome
   // "make sense" hosting it) -- both are preferences now layered *on top of* the hard dtier cap
   // above, instead of being the only thing deciding what can appear.
-  const maxThemeDepthFloor = biomeMaxThemeDepthFloor(centerBiome);
-  let pool = Object.keys(DUNGEON_THEMES).filter(id => {
+  const maxThemeDepthFloor = forced ? Infinity : biomeMaxThemeDepthFloor(centerBiome);
+  let pool = forced ? [forced] : Object.keys(DUNGEON_THEMES).filter(id => {
     const m = DUNGEON_THEMES[id];
     return m.tier !== 'dimension' && (m.dtierMax || 2) <= maxAllowedDtier && m.depthRange[0] <= maxThemeDepthFloor;
   });
@@ -11539,7 +11831,7 @@ function placeDungeonEntrance(chunk, cx, cy, seedVal, centerBiome) {
   // Normal biomes (maxThemeDepthFloor finite, see biomeMaxThemeDepthFloor) cap variant power at
   // Ancient (+1) -- Corrupted/Legendary (+2/+3) are reserved for special biomes, same rule as the
   // dtier cap just above, closing the gap the simulation found.
-  const variant = rollDungeonVariant(rng, distFromOrigin, maxThemeDepthFloor === Infinity ? undefined : 1);
+  const variant = rollDungeonVariant(rng, distFromOrigin, (forced || maxThemeDepthFloor !== Infinity) ? 1 : undefined);
   // targetPower: still the 1-6 bucket, but now used ONLY to pick an appropriately-strong boss
   // species from BOSS_POWER (see generateDungeonLevel) -- it no longer drives the displayed
   // recommended level (see below).
@@ -11567,6 +11859,7 @@ function placeDungeonEntrance(chunk, cx, cy, seedVal, centerBiome) {
   t.glyph = eg.glyph; t.color = tier === 'rare' ? '#e05ae0' : (tier === 'uncommon' ? '#5ac9e0' : '#9ac95a'); t.feature = 'dungeon_entrance'; t.dungeonId = id; t.walkable = true;
   chunk.dungeonEntrance = { id, theme, maxDepth: cappedMaxDepth, tier, name: displayName, entranceName: eg.name, x: cx*CH+lx, y: cy*CH+ly, variant: variant.id, recommendedLevel, size: sizeTier.id };
   dungeonRegistry.set(id, { id, theme, maxDepth: cappedMaxDepth, tier, name: displayName, entranceName: eg.name, levels: [], x: cx*CH+lx, y: cy*CH+ly, variant: variant.id, targetPower, recommendedLevel, depthScaleBonus, originMode: 'overworld', size: sizeTier.id });
+  return true;
 }
 
 // ===================== WORLD GENERATION v5 =====================
@@ -12850,10 +13143,13 @@ function maybeSpawnOverworldBoss(chunk, cx, cy, centerBiome, rng) {
 }
 // Actual placement, factored out so the boosted story-boss roll above and the original random
 // pool below can share it instead of duplicating the tile-picking/makeMonster/Object.assign block.
-function placeOverworldBoss(chunk, cx, cy, bossDef, rng) {
+function placeOverworldBoss(chunk, cx, cy, bossDef, rng, avoid) {
   const lx = randInt(rng, 3, CH-4), ly = randInt(rng, 3, CH-4);
   const t = chunk.tiles[ly][lx];
   if (!t.walkable && !(bossDef.aquatic && (t.biome === 'ocean' || t.biome === 'lake'))) return false;
+  // Optional avoid zone ({x,y,dist}): refuse a tile too close to a point (used when placing a boss
+  // into a chunk the player is standing in, so it never materializes next to them).
+  if (avoid && Math.max(Math.abs(cx*CH+lx - avoid.x), Math.abs(cy*CH+ly - avoid.y)) < avoid.dist) return false;
   const m = makeMonster('rabbit', 0, 0, 1, rng); // placeholder to reuse makeMonster's uid/shape, overwritten below
   const bScale = overworldDangerScale(cx, cy);
   Object.assign(m, {
@@ -12875,6 +13171,158 @@ function placeOverworldBoss(chunk, cx, cy, bossDef, rng) {
   }
   chunk.monsters.push(m);
   return true;
+}
+
+// ===================== STORY-BOSS HUNT ("pity") SYSTEM =====================
+// PROBLEM (found by an invincible playtest that spent thousands of actions on one boss hunt, with
+// 1,000+ chunks generated): a roaming story boss is only ever rolled at chunk GENERATION time
+// (see the boosted roll in the overworld-boss placement above). That ties a mandatory story beat to
+// an engine event the player doesn't control or see:
+//   - pathfinding probes (auto-travel, BFS/A*) call getTile -> getChunk and generate chunks up to
+//     80+ tiles away that the player never visits, so a boss can be rolled into terrain nobody sees;
+//   - chunks generated BEFORE the stage became active (every player explores first) never get the
+//     boosted roll at all, so the nearby candidates are already "spent";
+//   - the roll is a flat 5%, with no memory -- an unlucky streak never ends.
+// FIX: also roll when the PLAYER ENTERS a chunk, with a pity ramp so the expected search is bounded
+// and the player experiences every roll. It never replaces the generation-time roll (that one is
+// still fine and still happens); it only fills the gap when no live copy of the boss is near.
+// All tuning lives in STORY_HUNT so a designer can adjust difficulty in one place.
+const STORY_HUNT = {
+  baseChance: 0.05,        // chance on the first eligible chunk entered (matches the generation roll)
+  rampPerChunk: 0.04,      // added per further eligible chunk entered without a spawn
+  maxChance: 0.85,         // pity never becomes a guarantee on a single chunk
+  nearbyBossRadius: 120,   // tiles: a live copy of the boss closer than this suppresses new spawns
+  minSpawnDistance: 12,    // tiles: preferred minimum distance between the new boss and the player
+  relaxedDistanceFactor: 0.6, // fallback: second half of the attempts use minSpawnDistance * this
+  placementTries: 24,      // attempts to find a walkable tile that satisfies minSpawnDistance
+  flavor: 'The air here hums with menace -- something powerful has made its lair nearby.',
+};
+let lastHuntChunkKey = null; // transient: last chunk the hunt hook saw (re-derived after load, not saved)
+function liveBossNear(bossId, radiusTiles) {
+  const rc = Math.ceil(radiusTiles / CH);
+  const pcx = Math.floor(player.x / CH), pcy = Math.floor(player.y / CH);
+  for (let dy = -rc; dy <= rc; dy++) for (let dx = -rc; dx <= rc; dx++) {
+    const c = worldChunks.get(chunkKey(pcx + dx, pcy + dy));
+    if (!c) continue;
+    for (const m of c.monsters) {
+      if (m.alive && m.monsterId === bossId && Math.max(Math.abs(m.x - player.x), Math.abs(m.y - player.y)) <= radiusTiles) return true;
+    }
+  }
+  return false;
+}
+// Fear stacks by ADDITION in a dozen places (Night Terror hits +3, scripted boss moves, fear abilities, eldritch
+// effects...) and ticks down by only 1 per turn, with no ceiling. Measured on a level-99 character that had fought a
+// pack of Night Terrors: statusFear = 4,862 -- nearly five thousand turns of "You're too terrified to attack!". For a
+// melee build that is a permanent lockout (no cure but a potion), at exactly the point -- the final boss's dungeon --
+// where it is least survivable. Every additive site now goes through this one helper so the ceiling lives in one place.
+// (The random-event code already capped fear at 10 via addCapped; this makes the combat paths agree with it.)
+const FEAR_MAX_TURNS = 12;
+function addFearTurns(current, add) { return Math.min(FEAR_MAX_TURNS, (current || 0) + add); }
+// ---- Story-dungeon guarantee ------------------------------------------------------------------
+// Some mandatory bosses live in a themed dungeon (BOSS_DUNGEON_THEME), e.g. Seraphiel in a Sky Bastion.
+// Dungeon themes are otherwise picked per chunk by weighted dice under biome/distance caps -- and a
+// rare theme like sky_bastion is only allowed in 13 exotic biomes (about 12% of chunks in a measured
+// world). Measured: 351 dungeons, ZERO of that theme, while an invincible bot explored 5,000+ tiles
+// looking for the one the story requires. The quest hint itself concedes the gap ("nothing matching
+// that has turned up... keep exploring"). So for a mandatory beat, existence must not be left to chance.
+// RULE: while the active stage needs a themed boss dungeon and none is registered within
+// searchRadius of the player, once the player has entered minChunksEntered chunks (so it still reads as
+// exploration, not a hand-out) one is placed in a fresh chunk 4-8 chunks away, using the normal
+// placement code (placeDungeonEntrance with a forced theme) so it is a real, fully generated dungeon.
+const STORY_DUNGEON = {
+  searchRadius: 400,       // tiles: a registered dungeon of the theme closer than this satisfies the stage
+  minChunksEntered: 8,     // chunks the player must enter (while it's missing) before one is placed
+  ringMinChunks: 4,        // placement distance from the player, in chunks (96-192 tiles)
+  ringMaxChunks: 8,
+  tries: 80,               // candidate chunks examined before giving up until the next chunk entry
+  flavor: (name) => `Word reaches you of ${name} not far from here -- exactly the kind of place you have been looking for.`,
+};
+function ensureStoryDungeon(stage, bossId, pcx, pcy) {
+  const themeInfo = BOSS_DUNGEON_THEME[bossId];
+  if (!themeInfo || bossDungeonLivesInDimension(bossId)) return;
+  const st = player.story;
+  if (!st.dungeonHunt || st.dungeonHunt.stageId !== stage.id) st.dungeonHunt = { stageId: stage.id, entered: 0, placed: false };
+  const h = st.dungeonHunt;
+  if (h.placed) return;
+  if (nearestRegisteredDungeonOfTheme(themeInfo.theme, player.x, player.y)?.dist <= STORY_DUNGEON.searchRadius) return;
+  if (++h.entered < STORY_DUNGEON.minChunksEntered) return;
+  for (let i = 0; i < STORY_DUNGEON.tries; i++) {
+    const ring = randInt(Math.random, STORY_DUNGEON.ringMinChunks, STORY_DUNGEON.ringMaxChunks);
+    const ang = Math.random() * Math.PI * 2;
+    const cx = pcx + Math.round(Math.cos(ang) * ring), cy = pcy + Math.round(Math.sin(ang) * ring);
+    if ((Math.abs(cx) + Math.abs(cy)) * CH <= 45) continue;       // never inside the spawn-safety radius
+    const chunk = getChunk(cx, cy);
+    if (!chunk || chunk.settlement || chunk.dungeonEntrance) continue;
+    const centerBiome = chunk.tiles[CH >> 1][CH >> 1].biome;
+    if (centerBiome === 'ocean' || centerBiome === 'lake') continue;
+    if (!placeDungeonEntrance(chunk, cx, cy, 0, centerBiome, { forcedTheme: themeInfo.theme })) continue;
+    markLocationDirty(cx * CH, cy * CH);                          // the entrance tile changed: make it persist
+    h.placed = true;
+    log(STORY_DUNGEON.flavor(chunk.dungeonEntrance.name));
+    return;
+  }
+}
+// The boss whose overworld dungeon must exist for this stage to be completable, or null.
+//   kill_boss                         -> the stage's own target boss
+//   dimension_trail / visit_dimension -> the target dimension's gatekeeper, when that gate is kind
+//                                        'boss_kill' (killing him opens the realm) and the realm is still closed
+// Extend here (one case per stage type) when a new story beat needs a specific overworld location.
+function storyBossNeedingDungeon(stage) {
+  if (stage.type === 'kill_boss') return stage.targetBossId || null;
+  if (stage.type === 'dimension_trail' || stage.type === 'visit_dimension') {
+    const gate = DIMENSION_GATE_INFO[stage.targetDimensionId];
+    const open = (player.discoveredDimensions || []).includes(stage.targetDimensionId);
+    if (gate && gate.kind === 'boss_kill' && !open) return gate.bossId;
+  }
+  return null;
+}
+// A gatekeeper whose gate is kind 'boss_kill' is fought in an OVERWORLD dungeon (his death is what opens the
+// dimension), so that dungeon must exist out here. Only the other gate kinds ('item_structure', 'discovery')
+// keep their boss inside the dimension, where this guarantee must not place anything.
+function bossDungeonLivesInDimension(bossId) {
+  return Object.values(DIMENSION_GATE_INFO).some(g => g.bossId === bossId && g.kind !== 'boss_kill');
+}
+function onPlayerEnteredChunk(cx, cy) {
+  if (curIsDungeon() || curIsDimension()) return;
+  const stage = curStoryStage();
+  if (!stage || stage.done) return;
+  // Which boss's themed dungeon does this stage need to exist? (kill_boss stages name the boss directly;
+  // dimension stages reach a realm through its gatekeeper -- see storyBossNeedingDungeon.)
+  const dungeonBoss = storyBossNeedingDungeon(stage);
+  if (dungeonBoss && BOSS_DUNGEON_THEME[dungeonBoss]) {
+    // Dungeon bosses aren't hunted on the overworld -- but their DUNGEON has to exist (see STORY_DUNGEON).
+    ensureStoryDungeon(stage, dungeonBoss, cx, cy);
+    return;
+  }
+  if (stage.type !== 'kill_boss') return;
+  const def = OVERWORLD_BOSSES.find(b => b.id === stage.targetBossId);
+  if (!def || def.aquatic) return;
+  if ((Math.abs(cx) + Math.abs(cy)) * CH <= 45) return; // same spawn-safety radius as the generation roll
+  const chunk = worldChunks.get(chunkKey(cx, cy));
+  if (!chunk || chunk._huntStage === stage.id) return;  // each chunk rolls at most once per stage
+  chunk._huntStage = stage.id;
+  const centerBiome = chunk.tiles[Math.floor(CH / 2)][Math.floor(CH / 2)].biome;
+  if (!def.biomes.includes(centerBiome)) return;
+  if (liveBossNear(def.id, STORY_HUNT.nearbyBossRadius)) return;
+  const st = player.story;
+  if (!st.hunt || st.hunt.stageId !== stage.id) st.hunt = { stageId: stage.id, eligibleEntered: 0, spawns: 0 };
+  st.hunt.eligibleEntered++;
+  const chance = Math.min(STORY_HUNT.maxChance, STORY_HUNT.baseChance + STORY_HUNT.rampPerChunk * (st.hunt.eligibleEntered - 1));
+  if (Math.random() > chance) return;
+  // A chunk is only CH tiles wide and bosses are placed 3..CH-4 in, so if the player is standing near
+  // the middle (arrived by a diagonal step, teleport or fast travel) NO tile can be minSpawnDistance
+  // away. Try the full exclusion first, then relax it for the second half of the attempts, so an
+  // already-won roll is never silently lost to geometry.
+  const avoid = { x: player.x, y: player.y, dist: STORY_HUNT.minSpawnDistance };
+  for (let i = 0; i < STORY_HUNT.placementTries; i++) {
+    if (i === Math.floor(STORY_HUNT.placementTries / 2)) avoid.dist = Math.floor(STORY_HUNT.minSpawnDistance * STORY_HUNT.relaxedDistanceFactor);
+    if (placeOverworldBoss(chunk, cx, cy, def, Math.random, avoid)) {
+      st.hunt.spawns++; st.hunt.eligibleEntered = 0;
+      markLocationDirty(cx * CH, cy * CH);
+      log(STORY_HUNT.flavor);
+      return;
+    }
+  }
 }
 
 // ===================== GAME ENGINE =====================
@@ -15610,7 +16058,7 @@ function applyBiomeEnvironmentalEffect() {
     }
     case 'voidtear': {
       applyCorruption();
-      player.statusFear = (player.statusFear || 0) + 1;
+      player.statusFear = addFearTurns(player.statusFear, 1);
       const spots = [];
       for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
         if (!dx && !dy) continue;
@@ -18580,6 +19028,12 @@ const BOSS_DUNGEON_THEME = {
   admin7:               { theme: 'undercity_spire', flavor: 'said to still administer an undercity spire, alone' },
   unburied_queen:       { theme: 'necropolis', flavor: 'said to rule a necropolis that will not stay buried' },
   aurelith:             { theme: 'wyrmreach_lair', flavor: 'said to hoard gold at the heart of a wyrmreach lair' },
+  // The finale. Not a dimension gatekeeper, but the same mechanism: the Antagonist is placed ONLY at the bottom of a
+  // gods_threshold dungeon (see the dungeon boss placement), and until now nothing here said so -- the stage hint
+  // claimed the confrontation "finds you", the table had no entry (so no hint could point at the Threshold), and the
+  // story-dungeon guarantee (storyBossNeedingDungeon) could not cover it either. Found by an invincible playtest that
+  // reached the last stage with no way to locate the final boss; in that seed exactly 1 of 726 dungeons was a Threshold.
+  the_antagonist:       { theme: 'gods_threshold', flavor: 'said to wait at a threshold the world was never meant to reach' },
 };
 // Which dimension each gatekeeper's death (or, for the two item-gated ones, whose death drops
 // the key item) ultimately opens -- shared by both the guidance system below and the lore books.
@@ -18626,7 +19080,10 @@ function questStageHint(stage) {
   const fx = player.x, fy = player.y;
   if (stage.type === 'kill_boss') {
     const bossId = stage.targetBossId;
-    if (bossId === 'the_antagonist' || bossId === 'god') {
+    // The antagonist now has a dungeon theme (BOSS_DUNGEON_THEME), so it gets the normal directional hint below. Only a boss
+    // with no known location keeps the old line -- which was actively misleading for the antagonist: it told the player
+    // there was nowhere to look when the fight was in fact waiting in a specific kind of dungeon.
+    if ((bossId === 'the_antagonist' || bossId === 'god') && !BOSS_DUNGEON_THEME[bossId]) {
       return 'This confrontation finds you once everything before it is finished -- there is nowhere else useful to look yet.';
     }
     // Check if this boss is a dimension gatekeeper -- if so, the player needs to find and enter
@@ -20309,25 +20766,45 @@ function openItemAction(it, slot) {
 // kind of "could be more than one thing here" interaction later is just building an options
 // array and calling this -- no new UI plumbing required.
 let pendingChoiceOptions = null;
+// A choice menu is selected by LETTER, and only a-z exist: 26 options per page. Menus used to label option 27+ with
+// whatever character code 97+i happened to be ('{', '|', 'DEL', ...) and resolveChoiceKey only accepted /^[a-z]$/, so
+// every option past the 26th was impossible to choose by key OR by click -- found when a boss hoard produced a 128-entry
+// pickup menu and "Pick up everything" (appended last) could not be selected by anyone. Menus now paginate:
+// CHOICE_PAGE_SIZE per page, '[' / ']' (or the on-screen buttons) turn pages, letters select within the current page.
+const CHOICE_PAGE_SIZE = 26;
+let pendingChoicePage = 0, pendingChoiceTitle = '', pendingChoiceHint = '';
+function renderChoicePage() {
+  const pages = Math.max(1, Math.ceil(pendingChoiceOptions.length / CHOICE_PAGE_SIZE));
+  const start = pendingChoicePage * CHOICE_PAGE_SIZE;
+  let html = '';
+  pendingChoiceOptions.slice(start, start + CHOICE_PAGE_SIZE).forEach((opt, i) => {
+    const letter = String.fromCharCode(97 + i);
+    html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${opt.label}</div>`;
+  });
+  if (pages > 1) {
+    html += `<div class="modal-opt" style="opacity:.8"><span onclick="simulateKey('[')">[ prev</span> &nbsp; page ${pendingChoicePage + 1}/${pages} &nbsp; <span onclick="simulateKey(']')">next ]</span></div>`;
+  }
+  renderModal(pages > 1 ? `${pendingChoiceTitle} (${pendingChoicePage + 1}/${pages})` : pendingChoiceTitle, html,
+    pendingChoiceHint || (pages > 1 ? 'Letter/click to choose, [ ] to change page, Esc to cancel.' : 'Letter/click to choose, Esc to cancel.'));
+}
 function presentChoice(title, options, hint) {
   const real = (options || []).filter(Boolean);
   if (!real.length) return;
   if (real.length === 1) { real[0].action(); return; }
   pendingChoiceOptions = real;
+  pendingChoicePage = 0; pendingChoiceTitle = title; pendingChoiceHint = hint || '';
   gameState = 'choice';
   Sound.play('uiOpen');
-  let html = '';
-  real.forEach((opt, i) => {
-    const letter = String.fromCharCode(97 + i);
-    html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${opt.label}</div>`;
-  });
-  renderModal(title, html, hint || 'Letter/click to choose, Esc to cancel.');
+  renderChoicePage();
 }
 function resolveChoiceKey(key) {
   if (!pendingChoiceOptions) return;
   if (key === 'Escape') { pendingChoiceOptions = null; closeModal(); return; }
+  const pages = Math.max(1, Math.ceil(pendingChoiceOptions.length / CHOICE_PAGE_SIZE));
+  if (key === ']' || key === 'PageDown') { pendingChoicePage = (pendingChoicePage + 1) % pages; renderChoicePage(); return; }
+  if (key === '[' || key === 'PageUp') { pendingChoicePage = (pendingChoicePage - 1 + pages) % pages; renderChoicePage(); return; }
   if (!/^[a-z]$/.test(key)) return;
-  const idx = key.charCodeAt(0) - 97;
+  const idx = pendingChoicePage * CHOICE_PAGE_SIZE + (key.charCodeAt(0) - 97);
   const opt = pendingChoiceOptions[idx];
   if (!opt) return;
   pendingChoiceOptions = null;
@@ -20349,13 +20826,14 @@ function pickUp() {
       options.push({ label: `Open ${c.name}`, action: () => openContainer(c) });
     }
   });
+  // "Pick up everything" goes FIRST among the item options (after any containers). It used to be appended after
+  // every item, which for a boss hoard of 100+ entries put the one option most players want at the very end of an
+  // unreachable list. Only worth its own option when there is more than one item to bulk up.
+  if (items.length > 1) options.push({ label: 'Pick up everything', action: () => { items.forEach(pickUpSpecificItem); updateSidebar(); endTurn(); } });
   items.forEach(it => {
     const qtyTag = it.amount > 1 ? ` x${it.amount}` : '';
     options.push({ label: `Pick up ${it.name}${qtyTag}`, action: () => { pickUpSpecificItem(it); updateSidebar(); endTurn(); } });
   });
-  // Only worth its own option when there's more than one item to actually bulk up -- with a
-  // single item it would just be a redundant duplicate of the option already listed above.
-  if (items.length > 1) options.push({ label: 'Pick up everything', action: () => { items.forEach(pickUpSpecificItem); updateSidebar(); endTurn(); } });
   // ---- salvaging watercraft: a water-tile structure (see OCEAN_STRUCTURES) that's still
   // basically an intact boat -- a fishing boat, a capsized rowboat, a still-floating ship -- can be
   // broken down into the matching item from the VESSELS framework above, giving those world
@@ -21731,50 +22209,62 @@ function openGiftPicker(npc) {
 
 // ---- auto-travel / auto-explore ----
 let autoRunActive = false;
-function bfsFirstStep(sx, sy, gx, gy, maxRadius) {
+/**
+ * pathFirstStep -- first step of a shortest walkable path from (sx,sy) to (gx,gy), found with A*.
+ * Returns {dx,dy}, or null when already there, unreachable, or beyond the search limits.
+ *
+ * `maxRadius` bounds the search to a square window around the START (Chebyshev). The goal MUST be
+ * inside it -- callers should size it with pathRadiusFor() rather than hard-coding a number.
+ * `opts.maxNodes` bounds work (default: generous, scaled to the window, capped at 150k).
+ *
+ * WHY A* (replacing a plain breadth-first search): BFS floods every tile within the path length
+ * in all directions, so cost grows with the AREA reached. The old implementation therefore needed
+ * a node cap, and that cap silently turned "far but reachable" into "No path found." (documented
+ * at length in the previous version of this function). With a Chebyshev heuristic -- admissible
+ * and consistent for 8-way movement at uniform cost -- A* returns the same optimal paths while
+ * expanding only tiles near the route, so the cap stops being the binding constraint.
+ */
+function pathFirstStep(sx, sy, gx, gy, maxRadius, opts) {
   if (sx === gx && sy === gy) return null;
-  const key = (x,y) => x+','+y;
-  const visited = new Set([key(sx,sy)]);
-  const queue = [{ x:sx, y:sy, first:null }];
-  let head = 0;
+  if (Math.abs(gx - sx) > maxRadius || Math.abs(gy - sy) > maxRadius) return null;
+  const maxNodes = (opts && opts.maxNodes) || Math.min(150000, Math.round(8 * maxRadius * maxRadius));
+  const OFF = 1 << 20, K = 1 << 21;
+  const id = (x, y) => (x + OFF) * K + (y + OFF);
+  const h = (x, y) => Math.max(Math.abs(gx - x), Math.abs(gy - y));
+  // Binary min-heap ordered by f, ties broken toward larger g (deeper nodes) to cut re-expansion.
+  const heap = [];
+  const less = (p, q) => p.f < q.f || (p.f === q.f && p.g > q.g);
+  const push = (n) => { heap.push(n); let i = heap.length - 1; while (i > 0) { const par = (i - 1) >> 1; if (!less(heap[i], heap[par])) break; [heap[i], heap[par]] = [heap[par], heap[i]]; i = par; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && less(heap[l], heap[m])) m = l; if (r < heap.length && less(heap[r], heap[m])) m = r; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } } return top; };
+  const best = new Map([[id(sx, sy), 0]]);
+  push({ x: sx, y: sy, g: 0, f: h(sx, sy), first: null });
   const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
-  // BUG FIX: the node-queue safety cap below used to be a flat 4000 regardless of maxRadius --
-  // but a full BFS covers area roughly quadratic in the distance actually reached (real terrain
-  // is never a straight corridor to the goal), so 4000 nodes reliably resolves paths only out to
-  // roughly ~30 tiles, well short of what every real caller in this file already asks for
-  // (autoTravelHome/autoTravelToStairs pass maxRadius 60-80) -- meaning this function could
-  // silently report "no path" for a destination well within the radius the caller explicitly
-  // requested, for a real player pressing Shift+H/Shift+G just as much as for an AI driving the
-  // same key. Confirmed directly, not assumed: reimplemented this function's own logic in an
-  // isolated test and measured actual success/failure at various distances against the old cap
-  // vs several larger ones -- 40 tiles succeeded at the old cap, 50 needed roughly 12000, 75
-  // needed roughly 30000. Scaled the cap with the caller's own maxRadius instead of a flat
-  // number, calibrated (6 * maxRadius^2, matching the roughly-quadratic relationship the data
-  // above shows) so the two real in-game callers (radius 60-80) get a budget in the ~22-38k
-  // range that measured reliably resolving their requested distance,
-  // while a caller that only asked for a small local radius doesn't pay for a needlessly large
-  // budget it was never going to use anyway. Capped at 60000 as an outer sanity bound regardless
-  // of how large a radius is requested (this project's own playtest tooling, for example, has
-  // called this with maxRadius=300 for genuinely long-distance travel, which this cap does not
-  // promise to fully resolve -- an explicit, known, and accepted trade-off against worst-case
-  // per-call cost, not an oversight).
-  const nodeCap = Math.min(60000, Math.round(6 * maxRadius * maxRadius));
-  while (head < queue.length) {
-    const cur = queue[head++];
+  let expanded = 0;
+  while (heap.length && expanded < maxNodes) {
+    const cur = pop();
+    if (cur.g > best.get(id(cur.x, cur.y))) continue; // stale entry
     if (cur.x === gx && cur.y === gy) return cur.first;
-    if (Math.abs(cur.x-sx) > maxRadius || Math.abs(cur.y-sy) > maxRadius) continue;
-    for (const [dx,dy] of dirs) {
-      const nx = cur.x+dx, ny = cur.y+dy;
-      const k = key(nx,ny);
-      if (visited.has(k)) continue;
-      if (!curWalkable(nx,ny)) continue;
-      visited.add(k);
-      const first = cur.first || {dx,dy};
-      queue.push({ x:nx, y:ny, first });
-      if (queue.length > nodeCap) return null;
+    expanded++;
+    for (const [dx, dy] of dirs) {
+      const nx = cur.x + dx, ny = cur.y + dy;
+      if (Math.abs(nx - sx) > maxRadius || Math.abs(ny - sy) > maxRadius) continue;
+      const ng = cur.g + 1, k = id(nx, ny);
+      if (ng >= (best.has(k) ? best.get(k) : Infinity)) continue;
+      if (!curWalkable(nx, ny)) continue;
+      best.set(k, ng);
+      push({ x: nx, y: ny, g: ng, f: ng + h(nx, ny), first: cur.first || { dx, dy } });
     }
   }
   return null;
+}
+/** Search-window radius that always contains the goal, with slack to route around obstacles. */
+function pathRadiusFor(sx, sy, gx, gy, minRadius) {
+  return Math.max(minRadius || 60, Math.max(Math.abs(gx - sx), Math.abs(gy - sy)) + 40);
+}
+/** Back-compat wrapper: the original breadth-first API, now served by A* (see pathFirstStep).
+ * Kept because the playtest tooling and older call sites address it by this name. */
+function bfsFirstStep(sx, sy, gx, gy, maxRadius) {
+  return pathFirstStep(sx, sy, gx, gy, maxRadius);
 }
 function runAutoLoop(stepFn) {
   autoRunActive = true;
@@ -21814,7 +22304,7 @@ function autoTravelToStairs() {
   if (player.x === goal.x && player.y === goal.y) { if (curIsDungeon()) useStairs(); else log("You're already there."); return; }
   log('Auto-traveling... (danger nearby will stop you)');
   runAutoLoop(() => {
-    const step = bfsFirstStep(player.x, player.y, goal.x, goal.y, curIsDungeon() ? 60 : 80);
+    const step = pathFirstStep(player.x, player.y, goal.x, goal.y, pathRadiusFor(player.x, player.y, goal.x, goal.y, curIsDungeon() ? 60 : 80));
     if (!step) { log('No path found.'); return false; }
     const nx = player.x+step.dx, ny = player.y+step.dy;
     if (entityAt(nx,ny)) return false;
@@ -21835,14 +22325,67 @@ function findNearestFrontier(maxR) {
   }
   return null;
 }
+/**
+ * Breadth-first search outward from the player over walkable tiles for the nearest unexplored
+ * ("frontier") tile, measured in WALKING steps. Returns { x, y, first:{dx,dy}, steps } or null.
+ *
+ * findNearestFrontier() above ranks candidates by Chebyshev (straight-line) distance and ignores
+ * walls, so in a maze (sewers, catacombs) two frontier tiles on opposite sides of a wall can each
+ * look "nearest" from alternating positions. autoExplore re-picked the target every tick, so the
+ * player ping-ponged between two tiles for the whole 400-tick budget (found by an invincible
+ * playtest bot sitting in a Massive Sewer: (86,53) <-> (87,54), ~134 turns of progress in 900
+ * actions). Walking distance respects walls, which removes the usual cause of that.
+ *
+ * maxR bounds the search window (Chebyshev radius from the player), not the path length.
+ */
+function findFrontierByPath(maxR) {
+  const sx = player.x, sy = player.y;
+  const key = (x, y) => x + ',' + y;
+  const seenKeys = new Set([key(sx, sy)]);
+  const queue = [{ x: sx, y: sy, d: 0, first: null }];
+  const CAP = 40000; // hard safety bound on nodes visited
+  for (let head = 0; head < queue.length && queue.length < CAP; head++) {
+    const cur = queue[head];
+    if (cur.first) {
+      const t = curTileAt(cur.x, cur.y);
+      if (t && t.walkable && !t.seen) return { x: cur.x, y: cur.y, first: cur.first, steps: cur.d };
+    }
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      if (!dx && !dy) continue;
+      const nx = cur.x + dx, ny = cur.y + dy;
+      if (Math.abs(nx - sx) > maxR || Math.abs(ny - sy) > maxR) continue;
+      const k = key(nx, ny);
+      if (seenKeys.has(k)) continue;
+      const t = curTileAt(nx, ny);
+      if (!t || !t.walkable) continue;
+      seenKeys.add(k);
+      queue.push({ x: nx, y: ny, d: cur.d + 1, first: cur.first || { dx, dy } });
+    }
+  }
+  return null;
+}
 function autoExplore() {
   if (gameState !== 'playing') return;
   log('Auto-exploring... (danger nearby will stop you)');
+  // Search windows: a dungeon floor is a bounded map, so look across all of it; the overworld is
+  // unbounded, so keep the original local window or "explore" would wander off for hundreds of tiles.
+  const searchR = curIsDungeon() ? 90 : 20;
+  // The chosen frontier is held across ticks (see findFrontierByPath for why re-picking every
+  // tick ping-ponged). It is dropped only when reached, revealed, or no path leads to it any more.
+  let committed = null;
   runAutoLoop(() => {
-    const target = findNearestFrontier(20);
-    if (!target) { log('Nothing new to explore nearby.'); return false; }
-    const step = bfsFirstStep(player.x, player.y, target.x, target.y, curIsDungeon() ? 60 : 80);
-    if (!step) return false;
+    if (committed) {
+      const ct = curTileAt(committed.x, committed.y);
+      if (!ct || ct.seen || (player.x === committed.x && player.y === committed.y)) committed = null;
+    }
+    let step = committed ? pathFirstStep(player.x, player.y, committed.x, committed.y, pathRadiusFor(player.x, player.y, committed.x, committed.y, curIsDungeon() ? 60 : 80)) : null;
+    if (!step) {
+      committed = null;
+      const f = findFrontierByPath(searchR);
+      if (!f) { log(curIsDungeon() ? 'Nothing left to explore on this floor.' : 'Nothing new to explore nearby.'); return false; }
+      committed = { x: f.x, y: f.y };
+      step = f.first;
+    }
     const nx = player.x+step.dx, ny = player.y+step.dy;
     if (entityAt(nx,ny)) return false;
     player.x = nx; player.y = ny;
@@ -25264,7 +25807,7 @@ function autoTravelHome() {
     if (player.x === goal.x && player.y === goal.y) { useStairsUp(); return; }
     log('Auto-traveling to the stairs up...');
     runAutoLoop(() => {
-      const step = bfsFirstStep(player.x, player.y, goal.x, goal.y, 60);
+      const step = pathFirstStep(player.x, player.y, goal.x, goal.y, pathRadiusFor(player.x, player.y, goal.x, goal.y, 60));
       if (!step) { log('No path found.'); return false; }
       const nx = player.x+step.dx, ny = player.y+step.dy;
       if (entityAt(nx,ny)) return false;
@@ -25277,7 +25820,7 @@ function autoTravelHome() {
     if (!found) { log('You have not discovered any settlements nearby yet.'); return; }
     log(`Auto-traveling to ${found.name}...`);
     runAutoLoop(() => {
-      const step = bfsFirstStep(player.x, player.y, found.x, found.y, 80);
+      const step = pathFirstStep(player.x, player.y, found.x, found.y, pathRadiusFor(player.x, player.y, found.x, found.y, 80));
       if (!step) { log('No path found.'); return false; }
       const nx = player.x+step.dx, ny = player.y+step.dy;
       if (entityAt(nx,ny)) return false;
@@ -28641,10 +29184,10 @@ function doAttack(att, def, skipDuplicate) {
     else { def.statusSlow = (def.statusSlow||0) + 2; log(`The frost of ${att.name}'s attack chills ${defIsPlayer ? 'you' : def.name} to the bone.`); }
   }
   if (!isPlayer && att.poison && (!defIsPlayer || getBuff('resistpoison') <= 0) && (def.poisonDmgReduction || 0) < 1 && Math.random() < 0.4) { def.statusPoison = (def.statusPoison || 0) + (def.poisonDmgReduction ? Math.round(att.poison * (1-def.poisonDmgReduction)) : att.poison); log(`${defYouAre} poisoned!`); }
-  if (!isPlayer && att.causesFear && Math.random() < 0.35 * (1 - (def.fearResistBonus || 0))) { def.statusFear = (def.statusFear || 0) + 3; log(defIsPlayer ? 'Terror grips you!' : `Terror grips ${def.name}!`); }
+  if (!isPlayer && att.causesFear && Math.random() < 0.35 * (1 - (def.fearResistBonus || 0))) { def.statusFear = addFearTurns(def.statusFear, 3); log(defIsPlayer ? 'Terror grips you!' : `Terror grips ${def.name}!`); }
   if (!isPlayer && att.causesConfuse && Math.random() < 0.35 * (1 - (def.confuseResistBonus || 0))) { def.statusConfuse = (def.statusConfuse || 0) + 3; log(defIsPlayer ? 'Your mind reels in confusion!' : `${def.name}'s mind reels in confusion!`); }
   if (isPlayer && def !== player && (player.eldritchConfuseChance || 0) > 0 && Math.random() < player.eldritchConfuseChance) { def.statusConfuse = (def.statusConfuse || 0) + 3; log(`${def.name} reels in confusion at your unnatural touch!`); }
-  if (isPlayer && def !== player && (player.eldritchFearChance || 0) > 0 && Math.random() < player.eldritchFearChance) { def.statusFear = (def.statusFear || 0) + 3; log(`${def.name} recoils in primal terror!`); }
+  if (isPlayer && def !== player && (player.eldritchFearChance || 0) > 0 && Math.random() < player.eldritchFearChance) { def.statusFear = addFearTurns(def.statusFear, 3); log(`${def.name} recoils in primal terror!`); }
   // ---- Living World AI framework: a grudge. Whoever actually gets struck fights back against
   // their attacker on their own next turn, even if faction disposition alone wouldn't normally
   // put the two of them at odds (a provoked neutral beast, a struck civilian, a bandit who hit
@@ -29165,7 +29708,7 @@ function monsterCastAt(caster, ab, target) {
     }
     case 'debuff': {
       const turns = ab.dur || 4;
-      if (ab.stat === 'fear') { target.statusFear = (target.statusFear || 0) + turns; log(target === player ? 'Terror grips you!' : `Terror grips ${target.name}!`); }
+      if (ab.stat === 'fear') { target.statusFear = addFearTurns(target.statusFear, turns); log(target === player ? 'Terror grips you!' : `Terror grips ${target.name}!`); }
       else if (ab.stat === 'confuse') { target.statusConfuse = (target.statusConfuse || 0) + turns; log(target === player ? 'Your mind reels in confusion!' : `${target.name}'s mind reels in confusion!`); }
       else if (ab.stat === 'slow') { target.statusSlow = (target.statusSlow || 0) + turns; log(target === player ? 'You feel sluggish.' : `${target.name} is slowed.`); }
       break;
@@ -29625,7 +30168,7 @@ function runCombatState(m, vision) {
     if (dist <= 1) {
       m.menaceTurns = (m.menaceTurns || 0) + 1;
       if (m.menaceTurns >= 2 && Math.random() < 0.22 * (1 - (target.fearResistBonus || 0))) {
-        target.statusFear = (target.statusFear || 0) + 2;
+        target.statusFear = addFearTurns(target.statusFear, 2);
         log(`${target === player ? 'Something about' : target.name + ', something about'} ${m.name}'s presence alone makes ${target === player ? 'your' : 'its'} resolve falter.`);
       }
       doAttack(m, target);
@@ -37135,13 +37678,14 @@ function saveDataReplacer(key, value) {
   if (value instanceof Set) return undefined;
   return value;
 }
-function getSaveData() {
+function getSaveData(opts) {
   const dirtyChunks = [];
-  for (const [key, c] of worldChunks) if (c.dirty) dirtyChunks.push([key, c]);
+  const migrationBudget = { left: (opts && opts.legacyMigrations != null) ? opts.legacyMigrations : SAVE_LEGACY_MIGRATIONS_PER_SAVE };
+  for (const [key, c] of worldChunks) if (c.dirty) dirtyChunks.push([key, chunkSaveRecord(c, migrationBudget)]);
   const dirtyDimChunks = [];
   for (const [key, c] of dimensionChunks) if (c.dirty) dirtyDimChunks.push([key, c]);
   return {
-    version: 2, seed: SEED, turnCount, zoomIndex,
+    version: 3, seed: SEED, turnCount, zoomIndex,
     player: JSON.parse(JSON.stringify(player, saveDataReplacer)),
     kingdomRelationScores: Object.fromEntries(kingdomRelationScores),
     uidCounter, containerUidCounter, procBookUidCounter,
@@ -37218,7 +37762,7 @@ function applyLoadedSave(data) {
   // Restore exactly the parts of the world that were ever actually mutated. Everything else
   // (the vast majority of a large explored world) regenerates identically from SEED the moment
   // it's looked at again -- see the dirty-tracking note above chunkKey().
-  if (data.worldChunks) for (const [key, c] of data.worldChunks) worldChunks.set(key, c);
+  if (data.worldChunks) for (const [key, rec] of data.worldChunks) worldChunks.set(key, chunkFromSaveRecord(rec));
   if (data.dimensionChunks) for (const [key, c] of data.dimensionChunks) dimensionChunks.set(key, c);
   if (data.dungeonRegistry) for (const [id, dg] of data.dungeonRegistry) dungeonRegistry.set(id, dg);
   if (data.dimensionSubDungeons) DIMENSION_SUBDUNGEONS.push(...data.dimensionSubDungeons);
@@ -37257,6 +37801,8 @@ function applyLoadedSave(data) {
     delete data.player.wis;
   }
   player = Object.assign(newPlayer(), data.player);
+  // Saves from before the fear ceiling (v0.50.21) can hold an absurd stacked value (4,862 turns was measured).
+  player.statusFear = Math.min(player.statusFear || 0, FEAR_MAX_TURNS);
   // restore kingdom-relation drift from the previous session (clearWorldRegistries() above already
   // cleared it fresh) -- old saves made before this feature simply won't have the field, and that's
   // fine, relations just start from their deterministic seed baseline as before.
