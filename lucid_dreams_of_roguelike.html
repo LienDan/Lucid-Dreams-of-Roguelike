@@ -540,7 +540,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.50.10-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.51.1-alpha</div>
     </div>
   </div>
 
@@ -553,6 +553,15 @@
 // only (what/where), not reasoning -- see git-style history in project handoff notes if needed.
 //
 // ---- CHANGELOG (factual, condensed) ----
+// v0.51.1 Pantheon + framework pass (src/ modules appended at end of script).
+//   - GameBus event bus (makeMonster/doAttack/onDeath/endTurn/castSpell/useItem publish events); subscribe instead of editing core.
+//   - First hour: starter gear no longer corrupted, bleed can be tended (r), early monster waves graded by level.
+//   - Elite/Paragon monster affixes (MONSTER_AFFIXES registry, 20 affixes); hover tooltip shows them.
+//   - Monster maneuvers (smash/pounce/charge/whirlwind) with telegraphs, parry/riposte, exposed recovery.
+//   - Pantheon (DEITIES registry, 7 gods): pledge at shrines or via priests/monks/oracles, piety from play, ranked boons,
+//     invocations, offerings, renounce/wrath. Press B for the Faith screen. Hooks: INTERACT_PROVIDERS, DIALOGUE_PROVIDERS.
+//   - Feats (Z), guide pages, ally kills credit faith/feats, summoned allies skip affixes, god boons/feat HP survive recalcVitalsFromStats.
+//   - 26 affixes, 9 maneuvers (incl. Focused Shot for ranged), 10 gods (+life events), shrine trials, poison tending, troll regen fix.
 // v0.35.0 Cross-system integration pass: every system reaches into every other one.
 //   - Weather: playerControlWeather() lets player-caused weather reuse WEATHER_TYPES/ZONE_CLIMATE;
 //     wired into castSpell() via type:'weather'. Added to Storm/Elemental/Nature/eldritch/cyberware pools.
@@ -14228,11 +14237,12 @@ function spawnEventMonsters(poolName, count, opts) {
   if (!pool) return 0;
   opts = opts || {};
   const scale = depthScaleForPlayerLevel(player.level) * (opts.scaleMult || 1);
+  count = EARLY_GRACE.count(count, player.level);
   let spawned = 0;
   for (let i = 0; i < count; i++) {
     for (let tries = 0; tries < 8; tries++) {
       const dx = randInt(Math.random, -8, 8), dy = randInt(Math.random, -8, 8);
-      if (Math.abs(dx) < 2 && Math.abs(dy) < 2) continue;
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < EARLY_GRACE.minSpawnDist(player.level)) continue;
       const x = player.x + dx, y = player.y + dy;
       if (!curWalkable(x, y) || entityAt(x, y)) continue;
       const id = choice(Math.random, pool);
@@ -15426,7 +15436,7 @@ function applyBleed(e, stacks) {
   e.bleedClotTurns = wasBleeding ? Math.max(0, (e.bleedClotTurns || 0) - 2) : 0;
   if (e === player && !wasBleeding && !player.everBled) {
     player.everBled = true;
-    log("*** You're bleeding! Left alone it may eventually clot on its own, but the odds are against you early -- find or craft a Bandage to be sure. ***");
+    log("*** You're bleeding! Press [r] to tend the wound: a bandage stops it outright, cloth makes a rough binding, and bare hands applying pressure will slow it. Fighting on makes it worse. ***");
   }
 }
 function stanchBleed(e) { if (!e) return false; const did = (e.bleedStacks || 0) > 0 || (e.bleedTurns || 0) > 0; e.bleedStacks = 0; e.bleedTurns = 0; e.bleedClotTurns = 0; return did; }
@@ -16292,6 +16302,7 @@ function rollHit(att, def, ranged, calledShotPenalty) {
   // BUG FIX (v0.40.26): see Reckless Swing's own comment above -- the exposed window it's supposed
   // to leave the player in.
   if (def === player && player.exposedTurns > 0) chance += 0.15;
+  else if (def !== player && def.exposedTurns > 0) chance += 0.35; // maneuver recovery: an exposed foe is easy to hit (see MANEUVERS)
   // A concussed head (see recalcBodyPenalties) throws off aim and coordination -- this field
   // existed and was computed for every entity already but was never actually read anywhere,
   // making a "wounded head" mechanically invisible outside its own status-list entry. Applies to
@@ -20899,6 +20910,7 @@ function pickUp() {
       options.push({ label: 'Fish here', action: () => { closeModal(); beginFishing(player.x, player.y); } });
     }
   }
+  for (const prov of INTERACT_PROVIDERS) { try { prov(options, hereTile); } catch (e) { console.error(e); } }
   if (!options.length) {
     log(hasCorpse ? 'There is a corpse here. (Some spells can make use of it.)' : 'There is nothing here to pick up.');
     return;
@@ -22727,6 +22739,7 @@ const REST_SAFETY_CAP_TURNS = 6000; // generous; a real full-HP rest at any leve
 const REST_TURNS_PER_BATCH = 8; // turns processed per 20ms tick, keeps real-time wait reasonable
 function doRest() {
   if (gameState !== 'playing') return;
+  if ((player.bleedTurns || 0) > 0 || (player.bleedStacks || 0) > 0) { tendWound(); return; }
   if (player.sprinting) { player.sprinting = false; log('You stop sprinting to rest.'); }
   // BUG FIX (Action Speed Framework): this "already full" gate -- and the rest loop's own copy of
   // it just below -- only ever checked HP/MP, never Stamina. Before stamina had any real recovery
@@ -22742,7 +22755,7 @@ function doRest() {
   // recovery action. Blocking outright with a clear message is more honest than letting the loop
   // start and quietly interrupting once the player notices the bleed doing more damage than the
   // rest is undoing.
-  if ((player.bleedTurns || 0) > 0) { log("You can't rest while bleeding -- the movement keeps reopening it. Bandage the wound first."); return; }
+  if ((player.bleedTurns || 0) > 0 || (player.bleedStacks || 0) > 0) { tendWound(); return; }
   const nearbyThreat = curMonsters().some(m => m.alive && chebyshev(m.x,m.y,player.x,player.y) <= 8 && hasLOS(player.x,player.y,m.x,m.y));
   if (nearbyThreat) { log("You can't rest with danger nearby!"); return; }
   autoRunActive = true;
@@ -25402,6 +25415,7 @@ function openDialogue(npc) {
     if (!wasHostile && !curIsDungeon() && !isInActiveWar(npc)) commitCrime(getRegionKey(npc.x, npc.y), 5);
     endTurn();
   }});
+  for (const prov of DIALOGUE_PROVIDERS) { try { prov(npc, opts, nextKey); } catch (e) { console.error(e); } }
   opts.push({ key: nextKey(), label: 'Leave', action: () => closeModal() });
   dialogueOptions = opts;
   const tier = relationshipTier(npc);
@@ -27533,6 +27547,7 @@ function describeTile(t, wx, wy) {
     const poi = poiAt(wx, wy);
     let poiText = poi ? `<b>${poi.name}</b>${poi.lookExtra ? ' — ' + poi.lookExtra : ''}` : (TILE_FEATURE_DESCRIPTIONS[t.feature] || '');
     if (t.feature === 'shrine' && t.shrineUsed !== undefined) poiText += t.shrineUsed ? ' Its magic feels spent now.' : ' It still hums with dormant power.';
+    if (t.feature === 'shrine' && wx !== undefined && typeof shrineGodAt === 'function') poiText += ` Devoted to <b>${DEITIES[shrineGodAt(wx, wy)].name}</b>, ${DEITIES[shrineGodAt(wx, wy)].title}.`;
     if (poiText) extra = '<br>' + poiText;
   }
   else if (t.feature && TILE_FEATURE_DESCRIPTIONS[t.feature]) extra = '<br>' + TILE_FEATURE_DESCRIPTIONS[t.feature];
@@ -29308,7 +29323,7 @@ function processEntityStatus(e) {
     else if (posVisibleToPlayer(e.x, e.y)) log(`${e.name} burns for ${dmg} damage.`);
     if (e.hp <= 0) onDeath(e, null);
   }
-  if (e.regen) e.hp = Math.min(e.maxHp, e.hp + e.regen);
+  if (e.regen) e.hp = Math.min(e.maxHp, e.hp + (e === player ? scaledRegenFromLegacyPoints(e.regen, e.maxHp) : e.regen));
   // ---- REGEN SCALING FIX: mutationRegen (mutations/cybernetics/eldritch talents) used to add its
   // flat point total directly as HP every turn -- see REGEN_PCT_PER_LEGACY_POINT's comment near
   // MONSTER_SCALE_BASE for why that's fine at level 1 and irrelevant by level 99. Converted to a
@@ -37486,7 +37501,7 @@ function describeItem(it) {
   if (it.spellDmgBonus) mech.push(`+${Math.round(it.spellDmgBonus*100)}% spell damage`);
   if (it.techniqueDmgBonus) mech.push(`+${Math.round(it.techniqueDmgBonus*100)}% technique damage`);
   if (it.lifestealBonus) mech.push(`+${Math.round(it.lifestealBonus*100)}% lifesteal`);
-  if (it.regen) mech.push(`Regenerates ${it.regen} HP per turn`);
+  if (it.regen) mech.push(`Regenerates ${it.regen} point${it.regen === 1 ? '' : 's'} of HP per turn (scales with your max HP)`);
   if (it.poisonDmgReduction) mech.push(`-${Math.round(it.poisonDmgReduction*100)}% damage taken from poison`);
   if (it.bleedResistChance) mech.push(`${Math.round(it.bleedResistChance*100)}% chance to resist being bled entirely`);
   if (it.bleedDmgReduction) mech.push(`-${Math.round(it.bleedDmgReduction*100)}% damage taken from bleeds`);
@@ -37890,121 +37905,121 @@ const ARCHETYPES = [
   // ---- martial: weapon-school classes ----
   { id:'warrior', name:'Warrior', desc:'A hardened melee fighter, front and center. Strong and tough from the start.',
     apply: () => { player.str+=4; player.con+=2; player.gold+=100;
-      player.equipment.hand=makeItem('longsword',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
+      player.equipment.hand=makeStarterItem('longsword'); player.equipment.body=makeStarterItem('leather');
       player.knownTechniques.push('precisestrike','shieldwall'); } },
   { id:'lancer', name:'Lancer', desc:'Disciplined spear-fighter who controls the fight from range and up close alike.',
     apply: () => { player.str+=3; player.dex+=2; player.con+=1; player.gold+=90;
-      player.equipment.hand=makeItem('spear',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
+      player.equipment.hand=makeStarterItem('spear'); player.equipment.body=makeStarterItem('leather');
       player.knownTechniques.push('piercingthrust','guardstance'); } },
   { id:'ranger', name:'Ranger', desc:'A survivalist marksman at home in the wilds, picking foes off from a distance.',
     apply: () => { player.dex+=4; player.con+=1; player.wil+=1; player.gold+=80;
-      player.equipment.hand=makeItem('bow',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
+      player.equipment.hand=makeStarterItem('bow'); player.equipment.body=makeStarterItem('leather');
       player.knownTechniques.push('aimedshot','eagleeye'); } },
   { id:'duelist', name:'Duelist', desc:'A blade in each hand, weaving offense and defense in the same breath.',
     apply: () => { player.dex+=4; player.str+=1; player.con+=1; player.gold+=85;
-      player.equipment.hand=makeItem('rapier',0,Math.random); player.equipment.offhand=makeItem('off_hand_dagger',0,Math.random);
+      player.equipment.hand=makeStarterItem('rapier'); player.equipment.offhand=makeStarterItem('off_hand_dagger');
       player.knownTechniques.push('twinslash','crossparry'); } },
   { id:'rogue', name:'Rogue', desc:'Quick, cunning, and always ready to find the gap in someone\'s guard.',
     apply: () => { player.dex+=4; player.int+=2; player.gold+=90;
-      player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
+      player.equipment.hand=makeStarterItem('dagger'); player.equipment.body=makeStarterItem('leather');
       player.knownTechniques.push('quickstab','shadowstep'); } },
   { id:'brawler', name:'Brawler', desc:'No weapon needed — just fists, elbows, and a willingness to get close.',
     apply: () => { player.str+=3; player.dex+=2; player.con+=2; player.gold+=60;
-      player.equipment.body=makeItem('leather',0,Math.random); player.equipment.gloves=makeItem('gloves',0,Math.random);
+      player.equipment.body=makeStarterItem('leather'); player.equipment.gloves=makeStarterItem('gloves');
       player.knownTechniques.push('ironfist','sweepingkick'); } },
   { id:'berserker', name:'Berserker', desc:'Fights harder the more it costs — spends blood to buy fury.',
     apply: () => { player.str+=4; player.con+=3; player.gold+=70;
-      player.equipment.hand=makeItem('waraxe',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
+      player.equipment.hand=makeStarterItem('waraxe'); player.equipment.body=makeStarterItem('leather');
       player.knownTechniques.push('ragingblow','recklessswing'); } },
   { id:'monk', name:'Monk', desc:'A disciplined martial artist who channels inner stillness into devastating strikes.',
     apply: () => { player.wil+=3; player.dex+=2; player.con+=1; player.gold+=55;
-      player.equipment.body=makeItem('robe',0,Math.random); player.equipment.gloves=makeItem('gloves',0,Math.random);
+      player.equipment.body=makeStarterItem('robe'); player.equipment.gloves=makeStarterItem('gloves');
       player.knownTechniques.push('meditativestrike','kiflow'); } },
   { id:'commander', name:'Commander', desc:'A battlefield tactician who holds the line and turns the tide with a shout.',
     apply: () => { player.str+=2; player.cha+=2; player.con+=2; player.gold+=95;
-      player.equipment.hand=makeItem('longsword',0,Math.random); player.equipment.offhand=makeItem('shield',0,Math.random); player.equipment.body=makeItem('chainmail',0,Math.random);
+      player.equipment.hand=makeStarterItem('longsword'); player.equipment.offhand=makeStarterItem('shield'); player.equipment.body=makeStarterItem('chainmail');
       player.knownTechniques.push('battlecry','shieldwall'); } },
   // ---- arcane & elemental casters ----
   { id:'mage', name:'Mage', desc:'A scholar of the raw arcane, wielding spells over steel.',
     apply: () => { player.int+=4; player.wil+=2; player.gold+=60;
-      player.equipment.hand=makeItem('staff',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.equipment.hand=makeStarterItem('staff'); player.equipment.body=makeStarterItem('robe');
       player.knownSpells.push('magicmissile','shield'); } },
   { id:'elementalist', name:'Elementalist', desc:'Hurls fire and ice with equal enthusiasm and very little subtlety.',
     apply: () => { player.int+=4; player.dex+=1; player.gold+=65;
-      player.equipment.hand=makeItem('wand_fire',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.equipment.hand=makeStarterItem('wand_fire'); player.equipment.body=makeStarterItem('robe');
       player.knownSpells.push('firebolt','frostbolt'); } },
   { id:'stormcaller', name:'Stormcaller', desc:'Calls down wind and lightning to scatter foes before they can close in.',
     apply: () => { player.int+=3; player.wil+=2; player.dex+=1; player.gold+=65;
-      player.equipment.hand=makeItem('oak_staff',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.equipment.hand=makeStarterItem('oak_staff'); player.equipment.body=makeStarterItem('robe');
       player.knownSpells.push('galewind','lightningjavelin'); } },
   { id:'chronomancer', name:'Chronomancer', desc:'Bends the flow of time around themself, just slightly, just enough.',
     apply: () => { player.int+=3; player.dex+=2; player.wil+=1; player.gold+=65;
-      player.equipment.hand=makeItem('wand_arcane',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.equipment.hand=makeStarterItem('wand_arcane'); player.equipment.body=makeStarterItem('robe');
       player.knownSpells.push('accelerate','foresight'); } },
   { id:'illusionist', name:'Illusionist', desc:'Wins fights by making sure the enemy can never quite tell where you are.',
     apply: () => { player.int+=3; player.dex+=3; player.gold+=65;
-      player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.equipment.hand=makeStarterItem('dagger'); player.equipment.body=makeStarterItem('robe');
       player.knownSpells.push('mirrorimage','phantomstep'); } },
   // ---- life, death & nature casters ----
   { id:'paladin', name:'Paladin', desc:'A holy warrior — armored, devout, and lethal to anything undead.',
     apply: () => { player.str+=2; player.wil+=2; player.cha+=1; player.con+=1; player.gold+=90;
-      player.equipment.hand=makeItem('holy_mace',0,Math.random); player.equipment.body=makeItem('chainmail',0,Math.random);
+      player.equipment.hand=makeStarterItem('holy_mace'); player.equipment.body=makeStarterItem('chainmail');
       player.knownSpells.push('smite','purify'); } },
   { id:'druid', name:'Druid', desc:'Speaks for the wild places, calling on thorns, roots, and old green magic.',
     apply: () => { player.wil+=4; player.dex+=1; player.gold+=55;
-      player.equipment.hand=makeItem('oak_staff',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.equipment.hand=makeStarterItem('oak_staff'); player.equipment.body=makeStarterItem('robe');
       player.knownSpells.push('thornwhip','naturesward'); } },
   { id:'necromancer', name:'Necromancer', desc:'A student of death, commanding the fallen to fight in their own place.',
     apply: () => { player.int+=4; player.cha+=2; player.gold+=70;
-      player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.equipment.hand=makeStarterItem('dagger'); player.equipment.body=makeStarterItem('robe');
       player.knownSpells.push('summonskeleton','drain'); } },
   { id:'bloodmage', name:'Blood Mage', desc:'Pays for power in their own blood, and it always seems to be worth it.',
     apply: () => { player.int+=4; player.con+=1; player.gold+=60;
-      player.equipment.hand=makeItem('stiletto',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.equipment.hand=makeStarterItem('stiletto'); player.equipment.body=makeStarterItem('robe');
       player.knownSpells.push('bloodpact','hemorrhage'); } },
   { id:'summoner', name:'Summoner', desc:'Prefers to let something else do the fighting, and calls it out of thin air.',
     apply: () => { player.int+=3; player.wil+=1; player.cha+=3; player.gold+=60;
-      player.equipment.hand=makeItem('staff',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.equipment.hand=makeStarterItem('staff'); player.equipment.body=makeStarterItem('robe');
       player.knownSpells.push('summonwolf','summonspirit'); } },
   { id:'alchemist', name:'Alchemist', desc:'Turns flasks, gas, and volatile compounds into a surprisingly deep bag of tricks.',
     apply: () => { player.int+=3; player.dex+=2; player.gold+=75;
-      player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
-      addItemToList(player.inventory, makeItem('antidote',0,Math.random));
+      player.equipment.hand=makeStarterItem('dagger'); player.equipment.body=makeStarterItem('robe');
+      addItemToList(player.inventory, makeStarterItem('antidote'));
       player.knownSpells.push('alchemistfire','acidflask'); } },
   { id:'chef', name:'Chef', desc:'A food-fueled fighter who cooks up buffs mid-battle and never goes into a fight hungry.',
     apply: () => { player.str+=2; player.con+=3; player.wil+=1; player.gold+=70;
-      player.equipment.hand=makeItem('cleaver',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
-      addItemToList(player.inventory, makeItem('meat_raw',0,Math.random)); addItemToList(player.inventory, makeItem('meat_raw',0,Math.random)); addItemToList(player.inventory, makeItem('meat_raw',0,Math.random));
-      addItemToList(player.inventory, makeItem('herb',0,Math.random)); addItemToList(player.inventory, makeItem('herb',0,Math.random));
-      addItemToList(player.inventory, makeItem('potato',0,Math.random)); addItemToList(player.inventory, makeItem('onion',0,Math.random));
+      player.equipment.hand=makeStarterItem('cleaver'); player.equipment.body=makeStarterItem('leather');
+      addItemToList(player.inventory, makeStarterItem('meat_raw')); addItemToList(player.inventory, makeStarterItem('meat_raw')); addItemToList(player.inventory, makeStarterItem('meat_raw'));
+      addItemToList(player.inventory, makeStarterItem('herb')); addItemToList(player.inventory, makeStarterItem('herb'));
+      addItemToList(player.inventory, makeStarterItem('potato')); addItemToList(player.inventory, makeStarterItem('onion'));
       player.knownRecipes.push('cook_meat','stew','cook_veg_soup');
       player.knownTechniques.push('searingladle','quickbite'); } },
   { id:'tinkerer', name:'Tinkerer', desc:'A gadgeteer who fights with a belt full of bombs, mines, and other things that go bang.',
     apply: () => { player.dex+=3; player.int+=2; player.con+=1; player.gold+=70;
-      player.equipment.hand=makeItem('wrench',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
-      addItemToList(player.inventory, makeItem('firebomb',0,Math.random)); addItemToList(player.inventory, makeItem('frostbomb',0,Math.random));
-      addItemToList(player.inventory, makeItem('oil_flask',0,Math.random)); addItemToList(player.inventory, makeItem('oil_flask',0,Math.random));
-      addItemToList(player.inventory, makeItem('sulfur',0,Math.random)); addItemToList(player.inventory, makeItem('sulfur',0,Math.random));
-      addItemToList(player.inventory, makeItem('saltpeter',0,Math.random)); addItemToList(player.inventory, makeItem('saltpeter',0,Math.random));
-      addItemToList(player.inventory, makeItem('iron_ingot',0,Math.random));
+      player.equipment.hand=makeStarterItem('wrench'); player.equipment.body=makeStarterItem('leather');
+      addItemToList(player.inventory, makeStarterItem('firebomb')); addItemToList(player.inventory, makeStarterItem('frostbomb'));
+      addItemToList(player.inventory, makeStarterItem('oil_flask')); addItemToList(player.inventory, makeStarterItem('oil_flask'));
+      addItemToList(player.inventory, makeStarterItem('sulfur')); addItemToList(player.inventory, makeStarterItem('sulfur'));
+      addItemToList(player.inventory, makeStarterItem('saltpeter')); addItemToList(player.inventory, makeStarterItem('saltpeter'));
+      addItemToList(player.inventory, makeStarterItem('iron_ingot'));
       player.knownRecipes.push('craft_landmine','craft_firebomb','craft_frostbomb','craft_oil_flask');
       player.knownTechniques.push('wrenchbash','quickrig'); } },
   { id:'herbalist', name:'Herbalist', desc:'A field botanist who brews toxins and tonics on the fly, poisoning foes as readily as mending wounds.',
     apply: () => { player.wil+=3; player.int+=2; player.con+=1; player.gold+=65;
-      player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
-      addItemToList(player.inventory, makeItem('herb',0,Math.random)); addItemToList(player.inventory, makeItem('herb',0,Math.random));
-      addItemToList(player.inventory, makeItem('herb',0,Math.random)); addItemToList(player.inventory, makeItem('herb',0,Math.random));
+      player.equipment.hand=makeStarterItem('dagger'); player.equipment.body=makeStarterItem('robe');
+      addItemToList(player.inventory, makeStarterItem('herb')); addItemToList(player.inventory, makeStarterItem('herb'));
+      addItemToList(player.inventory, makeStarterItem('herb')); addItemToList(player.inventory, makeStarterItem('herb'));
       player.knownRecipes.push('brew_heal_potion','antidote');
       player.knownSpells.push('toxicspores','quickpoultice'); } },
   // ---- fringe: cybernetics & eldritch mutation ----
   { id:'cyberadept', name:'Cyber-Adept', desc:'Augmented flesh and steel — you paid a fortune for your first implant.',
     apply: () => { player.dex+=2; player.int+=2; player.str+=1; player.gold+=50;
-      player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('leather',0,Math.random);
+      player.equipment.hand=makeStarterItem('dagger'); player.equipment.body=makeStarterItem('leather');
       player.knownCyberIds.push('reflexbooster'); player.installedCyber.push('reflexbooster');
       const c=CYBERNETICS.find(x=>x.id==='reflexbooster'); if (c.apply) c.apply(); } },
   { id:'occultist', name:'Occultist', desc:'You have already glimpsed something you cannot unsee, and it changed you.',
     apply: () => { player.int+=2; player.wil+=2; player.con+=1; player.gold+=50;
-      player.equipment.hand=makeItem('dagger',0,Math.random); player.equipment.body=makeItem('robe',0,Math.random);
+      player.equipment.hand=makeStarterItem('dagger'); player.equipment.body=makeStarterItem('robe');
       player.mutations.push('chitinoushide'); player.corruption=15;
       const m=MUTATIONS.find(x=>x.id==='chitinoushide'); if (m.apply) m.apply(); } },
 ];
@@ -39111,7 +39126,7 @@ function gameOver() {
   const equipped = SLOT_ORDER.map(s => eq[s]).filter(Boolean).map(it => it.name).join(', ') || 'nothing';
   const logHtml = (player.deathLog || []).map(m => `<div>${m}</div>`).join('');
   const html = `<div class="npcline">You fell to <b>${cause}</b> at level ${player.level} on turn ${player.deathTurn || turnCount}, carrying ${player.gold} gold.</div>
-    <div class="npcline dim">Equipped at death: ${equipped}</div>
+    <div class="npcline dim">Equipped at death: ${equipped}</div>${typeof deathExtras === "function" ? deathExtras() : ""}
     <div class="trade-col-title" style="margin-top:8px">What happened</div>
     <div style="max-height:260px;overflow-y:auto;border:1px solid var(--border,#444);padding:6px;font-size:12px;background:rgba(0,0,0,0.2)">${logHtml}</div>
     <div class="modal-opt" onclick="simulateKey('a')" style="margin-top:10px">[a] Return to Main Menu</div>
@@ -39308,6 +39323,8 @@ const GUIDE_SECTIONS = [
       ['p','Property &amp; Housing — buy/sell/furnish houses, set a primary residence.'],
       ['Shift+F','Family — spouse and children at a glance, including any grown child\'s life-path choice.'],
       ['Shift+O','Professions — your trade levels/ranks, and the Merchant\'s Ledger if you\'ve taken up Trading.'],
+      ['Shift+B','Faith — your god, piety, tenets, boons and invocation (or browse the gods if you serve none).'],
+      ['Shift+Z','Feats — milestone goals with permanent rewards.'],
     ])}
     ${guideKeyTable('System', [
       ['Esc','Open the in-game menu — Save, Load, Export/Import, Settings, or Quit to Title Screen. Also backs out of whatever screen you\'re currently in.'],
@@ -40514,6 +40531,8 @@ function handleKey(e) {
     if (key === 'F') { openFamilyMenu(); return; }
     if (key === 'O') { openProfessionsMenu(); return; }
     if (key === 'V') { openTravel(); return; }
+    if (key === 'B') { openFaith(); return; }
+    if (key === 'Z') { openFeats(); return; }
     if (key === 'm') { markWaypoint(); return; }
     if (key === 'G') { autoTravelToStairs(); return; }
     if (key === 'H') { autoTravelHome(); return; }
@@ -42417,6 +42436,1445 @@ TUTORIALS.push({
     },
   ],
 });
+
+// =====================================================================================================
+// ===================== v0.51.0 "FIRST HOUR" PASS ======================================================
+// Found by automated play (24 casual bot lives, all dead within ~450 actions; 8/24 to wolves, 3/24 to
+// bleeding with no way to stop it) and by looking at the real UI: a brand-new character could start with
+// "Corroded Longsword of Splinters" and "Cursed Leather Armor" because starter gear went through the
+// ordinary random-affix loot roll. Everything in this block is about making the first ~hour fair, readable
+// and recoverable WITHOUT touching late-game balance:
+//   - makeStarterItem(): starter gear is always plain, undamaged and uncursed.
+//   - tendWound(): bleeding always has an answer. [r] with a bandage uses it; with cloth it improvises a
+//     binding; with nothing it applies pressure for a few turns. Costs time and HP, never a hard lock.
+//   - EARLY_GRACE: event "waves" (wolf packs, ambushes) scale with player level so a level-1 character
+//     meets one wolf, not three, and meets it at a distance instead of at their elbow.
+// =====================================================================================================
+function makeStarterItem(baseId) {
+  // rng pinned high => every `rng() < p` affix roll fails => plain base item. Sockets roll off rarity 0.
+  const it = makeItem(baseId, 0, () => 0.9999);
+  if (it) it.starterGear = true;
+  return it;
+}
+
+const EARLY_GRACE = {
+  // fraction of an event wave's nominal count that actually spawns, by player level.
+  waveFraction(level) { return level <= 2 ? 0.34 : level <= 4 ? 0.67 : level <= 7 ? 0.85 : 1; },
+  minSpawnDist(level) { return level <= 3 ? 6 : level <= 6 ? 4 : 2; },
+  count(n, level) { return Math.max(1, Math.round(n * this.waveFraction(level))); },
+};
+
+// ---- bleeding always has an answer ----
+let tendingWound = false;
+function tendWound() {
+  if (gameState !== 'playing' || tendingWound) return;
+  const bandage = player.inventory.find(i => i.effect === 'bandage' || i.effect === 'medkit' || i.effect === 'coagulant');
+  if (bandage) { useItem(bandage); return; }
+  const cloth = player.inventory.find(i => i.id === 'cloth');
+  if (cloth) {
+    removeOneFromInventory(cloth);
+    stanchBleed(player);
+    log('You tear a strip of cloth and bind the wound as tight as you can. It holds -- for now.');
+    endTurn({ forceFull: true });
+    return;
+  }
+  const danger = curMonsters().some(m => m.alive && m.hostile !== false && chebyshev(m.x, m.y, player.x, player.y) <= 3 && hasLOS(player.x, player.y, m.x, m.y));
+  if (danger) { log("You can't concentrate on the wound with something that close -- deal with it, or run."); return; }
+  tendingWound = true;
+  autoRunActive = true;
+  log('You press down hard on the wound and breathe through it...');
+  let turns = 0;
+  const startHp = player.hp;
+  const iv = setInterval(() => {
+    const stop = (msg) => { if (msg) log(msg); tendingWound = false; autoRunActive = false; clearInterval(iv); render(); };
+    if (gameState !== 'playing' || !autoRunActive || !player.alive) return stop();
+    if ((player.bleedStacks || 0) <= 0) return stop();
+    const threat = curMonsters().some(m => m.alive && m.hostile !== false && chebyshev(m.x, m.y, player.x, player.y) <= 4 && hasLOS(player.x, player.y, m.x, m.y));
+    if (threat) return stop('Something is coming -- you lose your grip on the wound.');
+    player.bleedClotTurns = (player.bleedClotTurns || 0) + 4; // direct pressure speeds clotting a lot
+    endTurn({ forceFull: true });
+    turns++;
+    if (!player.alive) return stop();
+    if ((player.bleedStacks || 0) <= 0) return stop();
+    if (turns >= 4) {
+      if ((player.bleedStacks || 0) > 0) { player.bleedStacks = Math.max(0, player.bleedStacks - 1); if (player.bleedStacks <= 0) stanchBleed(player); }
+      return stop((player.bleedStacks || 0) > 0 ? 'Pressure slows it, but it is still seeping. Keep at it, or find a bandage.' : 'The bleeding stops under your hand.');
+    }
+  }, 40);
+}
+function removeOneFromInventory(it) {
+  if (it.amount && it.amount > 1) { it.amount--; return; }
+  player.inventory = player.inventory.filter(i => i.uid !== it.uid);
+}
+
+// Early-game bite scaling: fast melee beasts (wolves attack twice a turn) out-damage a level 1-3 character.
+// Applied at spawn from the player's current level; no RNG, so world generation is untouched.
+EARLY_GRACE.atkScale = lvl => (lvl <= 2 ? 0.6 : lvl <= 4 ? 0.8 : 1);
+
+// Poison counterplay: resting while poisoned now treats it (antidote > chewed herb > bare-hands flush) instead of
+// blindly looping. Poison used to be a pure timer with no player agency at low level.
+function tendPoison() {
+  const has = id => player.inventory.find(i => i.id === id);
+  const antidote = has('antidote');
+  if (antidote) { useItem(antidote); return; }
+  const herb = has('herb');
+  if (herb) {
+    removeOneFromInventory(herb);
+    player.statusPoison = Math.max(0, (player.statusPoison || 0) - 3);
+    log('You chew a bitter herb; the venom\'s grip loosens.');
+  } else {
+    player.statusPoison = Math.max(0, (player.statusPoison || 0) - 1);
+    player.hp = Math.max(1, player.hp - 1);
+    log('You squeeze and flush the wound, pulling some venom out (-1 HP).');
+  }
+  endTurn();
+}
+const _orig_doRest_poison = doRest;
+doRest = function () {
+  if (gameState === 'playing' && (player.statusPoison || 0) >= 2 && !((player.bleedTurns || 0) > 0 || (player.bleedStacks || 0) > 0)
+      && !(player.poisonImmune || getBuff('resistpoison') > 0)) { tendPoison(); return; }
+  return _orig_doRest_poison.apply(this, arguments);
+};
+
+// =====================================================================================================
+// ===================== v0.51.0 GAME BUS: one place for systems to react to what happens ===============
+// WHY: this game grew in chunks, and each new system (relic procs, quest hooks, VFX, bounty hunters...)
+// had to be hand-wired into the middle of doAttack/onDeath/endTurn. That is why old features often did not
+// touch new ones. GameBus fixes the shape of the problem: the few chokepoints below publish events, and any
+// system -- elite affixes, gods, feats, future mechanics -- subscribes without editing those functions.
+//
+//   GameBus.on('attackResolved', e => { ... })        returns an unsubscribe function
+//   GameBus.emit('myEvent', payload)                  any system may publish its own events too
+//
+// STANDARD EVENTS (payload fields):
+//   monsterSpawned  { m, base, depthScale }                 a monster was just built (makeMonster)
+//   attackResolved  { att, def, dmg, killed, melee }        one doAttack finished (dmg = HP actually removed)
+//   death           { def, killer }                          something (not the player) finished dying
+//   playerDied      { killer }                               the player's real death (not a revive)
+//   turn            { turn }                                 one full game turn elapsed (endTurn)
+//   castStart       { id }                                   about to cast/use an ability (before the turn passes)
+//   cast            { id, ok }                               the cast finished; ok=false if no turn was spent
+//   itemUsed        { it }                                   the player used an item
+//   floorChanged    { }                                      the player changed dungeon level / world layer
+// A handler that throws is logged and skipped; it can never break the turn.
+// =====================================================================================================
+const GameBus = (function () {
+  const handlers = Object.create(null);
+  return {
+    on(evt, fn, prio) {
+      const list = (handlers[evt] = handlers[evt] || []);
+      const rec = { fn, prio: prio || 0 };
+      list.push(rec); list.sort((a, b) => b.prio - a.prio);
+      return () => { const i = list.indexOf(rec); if (i >= 0) list.splice(i, 1); };
+    },
+    emit(evt, data) {
+      const list = handlers[evt]; if (!list || !list.length) return data;
+      for (const rec of list.slice()) { try { rec.fn(data); } catch (e) { if (typeof console !== 'undefined') console.error('[GameBus] ' + evt, e); } }
+      return data;
+    },
+    count(evt) { return (handlers[evt] || []).length; },
+  };
+})();
+
+// ---- publishers: thin wrappers over the original functions (function declarations are mutable globals) ----
+// Summoned/conjured allies must not roll elite affixes or take early-game scaling: wrap their creators in quiet().
+GameBus.quiet = 0;
+GameBus.runQuiet = function (fn, self, args) { GameBus.quiet++; try { return fn.apply(self, args); } finally { GameBus.quiet--; } };
+const _orig_makeMonster = makeMonster;
+makeMonster = function (monsterId, x, y, depthScale, rng) {
+  const m = _orig_makeMonster.apply(this, arguments);
+  if (m && !GameBus.quiet) GameBus.emit('monsterSpawned', { m, base: MONSTER_BASES[monsterId], depthScale: depthScale || 1 });
+  return m;
+};
+const _orig_doAttack = doAttack;
+doAttack = function (att, def, skipDuplicate) {
+  const hp0 = def ? def.hp : 0;
+  if (def && def.kind === 'npc' && def._innocent === undefined) def._innocent = !def.hostile;   // who was peaceful BEFORE this fight began
+  const r = _orig_doAttack.apply(this, arguments);
+  if (def && att) {
+    const dmg = Math.max(0, hp0 - def.hp);
+    GameBus.emit('attackResolved', { att, def, dmg, killed: def.alive === false || def.hp <= 0, melee: chebyshev(att.x, att.y, def.x, def.y) <= 1 });
+  }
+  return r;
+};
+const _orig_onDeath = onDeath;
+onDeath = function (def, killer) {
+  const wasAlive = def && def.alive !== false;
+  const r = _orig_onDeath.apply(this, arguments);
+  if (def && wasAlive && def.alive === false) {
+    if (def === player) GameBus.emit('playerDied', { killer });
+    else GameBus.emit('death', { def, killer });
+  }
+  return r;
+};
+const _orig_endTurn = endTurn;
+endTurn = function (opts) {
+  const r = _orig_endTurn.apply(this, arguments);
+  GameBus.emit('turn', { turn: turnCount });
+  return r;
+};
+if (typeof castSpell === 'function') {
+  const _orig_castSpell = castSpell;
+  castSpell = function (id) { const t0 = turnCount; GameBus.emit('castStart', { id }); const r = _orig_castSpell.apply(this, arguments); GameBus.emit('cast', { id, ok: turnCount > t0 }); return r; };
+}
+const _orig_useItem = useItem;
+useItem = function (it) { const r = _orig_useItem.apply(this, arguments); GameBus.emit('itemUsed', { it }); return r; };
+
+GameBus.on('monsterSpawned', e => {
+  const m = e.m; if (!m || m.kind !== 'monster' || !m.atk || !player || typeof EARLY_GRACE === 'undefined') return;
+  const k = EARLY_GRACE.atkScale(player.level); if (k >= 1 || m._earlyScaled) return;
+  m._earlyScaled = true; m.atk = [Math.max(1, Math.round(m.atk[0] * k)), Math.max(1, Math.round(m.atk[1] * k))];
+}, 100);
+
+if (typeof spawnAlly === 'function') { const _orig_spawnAlly = spawnAlly; spawnAlly = function () { return GameBus.runQuiet(_orig_spawnAlly, this, arguments); }; }
+
+// Regeneration scaled linearly with monster power (troll regen 2 -> 20+), outpacing a built player's damage: a mid-level
+// troll was an unkillable wall (bench_mid.py: L8 warrior lost 100% of HP over 52 turns). Scale it by sqrt instead.
+GameBus.on('monsterSpawned', e => {
+  const m = e.m, b = e.base; if (!m || !b || !b.regen || !m.powerScale) return;
+  m.regen = Math.max(b.regen, Math.round(b.regen * Math.sqrt(m.powerScale)));
+}, 200);
+
+// =====================================================================================================
+// ===================== v0.51.0 MARKED, ELITE & PARAGON MONSTERS (affix framework) =====================
+// Diablo/DCSS/Brogue-style variety: the same wolf can be a plain wolf, a Swift Wolf, or a Volatile Bloodthirsty
+// Wolf that heals on every bite and bursts when it dies. Every affix is ONE data entry in MONSTER_AFFIXES;
+// nothing else in the game needs to know a specific affix exists.
+//
+//   id: { prefix, color, weight, minDs, tier, desc, conflicts:[ids],
+//         apply(m, ctx)            // stat changes at spawn
+//         onHit(m, target, dmg)    // m hit target
+//         onDamaged(m, att, dmg)   // m was hit by att
+//         onTurn(m)                // once per game turn while the monster is nearby
+//         onDeath(m, killer) }     // after m died
+//
+// ADD ONE: put an entry in MONSTER_AFFIXES. That's it -- rolling, naming, colour, tooltip, XP and loot reward all
+// read the registry. Rank: 1 affix = Marked (x1.8 XP), 2 = Elite (x3), 3 = Paragon (x5), each with bonus loot.
+// Rolls use a coordinate-seeded RNG, so they are stable per world position and never disturb world generation.
+// =====================================================================================================
+const AFFIX_TUNING = {
+  graceLevel: 3,                 // below this player level elites are very rare
+  baseChance: 0.05, perDepth: 0.014, maxChance: 0.32,
+  eliteChance: 0.22, paragonChance: 0.10,   // given a monster is marked, odds of a 2nd / 3rd affix (scaled by depth)
+  xpMult: [1, 1.8, 3, 5], lootRarity: [0, 1, 2, 3],
+};
+const _affixAvgAtk = m => ((m.atk && m.atk.length ? (m.atk[0] + m.atk[1]) / 2 : 3));
+const _affixSeen = m => !!(m && posVisibleToPlayer && posVisibleToPlayer(m.x, m.y));
+const _affixLog = (m, msg) => { if (_affixSeen(m) || m === player) log(msg); };
+function _affixHurt(target, amount, source, killer) {
+  amount = Math.max(1, Math.round(amount));
+  target.hp -= amount;
+  if (target === player) lastDamageSource = source || 'a monster\'s curse';
+  if (target.hp <= 0 && target.alive !== false) onDeath(target, killer || null);
+}
+const MONSTER_AFFIXES = {
+  swift:      { prefix: 'Swift', color: '#7fe0ff', weight: 10, minDs: 1, desc: 'Moves and strikes twice as often.',
+                apply(m) { m.swiftMover = true; } },
+  brutal:     { prefix: 'Brutal', color: '#ff6a4a', weight: 10, minDs: 1, desc: 'Hits 40% harder.',
+                apply(m) { if (m.atk) m.atk = [Math.round(m.atk[0] * 1.4), Math.round(m.atk[1] * 1.4)]; } },
+  plated:     { prefix: 'Plated', color: '#b0b8c8', weight: 8, minDs: 2, desc: 'Heavy natural armor.',
+                apply(m, c) { m.armor = (m.armor || 0) + Math.max(2, Math.ceil(c.ds * 1.3)); } },
+  hulking:    { prefix: 'Hulking', color: '#d0a070', weight: 8, minDs: 1, desc: 'Far more health.',
+                apply(m) { m.hp = m.maxHp = Math.round(m.maxHp * 1.8); } },
+  vampiric:   { prefix: 'Bloodthirsty', color: '#c02040', weight: 8, minDs: 2, desc: 'Heals itself by what it bites out of you.',
+                onHit(m, t, dmg) { if (dmg > 0) { m.hp = Math.min(m.maxHp, m.hp + Math.ceil(dmg * 0.6)); } } },
+  venomous:   { prefix: 'Venomous', color: '#8ac93a', weight: 8, minDs: 1, desc: 'Its bite poisons.', conflicts: ['serrated'],
+                onHit(m, t, dmg) { if (dmg > 0 && t.hp > 0) t.statusPoison = (t.statusPoison || 0) + Math.max(2, Math.round(_affixAvgAtk(m) * 0.8)); } },
+  serrated:   { prefix: 'Rending', color: '#e04a4a', weight: 8, minDs: 1, desc: 'Its wounds bleed.', conflicts: ['venomous'],
+                onHit(m, t, dmg) { if (dmg > 0 && t.hp > 0 && Math.random() < 0.55) applyBleed(t, 1); } },
+  cinder:     { prefix: 'Cinder', color: '#ff8a3a', weight: 7, minDs: 2, desc: 'Burning hot. Sets you alight; leaves fire where it falls.', conflicts: ['rimed'],
+                apply(m) { m.fireImmune = true; },
+                onHit(m, t) { if (t.hp > 0 && Math.random() < 0.4 && igniteEntity(t, 3) && t === player) log(`${m.name}'s touch sets you alight!`); },
+                onDeath(m) { igniteTile(m.x, m.y, 3); } },
+  rimed:      { prefix: 'Rimed', color: '#8ae0ff', weight: 7, minDs: 2, desc: 'Frost-clad. Its touch slows you.', conflicts: ['cinder'],
+                apply(m) { m.frostImmune = true; },
+                onHit(m, t, dmg) { if (dmg > 0 && t.hp > 0) t.statusSlow = Math.max(t.statusSlow || 0, 2); } },
+  resilient:  { prefix: 'Resilient', color: '#6ad06a', weight: 8, minDs: 1, desc: 'Regenerates steadily.',
+                onTurn(m) { if (m.hp < m.maxHp && m.hp > 0) m.hp = Math.min(m.maxHp, m.hp + Math.max(1, Math.round(m.maxHp * 0.04))); } },
+  thorned:    { prefix: 'Thorned', color: '#7ab04a', weight: 7, minDs: 2, desc: 'Reflects part of melee damage back.',
+                onDamaged(m, att, dmg) { if (dmg > 0 && m.hp > 0 && att && att.hp > 0 && chebyshev(att.x, att.y, m.x, m.y) <= 1) { const r = Math.max(1, Math.round(dmg * 0.3)); _affixLog(m, `Thorns lash ${att === player ? 'you' : att.name} for ${r}!`); _affixHurt(att, r, 'a thorned ' + m.name, m); } } },
+  elusive:    { prefix: 'Elusive', color: '#e0e0a0', weight: 7, minDs: 2, desc: 'Hard to hit.',
+                apply(m) { m.dodgeChance = Math.min(0.45, (m.dodgeChance || 0) + 0.3); } },
+  volatile:   { prefix: 'Volatile', color: '#ffb030', weight: 7, minDs: 2, desc: 'Explodes when it dies, hurting everything adjacent.', conflicts: ['brooding'],
+                onTurn(m) { if (!m.volatileWarned && m.hp < m.maxHp * 0.3 && _affixSeen(m)) { m.volatileWarned = true; log(`${m.name} swells and glows -- it's about to burst!`); } },
+                onDeath(m, killer) {
+                  const dmg = Math.round(_affixAvgAtk(m) * 2.2) + 2;
+                  _affixLog(m, `${m.name} bursts in a fiery blast!`);
+                  VFX.fx.ring && VFX.fx.ring({ x: m.x, y: m.y, color: '#ffb030', radius: 2.2, life: 380 });
+                  const victims = [];
+                  if (chebyshev(player.x, player.y, m.x, m.y) <= 1) victims.push(player);
+                  for (const h of hostilesWithinRadius(m.x, m.y, 1)) if (h !== m && h.alive) victims.push(h);
+                  for (const a of curAllies()) if (chebyshev(a.x, a.y, m.x, m.y) <= 1) victims.push(a);
+                  for (const v of victims) _affixHurt(v, dmg, 'a volatile ' + m.name, m);
+                  igniteTile(m.x, m.y, 2);
+                } },
+  brooding:   { prefix: 'Brooding', color: '#c0a0e0', weight: 6, minDs: 2, desc: 'Splits into two lesser copies when it dies.', conflicts: ['volatile'],
+                onDeath(m, killer) {
+                  if (m.isBrood) return;
+                  const spots = [];
+                  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) { if ((dx || dy) && curWalkable(m.x + dx, m.y + dy) && !entityAt(m.x + dx, m.y + dy)) spots.push([m.x + dx, m.y + dy]); }
+                  let n = 0;
+                  while (n < 2 && spots.length) {
+                    const [sx, sy] = spots.splice(Math.floor(Math.random() * spots.length), 1)[0];
+                    const kid = _orig_makeMonster(m.monsterId, sx, sy, m.depthScale || 1, Math.random);
+                    kid.hp = kid.maxHp = Math.max(2, Math.round(m.maxHp * 0.4)); kid.xp = Math.round(m.xp * 0.15); kid.isBrood = true; kid.name = 'Spawn of ' + m.name.replace(/^.*? /, '');
+                    kid.engaged = true; kid.aiState = 'alert'; addMonsterToWorld(kid); n++;
+                  }
+                  if (n) _affixLog(m, `${m.name} splits apart into smaller ones!`);
+                } },
+  thieving:   { prefix: 'Light-Fingered', color: '#e0d060', weight: 6, minDs: 1, desc: 'Steals gold, then runs. Kill it to get the gold back.',
+                onHit(m, t) {
+                  if (t !== player || m.stolenGold || player.gold <= 0) return;
+                  const steal = Math.min(player.gold, Math.round(10 + 8 * (m.depthScale || 1) + player.gold * 0.1));
+                  player.gold -= steal; m.stolenGold = steal; m.thiefTimer = 40; m.statusFear = 40; m.engaged = true;
+                  log(`${m.name} snatches ${steal} gold and bolts!`);
+                },
+                onTurn(m) {
+                  if (!m.stolenGold) return;
+                  m.statusFear = Math.max(m.statusFear || 0, 3);
+                  if (--m.thiefTimer <= 0) { _affixLog(m, `${m.name} slips away with your ${m.stolenGold} gold.`); m.alive = false; m.hp = 0; }
+                },
+                onDeath(m, killer) { if (m.stolenGold && (killer === player || (killer && isPlayerOwnedKiller(killer)))) { player.gold += m.stolenGold; log(`You recover ${m.stolenGold} stolen gold.`); } m.stolenGold = 0; } },
+  draining:   { prefix: 'Siphoning', color: '#a060e0', weight: 6, minDs: 2, desc: 'Drains your mana and stamina.',
+                onHit(m, t, dmg) { if (t === player && dmg > 0) { const d = 3 + Math.round((m.depthScale || 1) * 1.5); player.mp = Math.max(0, player.mp - d); player.stamina = Math.max(0, player.stamina - d); m.hp = Math.min(m.maxHp, m.hp + 1); } } },
+  dreadful:   { prefix: 'Dreadful', color: '#a0a0ff', weight: 6, minDs: 3, desc: 'Its blows can fill you with terror.',
+                onHit(m, t, dmg) { if (t === player && dmg > 0 && Math.random() < 0.3) { player.statusFear = addFearTurns(player.statusFear || 0, 2); log('Dread freezes your arm!'); } } },
+  phasing:    { prefix: 'Phasing', color: '#e080ff', weight: 6, minDs: 3, desc: 'Blinks next to you out of nowhere.',
+                onTurn(m) {
+                  if ((m.phaseCd || 0) > 0) { m.phaseCd--; return; }
+                  const d = chebyshev(m.x, m.y, player.x, player.y);
+                  if (d < 3 || d > 9 || !m.engaged || Math.random() > 0.3) return;
+                  const spots = [];
+                  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) { if ((dx || dy) && curWalkable(player.x + dx, player.y + dy) && !entityAt(player.x + dx, player.y + dy)) spots.push([player.x + dx, player.y + dy]); }
+                  if (!spots.length) return;
+                  const [nx, ny] = spots[Math.floor(Math.random() * spots.length)];
+                  m.x = nx; m.y = ny; m.phaseCd = 8; _affixLog(m, `${m.name} blinks beside you!`);
+                } },
+  warlord:    { prefix: 'Warleader', color: '#ff9a3a', weight: 5, minDs: 2, desc: 'Allies near it hit 25% harder.',
+                onTurn(m) {
+                  for (const o of curMonsters()) {
+                    if (o === m || !o.alive || o.faction !== m.faction) continue;
+                    const near = chebyshev(o.x, o.y, m.x, m.y) <= 6;
+                    if (near) o.buffAtkMult = Math.max(o.buffAtkMult || 1, 1.25); else if (o.buffAtkMult === 1.25 && !(o.affixes && o.affixes.includes('warlord'))) o.buffAtkMult = 1;
+                  }
+                } },
+  gilded:     { prefix: 'Gilded', color: '#ffd84a', weight: 3, minDs: 1, desc: 'Carries a fortune and bolts the moment it sees you.', conflicts: ['thieving', 'brutal', 'hulking'], rankOnly: 1,
+                apply(m, c) { m.behavior = 'flee'; m.fearless = false; m.gildedFlee = true; m.hp = m.maxHp = Math.max(6, Math.round(m.maxHp * 0.7)); m.swiftMover = false; m.dropGold = true; m._gildedBonus = 2 + Math.floor(c.ds / 3); },
+                onTurn(m) { if (m.hp > 0 && m.engaged) m.statusFear = Math.max(m.statusFear || 0, 2); } },
+};
+
+function affixesOf(e) { return (e && e.affixes) ? e.affixes.map(id => MONSTER_AFFIXES[id]).filter(Boolean) : []; }
+function affixRankName(n) { return n >= 3 ? 'Paragon' : n === 2 ? 'Elite' : 'Marked'; }
+
+function rollMonsterAffixes(m, base, ds, forced) {
+  if (!m || !base || !player || player.isTutorial) return;
+  if (!forced && (m.boss || base.boss || m.scriptedAI || base.fixedStats || m.interstitial || m.isBrood || base.prey || m.isSummon || m.kind !== 'monster')) return;
+  if (!forced && (base.hp || 0) < 8 && !base.dtier) return;
+  const lvl = player.level || 1;
+  const rng = mulberry32((SEED ^ (Math.imul(m.x | 0, 73856093) ^ Math.imul(m.y | 0, 19349663) ^ Math.imul((m.monsterId || '').length * 31 + (m.monsterId || 'x').charCodeAt(0), 83492791))) >>> 0);
+  let chance = Math.min(AFFIX_TUNING.maxChance, AFFIX_TUNING.baseChance + AFFIX_TUNING.perDepth * Math.max(0, ds - 1));
+  if (lvl < AFFIX_TUNING.graceLevel) chance *= 0.15;
+  if (!forced && rng() >= chance) return;
+  const want = forced ? forced.length : 1 + (rng() < Math.min(0.6, AFFIX_TUNING.eliteChance * (0.6 + ds * 0.15)) ? 1 : 0) + (ds >= 4 && rng() < AFFIX_TUNING.paragonChance * (ds / 5) ? 1 : 0);
+  const picked = forced ? forced.slice() : [];
+  for (let n = 0; !forced && n < want; n++) {
+    const pool = Object.entries(MONSTER_AFFIXES).filter(([id, a]) => {
+      if (picked.includes(id) || (a.minDs || 1) > ds) return false;
+      if (a.rankOnly && want > a.rankOnly) return false;
+      if (picked.some(p => (MONSTER_AFFIXES[p].conflicts || []).includes(id) || (a.conflicts || []).includes(p))) return false;
+      if (id === 'swift' && m.swiftMover) return false;
+      return true;
+    }).map(([id, a]) => [id, a.weight || 1]);
+    if (!pool.length) break;
+    picked.push(weightedChoice(rng, pool));
+  }
+  if (!picked.length) return;
+  m.affixes = picked;
+  const rank = picked.length;
+  const ctx = { ds, rank };
+  for (const id of picked) { const a = MONSTER_AFFIXES[id]; if (a.apply) a.apply(m, ctx); }
+  const prefixes = picked.map(id => MONSTER_AFFIXES[id].prefix);
+  m.baseName = m.baseName || m.name;
+  m.name = prefixes.join(' ') + ' ' + m.baseName;
+  m.color = MONSTER_AFFIXES[picked[0]].color;
+  m.xp = Math.round(m.xp * AFFIX_TUNING.xpMult[Math.min(3, rank)]);
+  m.eliteRank = rank;
+  m.dropGold = true;
+  // bonus loot, rolled now (stable) from the same seeded stream
+  try {
+    const cap = Math.min(3, 1 + Math.floor(ds / 3));
+    const eligible = ITEM_BASES.filter(b => !b.setId && !b.isUnique && !b.craftOnly && (b.valueTier || 0) <= cap && b.type !== 'book' && b.type !== 'chest');
+    const drops = (m._gildedBonus || 0) + rank;
+    m.guaranteedDrops = m.guaranteedDrops || [];
+    for (let i = 0; i < drops && eligible.length; i++) m.guaranteedDrops.push(makeItem(choice(rng, eligible).id, Math.min(3, rank), rng));
+  } catch (e) { /* loot is a bonus; never break spawning */ }
+}
+GameBus.on('monsterSpawned', ({ m, base, depthScale }) => rollMonsterAffixes(m, base, depthScale || 1));
+
+// announce once when a marked monster comes into view
+GameBus.on('turn', () => {
+  let ms; try { ms = curMonsters(); } catch (e) { return; }
+  for (const m of ms) {
+    if (!m.affixes || !m.alive || m.hp <= 0) continue;
+    if (chebyshev(m.x, m.y, player.x, player.y) > 24) continue;
+    if (!m.affixAnnounced && posVisibleToPlayer(m.x, m.y)) {
+      m.affixAnnounced = true;
+      log(`*** ${affixRankName(m.affixes.length)}: ${m.name} -- ${affixesOf(m).map(a => a.desc.replace(/\.$/, '')).join('; ')}. ***`);
+    }
+    for (const a of affixesOf(m)) if (a.onTurn) a.onTurn(m);
+  }
+});
+GameBus.on('attackResolved', ({ att, def, dmg }) => {
+  if (att && att.affixes && def) for (const a of affixesOf(att)) if (a.onHit && att.alive !== false) a.onHit(att, def, dmg);
+  if (def && def.affixes && dmg > 0 && att) for (const a of affixesOf(def)) if (a.onDamaged) a.onDamaged(def, att, dmg);
+});
+GameBus.on('death', ({ def, killer }) => {
+  if (!def.affixes || def.kind === 'ally') return;   // a converted/hacked elite dying on YOUR side must not burst, split or rise against you
+  for (const a of affixesOf(def)) if (a.onDeath) a.onDeath(def, killer);
+  if (def.eliteRank && (killer === player || (killer && isPlayerOwnedKiller(killer)))) {
+    player.eliteKills = (player.eliteKills || 0) + 1;
+    log(`${affixRankName(def.eliteRank)} slain! (${player.eliteKills} elites felled)`);
+  }
+});
+
+// ---- presentation: tooltip lines + an unmistakable marker on the map ----
+INSPECT_SECTIONS.splice(1, 0, { id: 'affixes', build(c) {
+  const e = c.entity; if (!e || !c.visible || !e.affixes) return null;
+  return `<div style="color:#ffd84a">${affixRankName(e.affixes.length)}</div>` + affixesOf(e).map(a => `<div style="color:${a.color}">&bull; ${escapeHtml(a.prefix)}: <span style="opacity:.85">${escapeHtml(a.desc)}</span></div>`).join('');
+} });
+(function () {
+  const _draw = VFX.draw;
+  VFX.draw = function (ctx, v) {
+    _draw.call(VFX, ctx, v);
+    try {
+      const t = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+      ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      for (const m of curMonsters()) {
+        if (!m.affixes || !m.alive || m.hp <= 0 || !posVisibleToPlayer(m.x, m.y)) continue;
+        const px = (m.x - player.x + v.halfW) * v.ts + v.ts / 2, py = (m.y - player.y + v.halfH) * v.ts + v.ts / 2;
+        const col = (MONSTER_AFFIXES[m.affixes[0]] || {}).color || '#ffd84a';
+        ctx.globalAlpha = 0.55 + 0.35 * Math.sin(t * 4 + m.x);
+        ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, v.ts * 0.08);
+        const r = v.ts * 0.5 - 1; ctx.strokeRect(px - r, py - r, r * 2, r * 2);
+        ctx.globalAlpha = 1; ctx.fillStyle = col; ctx.font = `bold ${Math.max(7, Math.round(v.ts * 0.38))}px monospace`;
+        ctx.fillText('◆'.repeat(m.affixes.length), px, py - v.ts * 0.5 - 2);
+      }
+      ctx.restore();
+    } catch (e) { /* cosmetic */ }
+  };
+  const _active = VFX.active;
+  VFX.active = function () { try { if (curMonsters().some(m => m.affixes && m.alive)) return true; } catch (e) {} return _active.call(VFX); };
+})();
+
+// =====================================================================================================
+// ===================== v0.51.0 TELEGRAPHED MANEUVERS: read it, dodge it, punish it ===================
+// Combat used to be "bump until one side is dead". Now many enemies have a HEAVY MANEUVER. They spend a turn
+// winding up (the danger tiles glow red and the log says what is coming), then strike for ~2x damage on the
+// marked tiles. You have exactly one action to answer:
+//   - SIDESTEP: leave the marked tiles. The blow lands on nothing and the enemy is EXPOSED: your hits crit.
+//   - PARRY/BLOCK: Parry Stance, Perfect Parry, Cross Parry, Guard Stance, Shield Wall (formerly only +armor)
+//     now negate the blow, stagger the attacker and give you a free riposte; shields can block passively.
+//   - INTERRUPT: a hit that lands for 20%+ of its max HP, a stun or a freeze cancels the wind-up.
+//   - TERRAIN: a charging beast that hits a wall is stunned; a lunge that overshoots lands in whatever you left.
+//
+// Data-driven: a maneuver is one entry in MANEUVERS; who gets which is MANEUVER_RULES (regex on monster id, plus
+// a stat-based fallback, so new monsters are covered automatically). Scripted bosses keep their own AI.
+// =====================================================================================================
+const MANEUVER_TUNING = { interruptFrac: 0.2, exposedCrit: 1.0 };
+
+function _mvSeen(m) { return posVisibleToPlayer(m.x, m.y); }
+function _mvLine(a, b) { // tiles from a toward b (exclusive of a), 8-dir greedy
+  const out = []; let x = a.x, y = a.y;
+  const dx = Math.sign(b.x - a.x), dy = Math.sign(b.y - a.y);
+  return { dx, dy };
+}
+function _mvStrike(m, tiles, mult, hitMsg) {
+  // Hit every hostile entity standing on one of the tiles. Returns the entities hit (parried/dodged ones included).
+  const targets = [], struck = [];
+  for (const t of tiles) { const e = (player.x === t.x && player.y === t.y) ? player : entityAt(t.x, t.y); if (e && e !== m && e.hp > 0 && !targets.includes(e) && (e === player || isHostileTo(m, e))) targets.push(e); }
+  for (const e of targets) {
+    let useMult = mult;
+    if (e === player) {
+      const d = maneuverDefense(m);
+      if (d && d.kind === 'parry') {
+        player._parry = null;
+        log(`*** You turn aside ${m.name}'s ${MANEUVERS[m.maneuver.id].name}! ***`);
+        m.stunnedTurns = Math.max(m.stunnedTurns || 0, 1); m.exposedTurns = 2; if (m.maneuver) { m.maneuver.phase = 'recover'; m.maneuver.left = 2; }
+        if (d.grade >= 2) player.stamina = Math.min(player.maxStamina, player.stamina + 12);
+        if (hasLOS(player.x, player.y, m.x, m.y) && chebyshev(player.x, player.y, m.x, m.y) <= 1) { log('Riposte!'); doAttack(player, m); }
+        struck.parried = true;
+        continue;
+      }
+      if (d && d.kind === 'block') { useMult *= 0.4; player.stamina = Math.max(0, player.stamina - 8); log('Your shield takes the worst of it!'); }
+    }
+    const prev = m.buffAtkMult; m.buffAtkMult = (prev || 1) * useMult;
+    if (hitMsg) log(hitMsg.replace('{t}', e === player ? 'you' : e.name));
+    doAttack(m, e);
+    m.buffAtkMult = prev;
+    struck.push(e);
+  }
+  return struck;
+}
+function maneuverDefense(m) {
+  const pr = player._parry;
+  if (pr && pr.until >= turnCount) return { kind: 'parry', grade: pr.grade };
+  const sh = player.equipment && player.equipment.offhand;
+  if (sh && /shield|buckler|aegis|bulwark|\bward\b/i.test((sh.name || '') + ' ' + (sh.id || '')) && !sh.broken && Math.random() < 0.3) return { kind: 'block' };
+  return null;
+}
+// the old stance skills finally mean something
+const PARRY_SKILLS = { parrystance: { dur: 8, grade: 1 }, crossparry: { dur: 10, grade: 1 }, guardstance: { dur: 10, grade: 1 }, shieldwall: { dur: 12, grade: 1 }, perfectparry: { dur: 8, grade: 2 } };
+GameBus.on('castStart', ({ id }) => { if (PARRY_SKILLS[id]) player._parryPending = id; });
+GameBus.on('cast', () => { if (player) player._parryPending = null; });
+// the stance is armed at the exact moment the ability's armor buff is applied -- i.e. only if the cast really worked
+(function () {
+  for (const fnName of ['applyBuff', 'applyBuffQuiet']) {
+    const orig = (fnName === 'applyBuff') ? applyBuff : applyBuffQuiet;
+    const wrapped = function (stat, power, turns) {
+      const r = orig.apply(this, arguments);
+      const id = player && player._parryPending;
+      if (id && stat === 'armor' && PARRY_SKILLS[id]) {
+        const p = PARRY_SKILLS[id];
+        player._parry = { until: turnCount + p.dur + 1, grade: p.grade, id };
+        player._parryPending = null;
+        log(`You are ready to turn aside the next heavy blow (${p.dur} turns).`);
+      }
+      return r;
+    };
+    if (fnName === 'applyBuff') applyBuff = wrapped; else applyBuffQuiet = wrapped;
+  }
+})();
+
+const MANEUVERS = {
+  smash: { name: 'Crushing Blow', windup: 1, recover: 2, mult: 2.1, cd: 6, chance: 0.4, minR: 1, maxR: 1,
+    plan(m) { return { tiles: [{ x: player.x, y: player.y }] }; },
+    announce: m => `${m.name} rears back to bring its weapon down on you!`,
+    resolve(m, plan) {
+      const hit = _mvStrike(m, plan.tiles, this.mult, `${m.name} brings it crashing down on {t}!`);
+      if (hit.includes(player) && player.hp > 0) { player.stamina = Math.max(0, player.stamina - 18); player.statusSlow = Math.max(player.statusSlow || 0, 1); }
+      if (hit.parried) return 2;
+      if (!hit.length) { log(`${m.name}'s blow slams into empty ground!`); return 2; }
+      return 1;
+    } },
+  pounce: { name: 'Pounce', windup: 1, recover: 2, mult: 1.6, cd: 5, chance: 0.5, minR: 2, maxR: 5,
+    plan(m) {
+      const T = { x: player.x, y: player.y };
+      return { tiles: [T] };
+    },
+    announce: m => `${m.name} crouches, muscles coiling -- it's about to pounce!`,
+    resolve(m, plan) {
+      const T = plan.tiles[0];
+      // land on the neighbour of T nearest to us (or on T itself if it's empty -- the overshoot)
+      const here = (player.x === T.x && player.y === T.y) ? player : entityAt(T.x, T.y);
+      let L = null, best = 99;
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+        if (!dx && !dy) continue;
+        const nx = T.x + dx, ny = T.y + dy;
+        if (!isPassableFor(m, nx, ny) || (entityAt(nx, ny) && !(nx === m.x && ny === m.y)) || (player.x === nx && player.y === ny)) continue;
+        const d = chebyshev(m.x, m.y, nx, ny); if (d < best) { best = d; L = { x: nx, y: ny }; }
+      }
+      if (here) {
+        if (L) enterTileAsEntity(m, L.x, L.y);
+        const hit = _mvStrike(m, [T], this.mult, `${m.name} leaps and bowls into {t}!`);
+        if (hit.includes(player) && player.hp > 0) player.statusSlow = Math.max(player.statusSlow || 0, 1);
+        return hit.length ? 1 : 1;
+      }
+      if (isPassableFor(m, T.x, T.y) && !entityAt(T.x, T.y)) { enterTileAsEntity(m, T.x, T.y); log(`${m.name} sails through the air and lands where you were -- off balance!`); return 2; }
+      log(`${m.name} leaps at nothing.`); return 2;
+    } },
+  charge: { name: 'Charge', windup: 1, recover: 2, mult: 1.9, cd: 7, chance: 0.5, minR: 3, maxR: 8,
+    plan(m) {
+      const dx = Math.sign(player.x - m.x), dy = Math.sign(player.y - m.y); if (!dx && !dy) return null;
+      const tiles = []; let x = m.x, y = m.y;
+      for (let i = 0; i < 9; i++) { x += dx; y += dy; if (!isPassableFor(m, x, y)) break; tiles.push({ x, y }); }
+      if (tiles.length < 2) return null;
+      return { tiles, dx, dy };
+    },
+    announce: m => `${m.name} lowers its head and paws the ground -- it's going to charge!`,
+    resolve(m, plan) {
+      let moved = 0;
+      for (const t of plan.tiles) {
+        const e = (player.x === t.x && player.y === t.y) ? player : entityAt(t.x, t.y);
+        if (e && e !== m) {
+          const hit = _mvStrike(m, [t], this.mult, `${m.name} crashes into {t}!`);
+          if (hit.includes(player) && player.hp > 0) { knockbackEntity(player, m.x, m.y, 2); }
+          return 1;
+        }
+        enterTileAsEntity(m, t.x, t.y); moved++;
+      }
+      const nx = m.x + plan.dx, ny = m.y + plan.dy;
+      if (moved >= 2 && !isPassableFor(m, nx, ny)) { log(`${m.name} slams headfirst into the ${(curTileAt(nx, ny) || {}).feature || 'obstacle'}, stunned!`); m.stunnedTurns = 2; return 3; }
+      log(`${m.name} thunders past, overshooting.`); return 2;
+    } },
+  whirlwind: { name: 'Whirlwind', windup: 1, recover: 1, mult: 1.4, cd: 6, chance: 0.3, minR: 1, maxR: 1,
+    plan(m) { const tiles = []; for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) if (dx || dy) tiles.push({ x: m.x + dx, y: m.y + dy }); return { tiles }; },
+    announce: m => `${m.name} sets its feet and starts to wind up a sweeping attack!`,
+    resolve(m, plan) { _mvStrike(m, plan.tiles, this.mult, `${m.name} spins, striking {t}!`); return 1; } },
+};
+
+const MANEUVER_RULES = [
+  { re: /^(boar|elk|runaway_automaton|bot_combatdrone|bot_warchassis|hoard_wyrm|tide_reaver)$/, ids: ['charge'] },
+  { re: /^(wolf|jackal|dire_wolf|alphawolf|alpha_direwolf|savanna_lion|taiga_lynx|hellhound|cyber_hound|spider|cave_spider|giantrat|fox|crocodile|current_stalker|crypt_stalker|brimstone_stalker|shadow_demon|rogue_assassin|reef_shark|bone_walker|razor_bat_swarm)$/, ids: ['pounce'] },
+  { re: /^(bear|yeti|ogre|troll|ogre_brute|hill_giant|frost_giant|orc|orc_grunt|orc_berserker|orcwarlord|bugbear|goblin_brute|hobgoblin|stonegolem|claygolem|iron_golem|animatedarmor|treant_elder|treant_sapling|death_knight|knight_captain|mercenary|bandit_thug|banditchief|revenant|ruin_guardian|reliquary_warden|stoneguardian|rune_guardian|gargoyle|mummy|zombie|bog-zombie|giantworm|warband_captain|chrome_enforcer|choir_enforcer|bramble_knight|grave_warden)$/, ids: ['smash'] },
+  { re: /^(orc_berserker|orc_grunt|bandit|bandit_thug|mercenary|skeleton_warrior|hobgoblin|knight_captain|banditchief|bugbear|war_priest|orc_warchief|goblin_overlord|death_knight|warband_captain|cyborg_graftedmercenary|cyborg_apexunit)$/, ids: ['whirlwind'] },
+];
+function maneuverIdsFor(m, base) {
+  const ids = [];
+  for (const r of MANEUVER_RULES) if (r.re.test(m.monsterId || '')) for (const id of r.ids) if (!ids.includes(id)) ids.push(id);
+  // fallback: any melee bruiser with real punch gets a smash, so future monsters are covered automatically
+  const avg = m.atk ? (m.atk[0] + m.atk[1]) / 2 : 0;
+  if (!ids.length && ['aggressive', 'stalker', 'charger'].includes(m.behavior) && avg >= 8 && !m.thrower && !m.breathWeapon) ids.push('smash');
+  if ((m.eliteRank || 0) >= 2 && !ids.includes('whirlwind') && m.behavior !== 'ranged' && m.behavior !== 'kiter') ids.push('whirlwind');
+  return ids;
+}
+
+function _mvEligibleTurn(m) {
+  return m.alive && m.hp > 0 && !(m.scriptedAI && STORY_BOSS_AI[m.scriptedAI]) && m.aiState !== 'dormant' && !(m.frozenSolidTurns > 0) && !(m.stunnedTurns > 0) && !(m.statusFear > 0) && !(m.statusConfuse > 0) && !(m.burningTurns > 0);
+}
+function maybeStartManeuver(m) {
+  if (m.maneuverIds === undefined) m.maneuverIds = maneuverIdsFor(m, MONSTER_BASES[m.monsterId]);
+  if (!m.maneuverIds.length) return false;
+  if ((m.maneuverCd || 0) > 0) { m.maneuverCd--; return false; }
+  if (!_mvEligibleTurn(m) || !m.engaged || m.faction === 'ally') return false;
+  if (m.target && m.target !== player && m.target.alive !== false) return false;
+  const d = chebyshev(m.x, m.y, player.x, player.y);
+  if (d > 8 || !hasLOS(m.x, m.y, player.x, player.y)) return false;
+  if (typeof invisHidesPlayerAt === 'function' && invisHidesPlayerAt(d)) return false;
+  const order = m.maneuverIds.slice().sort(() => Math.random() - 0.5);
+  for (const id of order) {
+    const def = MANEUVERS[id]; if (!def || d < def.minR || d > def.maxR) continue;
+    if (Math.random() > def.chance) continue;
+    const plan = def.plan(m); if (!plan) continue;
+    m.maneuver = { id, phase: 'windup', left: def.windup, plan };
+    m.maneuverCd = def.cd + Math.floor(Math.random() * 3);
+    if (_mvSeen(m)) {
+      log(def.announce(m));
+      if (!player._sawTelegraph) { player._sawTelegraph = true; log('*** A heavy attack is coming: the red tiles are where it will land. Step off them (or brace with a parry stance) -- an enemy that misses is left exposed. ***'); }
+    }
+    return true;
+  }
+  return false;
+}
+function _mvUpkeep(m) {
+  if (m.statusPoison || m.regen || m.statusSlow || m.wetTurns || m.oiledTurns || m.burningTurns || m.frozenSolidTurns || m.bleedTurns || m.stunnedTurns) processEntityStatus(m);
+  if (m.alive && m.hp > 0) regenEntityAIPools(m);
+}
+function maneuverTurn(m, isBonus) {
+  if (isBonus) return;
+  _mvUpkeep(m);
+  if (!m.alive || m.hp <= 0) return;
+  const mv = m.maneuver; if (!mv) return;
+  if (mv.phase === 'windup' && (m.frozenSolidTurns > 0 || m.stunnedTurns > 0 || m.statusFear > 0 || m.statusConfuse > 0)) {
+    if (_mvSeen(m)) log(`${m.name}'s ${MANEUVERS[mv.id].name} is cut short!`);
+    m.maneuver = null; return;
+  }
+  if (mv.phase === 'windup') {
+    mv.left--; if (mv.left > 0) return;
+    const def = MANEUVERS[mv.id];
+    const rec = def.resolve(m, mv.plan) || 1;
+    if (!m.alive || m.hp <= 0) { m.maneuver = null; return; }
+    if (m.maneuver && m.maneuver.phase === 'recover') { m.exposedTurns = m.maneuver.left; return; } // parried: already staggered
+    m.maneuver = { id: mv.id, phase: 'recover', left: rec };
+    m.exposedTurns = rec;
+    return;
+  }
+  // recover
+  if (m.stunnedTurns > 0) { return; }
+  mv.left--;
+  if (mv.left <= 0) { m.maneuver = null; m.exposedTurns = 0; } else m.exposedTurns = mv.left;
+}
+const _orig_monsterAI = monsterAI;
+monsterAI = function (m, isBonus) {
+  if (m.maneuver) { maneuverTurn(m, isBonus); return; }
+  if (m.exposedTurns > 0 && !isBonus) m.exposedTurns--;
+  if (!isBonus && maybeStartManeuver(m)) return;
+  return _orig_monsterAI.apply(this, arguments);
+};
+
+// hits that are big enough, or a stun, break a wind-up
+GameBus.on('attackResolved', ({ att, def, dmg }) => {
+  if (!def || !def.maneuver || def.maneuver.phase !== 'windup' || def.hp <= 0) return;
+  if (dmg >= Math.max(1, def.maxHp * MANEUVER_TUNING.interruptFrac)) {
+    if (_mvSeen(def)) log(`*** You interrupt ${def.name}'s ${MANEUVERS[def.maneuver.id].name}! ***`);
+    def.maneuver = null; def.maneuverCd = (def.maneuverCd || 0) + 2;
+    def.statusSlow = Math.max(def.statusSlow || 0, 1);
+  }
+});
+// an exposed enemy cannot protect itself: the player's blows crit
+const _bus_doAttack_for_exposed = doAttack;
+doAttack = function (att, def, skip) {
+  if (att === player && def && def.exposedTurns > 0 && def.alive !== false) {
+    const old = player.critBonus; player.critBonus = (old || 0) + MANEUVER_TUNING.exposedCrit;
+    if (!def._openingShown) { def._openingShown = true; log('An opening!'); }
+    try { return _bus_doAttack_for_exposed.apply(this, arguments); } finally { player.critBonus = old; }
+  }
+  return _bus_doAttack_for_exposed.apply(this, arguments);
+};
+
+// ---- presentation: danger tiles + tooltip ----
+INSPECT_SECTIONS.splice(1, 0, { id: 'maneuver', build(c) {
+  const e = c.entity; if (!e || !c.visible || !e.maneuver) return null;
+  if (e.maneuver.phase === 'windup') return `<div style="color:#ff5a4a;font-weight:bold">&#9888; Winding up: ${escapeHtml(MANEUVERS[e.maneuver.id].name)}</div>`;
+  return `<div style="color:#7fe07f">Off balance &mdash; your hits crit</div>`;
+} });
+(function () {
+  const _draw = VFX.draw;
+  VFX.draw = function (ctx, v) {
+    _draw.call(VFX, ctx, v);
+    try {
+      const t = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+      ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      for (const m of curMonsters()) {
+        const mv = m.maneuver; if (!mv || !m.alive || m.hp <= 0 || !posVisibleToPlayer(m.x, m.y)) continue;
+        if (mv.phase === 'windup') {
+          const pulse = 0.35 + 0.25 * Math.sin(t * 9);
+          for (const tile of mv.plan.tiles) {
+            const px = (tile.x - player.x + v.halfW) * v.ts, py = (tile.y - player.y + v.halfH) * v.ts;
+            ctx.globalAlpha = pulse; ctx.fillStyle = '#ff2a1a'; ctx.fillRect(px, py, v.ts, v.ts);
+            ctx.globalAlpha = 0.9; ctx.strokeStyle = '#ff7a5a'; ctx.lineWidth = 1; ctx.strokeRect(px + 1, py + 1, v.ts - 2, v.ts - 2);
+          }
+          const mx = (m.x - player.x + v.halfW) * v.ts + v.ts / 2, my = (m.y - player.y + v.halfH) * v.ts;
+          ctx.globalAlpha = 1; ctx.fillStyle = '#ff5a4a'; ctx.font = `bold ${Math.max(9, Math.round(v.ts * 0.7))}px monospace`; ctx.fillText('!', mx, my - 2);
+        } else if (m.exposedTurns > 0) {
+          const mx = (m.x - player.x + v.halfW) * v.ts + v.ts / 2, my = (m.y - player.y + v.halfH) * v.ts;
+          ctx.globalAlpha = 0.9; ctx.fillStyle = '#7fe07f'; ctx.font = `bold ${Math.max(8, Math.round(v.ts * 0.5))}px monospace`; ctx.fillText('✦', mx, my - 2);
+        }
+      }
+      ctx.restore();
+    } catch (e) { /* cosmetic */ }
+  };
+  const _active = VFX.active;
+  VFX.active = function () { try { if (curMonsters().some(m => m.maneuver && m.maneuver.phase === 'windup' && m.alive)) return true; } catch (e) {} return _active.call(VFX); };
+})();
+
+// ---- v0.51.1 more affixes (pure registry entries; rolling, naming, tooltips, XP and loot pick them up automatically) ----
+Object.assign(MONSTER_AFFIXES, {
+  warded:     { prefix: 'Warded', color: '#80c0ff', weight: 6, minDs: 2, desc: 'A shimmering ward soaks up the first blows.',
+                apply(m) { m.ward = Math.max(4, Math.round(m.maxHp * 0.45)); m.wardMax = m.ward; },
+                onDamaged(m, att, dmg) {
+                  if (!(m.ward > 0) || dmg <= 0 || m.hp <= 0) return;
+                  const soak = Math.min(dmg, m.ward); m.ward -= soak; m.hp = Math.min(m.maxHp, m.hp + soak);
+                  if (m.ward <= 0) _affixLog(m, `${m.name}'s ward shatters!`);
+                } },
+  berserking: { prefix: 'Berserk', color: '#ff4040', weight: 6, minDs: 2, desc: 'Goes wild below half health: hits harder and moves faster.',
+                onTurn(m) {
+                  if (m.berserked || m.hp > m.maxHp * 0.5) return;
+                  m.berserked = true; m.swiftMover = true;
+                  if (m.atk) m.atk = [Math.round(m.atk[0] * 1.5), Math.round(m.atk[1] * 1.5)];
+                  _affixLog(m, `${m.name} flies into a frenzy!`);
+                } },
+  bewildering:{ prefix: 'Bewildering', color: '#d080e0', weight: 5, minDs: 3, desc: 'Its blows can leave you confused.',
+                onHit(m, t, dmg) { if (t === player && dmg > 0 && Math.random() < 0.25) { player.statusConfuse = Math.max(player.statusConfuse || 0, 3); log('Your head swims!'); } } },
+  gravebound: { prefix: 'Gravebound', color: '#9aa890', weight: 5, minDs: 3, desc: 'Rises once more after it dies, weaker.',
+                onDeath(m) {
+                  if (m.risen) return;
+                  const spots = [];
+                  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) if (curWalkable(m.x + dx, m.y + dy) && !entityAt(m.x + dx, m.y + dy)) spots.push([m.x + dx, m.y + dy]);
+                  if (!spots.length) return;
+                  const [sx, sy] = spots[Math.floor(Math.random() * spots.length)];
+                  const r = _orig_makeMonster(m.monsterId, sx, sy, m.depthScale || 1, Math.random);
+                  r.hp = r.maxHp = Math.max(3, Math.round(m.maxHp * 0.5)); r.xp = Math.round(m.xp * 0.3); r.risen = true; r.name = 'Risen ' + (m.baseName || m.name.replace(/^.*? /, ''));
+                  r.engaged = true; r.aiState = 'alert'; addMonsterToWorld(r);
+                  _affixLog(m, `${m.name} claws its way back up!`);
+                } },
+  mending:    { prefix: 'Mending', color: '#7ae0b0', weight: 5, minDs: 2, desc: 'Knits the wounds of nearby allies every few turns.',
+                onTurn(m) {
+                  if (turnCount % 4) return;
+                  let healed = 0;
+                  for (const o of curMonsters()) if (o !== m && o.alive !== false && o.hp > 0 && o.hp < o.maxHp && chebyshev(o.x, o.y, m.x, m.y) <= 5) { o.hp = Math.min(o.maxHp, o.hp + Math.max(1, Math.round(o.maxHp * 0.08))); healed++; }
+                  if (healed) _affixLog(m, `${m.name} mends the wounds of its kin.`);
+                } },
+  heretic:    { prefix: 'Heretic', color: '#e0e0e0', weight: 5, minDs: 2, desc: 'Mocks the gods: blows shake the faith of the devout.',
+                onHit(m, t, dmg) { if (t === player && dmg > 0 && typeof deityOf === 'function' && deityOf()) { addPiety(-1); if (Math.random() < 0.3) log(`${m.name} sneers at your god.`); } },
+                onDeath(m, killer) { if (_fOwned(killer) && typeof deityOf === 'function' && deityOf()) addPiety(4); } },
+});
+
+// ---- v0.51.1 more maneuvers: Rend (bleeding claw rake), Bellow (fear shout), Spit (poison glob), Shockwave (stomp) ----
+Object.assign(MANEUVERS, {
+  rend: { name: 'Rend', windup: 1, recover: 1, mult: 1.2, cd: 5, chance: 0.35, minR: 1, maxR: 1,
+    plan(m) {
+      const dx = Math.sign(player.x - m.x), dy = Math.sign(player.y - m.y);
+      const tiles = [{ x: m.x + dx, y: m.y + dy }];
+      if (dx && dy) { tiles.push({ x: m.x + dx, y: m.y }, { x: m.x, y: m.y + dy }); }
+      else if (dx) { tiles.push({ x: m.x + dx, y: m.y - 1 }, { x: m.x + dx, y: m.y + 1 }); }
+      else { tiles.push({ x: m.x - 1, y: m.y + dy }, { x: m.x + 1, y: m.y + dy }); }
+      return { tiles };
+    },
+    announce: m => `${m.name} draws back a clawed limb for a savage rake!`,
+    resolve(m, plan) {
+      const hit = _mvStrike(m, plan.tiles, this.mult, `${m.name} rakes {t} open!`);
+      for (const e of hit) if (e.hp > 0 && typeof applyBleed === 'function') applyBleed(e, 1);
+      return hit.parried ? 2 : 1;
+    } },
+  bellow: { name: 'Bellow', windup: 1, recover: 1, mult: 0, cd: 10, chance: 0.25, minR: 1, maxR: 4,
+    plan(m) { const tiles = []; for (let dx = -3; dx <= 3; dx++) for (let dy = -3; dy <= 3; dy++) if ((dx || dy) && Math.max(Math.abs(dx), Math.abs(dy)) <= 3) tiles.push({ x: m.x + dx, y: m.y + dy }); return { tiles }; },
+    announce: m => `${m.name} fills its lungs -- a terrible roar is coming!`,
+    resolve(m, plan) {
+      const pd = chebyshev(player.x, player.y, m.x, m.y);
+      log(`${m.name} ROARS!`);
+      if (pd <= 3) {
+        const resist = Math.min(0.8, player.fearResistBonus || 0);
+        if (Math.random() >= resist) { player.statusFear = addFearTurns(player.statusFear || 0, 3); log('The sound rattles your nerve!'); }
+        else log('You steel yourself against the roar.');
+      }
+      return 1;
+    } },
+  spit: { name: 'Spit', windup: 1, recover: 1, mult: 0.9, cd: 6, chance: 0.4, minR: 2, maxR: 6,
+    plan(m) { return { tiles: [{ x: player.x, y: player.y }] }; },
+    announce: m => `${m.name} rears back and its throat bulges -- it's going to spit!`,
+    resolve(m, plan) {
+      const hit = _mvStrike(m, plan.tiles, this.mult, `${m.name}'s spit splashes {t}!`);
+      for (const e of hit) if (e.hp > 0) e.statusPoison = (e.statusPoison || 0) + 4;
+      if (!hit.length) log(`${m.name}'s spit splatters harmlessly.`);
+      return hit.parried ? 2 : 1;
+    } },
+  shockwave: { name: 'Shockwave', windup: 2, recover: 2, mult: 1.1, cd: 9, chance: 0.3, minR: 1, maxR: 2,
+    plan(m) { const tiles = []; for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) if ((dx || dy) && Math.max(Math.abs(dx), Math.abs(dy)) === 2) tiles.push({ x: m.x + dx, y: m.y + dy }); for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) if (dx || dy) tiles.push({ x: m.x + dx, y: m.y + dy }); return { tiles }; },
+    announce: m => `${m.name} raises a huge foot -- the ground is about to shake!`,
+    resolve(m, plan) {
+      const hit = _mvStrike(m, plan.tiles, this.mult, `The shockwave hammers {t}!`);
+      for (const e of hit) if (e.hp > 0) e.statusSlow = Math.max(e.statusSlow || 0, 2);
+      return hit.parried ? 3 : 2;
+    } },
+});
+MANEUVER_RULES.push(
+  { re: /^(bear|yeti|troll|ogre|ogre_brute|savanna_lion|taiga_lynx|wolf|dire_wolf|alphawolf|alpha_direwolf|werewolf|hellhound|wyvern|giantbat|crypt_stalker|brimstone_stalker)$/, ids: ['rend'] },
+  { re: /^(ogre|ogre_brute|troll|hill_giant|frost_giant|bear|yeti|alphawolf|alpha_direwolf|minotaur|dragon|wyrm|hoard_wyrm|orcwarlord|orc_warchief|bugbear)$/, ids: ['bellow'] },
+  { re: /^(spider|cave_spider|giant_spider|cobra|viper|snake|basilisk|wyvern|crocodile|scorpion|giantscorpion)$/, ids: ['spit'] },
+  { re: /^(hill_giant|frost_giant|stonegolem|claygolem|iron_golem|ogre_brute|treant_elder|troll)$/, ids: ['shockwave'] },
+);
+
+// ---- Aimed/Focused shot for ranged monsters and spellcasters: a telegraphed single-tile hit you can sidestep ----
+MANEUVERS.aimed = { name: 'Focused Shot', windup: 1, recover: 1, mult: 1.7, cd: 8, chance: 0.3, minR: 2, maxR: 8,
+  plan(m) { return { tiles: [{ x: player.x, y: player.y }] }; },
+  announce: m => m.usesMp ? `${m.name} gathers power -- a focused blast is coming for where you stand!` : `${m.name} draws a careful bead on you!`,
+  resolve(m, plan) {
+    if (!hasLOS(m.x, m.y, plan.tiles[0].x, plan.tiles[0].y)) { log(`${m.name}'s shot finds no clear line.`); return 1; }
+    const hit = _mvStrike(m, plan.tiles, this.mult, m.usesMp ? `${m.name}'s blast strikes {t}!` : `${m.name}'s shot punches into {t}!`);
+    if (!hit.length) log(`${m.name}'s attack lands on empty ground.`);
+    return hit.parried ? 2 : 1;
+  } };
+const _orig_maneuverIdsFor = maneuverIdsFor;
+maneuverIdsFor = function (m, base) {
+  const ids = _orig_maneuverIdsFor.apply(this, arguments);
+  if ((m.behavior === 'ranged' || m.usesMp) && m.behavior !== 'turret' && !ids.includes('aimed') && !m.breathWeapon) ids.push('aimed');
+  return ids;
+};
+
+// =====================================================================================================
+// ===================== v0.51.0 THE PANTHEON: gods, piety, boons, invocations, wrath ====================
+// Faith is a *playstyle contract*. Pledge to a god (at any shrine/altar, or by asking a priest) and your normal
+// actions -- killing, casting, healing, wandering -- earn or cost PIETY according to that god's tenets. Piety unlocks
+// ranks of boons (permanent while you keep favour) and pays for invocations (active powers). Break tenets badly
+// enough and the god abandons you in wrath. Nothing here is menu-only: every tenet is a GameBus subscription.
+//
+// ADD A GOD: push one entry into DEITIES. Fields:
+//   id, name, title, domain, color, blurb
+//   tenets: [text]                       shown to the player
+//   on: { kill(e,f), cast(e,f), item(e,f), turn(e,f), hurt(e,f) } -> return piety delta (number) or nothing
+//        e = the bus payload (see 20_bus.js), f = player.faith. Return negative to punish.
+//   boons: [ {rank, text, stats:{key:amount}, maxHp, maxMp}, ... ]  rank = tier needed (1..5); stats use
+//          EQUIP_FLAT_BONUS_KEYS names so every existing system that reads them just works.
+//   invoke: { name, cost, cooldown, desc, run(f) -> true if it happened }
+// =====================================================================================================
+const FAITH_TUNING = {
+  tiers: [10, 35, 70, 120, 180], maxPiety: 220,
+  decayEvery: 120,             // every N turns piety drifts down by 1 above tier 0 (faith must be tended)
+  wrathHpFrac: 0.3, wrathBanTurns: 3000,
+  offerGoldPerPiety: 12, offerCooldown: 250,
+  pledgeMinGold: 0,
+};
+const _fOwned = k => !!k && isPlayerOwnedKiller(k);   // the player, a companion, or a summon: all count as 'your' kills
+const _fHostileKill = e => e.def && e.def.kind === 'monster' && _fOwned(e.killer);
+// _innocent is stamped the first time you interact with / attack an NPC, BEFORE the dialogue 'Attack' option flips hostile.
+const _fPeacefulKill = e => e.def && e.def.kind === 'npc' && (e.def._innocent === undefined ? !e.def.hostile : e.def._innocent) && _fOwned(e.killer);
+const _fUndead = d => d && (UNDEAD_IDS.has(d.monsterId) || UNDEAD_IDS.has(d.baseId));
+const _fElite = d => d && typeof affixesOf === 'function' && affixesOf(d).length > 0;
+const _fHealItem = it => !!it && (it.effect === 'heal' || it.effect === 'buffregen' || /bandage|medkit|salve|elixir|potion|holy_water|coagulant/.test(it.id || ''));
+const _fFoodItem = it => !!it && /^(food|foodbuff|milestonefood|foodspell)$/.test(it.effect || '');
+const DEITIES = {
+  solenne: { id:'solenne', name:'Solenne', title:'Lady of the Dawn', domain:'Light & Mercy', color:'#f0e090',
+    blurb:'A patient sun-goddess. She wants the dead laid to rest and the weak spared.',
+    tenets:['Destroy the undead (+3) and the marked (+4).', 'Mend wounds with bandages and remedies, and cast holy magic (+1).', 'Raising the dead is anathema (-8).', 'Murdering the peaceful costs you dearly (-40).'],
+    on: { kill: (e) => (_fPeacefulKill(e) ? -40 : 0) + (_fHostileKill(e) ? (_fUndead(e.def) ? 3 : 0) + (_fElite(e.def) ? 4 : 0) : 0),
+          item: (e) => (_fHealItem(e.it) ? 1 : 0),
+          cast: e => !e.ok || !e.spell ? 0 : (e.spell.school === 'Holy' ? 1 : 0) + (e.spell.type === 'raise' ? -8 : 0) },
+    boons: [ {rank:1, text:'Lantern-light: +1 regeneration', stats:{regen:1}}, {rank:2, text:'Warded heart: +15% fear resistance', stats:{fearResistBonus:0.15}},
+             {rank:3, text:'Mercy\'s mantle: +20 max HP', maxHp:20}, {rank:4, text:'Sun-forged: +10% bleed resistance', stats:{bleedResistChance:0.10}},
+             {rank:5, text:'Dawn\'s champion: +25% damage to bosses', stats:{bossDmgBonus:0.25}} ],
+    invoke: { name:'Radiance', cost:14, cooldown:200, desc:'Heal 40% of your max HP and sear every undead near you.',
+      run: f => { const heal = Math.ceil(player.maxHp*0.4); player.hp = Math.min(player.maxHp, player.hp+heal); let n=0;
+        for (const m of _fNear(6)) if (_fUndead(m)) { m.hp -= 10 + player.level*2; n++; if (m.hp<=0) onDeath(m, player); }
+        log(`*** Solenne's light pours over you: +${heal} HP${n?`, and ${n} undead burn`:''}. ***`); return true; } } },
+  garruk: { id:'garruk', name:'Garruk', title:'the Red Banner', domain:'War & Valor', color:'#e05a4a',
+    blurb:'A god of blood-and-iron honour. He rewards those who stand and fight, and scorns the spell-hider.',
+    tenets:['Win fights in melee (+1, +3 for the marked).', 'Face stronger foes than yourself (+2).', 'Casting spells grates on him (-0.5 each).'],
+    on: { kill: e => _fHostileKill(e) ? ((e.melee !== false ? 1 : 0) + (_fElite(e.def) ? 3 : 0) + (e.def.maxHp > player.maxHp*0.8 ? 2 : 0)) : 0,
+          cast: e => (e.ok ? -0.5 : 0) },
+    boons: [ {rank:1, text:'Blooded: +4% crit chance', stats:{critBonus:0.04}}, {rank:2, text:'Iron resolve: +25% fear resistance', stats:{fearResistBonus:0.25}},
+             {rank:3, text:'Banner-bearer: +20 max HP', maxHp:20}, {rank:4, text:'Brutal: +25% crit damage', stats:{critDmgBonus:0.25}},
+             {rank:5, text:'Executioner: +30% damage to wounded foes', stats:{executeBonus:0.30}} ],
+    invoke: { name:'Battle Cry', cost:12, cooldown:150, desc:'+3 STR and +0.1 crit for 30 turns; foes next to you cower.',
+      run: f => { applyBuff('str', 3, 30); applyBuff('crit', 0.1, 30); for (const m of _fNear(1)) { m.statusFear = Math.max(m.statusFear||0, 3); }
+        log('*** You roar in Garruk\'s name! ***'); return true; } } },
+  nyxilu: { id:'nyxilu', name:'Nyx-Ilu', title:'the Veiled', domain:'Shadow & Cunning', color:'#a080d0',
+    blurb:'A whisper in the dark. She prizes the kill that was never seen coming.',
+    tenets:['Kill foes who are exposed, or while you are unseen (+2).', 'Slay the marked (+3).', 'Brawling in the open earns nothing.'],
+    on: { kill: e => _fHostileKill(e) ? ((e.def.exposedTurns > 0 || getBuff('invis') > 0) ? 2 : 0) + (_fElite(e.def) ? 3 : 0) : 0 },
+    boons: [ {rank:1, text:'Soft-footed: +4% dodge', stats:{dodgeChance:0.04}}, {rank:2, text:'Knife-eyed: +4% crit chance', stats:{critBonus:0.04}},
+             {rank:3, text:'Veil: +6% dodge', stats:{dodgeChance:0.06}}, {rank:4, text:'Twist the knife: +30% crit damage', stats:{critDmgBonus:0.3}},
+             {rank:5, text:'Shadow-touched: +10% bleed resistance and +4% dodge', stats:{bleedResistChance:0.1, dodgeChance:0.04}} ],
+    invoke: { name:'Shroud', cost:12, cooldown:160, desc:'Vanish from sight for 12 turns.', run: f => { applyBuff('invis', 1, 12); return true; } } },
+  thessaly: { id:'thessaly', name:'Thessaly', title:'the Weaver', domain:'Arcana & Craft', color:'#60b0f0',
+    blurb:'Goddess of the pattern beneath things. Every spell is a stitch she approves of.',
+    tenets:['Cast spells (+0.6 each).', 'Slay with magic (+1).', 'Reading and brewing counts: using scrolls/potions (+0.5).'],
+    on: { cast: e => e.ok ? 0.6 : 0, item: e => (e.it && (/^scroll/.test(e.it.effect || '') || /scroll|book|tome|potion|elixir/.test(e.it.id || '')) ? 0.5 : 0), kill: e => (_fHostileKill(e) && e.melee === false ? 1 : 0) },
+    boons: [ {rank:1, text:'Attuned: +10 max MP', maxMp:10}, {rank:2, text:'Sharpened pattern: +8% spell damage', stats:{spellDmgBonus:0.08}},
+             {rank:3, text:'Deep well: +15 max MP', maxMp:15}, {rank:4, text:'Resonance: +12% spell damage', stats:{spellDmgBonus:0.12}},
+             {rank:5, text:'Archweaver: +15% elemental damage and +20% confusion resist', stats:{elementalDmgBonus:0.15, confuseResistBonus:0.2}} ],
+    invoke: { name:'Unravel', cost:12, cooldown:140, desc:'Restore 60% of your max MP.', run: f => { player.mp = Math.min(player.maxMp, player.mp + Math.ceil(player.maxMp*0.6)); log('*** The pattern refills you. ***'); return true; } } },
+  orro: { id:'orro', name:'Orro', title:'Greenhand', domain:'Growth & Wilds', color:'#80c060',
+    blurb:'The old green. Orro asks that you walk under open sky, tend what grows, and take no more than you need.',
+    tenets:['Walk the open world (+0.04 per turn outdoors).', 'Harvest, eat and tend (+1 per remedy/food).', 'Murdering the peaceful costs you (-30).'],
+    on: { turn: (e,f) => (!curIsDungeon() ? 0.04 : 0), item: e => (_fFoodItem(e.it) || _fHealItem(e.it) ? 1 : 0), kill: e => _fPeacefulKill(e) ? -30 : 0,
+          cast: e => (e.ok && e.spell && e.spell.type === 'raise') ? -5 : 0 },
+    boons: [ {rank:1, text:'Green blood: +1 regeneration', stats:{regen:1}}, {rank:2, text:'Thick bark: +15% poison/bleed resilience', stats:{poisonDmgReduction:0.15, bleedDmgReduction:0.15}},
+             {rank:3, text:'Hale: +25 max HP', maxHp:25}, {rank:4, text:'Rootfast: +10% bleed resist', stats:{bleedResistChance:0.1}},
+             {rank:5, text:'Wild heart: +1 regeneration', stats:{regen:1}} ],
+    invoke: { name:'Bloom', cost:12, cooldown:180, desc:'Regenerate 4% of max HP every turn for 25 turns.', run: f => { applyBuff('regen', Math.max(1, Math.round(player.maxHp * 0.04)), 25); return true; } } },
+  morrow: { id:'morrow', name:'Morrow', title:'Grave-Lord', domain:'Death & Hunger', color:'#7a9a7a',
+    blurb:'Death is the one honest bargain. Morrow rewards the one who kills close to death, and scorns the coward\'s potion.',
+    tenets:['Kill while wounded (below 50% HP) (+3).', 'Slay the marked (+3).', 'Raising the dead pleases him (+3).', 'Drinking healing potions or bandaging offends him (-1).'],
+    on: { kill: e => _fHostileKill(e) ? ((player.hp < player.maxHp*0.5 ? 3 : 0) + (_fElite(e.def) ? 3 : 0)) : 0, item: e => (_fHealItem(e.it) ? -1 : 0),
+          cast: e => (e.ok && e.spell && e.spell.type === 'raise') ? 3 : 0 },
+    boons: [ {rank:1, text:'Hungry blade: +3% lifesteal', stats:{lifestealBonus:0.03}}, {rank:2, text:'Grim: +15% execute damage', stats:{executeBonus:0.15}},
+             {rank:3, text:'Death\'s door: +20% damage when below 40% HP', stats:{lowHpDmgBonus:0.20}}, {rank:4, text:'Feast: +4% lifesteal', stats:{lifestealBonus:0.04}},
+             {rank:5, text:'Reaper: +20% execute and +20% boss damage', stats:{executeBonus:0.2, bossDmgBonus:0.2}} ],
+    invoke: { name:'Drain', cost:14, cooldown:170, desc:'Strike the life out of adjacent foes and keep half of it.',
+      run: f => { let got=0; for (const m of _fNear(1)) { const d = 6 + player.level*2; m.hp -= d; got += d; if (m.hp<=0) onDeath(m, player); }
+        player.hp = Math.min(player.maxHp, player.hp + Math.floor(got/2)); log(`*** Morrow drinks: ${got} damage dealt, ${Math.floor(got/2)} returned. ***`); return got>0; } } },
+  kassh: { id:'kassh', name:'Kassh', title:'the Gambler', domain:'Luck & Risk', color:'#e0b040',
+    blurb:'A grinning god of dice. Kassh loves long odds -- and a bold hand on a bad day.',
+    tenets:['Slay marked foes (+4).', 'Win a fight at under 30% HP (+4).', 'Hoarding gold displeases him: offerings are sweet.'],
+    on: { kill: e => _fHostileKill(e) ? ((_fElite(e.def) ? 4 : 0) + (player.hp < player.maxHp*0.3 ? 4 : 0)) : 0 },
+    boons: [ {rank:1, text:'Lucky: +3% crit', stats:{critBonus:0.03}}, {rank:2, text:'Slippery: +4% dodge', stats:{dodgeChance:0.04}},
+             {rank:3, text:'House edge: +25% crit damage', stats:{critDmgBonus:0.25}}, {rank:4, text:'Double or nothing: +5% crit', stats:{critBonus:0.05}},
+             {rank:5, text:'All in: +10% dodge and +20% damage when below 40% HP', stats:{dodgeChance:0.1, lowHpDmgBonus:0.2}} ],
+    invoke: { name:'Roll the Bones', cost:10, cooldown:120, desc:'A random blessing -- or a gamble that bites back.',
+      run: f => { const r = Math.random();
+        if (r < 0.15) { player.hp = Math.max(1, player.hp - Math.ceil(player.maxHp*0.15)); log('*** The bones come up snake-eyes. Kassh takes his cut in blood. ***'); }
+        else if (r < 0.5) { applyBuff('crit', 0.2, 25); log('*** Sixes! Your luck sharpens (+crit, 25 turns). ***'); }
+        else if (r < 0.8) { applyBuff('evasion', 0.15, 25); log('*** Kassh grins; the odds tilt your way (+evasion). ***'); }
+        else { const g = 20 + player.level*10; player.gold += g; log(`*** The bones pay out: +${g} gold. ***`); }
+        return true; } } },
+};
+function _fNear(r) {
+  const out = [];
+  const list = curMonsters();
+  for (const m of list || []) if (m && m.alive !== false && m.hp > 0 && chebyshev(player.x, player.y, m.x, m.y) <= r && m !== player) out.push(m);
+  return out;
+}
+function faithOf() { return player && player.faith; }
+function deityOf() { const f = faithOf(); return f && f.god ? DEITIES[f.god] : null; }
+function faithTier(p) { let t = 0; FAITH_TUNING.tiers.forEach((th, i) => { if (p >= th) t = i + 1; }); return t; }
+// Boons are applied as additive deltas and remembered in f.applied, so they survive equipment swaps and
+// can be exactly reversed on renounce/wrath. maxHp/maxMp are handled the same way.
+function syncBoons() {
+  const f = faithOf(); if (!f) return;
+  const d = f.god && !f.lost ? DEITIES[f.god] : null;
+  const tier = d ? faithTier(f.piety) : 0;
+  const want = {};
+  if (d) for (const b of d.boons) if (b.rank <= tier) {
+    for (const k in (b.stats || {})) want[k] = (want[k] || 0) + b.stats[k];
+    if (b.maxHp) want.maxHp = (want.maxHp || 0) + b.maxHp;
+    if (b.maxMp) want.maxMp = (want.maxMp || 0) + b.maxMp;
+  }
+  const had = f.applied || {};
+  const keys = new Set([...Object.keys(had), ...Object.keys(want)]);
+  for (const k of keys) {
+    const delta = (want[k] || 0) - (had[k] || 0);
+    if (!delta) continue;
+    if (k === 'maxHp') { player.maxHp += delta; player.hp = Math.max(1, Math.min(player.maxHp, player.hp + (delta > 0 ? delta : 0))); }
+    else if (k === 'maxMp') { player.maxMp += delta; player.mp = Math.max(0, Math.min(player.maxMp, player.mp + (delta > 0 ? delta : 0))); }
+    else player[k] = (player[k] || 0) + delta;
+  }
+  f.applied = want;
+  if (f.tier !== tier) {
+    if (d && tier > (f.tier || 0)) { const b = d.boons.find(x => x.rank === tier); log(`*** ${d.name} favours you more (rank ${tier}): ${b ? b.text : ''} ***`); }
+    else if (d && tier < (f.tier || 0)) log(`${d.name}'s favour wanes (rank ${tier}).`);
+    f.tier = tier;
+  }
+}
+function addPiety(n, why) {
+  const f = faithOf(); if (!f || !f.god || f.lost || !n) return;
+  const d = DEITIES[f.god];
+  f.piety = Math.max(-1, Math.min(FAITH_TUNING.maxPiety, f.piety + n));
+  if (n <= -5 && why) log(`${d.name} is displeased (${why}). Piety ${Math.round(f.piety)}.`);
+  if (f.piety < 0) return godWrath('abandon');
+  syncBoons();
+}
+function pledgeTo(id, where) {
+  const d = DEITIES[id]; if (!d) return;
+  const f = player.faith = player.faith || { god: null, piety: 0, banned: {}, applied: {}, tier: 0, invokedAt: {}, offeredAt: -9999 };
+  if (f.god && !f.lost) { log(`You already serve ${DEITIES[f.god].name}. Renounce first.`); return; }
+  if ((f.banned[id] || 0) > turnCount) { log(`${d.name} will not hear you yet.`); return; }
+  f.god = id; f.lost = false; f.piety = 8; f.pledgedAt = turnCount; f.applied = f.applied || {};
+  log(`*** You pledge yourself to ${d.name}, ${d.title}${where ? ' at ' + where : ''}. ***`);
+  log(`Tenets: ${d.tenets.join(' ')}`);
+  syncBoons(); updateSidebar();
+}
+function renounceFaith(silent) {
+  const f = faithOf(); if (!f || !f.god) return;
+  const d = DEITIES[f.god];
+  f.lost = true; syncBoons();
+  f.banned[f.god] = turnCount + FAITH_TUNING.wrathBanTurns;
+  const old = f.god; f.god = null; f.lost = false; f.piety = 0; f.tier = 0;
+  if (!silent) { const dmg = Math.ceil(player.hp * 0.15); player.hp = Math.max(1, player.hp - dmg); log(`*** You renounce ${d.name}. A cold wind passes through you (-${dmg} HP). ***`); }
+  updateSidebar();
+}
+function godWrath(kind) {
+  const f = faithOf(); const d = DEITIES[f.god];
+  log(`*** ${d.name} withdraws from you in wrath! ***`);
+  const dmg = Math.min(player.hp - 1, Math.ceil(player.maxHp * FAITH_TUNING.wrathHpFrac));
+  if (dmg > 0) player.hp -= dmg;
+  log(`The god's displeasure scours you for ${Math.max(0, dmg)} damage. You are forsaken by ${d.name} for a long while.`);
+  renounceFaith(true);
+  if (typeof Sound !== 'undefined') Sound.play('hurt');
+}
+function invokeGod() {
+  const f = faithOf(), d = deityOf(); if (!d) return;
+  const inv = d.invoke, last = (f.invokedAt || {})[d.id] || -9999;
+  if (turnCount - last < inv.cooldown) return log(`${d.name} is not ready yet (${inv.cooldown - (turnCount - last)} turns).`);
+  if (f.piety < inv.cost + 1) return log(`You lack the piety (${inv.cost} needed).`);
+  if (inv.run(f)) { f.piety -= inv.cost; f.invokedAt[d.id] = turnCount; Sound.play('shrine'); syncBoons(); updateSidebar(); endTurn(); }
+}
+function makeOffering() {
+  const f = faithOf(), d = deityOf(); if (!d) return log('You serve no god.');
+  if (turnCount - (f.offeredAt || -9999) < FAITH_TUNING.offerCooldown) return log(`${d.name} has had your gift recently.`);
+  const per = FAITH_TUNING.offerGoldPerPiety, price = per * 5;
+  if (player.gold < price) return log(`An offering needs at least ${price} gold.`);
+  const amt = Math.min(player.gold, price * 3), p = Math.floor(amt / per);
+  player.gold -= amt; f.offeredAt = turnCount; log(`You lay ${amt} gold upon the altar.`); addPiety(p); updateSidebar(); endTurn();
+}
+function _faithPage(title, bodyHtml, opts, hint) {
+  opts.forEach((o, i) => { o.key = String.fromCharCode(97 + i); });
+  dialogueOptions = opts; gameState = 'dialogue'; dialogueNPC = null;
+  renderModal(title, bodyHtml + opts.map(o => `<div class="modal-opt" onclick="simulateKey('${o.key}')">[${o.key}] ${o.label}</div>`).join(''), hint || 'Letter/click to choose, Esc to close.');
+}
+function _godSheet(d, f) {
+  const tier = f ? faithTier(f.piety) : 0;
+  const tenets = d.tenets.map(t => `<div class="npcline dim">&bull; ${t}</div>`).join('');
+  const boons = d.boons.map(b => {
+    const have = f && b.rank <= tier;
+    return `<div class="npcline" style="${have ? '' : 'opacity:.55'}"><span style="color:${d.color}">${have ? '&#10003;' : '&#9675;'}</span> <b>Rank ${b.rank}</b> <span class="dim">(${FAITH_TUNING.tiers[b.rank - 1]} piety)</span> &mdash; ${b.text}</div>`;
+  }).join('');
+  const inv = d.invoke;
+  return `<div class="npcline" style="color:${d.color}"><i>${d.blurb}</i></div>` +
+    `<div class="trade-col-title" style="margin-top:8px">Tenets</div>${tenets}` +
+    `<div class="trade-col-title" style="margin-top:8px">Boons</div>${boons}` +
+    `<div class="trade-col-title" style="margin-top:8px">Invocation: ${inv.name}</div><div class="npcline dim">${inv.desc} Costs ${inv.cost} piety; ${inv.cooldown}-turn cooldown.</div>`;
+}
+function openFaith() {
+  const f = faithOf(), d = deityOf();
+  if (!d) {
+    const opts = Object.values(DEITIES).map(g => ({ label: `<b style="color:${g.color}">${g.name}</b>, ${g.title} <span class="dim">(${g.domain})</span>`, action: () => _godPage(g) }));
+    opts.push({ label: 'Close', action: () => closeModal() });
+    return _faithPage('The Gods', '<div class="npcline">You serve no god. Pledge at a shrine (stand on it and use the interact key) or ask a priest, monk or oracle. Choose a god to read their tenets and boons.</div>', opts);
+  }
+  const tier = faithTier(f.piety), next = FAITH_TUNING.tiers[tier];
+  const cd = Math.max(0, d.invoke.cooldown - (turnCount - ((f.invokedAt || {})[d.id] || -9999)));
+  const opts = [
+    { label: `Invoke ${d.invoke.name} <span class="dim">(${d.invoke.cost} piety${cd ? ', ready in ' + cd + ' turns' : ''})</span>`, action: () => { closeModal(); invokeGod(); } },
+    { label: 'Read the other gods', action: () => { closeModal(); const sv = player.faith; openGodsBrowser(); } },
+    { label: 'Renounce ' + d.name, action: () => { closeModal(); renounceFaith(); } },
+    { label: 'Close', action: () => closeModal() },
+  ];
+  _faithPage(`${d.name}, ${d.title}`, `<div class="npcline">Piety <b>${Math.round(f.piety)}</b>${next ? ' / ' + next + ' for rank ' + (tier + 1) : ' (maximum rank)'} &middot; Rank <b>${tier}</b></div>` + _godSheet(d, f), opts);
+}
+function _godPage(g) {
+  _faithPage(`${g.name}, ${g.title}`, _godSheet(g, null), [{ label: 'Back', action: () => openGodsBrowser() }, { label: 'Close', action: () => closeModal() }]);
+}
+function openGodsBrowser() {
+  const opts = Object.values(DEITIES).map(g => ({ label: `<b style="color:${g.color}">${g.name}</b>, ${g.title} <span class="dim">(${g.domain})</span>`, action: () => _godPage(g) }));
+  opts.push({ label: 'Close', action: () => closeModal() });
+  _faithPage('The Gods', '<div class="npcline dim">Choose a god to read their tenets and boons.</div>', opts);
+}
+// Each shrine belongs to one god, chosen deterministically from its coordinates (stable across saves).
+function shrineGodAt(x, y) {
+  const ids = Object.keys(DEITIES); let h = (x * 73856093) ^ (y * 19349663) ^ 0x5bd1e995; h = Math.abs(h);
+  return ids[h % ids.length];
+}
+function _fPledgeOptions(push, where, patron) {
+  const f = faithOf(), d = deityOf();
+  if (d) {
+    if (f.piety >= 0) push({ label: `Make an offering to ${d.name}`, action: () => { closeModal(); makeOffering(); } });
+    push({ label: `Pray: view your faith`, action: () => { closeModal(); openFaith(); } });
+    return;
+  }
+  const ids = Object.keys(DEITIES); if (patron) ids.sort((a, b) => (b === patron) - (a === patron));
+  for (const id of ids) {
+    const g = DEITIES[id], home = id === patron;
+    push({ label: `${home ? 'Pledge to ' + g.name + ', who is worshipped at this shrine (+8 piety)' : 'Pledge to ' + g.name + ', ' + g.title}  (${g.domain})`, action: () => { closeModal(); pledgeTo(id, where); if (home && player.faith && player.faith.god === id) addPiety(8); } });
+  }
+}
+const INTERACT_PROVIDERS = [];
+INTERACT_PROVIDERS.push(function (options, tile) {
+  if (tile && tile.feature === 'shrine') { const pid = shrineGodAt(player.x, player.y); _fPledgeOptions(o => options.push(o), `the shrine of ${DEITIES[pid].name}`, pid); }
+});
+const DIALOGUE_PROVIDERS = [];
+DIALOGUE_PROVIDERS.push(function (npc, opts, nextKey) {
+  if (npc && npc._innocent === undefined) npc._innocent = !npc.hostile;
+  const f0 = faithOf();
+  if (f0 && f0.god && npc && (npc.roleId === 'priest' || npc.roleId === 'monk' || npc.roleId === 'oracle') && f0.piety >= FAITH_TUNING.tiers[0] && turnCount - (f0.blessedAt || -9999) >= 300) {
+    opts.push({ key: nextKey(), label: `Ask for ${DEITIES[f0.god].name}'s blessing (free, once per 300 turns)`, action: () => {
+      closeModal(); f0.blessedAt = turnCount;
+      const h = Math.ceil(player.maxHp * (0.15 + 0.05 * faithTier(f0.piety))); player.hp = Math.min(player.maxHp, player.hp + h);
+      if (typeof stanchBleed === 'function') stanchBleed(player);
+      log(`${npc.name} lays hands upon you in ${DEITIES[f0.god].name}'s name: +${h} HP, wounds closed.`); updateSidebar(); endTurn();
+    } });
+  }
+  if (npc && (npc.roleId === 'priest' || npc.roleId === 'monk' || npc.roleId === 'oracle')) {
+    _fPledgeOptions(o => opts.push(Object.assign({ key: nextKey() }, o)), `${npc.name}'s guidance`);
+  }
+});
+// ---- tenets: every god is just a bus subscriber ----
+function _fApply(evtName, e) {
+  const f = faithOf(), d = deityOf(); if (!d || f.lost) return;
+  if (evtName === 'cast' && e.id && !e.spell) { try { e.spell = findAbilityById(e.id); } catch (_) {} }
+  const fn = d.on && d.on[evtName]; if (!fn) return;
+  const n = fn(e, f);
+  if (n) addPiety(n, n < 0 ? 'against the tenets' : '');
+}
+GameBus.on('castStart', () => { player._casting = true; });
+GameBus.on('cast', () => { player._casting = false; });
+// melee = the killing blow was a melee swing (not a spell, not a ranged/thrown attack)
+GameBus.on('death', e => _fApply('kill', Object.assign({}, e, { melee: !(player._lastAttackRanged || player._casting) })));
+GameBus.on('cast', e => _fApply('cast', e));
+GameBus.on('itemUsed', e => _fApply('item', e));
+GameBus.on('turn', e => {
+  const f = faithOf(); if (!f || !f.god) return;
+  _fApply('turn', e);
+  if (turnCount % FAITH_TUNING.decayEvery === 0 && f.piety > 0) { f.piety = Math.max(0, f.piety - 1); syncBoons(); }
+});
+GameBus.on('attackResolved', e => { if (e.att === player) player._lastAttackRanged = !e.melee; });
+GameBus.on('playerDied', () => { /* a god's favour does not carry death's debt */ });
+
+// Crimes offend the merciful and the green (and are shrugged at by the rest).
+const _orig_commitCrime = commitCrime;
+commitCrime = function (regionKey, amount) {
+  const r = _orig_commitCrime.apply(this, arguments);
+  const f = faithOf(); if (f && (f.god === 'solenne' || f.god === 'orro')) addPiety(-Math.max(2, Math.round(amount * 0.6)), 'a crime');
+  return r;
+};
+
+// Sidebar line: god, rank and piety, plus an invocation-ready marker. Created lazily next to the status row.
+const _orig_updateSidebar = updateSidebar;
+updateSidebar = function () {
+  const r = _orig_updateSidebar.apply(this, arguments);
+  try {
+    let el = document.getElementById('faith-row');
+    if (!el) {
+      const anchor = document.getElementById('status-row'); if (!anchor || !anchor.parentNode) return r;
+      el = document.createElement('div'); el.id = 'faith-row'; el.style.cssText = 'font-size:12px;margin:4px 0;cursor:pointer;';
+      el.title = 'Click, or press Shift+B, for your faith'; el.onclick = () => openFaith();
+      anchor.parentNode.insertBefore(el, anchor);
+    }
+    const f = faithOf(), d = deityOf();
+    if (!d) { el.style.display = 'none'; return r; }
+    const ready = (turnCount - ((f.invokedAt || {})[d.id] || -9999)) >= d.invoke.cooldown && f.piety > d.invoke.cost;
+    const tier = faithTier(f.piety), lo = tier ? FAITH_TUNING.tiers[tier - 1] : 0, hi = FAITH_TUNING.tiers[tier] || FAITH_TUNING.maxPiety;
+    const pct = Math.max(0, Math.min(100, ((f.piety - lo) / Math.max(1, hi - lo)) * 100));
+    el.style.display = '';
+    el.innerHTML = `<div style="color:${d.color}">&#10022; ${d.name} <span class="dim" style="font-size:11px">rank ${tier}</span></div>` +
+      `<div style="height:5px;background:rgba(255,255,255,0.1);border-radius:3px;margin:2px 0"><div style="height:5px;width:${pct}%;background:${d.color};border-radius:3px"></div></div>` +
+      `<div class="dim" style="font-size:11px">piety ${Math.round(f.piety)}${tier < 5 ? ' / ' + hi : ''}${ready ? ' &middot; <b style="color:' + d.color + '">' + d.invoke.name + ' ready</b>' : ''}</div>`;
+  } catch (e) {}
+  return r;
+};
+
+// The faithful are charged less for temple services: priests, monks, oracles and healers knock 8% off per rank (floor 60%).
+if (typeof npcTierPriceMult === 'function') {
+  const _orig_npcTierPriceMult = npcTierPriceMult;
+  npcTierPriceMult = function (npc) {
+    let m = _orig_npcTierPriceMult.apply(this, arguments);
+    try {
+      const f = faithOf();
+      if (f && f.god && !f.lost && npc && (npc.healer || /^(priest|monk|oracle)$/.test(npc.roleId || ''))) m *= Math.max(0.6, 1 - 0.08 * faithTier(f.piety));
+    } catch (e) {}
+    return m;
+  };
+}
+
+// ---- v0.51.1 three more gods, plus the bus events they need (crafted, gifted, questDone, newChunk) ----
+(function () {
+  const wrap = (name, evt, pick) => {
+    if (typeof globalThis[name] !== 'function') return;
+    const orig = globalThis[name];
+    globalThis[name] = function () {
+      const t0 = turnCount, inv0 = player && player.inventory ? player.inventory.length : 0;
+      const r = orig.apply(this, arguments);
+      try { GameBus.emit(evt, pick ? pick(arguments, r, t0, inv0) : {}); } catch (e) { console.error(e); }
+      return r;
+    };
+  };
+  // crafted: only if a turn passed (a failed craft doesn't advance time)
+  if (typeof craftRecipe === 'function') { const o = craftRecipe; craftRecipe = function (id) { const t0 = turnCount; const r = o.apply(this, arguments); if (turnCount > t0) GameBus.emit('crafted', { id }); return r; }; }
+  if (typeof completeQuest === 'function') { const o = completeQuest; completeQuest = function (q) { const r = o.apply(this, arguments); GameBus.emit('questDone', { q }); return r; }; }
+  if (typeof giveGift === 'function') { const o = giveGift; giveGift = function (npc, item) { const g0 = npc && npc.giftCount; const r = o.apply(this, arguments); if (npc && (npc.giftCount || 0) > (g0 || 0)) GameBus.emit('gifted', { npc, item }); return r; }; }
+})();
+// new world area discovered: one event per never-before-visited chunk
+GameBus.on('turn', () => {
+  if (curIsDungeon()) return;
+  const key = getRegionKey(player.x, player.y), seen = (player.chunksSeen = player.chunksSeen || {});
+  if (!seen[key]) { seen[key] = 1; GameBus.emit('newChunk', { key }); }
+});
+Object.assign(DEITIES, {
+  hestera: { id:'hestera', name:'Hestera', title:'Hearth-Mother', domain:'Craft & Community', color:'#e09a60',
+    blurb:'Keeper of the home fire. She loves the maker, the giver and the one who finishes what neighbours ask.',
+    tenets:['Craft things (+1.5).', 'Give gifts (+1.5).', 'Finish quests for others (+4).', 'Murdering the peaceful costs you dearly (-40).'],
+    on: { kill: e => _fPeacefulKill(e) ? -40 : 0 },
+    events: { crafted: () => 1.5, gifted: () => 1.5, questDone: () => 4 },
+    boons: [ {rank:1, text:'Warm hands: +1 regeneration', stats:{regen:1}}, {rank:2, text:'Home-cooked: +15 max HP', maxHp:15}, {rank:3, text:'Steady heart: +15% fear resistance', stats:{fearResistBonus:0.15}},
+             {rank:4, text:'Hearth-ward: +15% poison and bleed resilience', stats:{poisonDmgReduction:0.15, bleedDmgReduction:0.15}}, {rank:5, text:'Mother\'s blessing: +25 max HP and +1 regeneration', maxHp:25, stats:{regen:1}} ],
+    invoke: { name:'Hearthfire', cost:12, cooldown:180, desc:'Heal 25% of max HP, cure poison and stop bleeding.',
+      run: f => { player.hp = Math.min(player.maxHp, player.hp + Math.ceil(player.maxHp * 0.25)); player.statusPoison = 0; if (typeof stanchBleed === 'function') stanchBleed(player); log('*** Hestera\'s hearth-light warms you through. ***'); return true; } } },
+  iskra: { id:'iskra', name:'Iskra', title:'the Wanderer', domain:'Roads & Discovery', color:'#70d0d0',
+    blurb:'A restless goddess of far horizons. She rewards the curious who keep moving.',
+    tenets:['Set foot in new lands (+2 per new region).', 'Complete quests (+2).', 'Resting in town is no pilgrimage (no reward).'],
+    on: {},
+    events: { newChunk: () => 2, questDone: () => 2 },
+    boons: [ {rank:1, text:'Light step: +3% dodge', stats:{dodgeChance:0.03}}, {rank:2, text:'Road-hardened: +10 max HP', maxHp:10}, {rank:3, text:'Far-sighted: +4% crit', stats:{critBonus:0.04}},
+             {rank:4, text:'Fleet: +5% dodge', stats:{dodgeChance:0.05}}, {rank:5, text:'Horizon-chaser: +20 max HP and +4% crit', maxHp:20, stats:{critBonus:0.04}} ],
+    invoke: { name:'Fleet Step', cost:12, cooldown:150, desc:'Gain extra speed for 10 turns.', run: f => { applyBuff('actionspeed', 1, 10); return true; } } },
+  aurel: { id:'aurel', name:'Aurel', title:'Keeper of Scales', domain:'Law & Trade', color:'#d0c070',
+    blurb:'An exacting god of fair weights. He values oaths kept, debts paid and no crime unanswered.',
+    tenets:['Finish quests (+4).', 'Give gifts (+1).', 'Crimes anger him (-4 per crime).', 'Murdering the peaceful costs you dearly (-40).'],
+    on: { kill: e => _fPeacefulKill(e) ? -40 : 0 },
+    events: { questDone: () => 4, gifted: () => 1 },
+    boons: [ {rank:1, text:'Fair measure: +1 regeneration', stats:{regen:1}}, {rank:2, text:'Exacting: +3% crit', stats:{critBonus:0.03}}, {rank:3, text:'Iron oath: +25% fear resistance', stats:{fearResistBonus:0.25}},
+             {rank:4, text:'Judge: +15% damage to bosses', stats:{bossDmgBonus:0.15}}, {rank:5, text:'Law made flesh: +20 max HP and +20% confusion resistance', maxHp:20, stats:{confuseResistBonus:0.2}} ],
+    invoke: { name:'Writ of Pardon', cost:14, cooldown:300, desc:'Halve the bounty on your head in this region.',
+      run: f => { const k = getRegionKey(player.x, player.y); const b = (player.bounties || {})[k] || 0; if (!b) { log('Aurel finds no crime to forgive here.'); return false; } player.bounties[k] = Math.floor(b / 2); log(`*** Aurel's writ stays the law: bounty ${b} -> ${player.bounties[k]}. ***`); return true; } } },
+});
+// generic data-driven event tenets: any god may declare events: { busEventName: (e, f) => piety }
+for (const evt of ['crafted', 'gifted', 'questDone', 'newChunk']) {
+  GameBus.on(evt, e => { const f = faithOf(), d = deityOf(); if (!d || f.lost || !d.events || !d.events[evt]) return; const n = d.events[evt](e, f); if (n) addPiety(n); });
+}
+// Aurel also punishes crime
+(function () { const o = commitCrime; commitCrime = function (rk, amt) { const r = o.apply(this, arguments); const f = faithOf(); if (f && f.god === 'aurel') addPiety(-4, 'a crime'); return r; }; })();
+
+// ---- v0.51.1 life events (marriage, children, office, crown, bereavement) reach the gods through the bus ----
+(function () {
+  const after = (name, evt, ok) => {
+    if (typeof globalThis[name] !== 'function') return;
+    const orig = globalThis[name];
+    globalThis[name] = function () {
+      const before = ok.before ? ok.before() : null;
+      const r = orig.apply(this, arguments);
+      try { if (ok.test(before, arguments)) GameBus.emit(evt, { args: arguments }); } catch (e) { console.error(e); }
+      return r;
+    };
+  };
+  after('proposeMarriage', 'married', { before: () => !!player.spouse, test: b => !b && !!player.spouse });
+  after('tryForChild', 'child', { before: () => player.kids || 0, test: b => (player.kids || 0) > b });
+  after('claimCrown', 'crowned', { before: () => player.rulerOf, test: b => !!player.rulerOf && player.rulerOf !== b });
+  after('petitionForOffice', 'office', { before: () => Object.keys(player.civicOffices || {}).length, test: b => Object.keys(player.civicOffices || {}).length > b });
+  GameBus.on('turn', () => { player._spouseUid = player.spouse ? player.spouse.uid : null; });
+  GameBus.on('death', e => { if (e.def && e.def.kind === 'npc' && player._spouseUid && e.def.uid === player._spouseUid) { player._spouseUid = null; GameBus.emit('bereaved', { def: e.def }); } });
+  const add = (god, map) => { const d = DEITIES[god]; d.events = Object.assign(d.events || {}, map); };
+  add('hestera', { married: () => 10, child: () => 8, office: () => 4 });
+  add('solenne', { married: () => 6, child: () => 4, bereaved: () => 4 });
+  add('orro', { child: () => 4, married: () => 3 });
+  add('aurel', { crowned: () => 15, office: () => 8, married: () => 3 });
+  add('garruk', { crowned: () => 10, office: () => 4 });
+  add('kassh', { crowned: () => 10, married: () => 3 });
+  add('morrow', { bereaved: () => 6 });
+  add('iskra', { office: () => 2 });
+  for (const evt of ['married', 'child', 'crowned', 'office', 'bereaved']) {
+    GameBus.on(evt, e => { const f = faithOf(), d = deityOf(); if (!d || f.lost || !d.events || !d.events[evt]) return; const n = d.events[evt](e, f); if (n) addPiety(n); });
+  }
+})();
+// Surface the new tenets in the Faith screen and guide.
+(function () {
+  const t = { hestera: 'Marry (+10), raise children (+8).', solenne: 'Marry (+6), have children (+4).', orro: 'Have children (+4).', aurel: 'Be crowned (+15) or win civic office (+8).',
+              garruk: 'Be crowned (+10).', kassh: 'Be crowned (+10): the biggest gamble.', morrow: 'Grief honours him: a spouse\'s death (+6).' };
+  for (const id in t) if (DEITIES[id]) DEITIES[id].tenets.push(t[id]);
+})();
+
+// =====================================================================================================
+// ===================== v0.51.1 FEATS: in-world milestones that pay out permanent rewards ==============
+// Feats are bus-driven goals ("slay 3 marked monsters", "cast 40 spells"). Progress counters tick from GameBus events;
+// ADD ONE: push an entry into FEATS. { id, name, desc, stat, goal, reward:{text, run()} }
+// Stats are plain counters (player.feats.counts[stat]); any system can bump one with featBump('stat', n).
+// Press Z to review. Completing a feat announces itself and grants its reward immediately.
+// =====================================================================================================
+const FEATS = [
+  { id:'first_blood',  name:'First Blood',        desc:'Slay 10 monsters.',                 stat:'kills',       goal:10,  reward:{ text:'+5 max HP',            run:()=>{ featAddMax(5,0); } } },
+  { id:'butcher',      name:'Butcher',            desc:'Slay 100 monsters.',                stat:'kills',       goal:100, reward:{ text:'+1 STR',               run:()=>{ player.str+=1; } } },
+  { id:'legion',       name:'Legion-Breaker',     desc:'Slay 400 monsters.',                stat:'kills',       goal:400, reward:{ text:'+15 max HP, +1 DEX',   run:()=>{ featAddMax(15,0); player.dex+=1; } } },
+  { id:'markhunter',   name:'Markhunter',         desc:'Slay 3 marked/elite monsters.',     stat:'elites',      goal:3,   reward:{ text:'+1 DEX and 60 gold',  run:()=>{ player.dex+=1; player.gold+=60; } } },
+  { id:'paragonbane',  name:'Paragonbane',        desc:'Slay 15 marked/elite monsters.',    stat:'elites',      goal:15,  reward:{ text:'+3% crit',             run:()=>{ player.critBonus=(player.critBonus||0)+0.03; } } },
+  { id:'gravewarden',  name:'Gravewarden',        desc:'Destroy 20 undead.',                stat:'undead',      goal:20,  reward:{ text:'+10 max HP',           run:()=>{ featAddMax(10,0); } } },
+  { id:'deathsdoor',   name:'Death\'s Door',      desc:'Win 5 kills while below 30% HP.',   stat:'desperate',   goal:5,   reward:{ text:'+4% dodge',            run:()=>{ player.dodgeChance=(player.dodgeChance||0)+0.04; } } },
+  { id:'spellslinger', name:'Spellslinger',       desc:'Cast 40 spells.',                   stat:'casts',       goal:40,  reward:{ text:'+1 INT, +8 max MP',   run:()=>{ player.int+=1; featAddMax(0,8); } } },
+  { id:'tinkerer',     name:'Resourceful',        desc:'Use 50 items.',                     stat:'items',       goal:50,  reward:{ text:'+10 max HP',           run:()=>{ featAddMax(10,0); } } },
+  { id:'wanderer',     name:'Wanderer',           desc:'Spend 3000 turns under open sky.',  stat:'outdoor',     goal:3000,reward:{ text:'+1 regeneration',      run:()=>{ player.regen=(player.regen||0)+1; } } },
+  { id:'delver',       name:'Delver',             desc:'Spend 1500 turns underground.',     stat:'underground', goal:1500,reward:{ text:'+1 CON',               run:()=>{ player.con+=1; featAddMax(3,0); } } },
+  { id:'devout',       name:'Devout',             desc:'Reach rank 3 with a god.',          stat:'faithrank',   goal:3,   reward:{ text:'+20 piety', run:()=>{ if (typeof addPiety==='function') addPiety(20); } } },
+  { id:'survivor',     name:'Survivor',           desc:'Survive 1000 turns without dying.', stat:'turns',       goal:1000,reward:{ text:'+5 max HP',            run:()=>{ featAddMax(5,0); } } },
+];
+// Max HP/MP rewards are tracked so they can be re-applied after recalcVitalsFromStats() rebuilds the pools from CON/INT.
+function featAddMax(hp, mp) {
+  const fs = featState(); fs.bonusHp = (fs.bonusHp || 0) + hp; fs.bonusMp = (fs.bonusMp || 0) + mp;
+  player.maxHp += hp; player.hp += hp; player.maxMp += mp; player.mp += mp;
+}
+function featState() { const p = player; return (p.feats = p.feats || { counts: {}, done: {} }); }
+function featBump(stat, n, absolute) {
+  const fs = featState(); fs.counts[stat] = absolute ? Math.max(fs.counts[stat] || 0, n) : (fs.counts[stat] || 0) + (n === undefined ? 1 : n);
+  for (const f of FEATS) {
+    if (f.stat !== stat || fs.done[f.id] || fs.counts[stat] < f.goal) continue;
+    fs.done[f.id] = turnCount;
+    log(`*** FEAT: ${f.name}! Reward: ${f.reward.text}. ***`);
+    try { f.reward.run(); } catch (e) { console.error(e); }
+    if (typeof Sound !== 'undefined') Sound.play('levelup');
+    updateSidebar();
+  }
+}
+function openFeats() {
+  const fs = featState(), done = Object.keys(fs.done).length;
+  const rows = FEATS.map(f => {
+    const c = Math.min(f.goal, fs.counts[f.stat] || 0), ok = !!fs.done[f.id], pct = Math.round(100 * c / f.goal);
+    return `<div class="npcline" style="${ok ? '' : ''}"><span style="color:${ok ? '#8ad06a' : '#c9a06a'}">${ok ? '&#10003;' : '&#9675;'}</span> <b>${f.name}</b> <span class="dim">&mdash; ${f.desc}</span>` +
+      `<div style="display:flex;align-items:center;gap:8px;margin:2px 0 4px 18px"><div style="flex:1;height:5px;background:rgba(255,255,255,0.1);border-radius:3px"><div style="height:5px;width:${pct}%;background:${ok ? '#8ad06a' : '#c9a06a'};border-radius:3px"></div></div>` +
+      `<span class="dim" style="font-size:11px;min-width:90px">${ok ? 'done' : c + ' / ' + f.goal} &middot; ${f.reward.text}</span></div></div>`;
+  }).join('');
+  _faithPage(`Feats (${done}/${FEATS.length})`, `<div style="max-height:420px;overflow-y:auto;padding-right:6px">${rows}</div>`, [{ label: 'Close', action: () => closeModal() }], 'Esc to close.');
+}
+GameBus.on('death', e => {
+  if (!e.def || !isPlayerOwnedKiller(e.killer) || e.def.kind !== 'monster') return;
+  featBump('kills');
+  if (typeof affixesOf === 'function' && affixesOf(e.def).length) featBump('elites');
+  if (UNDEAD_IDS.has(e.def.monsterId)) featBump('undead');
+  if (e.killer === player && player.hp < player.maxHp * 0.3) featBump('desperate');
+});
+GameBus.on('cast', e => { if (e.ok) featBump('casts'); });
+GameBus.on('itemUsed', () => featBump('items'));
+GameBus.on('turn', () => {
+  featBump(curIsDungeon() ? 'underground' : 'outdoor');
+  featBump('turns');
+  const f = player.faith; if (f && f.god) featBump('faithrank', faithTier(f.piety), true);
+});
+GameBus.on('playerDied', () => { featState().counts.turns = 0; });
+// Death telemetry for headless test harnesses (harmless in normal play).
+GameBus.on('playerDied', e => { try { console.log('[DEATH] ' + (player.deathCause || (e.killer && e.killer.name) || '?') + ' L' + player.level + ' t' + turnCount); } catch (_) {} });
+
+// recalcVitalsFromStats() rebuilds max HP/MP from CON/INT alone; put god boons and feat rewards back on top.
+if (typeof recalcVitalsFromStats === 'function') {
+  const _orig_recalcVitals = recalcVitalsFromStats;
+  recalcVitalsFromStats = function () {
+    const r = _orig_recalcVitals.apply(this, arguments);
+    const f = player.faith, fs = player.feats;
+    const hp = ((f && f.applied && f.applied.maxHp) || 0) + ((fs && fs.bonusHp) || 0);
+    const mp = ((f && f.applied && f.applied.maxMp) || 0) + ((fs && fs.bonusMp) || 0);
+    if (hp) { const full = player.hp >= player.maxHp - hp; player.maxHp += hp; if (full) player.hp = player.maxHp; }
+    if (mp) { const full = player.mp >= player.maxMp - mp; player.maxMp += mp; if (full) player.mp = player.maxMp; }
+    return r;
+  };
+}
+
+// Extra lines on the death screen: faith, feats, elite kills.
+function deathExtras() {
+  try {
+    const bits = [];
+    const f = player.faith, d = typeof deityOf === 'function' && deityOf();
+    if (d) bits.push(`Served <b>${d.name}</b>, ${d.title} (rank ${faithTier(f.piety)}, ${Math.round(f.piety)} piety).`);
+    else if (f && f.banned && Object.keys(f.banned).length) bits.push('Died forsaken by the gods.');
+    const fs = featState(), nd = Object.keys(fs.done).length;
+    bits.push(`Feats earned: ${nd}/${FEATS.length}. Monsters slain: ${fs.counts.kills || 0}${fs.counts.elites ? ' (' + fs.counts.elites + ' marked)' : ''}.`);
+    return bits.map(b => `<div class="npcline dim">${b}</div>`).join('');
+  } catch (e) { return ''; }
+}
+
+// =====================================================================================================
+// ===================== v0.51.1 SHRINE TRIALS: a voluntary, god-flavoured fight for a real reward ========
+// At an unspent shrine you may "undertake the trial": a ring of local monsters appears, led by a champion with forced
+// affixes. Slay them all and the shrine pays out (gold, XP, a rare item, piety if you serve a god, a feat counter).
+// Walk away (40+ tiles) and the trial lapses with no reward and no penalty. Pure registry/bus use; no new core hooks.
+// =====================================================================================================
+const TRIAL_TUNING = { minCount: 3, maxCount: 5, champAffixes: 2, abandonDist: 40 };
+function _trialPool() {
+  const ids = new Set();
+  try { for (const m of curMonsters()) if (m.alive && m.hp > 0 && m.kind === 'monster' && !m.boss && !m.scriptedAI && chebyshev(m.x, m.y, player.x, player.y) < 40 && MONSTER_BASES[m.monsterId] && MONSTER_BASES[m.monsterId].behavior !== 'flee') ids.add(m.monsterId); } catch (e) {}
+  const out = [...ids]; return out.length >= 2 ? out : ['wolf', 'bandit', 'skeleton'].filter(i => MONSTER_BASES[i]);
+}
+function startShrineTrial(tile) {
+  if (player._trial) return log('A trial is already underway.');
+  const ds = depthScaleForPlayerLevel(player.level), pool = _trialPool();
+  const n = randInt(Math.random, TRIAL_TUNING.minCount, TRIAL_TUNING.maxCount), uids = [];
+  const spots = [];
+  for (let dx = -5; dx <= 5; dx++) for (let dy = -5; dy <= 5; dy++) { const d = Math.max(Math.abs(dx), Math.abs(dy)); if (d >= 3 && curWalkable(player.x + dx, player.y + dy) && !entityAt(player.x + dx, player.y + dy)) spots.push([player.x + dx, player.y + dy]); }
+  for (let i = 0; i < n && spots.length; i++) {
+    const [sx, sy] = spots.splice(Math.floor(Math.random() * spots.length), 1)[0];
+    const id = choice(Math.random, pool), base = MONSTER_BASES[id];
+    const m = _orig_makeMonster(id, sx, sy, ds, Math.random);
+    if (i === 0) {
+      const ids = Object.keys(MONSTER_AFFIXES), forced = [];
+      let guard = 0; while (forced.length < TRIAL_TUNING.champAffixes && guard++ < 40) { const a = choice(Math.random, ids); const def = MONSTER_AFFIXES[a]; if (!forced.includes(a) && !(def.conflicts || []).some(c => forced.includes(c))) forced.push(a); }
+      rollMonsterAffixes(m, base, ds, forced); m.isChampion = true;
+    } else rollMonsterAffixes(m, base, ds);
+    m.engaged = true; m.aiState = 'alert'; addMonsterToWorld(m); uids.push(m.uid);
+  }
+  tile.trialDone = true;
+  player._trial = { uids, left: uids.length, x: player.x, y: player.y, god: player.faith && player.faith.god || null, startedAt: turnCount };
+  log(`*** The shrine flares -- ${uids.length} foes answer its challenge! Slay them all. ***`);
+  endTurn();
+}
+function _trialReward() {
+  const t = player._trial; player._trial = null;
+  const lvl = player.level, gold = 40 + lvl * 18; player.gold += gold; gainXP(20 + lvl * 12);
+  const bases = ITEM_BASES.filter(b => (b.type === 'weapon' || b.type === 'armor') && !b.cursed && !b.unique);
+  let got = null;
+  if (bases.length) { const b = choice(Math.random, bases); got = makeItem(b.id, lvl < 10 ? 2 : 3, Math.random, 1 + lvl * 0.04); if (got) addItemToList(player.inventory, got); }
+  log(`*** The trial is won! The shrine yields ${gold} gold${got ? ' and ' + got.name : ''}. ***`);
+  if (player.faith && player.faith.god) addPiety(12);
+  featBump('trials');
+  updateSidebar();
+}
+GameBus.on('death', e => {
+  const t = player._trial; if (!t || !e.def || !t.uids.includes(e.def.uid)) return;
+  t.left--; if (t.left <= 0) _trialReward();
+});
+GameBus.on('turn', () => {
+  const t = player._trial; if (!t) return;
+  // after a save/load the trial's monsters no longer exist: lapse quietly rather than hang forever
+  if (turnCount > t.startedAt + 2 && !curMonsters().some(m => t.uids.includes(m.uid) && m.alive && m.hp > 0)) { player._trial = null; return; }
+  if (chebyshev(player.x, player.y, t.x, t.y) > TRIAL_TUNING.abandonDist || turnCount - t.startedAt > 600) { player._trial = null; log('The shrine\'s challenge lapses, unanswered.'); }
+});
+INTERACT_PROVIDERS.push(function (options, tile) {
+  if (tile && tile.feature === 'shrine' && !tile.trialDone && !player._trial && !player.isTutorial)
+    options.push({ label: 'Undertake the shrine\'s trial (a champion and its pack; rich reward)', action: () => { closeModal(); startShrineTrial(tile); } });
+});
+FEATS.push({ id:'trialbound', name:'Trial-Bound', desc:'Win 3 shrine trials.', stat:'trials', goal:3, reward:{ text:'+10% crit damage and +10 max HP', run:()=>{ player.critDmgBonus=(player.critDmgBonus||0)+0.1; featAddMax(10,0); } } });
+
+// ---- v0.51.1 in-game guide pages for the new systems ----
+GUIDE_SECTIONS.push(
+  { id:'faith', label:'Gods & Faith', category:'Progression & Loot', html: () => `
+    <div class="modal-opt">Seven gods answer prayers. Pledge at any <b>shrine</b> (stand on it and press the pick-up/interact key) or ask a
+    <b>priest, monk or oracle</b>. Press <b>Shift+B</b> to see your god, tenets, boons and invocation.</div>
+    <div class="modal-opt"><b>Piety</b> rises and falls with how you play: each god has tenets (slay undead, fight in melee, cast spells, walk the open world,
+    kill while wounded...). Piety unlocks five ranks of boons (permanent while you keep favour) and pays for one <b>invocation</b>, an active power on a cooldown.
+    It drifts down slowly, so faith has to be tended; an offering of gold at an altar or priest restores some.</div>
+    <div class="modal-opt">Run piety below zero (murdering the peaceful is the fastest way) and the god leaves you in <b>wrath</b>. Renouncing is possible but costs HP, and a god you left will not hear you again for a long while.
+    ${Object.values(DEITIES).map(d => `<br><b>${d.name}</b>, ${d.title} (${d.domain}): ${d.tenets.join(' ')}`).join('')}</div>` },
+  { id:'feats', label:'Feats', category:'Progression & Loot', html: () => `
+    <div class="modal-opt">Press <b>Shift+Z</b> for Feats: milestone goals such as slaying marked monsters, casting spells or surviving long stretches. Each pays a permanent reward the moment you finish it.
+    ${FEATS.map(f => `<br><b>${f.name}</b>: ${f.desc} (${f.reward.text})`).join('')}</div>` },
+  { id:'elites', label:'Marked Monsters', category:'Combat & Abilities', html: () => `
+    <div class="modal-opt">Some monsters carry <b>affixes</b>: one is <i>Marked</i>, two <i>Elite</i>, three <i>Paragon</i>. They glow, announce themselves and hit harder in specific ways, but pay extra XP and loot. Hover over one to read its affixes.</div>
+    <div class="modal-opt">Big monsters also use <b>maneuvers</b> (smashes, pounces, charges, whirlwinds). Their danger tiles are highlighted a turn ahead; step out of the way, or time a parry (Shield Wall) to stagger them and riposte. A monster that just committed to a maneuver is <i>exposed</i>: easier to hit and to crit.</div>
+    <div class="modal-opt"><b>Shrine trials:</b> at an unspent shrine, choose <i>Undertake the trial</i>. A champion with two affixes and its pack appear around you; slay them all for gold, XP, a rare weapon or armor, piety (if you serve a god) and progress toward the Trial-Bound feat. Walk away and the trial lapses harmlessly.</div>
+    <div class="modal-opt">Bleeding and poison can be tended with <b>r</b>: a bandage stops bleeding, cloth makes a rough binding, an antidote or herb treats poison, and bare hands slow either.</div>` },
+);
 
 </script>
 </body>
