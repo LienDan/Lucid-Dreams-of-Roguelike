@@ -540,7 +540,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.51.1-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.51.2-alpha</div>
     </div>
   </div>
 
@@ -553,6 +553,53 @@
 // only (what/where), not reasoning -- see git-style history in project handoff notes if needed.
 //
 // ---- CHANGELOG (factual, condensed) ----
+// v0.51.2 Audit pass (headless-harness verified: 950 ability casts, 3,535 items, 279 monsters, 253 talents, save round-trips).
+//   - BUG: Crimson Lance set player.hp to NaN (castSpell's stale lifetap branch read spell.selfCost, which it lacks) and that
+//     same branch shadowed the real lifetap handler, so NO lifetap ability ever healed its caster and the Symbiotic/Predatory
+//     "lifetap returns more HP" talents did nothing. Removed the stale branch; lifetaps now use normal tile targeting + heal-back.
+//     New hpCostFor() is the single source of truth for HP costs (payment, log text, spell-menu label). Data-driven `healBackPct`
+//     per ability (Crimson Lance: selfCost 12, healBackPct 0.8, matching "drawn back doubled").
+//   - BUG: saves silently stopped working once ~7 dungeon floors were explored (one floor = ~640 KB of tile objects vs the ~5 MB
+//     localStorage quota). Dungeon floors, dimension chunks and legacy full chunks now save through packTileGrid() (palette +
+//     index rows, lossless, ~10-14x smaller); old saves still load. A failed autosave now warns loudly (throttled) and a save
+//     nearing the quota suggests Export Save.
+//   - BUG (economy exploit): with good standing, buying a shop's stock and selling it straight back was profitable (+51% measured;
+//     repeatable every restock). Pricing is now tradeBuyPrice()/tradeSellPrice(): one shared formula for display and transaction
+//     (the list used to omit the sell floor), with an invariant that a shop never pays more than a fraction of its own asking price.
+//   - BUG: worldPlacedBookIds (which unique manual books a world has already placed) was never cleared between games, so later games
+//     in one session ran out of unique books, and after a reload it forgot everything and could place duplicates. It is now reset per
+//     world and rebuilt on load from the books that actually exist in the saved state (not persisted: a saved set would drain the pool).
+//   - BUG: Export Save threw "Converting circular structure to JSON" whenever any monster was targeting you (it skipped the
+//     replacer that normal saves use), so the backup button failed during combat. Now uses saveDataReplacer.
+//   - Removed unreferenced helpers: isMyChild, tutKnowsRecipe/Spell/Technique, tutTagAlive, _mvLine.
+//   - BUG: auto-explore / auto-travel (X, G, H) moved the player by assigning x/y directly, so they skipped everything that happens on
+//     arriving at a tile: gold was walked over without being picked up (even with auto-pickup on), hidden traps never fired, and
+//     shrines, levers, poison gas and ground/world hazards did nothing. The arrival logic is now enterTileEffects(), shared by
+//     movePlayer and the new autoStep(); an auto action stops as soon as the tile it stepped onto hurts you. Manual movement is
+//     verified byte-identical to the previous build (seeded 400-move play across overworld, dungeons and dimensions).
+//   - BUG: worldPlacedBookIds / Export Save / trade pricing -- see the individual notes above.
+//   - BUG: the game offered "Propose marriage" to your own grown child (promotion keeps the uid and affection but drops the 'child' role, and
+//     isMyChild() existed but was never used), and a child could grow up into a paid 'companion', a beggar or a cultist. Now gated by
+//     isMyChild() at the dialogue option, in proposeMarriage and on the companion option, and CHILD_CAREER_EXCLUDED filters the career pool.
+//   - BUG: the 'pilgrim' (Temple) and 'puppeteer' (Festival Grounds) roles were in settlement role pools but never defined in ROLES, so makeNPC
+//     silently fell back to the first role and they spawned as 'Master Guard'/'Novice Guard'. Both are now real roles with dialogue.
+//   - BUG: tile-targeted casts never announced their resolution on the GameBus (castSpell only opens the prompt, so its 'cast' event said ok:false),
+//     so targeted spells never counted for Feats, never fed Thessaly/Solenne/Orro/Morrow tenets, and kills made by spells were credited as melee.
+//     confirmTileTarget is now wrapped to emit castStart/cast around the real resolution.
+//   - BUG: thawing ice rebuilt the tile as generic deep water, so freezing a river/shallows (frost spell, cold front) permanently re-skinned it.
+//     freezeTileToIce()/thawIceTile() now remember and restore the exact original look. The unused freezeNearby handler got an event (Flash Freeze).
+//   - BUG: farming, fire, gas, ice and oil stopped working after any area change or save/load. The active-tile registry is emptied on every area
+//     change and never saved, but each tile's `_fxTracked` flag was saved, so nothing re-registered them: planted crops never grew again
+//     after a dungeon trip or reload, fires and gas clouds burned forever, ice never thawed. retrackAreaFx() now rebuilds it for the area you are in.
+//   - BUG: world/dungeon/dimension generation occasionally put two creatures on the same tile (one hidden behind the other). A deterministic
+//     post-generation pass (separateOverlappingEntities) now moves duplicates to the nearest free tile of the same kind.
+//   - BUG: hasLOS was asymmetric (one Bresenham trace from whichever endpoint the caller passed first): 1-8% of visible tile pairs were visible
+//     one way only (a monster could shoot you from a tile you couldn't see). A pair now sees each other if a line from EITHER end is clear:
+//     mutual sight, and no sight that existed before is removed.
+//   - Refactors (each verified output-identical against the previous build): the monster body-trait classifier that was pasted twice
+//     is now classifyMonsterBodyTraits() (sha1 of all 279 monster definitions unchanged); the cave smoothing loop pasted into both
+//     cave generators is smoothCaveGrid() (200 generated caves byte-identical); the stairs flood fill pasted twice in
+//     generateDungeonLevel is stairsConnected() (486 generated floors, ~106 MB of tile/monster/item data, byte-identical).
 // v0.51.1 Pantheon + framework pass (src/ modules appended at end of script).
 //   - GameBus event bus (makeMonster/doAttack/onDeath/endTurn/castSpell/useItem publish events); subscribe instead of editing core.
 //   - First hour: starter gear no longer corrupted, bleed can be tended (r), early monster waves graded by level.
@@ -3839,6 +3886,19 @@ function makeManualBookItem(bookDef) { return makeBookItemRaw(bookDef); }
 // Picks a manual book that hasn't already been placed this world, when one's available and
 // requested; falls back to a procedural book otherwise so books never run out.
 const worldPlacedBookIds = new Set();
+// Rebuild "which unique manual books already exist in this world" from the saved state itself (inventory, saved chunks,
+// dungeons) instead of persisting the set: a persisted set kept every pick ever made, including ones from chunks that were later
+// regenerated from the seed, so each reload permanently drained the pool of unique books. This only counts books that are really there.
+function rebuildPlacedBookIds(data) {
+  worldPlacedBookIds.clear();
+  const stack = [data], skip = new Set(['grid', 'tiles', 'pal', 'rows']);
+  while (stack.length) {
+    const o = stack.pop();
+    if (!o || typeof o !== 'object') continue;
+    if (o.type === 'book' && o.manual === true && o.bookId) worldPlacedBookIds.add(o.bookId);
+    for (const k in o) { if (!skip.has(k)) { const v = o[k]; if (v && typeof v === 'object') stack.push(v); } }
+  }
+}
 function pickUnplacedManualBook(rng, filterFn) {
   const pool = BOOKS_MANUAL.filter(b => !worldPlacedBookIds.has(b.id) && (!filterFn || filterFn(b)));
   if (!pool.length) return null;
@@ -7274,7 +7334,7 @@ SPELLS.push(
   // ---- Blood Magic: more tiers ----
   { id:'hemoclasm', name:'Hemoclasm', mp:26, type:'execute', power:[20,32], selfCostPct:0.1, range:1, school:'Blood Magic', tier:3, desc:'A brutal ritual strike fueled by your own blood.' },
   { id:'bloodgodscovenant', name:"Blood God's Covenant", mp:50, type:'bloodbuff', stat:'str', power:14, dur:22, selfCostPct:0.18, range:0, school:'Blood Magic', tier:5, desc:'A pact sealed in blood, granting terrible strength for a terrible price.' },
-  { id:'crimsonlance', name:'Crimson Lance', mp:18, type:'lifetap', power:[16,26], range:5, school:'Blood Magic', tier:2, desc:'A spear of your own vitality, hurled and drawn back doubled.' },
+  { id:'crimsonlance', name:'Crimson Lance', mp:0, selfCost:12, healBackPct:0.8, type:'lifetap', power:[16,26], range:5, school:'Blood Magic', tier:2, desc:'A spear of your own vitality, hurled and drawn back doubled.' },
   // ---- Illusion: more tiers ----
   { id:'mirrorarmy', name:'Mirror Army', mp:28, type:'buff', stat:'evasion', power:0.22, dur:16, range:0, school:'Illusion', tier:3, desc:'A dozen illusory duplicates make you nearly impossible to pin down.' },
   { id:'nightmarerealm', name:'Nightmare Realm', mp:48, type:'debuff', stat:'fear', power:1, dur:14, range:6, aoe:true, aoeRadius:3, school:'Illusion', tier:5, desc:'For a moment, everyone nearby is trapped in their own worst dream.' },
@@ -7552,6 +7612,8 @@ ROLES.push(
   { id:'archivist', name:'Archivist', color:'#8a9ac9', hp:8, str:3, dex:5, atk:[1,2], armor:0 },
   { id:'acrobat', name:'Acrobat', color:'#c94a9a', hp:10, str:5, dex:13, atk:[1,3], armor:0 },
   { id:'fireeater', name:'Fire Eater', color:'#e0603a', hp:9, str:4, dex:9, atk:[1,2], armor:0 },
+  { id:'pilgrim', name:'Pilgrim', color:'#b8a98a', hp:11, str:5, dex:6, atk:[1,3], armor:0 },       // v0.51.2: in the Temple role pool but never defined (spawned as a 'Guard')
+  { id:'puppeteer', name:'Puppeteer', color:'#a06ac9', hp:9, str:4, dex:9, atk:[1,2], armor:0 },  // v0.51.2: same -- Festival Grounds pool entry with no role
   { id:'farrier', name:'Farrier', color:'#8a6a3a', hp:14, str:10, dex:6, atk:[2,4], armor:0 },
   { id:'confectioner', name:'Confectioner', color:'#e0a0c9', hp:9, str:4, dex:6, atk:[1,2], armor:0 },
   { id:'butcher', name:'Butcher', color:'#c9503a', hp:14, str:10, dex:6, atk:[2,4], armor:0 },
@@ -10124,7 +10186,43 @@ function withChunkSeededRandom(cx, cy, fn) {
   Math.random = mulberry32((SEED * 73856093) ^ (cx * 19349663) ^ (cy * 83492791) ^ 0x5bd1e995);
   try { return fn(); } finally { Math.random = real; }
 }
-function generateChunkSeeded(cx, cy) { return withChunkSeededRandom(cx, cy, () => generateChunk(cx, cy)); }
+// Generators place monsters/NPCs independently of each other, so now and then two land on the same tile (measured: ~0.4% of overworld
+// chunks, ~1% of dungeon floors, ~1% of dimension chunks) -- one creature is then hidden behind the other and can't be targeted or
+// walked around. This pass runs on every freshly generated area and moves each later duplicate to the nearest free tile of the same kind
+// (land stays land, water stays water; never a staircase). It uses NO randomness, so regenerating a chunk from its seed gives the identical
+// result every time (unmodified chunks are regenerated on load). `tileAt(x, y)` must return the area's tile or null.
+// (a creature that started on a non-walkable tile -- a swimmer, or a wall-phasing horror -- is only moved to another such tile)
+function separateOverlappingEntities(ents, tileAt) {
+  const occupied = new Set(), dupes = [];
+  for (const e of ents) {
+    if (!e || e.alive === false) continue;
+    const k = e.x + ',' + e.y;
+    if (occupied.has(k)) dupes.push(e); else occupied.add(k);
+  }
+  for (const e of dupes) {
+    const home = tileAt(e.x, e.y);
+    let moved = false;
+    for (let r = 1; r <= 8 && !moved; r++) {
+      for (let dy = -r; dy <= r && !moved; dy++) for (let dx = -r; dx <= r && !moved; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const nx = e.x + dx, ny = e.y + dy, k = nx + ',' + ny;
+        if (occupied.has(k)) continue;
+        const t = tileAt(nx, ny);
+        if (!t || t.feature === 'stairs_down' || t.feature === 'stairs_up') continue;
+        // same kind of tile as it started on: land stays land, water stays water, wall-phasers stay inside walls
+        if (home ? (home.walkable ? !t.walkable : (t.walkable || isWaterTile(home) !== isWaterTile(t))) : !t.walkable) continue;
+        if (e.homeX === e.x && e.homeY === e.y) { e.homeX = nx; e.homeY = ny; }   // keep the patrol anchor where the creature now stands
+        e.x = nx; e.y = ny; occupied.add(k); moved = true;
+      }
+    }
+  }
+}
+function chunkTileAt(c) { const ox = c.cx * CH, oy = c.cy * CH; return (x, y) => { const row = c.tiles[y - oy]; return row ? row[x - ox] || null : null; }; }
+function generateChunkSeeded(cx, cy) {
+  const c = withChunkSeededRandom(cx, cy, () => generateChunk(cx, cy));
+  separateOverlappingEntities([].concat(c.monsters || [], c.npcs || []), chunkTileAt(c));
+  return c;
+}
 function tileSigHash(t) {
   // `seen` is stored separately (bitmap). hp/maxHp are ignored WHILE UNDAMAGED: initDestructibleFeature rolls
   // them with Math.random at generation, so a regenerated tree legitimately has a different roll within the
@@ -10392,17 +10490,9 @@ const MONSTER_ABILITY_LIBRARY = {
 // in faction gaps. Runs once at load, after every monster (including the expansion packs and
 // story bosses) has been defined. Scripted story bosses keep their bespoke hand-authored AI
 // entirely (see STORY_BOSS_AI) and are skipped here on purpose.
-for (const _mid in MONSTER_BASES) {
-  const base = MONSTER_BASES[_mid];
-  if (base.scriptedAI || base.fixedStats) continue;
-  const name = (base.name || '').toLowerCase();
-  // underscores count as \w in JS regex, so "worm_process" has no word-boundary at the
-  // underscore -- \bprocess\b wouldn't match inside it. Normalizing to spaces first is what makes
-  // the \b-bounded patterns above/below actually catch id-only entries like worm_process,
-  // uncounted_angle, hollow_signal, master_cog.
-  const hay = (name + ' ' + _mid.toLowerCase()).replace(/_/g, ' ');
-
-  // -- swimming / flying: real terrain traversal (see canFly/canSwim), not flavor text --
+// Trait heuristics shared by BOTH classification passes below (the first skips scripted/fixed-stat bosses, the second re-applies
+// the identical logic to them). One copy, so the passes can never drift apart. Only fills fields that are still `undefined`.
+function classifyMonsterBodyTraits(base, name, hay) {
   if (base.aquatic === undefined && (base.faction === 'aquatic' || base.faction === 'drowned' ||
       /shark|fish|eel|kraken|crab|leviathan|siren|merfolk|serpent/.test(name))) base.aquatic = true;
   // -- water-bound vs amphibious: not every swimmer belongs on land. A crocodile, a crab, or a
@@ -10446,6 +10536,19 @@ for (const _mid in MONSTER_BASES) {
       ['undead', 'construct', 'cyber', 'celestial', 'plant', 'eldritch', 'cosmic', 'nonEuclid', 'dream', 'demonic', 'drowned'].includes(base.faction) ||
       base.fixedStats;
   }
+}
+for (const _mid in MONSTER_BASES) {
+  const base = MONSTER_BASES[_mid];
+  if (base.scriptedAI || base.fixedStats) continue;
+  const name = (base.name || '').toLowerCase();
+  // underscores count as \w in JS regex, so "worm_process" has no word-boundary at the
+  // underscore -- \bprocess\b wouldn't match inside it. Normalizing to spaces first is what makes
+  // the \b-bounded patterns above/below actually catch id-only entries like worm_process,
+  // uncounted_angle, hollow_signal, master_cog.
+  const hay = (name + ' ' + _mid.toLowerCase()).replace(/_/g, ' ');
+
+  // -- swimming / flying: real terrain traversal (see canFly/canSwim), not flavor text --
+  classifyMonsterBodyTraits(base, name, hay);
   // A short explicit-override tail for cases the pattern/faction rules above get wrong -- either
   // a unique superboss id that doesn't tokenize cleanly, or flavor that lives only in
   // a name/lore string the classifier never reads (a "Stone Guardian" reads as construct-flavored
@@ -10563,27 +10666,8 @@ for (const _mid in MONSTER_BASES) {
   // too, not just scripted ones -- non-scripted monsters already have these fields set by the
   // original loop, so the undefined-guards below are a no-op for all ~255 of them and this only
   // ever actually changes anything for the scriptedAI/fixedStats monsters that needed it.
-  if (base.aquatic === undefined && (base.faction === 'aquatic' || base.faction === 'drowned' ||
-      /shark|fish|eel|kraken|crab|leviathan|siren|merfolk|serpent/.test(name))) base.aquatic = true;
-  if (base.aquatic && base.waterOnly === undefined &&
-      /shark|fish|eel|kraken|leviathan|serpent|siren|merfolk|jellyfish|squid|manta|stingray|whale/.test(name)) base.waterOnly = true;
-  if (base.flying === undefined && /bat|hawk|vulture|wyvern|drake|harpy|griffin|phoenix|thunderbird|wisp|specter|spectre|ghost|wraith|banshee|imp|gargoyle|angel|seraph|gull/.test(name)) base.flying = true;
-  if (base.flying === undefined && base.faction === 'dragon' && !/wyrm|worm/.test(name)) base.flying = true;
-  if (base.noBodyParts === undefined) {
-    base.noBodyParts = /\b(slime|ooze|jelly|blob|swarm|elemental|gas|cloud|mist|vapor|process|exception|angle|signal|wraith|spirit|ghost|phantom|specter|spectre|spectral|shade|banshee)\b/.test(hay) ||
-      base.faction === 'virus' || base.faction === 'ooze';
-  }
-  if (base.bloodless === undefined) {
-    base.bloodless = base.noBodyParts ||
-      /\b(golem|construct|armor|robot|drone|android|turret|sentry|sentinel|automaton|skeleton|bone|lich|mummy|zombie|revenant|cog)\b/.test(hay) ||
-      ['undead', 'construct', 'cyber', 'drowned'].includes(base.faction);
-  }
-  if (base.diseaseImmune === undefined) {
-    base.diseaseImmune = base.bloodless ||
-      /\b(demon|archdemon|angel|seraph|deity|god)\b/.test(hay) ||
-      ['undead', 'construct', 'cyber', 'celestial', 'plant', 'eldritch', 'cosmic', 'nonEuclid', 'dream', 'demonic', 'drowned'].includes(base.faction) ||
-      base.fixedStats;
-  }
+  // (same classification as the first pass; that pass skips scripted bosses, so it is re-applied here -- shared function keeps the two in sync)
+  classifyMonsterBodyTraits(base, name, hay);
 
   //   - blunt (0% bleed, but still fully able to wound/cripple a limb -- see bluntMult): anything
   //     with no cutting edge at all -- mechanical/constructed bodies, incorporeal touch-attackers
@@ -14019,7 +14103,7 @@ function tickWeather() {
       const dx = randInt(Math.random, -6, 6), dy = randInt(Math.random, -6, 6);
       const t = curTileAt(player.x + dx, player.y + dy);
       if (t && isWaterTile(t) && !t.frozenTurns) {
-        t.walkable = true; t.feature = 'ice'; t.wasChasm = false; t.glyph = '='; t.color = '#bfe8f5'; t.bg = '#0d1c22'; t.frozenTurns = 40;
+        freezeTileToIce(t, 40, false);
         trackFxTile(t, player.x + dx, player.y + dy);
         break;
       }
@@ -14348,17 +14432,19 @@ const WORLD_EVENT_HANDLERS = {
   },
   corruptionShift(def) { gainCorruption(def.amount); log(def.msg); },
   freezeNearby(def) {
+    let froze = 0;
     if (!curIsDungeon()) {
       for (let i = 0; i < (def.count || 2); i++) {
         const dx = randInt(Math.random, -6, 6), dy = randInt(Math.random, -6, 6);
         const t = curTileAt(player.x + dx, player.y + dy);
         if (t && isWaterTile(t) && !t.frozenTurns) {
-          t.walkable = true; t.feature = 'ice'; t.glyph = '='; t.color = '#bfe8f5'; t.bg = '#0d1c22'; t.frozenTurns = 60;
+          freezeTileToIce(t, 60, false);
           trackFxTile(t, player.x + dx, player.y + dy);
+          froze++;
         }
       }
     }
-    log(def.msg);
+    log(froze ? def.msg : 'A bitter chill sweeps past. There is no open water close enough to freeze.');
   },
   blinkPlayer(def) {
     const spots = [];
@@ -14504,6 +14590,7 @@ const WORLD_EVENTS = [
   { id:'ev_plague_outbreak', telegraph:3, warnMsg:'A sickly-sweet smell starts creeping into the air.', name:'Plague Outbreak', rarity:'rare', scope:'overworld', type:'gasAround', turns:20, power:3, gasKind:'poison', msg:'The contagion finally takes hold nearby.', duration:0 },
   { id:'ev_frenzy', telegraph:2, warnMsg:'Every animal nearby has gone eerily quiet, all at once.', minDay:2, name:'Blood Frenzy', rarity:'rare', scope:'overworld', type:'spawnWave', pool:'beasts', count:4, spawnOpts:{ scaleMult:1.1 }, msg:'Something snaps, and every wild animal for a mile goes mad at once.' },
   { id:'ev_solar_flare', name:'Solar Flare', rarity:'rare', scope:['overworld','neo_kalyx','wyrmreach'], type:'forceWeather', weatherId:'heatwave', turns:80, msg:'The sun itself seems to swell for a moment, and the heat that follows is unnatural.' },
+  { id:'ev_flash_freeze', name:'Flash Freeze', rarity:'uncommon', scope:'overworld', type:'freezeNearby', count:6, msg:'The air cracks with cold and nearby water freezes solid in an instant, a temporary road of ice.' },   // v0.51.2: gives the previously-orphaned freezeNearby handler an event
   { id:'ev_cold_snap', name:'Sudden Cold Snap', rarity:'rare', scope:['overworld','the_boneyard'], type:'forceWeather', weatherId:'blizzard', turns:60, msg:'The temperature drops so fast it feels like a physical blow.' },
   { id:'ev_rift_tremor', name:'Rift Tremor', rarity:'rare', scope:['lucid_expanse','the_drift','fourth_corridor','corrupted_kernel'], type:'blinkPlayer', msg:'Reality hiccups, and for a moment you are somewhere slightly different than where you were standing.' },
   { id:'ev_ash_eruption', name:'Ash Eruption', rarity:'rare', scope:['abyssal_wastes','wyrmreach'], type:'forceWeather', weatherId:'ashfall', turns:100, msg:'Somewhere unseen, something enormous just exhaled, and the sky is full of ash for it.' },
@@ -15065,6 +15152,18 @@ function isWaterTile(t) { return !!(t && (t.feature === 'water' || t.biome === '
 // five-field literal at every call site. Consolidated here so there's one place to adjust the
 // look of water/chasm terrain instead of four. ----
 function setTileWater(t) { t.walkable = false; t.feature = 'water'; t.glyph = '~'; t.color = '#2a4a6a'; t.bg = '#0a141c'; }
+// Freeze/thaw: remember exactly what the tile looked like so the thaw restores it. Before this, every thaw rebuilt the tile as generic deep
+// water (#2a4a6a on #0a141c, feature 'water'), so freezing a river or shallows -- with a frost spell, a cold front or the Flash Freeze
+// event -- permanently re-skinned it. Ice from an older save has no record and falls back to the old generic rebuild.
+function freezeTileToIce(t, turns, wasChasm) {
+  if (!t.frozenTurns) t._preFreeze = { walkable: t.walkable, feature: t.feature, glyph: t.glyph, color: t.color, bg: t.bg };
+  t.walkable = true; t.feature = 'ice'; t.wasChasm = !!wasChasm; t.glyph = '='; t.color = '#bfe8f5'; t.bg = '#0d1c22'; t.frozenTurns = turns;
+}
+function thawIceTile(t) {
+  const p = t._preFreeze;
+  if (p) { t.walkable = p.walkable; t.feature = p.feature; t.glyph = p.glyph; t.color = p.color; t.bg = p.bg; delete t._preFreeze; }
+  else if (t.wasChasm) setTileChasm(t); else setTileWater(t);
+}
 function setTileChasm(t) { t.walkable = false; t.feature = 'chasm'; t.glyph = '\u2248'; t.color = '#1a1a22'; t.bg = '#000000'; }
 function isFlammableTile(t) {
   if (!t || !t.walkable || isWaterTile(t)) return false;
@@ -15781,7 +15880,44 @@ function triggerTrapAt(t, x, y, entity) {
   }
   if (e.hp <= 0) onDeath(e, null);
 }
+
+// ---- FX REGISTRY SELF-HEALING --------------------------------------------------------------------------------------------
+// processTerrainEffects only ticks tiles in activeFxTiles, a runtime list. That list is emptied by clearAreaFx() on EVERY area change
+// (entering a dungeon, taking stairs, a dimension...) and is never saved, yet the per-tile `_fxTracked` flag IS saved. Nothing ever
+// re-registered tiles afterwards, so after a dungeon trip or a save/load: crops stopped growing for good, fires and gas clouds burned
+// forever, ice never thawed, scorched ground never regrew and oil never dried. Now clearAreaFx()/loading a save raise fxNeedsRescan and
+// the next terrain tick rebuilds the list from the tiles of the area the player is actually in.
+let fxNeedsRescan = false;
+function tileHasActiveFx(t) {
+  return !!t && (t.fireTurns > 0 || t.smokeTurns > 0 || t.scorchRegrowTurns > 0 || t.gasTurns > 0 || t.frozenTurns > 0 || t.oilTurns > 0 ||
+    (t.feature === 'farmplot' && !!t.cropId && t.growStage < 2));
+}
+function retrackAreaFx() {
+  fxNeedsRescan = false;
+  const have = new Set(activeFxTiles.map(e => e.t));
+  const add = (t, x, y) => { if (t && !have.has(t) && tileHasActiveFx(t)) { t._fxTracked = false; trackFxTile(t, x, y); have.add(t); } };
+  const addChunk = (c, cx, cy) => {
+    const packed = c._packed;
+    if (packed && packed.tiles) { for (const [i, t] of packed.tiles) add(t, cx * CH + (i % CH), cy * CH + Math.floor(i / CH)); return; }   // lazy chunk: scan its saved delta, don't materialize it
+    const tiles = c.tiles; if (!tiles) return;
+    for (let ly = 0; ly < tiles.length; ly++) { const row = tiles[ly]; for (let lx = 0; lx < row.length; lx++) add(row[lx], cx * CH + lx, cy * CH + ly); }
+  };
+  if (curIsDungeon()) {
+    const lvl = curDungeonLevel();
+    if (lvl && lvl.grid) for (let y = 0; y < lvl.grid.length; y++) { const row = lvl.grid[y]; for (let x = 0; x < row.length; x++) add(row[x], x, y); }
+  } else if (curIsDimension()) {
+    const prefix = player.dimensionId + '|';
+    for (const [key, c] of dimensionChunks) {
+      if (!c.dirty || !key.startsWith(prefix)) continue;   // timed tiles only exist in chunks that have been modified (world generation never makes any)
+      const [cx, cy] = key.slice(prefix.length).split(',').map(Number);
+      addChunk(c, cx, cy);
+    }
+  } else {
+    for (const c of worldChunks.values()) if (c.dirty) addChunk(c, c.cx, c.cy);
+  }
+}
 function processTerrainEffects() {
+  if (fxNeedsRescan) retrackAreaFx();
   if (!activeFxTiles.length) return;
   const stillActive = [];
   const pendingSpreads = []; // [[x,y,turns,power,kind]] -- staged so we don't grow the array mid-iteration
@@ -15916,9 +16052,9 @@ function processTerrainEffects() {
             log(`${occ===player?'You':occ.name} plunge partway as the thawing ice gives way! (${dmg} damage)`);
             if (occ.hp <= 0) onDeath(occ, null);
           }
-          setTileChasm(t);
+          thawIceTile(t);
         } else {
-          setTileWater(t);
+          thawIceTile(t);
         }
         t.wasChasm = false;
         log('The ice thaws away.');
@@ -15968,6 +16104,7 @@ function processTerrainEffects() {
 function clearAreaFx() {
   for (const entry of activeFxTiles) entry.t._fxTracked = false;
   activeFxTiles = [];
+  fxNeedsRescan = true;   // the area you arrive in re-registers its own active tiles on the next tick (see retrackAreaFx)
   activeDecoys = []; // location-tracked; a decoy from the area you're leaving makes no sense elsewhere
 }
 
@@ -16092,8 +16229,15 @@ function applyBuffQuiet(stat, power, turns) {
   player.buffs[stat] = { power, turns: Math.max((player.buffs[stat] && player.buffs[stat].turns) || 0, turns) };
 }
 
+// Two tiles can see each other if a clear line exists from EITHER end. A single Bresenham trace is not symmetric (the line from A to B
+// can differ from the line from B to A), so with one trace ~1-8% of visible tile pairs were visible one way only -- a monster could shoot
+// you from a tile you couldn't see, or you could target something that couldn't target you. Accepting either trace makes the answer
+// identical in both directions (mutual sight) and never removes sight that already existed. `_losTrace` is the old single-direction test.
 function hasLOS(x0, y0, x1, y1) {
   if (DEBUG.xrayVision) return true; // X-Ray Vision (debug): ignore wall/obstacle occlusion entirely
+  return _losTrace(x0, y0, x1, y1) || _losTrace(x1, y1, x0, y0);
+}
+function _losTrace(x0, y0, x1, y1) {
   let dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
   let sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
   let err = dx - dy;
@@ -16998,7 +17142,7 @@ function confirmTileTarget(wx, wy) {
     endTurn(); return;
   }
   if (p.kind === 'spell') {
-    if (!paySpellCost(p.spell)) { log('Not enough resource.'); return; }
+    if (!paySpellCost(p.spell)) { log(p.spell.type === 'lifetap' || p.spell.resource === 'hp' ? 'You are too weak to pay the life cost.' : 'Not enough resource.'); return; }
     if (player.isTutorial) player._tutSpellCasts = (player._tutSpellCasts || 0) + 1;
     pendingTarget = null; gameState = 'playing';
     resolveSpellAtTile(p.spell, wx, wy);
@@ -17128,9 +17272,39 @@ function repairAtBlacksmith(npc) {
   updateSidebar();
   renderTrade();
 }
+// ---- TRADE PRICING: single source of truth for what a shop charges and pays ------------------------------------------
+// Used by renderTrade (what the list displays) and tradeTransact (what actually changes hands), so the two can never drift.
+// R ("repMult") bundles kingdom standing, species affinity, NPC tier, relationship and local goodwill. Tune the numbers here.
+const TRADE_BUY_MARKUP = 1.2;        // shop asks value x this x R
+const TRADE_SELL_RATE = 0.45;        // shop pays value x this x (2 - R) before any invariant/specialist adjustment
+const TRADE_MIN_SELL_FACTOR = 0.15;  // floor on (2 - R) so a hated customer still gets something
+const TRADE_SELL_TO_BUY_CAP = 0.85;  // INVARIANT: standing alone can never make a shop pay more than this x its own asking price
+const TRADE_MIN_R = 0.6;             // floor on R: stacked discounts bottom out at 40% off, which also keeps a shop's offer monotone in
+                                     // your standing (without it the cap below would make extreme goodwill pay WORSE than neutral)
+const TRADE_SPECIALIST_CAP = 0.95;   // ...and merchant specialist bonuses can never push a shop's offer past this x its asking price
+                                     // (market-driven material prices are exempt: that spread is the intended trading game)
+function tradeRepMult(npc) {
+  const r = repPriceMult(getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).key) * tradeSpeciesPriceMult(npc) * npcTierPriceMult(npc) * relationshipPriceMult(npc);
+  return Math.max(TRADE_MIN_R, r);
+}
+function tradeBuyPrice(it, npc, repMult) {
+  if (repMult === undefined) repMult = tradeRepMult(npc);
+  return Math.round(it.value * TRADE_BUY_MARKUP * repMult * merchantBuyMult());
+}
+// Before this invariant, discounts raised sell prices too (the 2 - R term), so with good standing buying a shop out and selling
+// it straight back was pure profit (measured +51% with a friendly novice shopkeeper, regional goodwill and kingdom rep) and
+// repeated every 4-day restock. A shop's offer is now bounded by its own asking price, which only matters at very low R.
+function tradeSellPrice(it, npc, repMult) {
+  if (repMult === undefined) repMult = tradeRepMult(npc);
+  const askUnit = TRADE_BUY_MARKUP * repMult * merchantBuyMult();                       // asking price per point of value
+  const standing = Math.min(TRADE_SELL_RATE * Math.max(TRADE_MIN_SELL_FACTOR, 2 - repMult), TRADE_SELL_TO_BUY_CAP * askUnit);
+  let price = it.value * standing * merchantSellMult(npc, it);
+  if (it.type !== 'material') price = Math.min(price, it.value * askUnit * TRADE_SPECIALIST_CAP);
+  return Math.round(price);
+}
 function renderTrade() {
   const npc = dialogueNPC;
-  const repMult = repPriceMult(getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).key) * tradeSpeciesPriceMult(npc) * npcTierPriceMult(npc) * relationshipPriceMult(npc);
+  const repMult = tradeRepMult(npc);
   const list = tradeMode === 'buy' ? npc.shop : player.inventory.filter(i => i.type !== 'misc');
   let html = `<div class="npcline">Your gold: ${player.gold} | [Tab] switch ${tradeMode === 'buy' ? 'to sell' : 'to buy'}</div>`;
   if (npc.roleId === 'blacksmith' || npc.roleId === 'cybersmith') html += `<div class="npcline dim">[R] Repair all equipped gear</div>`;
@@ -17144,7 +17318,7 @@ function renderTrade() {
     const letter = String.fromCharCode(97 + i);
     // Match tradeTransact()'s actual charged price exactly -- this used to ignore kingdom
     // reputation and show a different number than what you were actually charged/paid.
-    const price = tradeMode === 'buy' ? Math.round(it.value * 1.2 * repMult * merchantBuyMult()) : Math.round(it.value * 0.45 * (2 - repMult) * merchantSellMult(npc, it));
+    const price = tradeMode === 'buy' ? tradeBuyPrice(it, npc, repMult) : tradeSellPrice(it, npc, repMult);
     html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${it.name} - ${price}g</div>`;
   });
   if (!list.length) html += `<div class="npcline">(nothing)</div>`;
@@ -17154,11 +17328,11 @@ function renderTrade() {
 function tradeTransact(letter) {
   const npc = dialogueNPC;
   const idx = (tradePage || 0) * PAGE_SIZE + (letter.charCodeAt(0) - 97);
-  const repMult = repPriceMult(getKingdom(Math.floor(npc.x / CH), Math.floor(npc.y / CH)).key) * tradeSpeciesPriceMult(npc) * npcTierPriceMult(npc) * relationshipPriceMult(npc);
+  const repMult = tradeRepMult(npc);
   if (tradeMode === 'buy') {
     const it = npc.shop[idx];
     if (!it) return;
-    const price = Math.round(it.value * 1.2 * repMult * merchantBuyMult());
+    const price = tradeBuyPrice(it, npc, repMult);
     if (player.gold < price) { Sound.play('uiError'); log("You can't afford that."); return; }
     player.gold -= price; addItemToList(player.inventory, it); npc.shop.splice(idx, 1);
     if (player.isTutorial) player._tutDidBuy = true;
@@ -17168,7 +17342,7 @@ function tradeTransact(letter) {
     const list = player.inventory.filter(i => i.type !== 'misc');
     const it = list[idx];
     if (!it) return;
-    const price = Math.round(it.value * 0.45 * Math.max(0.15, 2 - repMult) * merchantSellMult(npc, it));
+    const price = tradeSellPrice(it, npc, repMult);
     player.gold += price;
     player.inventory = player.inventory.filter(i => i.uid !== it.uid);
     if (player.isTutorial) player._tutDidSell = true;
@@ -21224,6 +21398,7 @@ function applyAffectionDecay(npc) {
 }
 
 function proposeMarriage(npc) {
+  if (isMyChild(npc)) { log(`${npc.name} is your own child.`); return; }
   if (player.spouse) { log('You are already married.'); return; }
   if (npc.spouse) { log(`${npc.name} is already spoken for.`); return; }
   if ((npc.affection||0) < 80) { log(`${npc.name} does not know you well enough yet.`); return; }
@@ -22119,6 +22294,8 @@ const ROLE_FLAVOR_LINES = {
   monk: ["Discipline first, strength after. Most get that order backwards.", "Silence teaches more than most conversations do, if you can sit with it long enough."],
   archivist: ["Every record here tells you what the last one left out, if you cross-reference enough.", "History's not what happened. It's what got written down. Those aren't the same thing."],
   acrobat: ["Fear of falling's useful right up until it isn't. Then you just have to trust the training.", "Crowd gasps every time, even the ones who've seen the trick before."],
+  pilgrim: ["Walked three weeks to get here. The road teaches you what the shrine only confirms.", "I carry very little. That's rather the point of the journey."],
+  puppeteer: ["The trick isn't the strings. It's making the crowd forget there are any.", "A wooden face can say what a real one never dares. Children understand that better than anyone."],
   fireeater: ["It's less dangerous than it looks. Mostly. I still respect it every single time.", "First rule is you never let the crowd see your hands shake, even once."],
   farrier: ["A horse thrown wrong at the wrong moment can end a journey, or worse. I don't rush this.", "Every hoof's a little different. Fit the shoe to the horse, not the horse to the shoe."],
   confectioner: ["Sugar's dear, but nobody haggles over sweets the way they do bread.", "Children remember which stall had the good honey cakes long after they remember the settlement's name."],
@@ -22318,10 +22495,8 @@ function autoTravelToStairs() {
   runAutoLoop(() => {
     const step = pathFirstStep(player.x, player.y, goal.x, goal.y, pathRadiusFor(player.x, player.y, goal.x, goal.y, curIsDungeon() ? 60 : 80));
     if (!step) { log('No path found.'); return false; }
-    const nx = player.x+step.dx, ny = player.y+step.dy;
-    if (entityAt(nx,ny)) return false;
-    player.x = nx; player.y = ny;
-    endTurn({forceFull:true});
+    if (entityAt(player.x+step.dx, player.y+step.dy)) return false;
+    if (!autoStep(step.dx, step.dy)) return false;
     if (player.x === goal.x && player.y === goal.y) { if (curIsDungeon()) useStairs(); return false; }
     return true;
   });
@@ -22398,11 +22573,8 @@ function autoExplore() {
       committed = { x: f.x, y: f.y };
       step = f.first;
     }
-    const nx = player.x+step.dx, ny = player.y+step.dy;
-    if (entityAt(nx,ny)) return false;
-    player.x = nx; player.y = ny;
-    endTurn({forceFull:true});
-    return true;
+    if (entityAt(player.x+step.dx, player.y+step.dy)) return false;
+    return autoStep(step.dx, step.dy);
   });
 }
 
@@ -24070,8 +24242,10 @@ function childStageFor(birthTurn) {
   for (const st of CHILD_STAGES) if (days >= st.minDays) s = st;
   return s;
 }
+// True for the player's own children, including ones who have grown up and been rebuilt as an adult role (same uid, isGrownChild).
+// Gates romance/marriage options -- a grown child keeps their affection and loses the 'child' role, so the role check alone missed them.
+function isMyChild(npc) { return !!npc && (!!childRecordFor(npc) || !!npc.isGrownChild); }
 function childRecordFor(npc) { return npc ? (player.children || []).find(c => c.uid === npc.uid) || null : null; }
-function isMyChild(npc) { return !!childRecordFor(npc); }
 // A child NPC otherwise behaves exactly like any other settlement civilian (see makeNPC's
 // faction:'settlement'/aiState:'patrol' default) -- growth just widens the same patrolRadius the
 // standard settlement AI already wanders within, so an infant stays essentially in one room, a
@@ -24245,9 +24419,11 @@ function askChildFuture(npc, rec) {
   npc.affection = (npc.affection || 0) + 4;
   closeModal();
 }
+// Roles a player's grown child is never assigned (paid companionship, begging, hostile cults...). 'child'/'elder' were always excluded.
+const CHILD_CAREER_EXCLUDED = new Set(['child', 'elder', 'beggar', 'companion', 'cultist_npc', 'necromancer_trainer']);
 function pickAdultCivilianRole(chunk) {
   const flavor = (chunk && chunk.settlement && SETTLEMENT_FLAVORS[chunk.settlement.flavor]) || SETTLEMENT_FLAVORS.standard;
-  const pool = (flavor.rolePool || ['farmer', 'merchant', 'guard']).filter(r => r !== 'child' && r !== 'elder');
+  const pool = (flavor.rolePool || ['farmer', 'merchant', 'guard']).filter(r => !CHILD_CAREER_EXCLUDED.has(r));
   return pool.length ? choice(Math.random, pool) : 'farmer';
 }
 // Reuses makeNPC wholesale to build a proper adult (real combat stats, and -- for shop/trainer/
@@ -25353,14 +25529,14 @@ function openDialogue(npc) {
   }
   // ---- Settlement Overhaul: functional building-type interactions ----
   if (npc.roleId === 'innkeeper') opts.push({ key: nextKey(), label: 'Rent a room and rest', action: () => payForRoom(npc) });
-  if (npc.roleId === 'companion') opts.push({ key: nextKey(), label: 'Pay for a quiet evening', action: () => payForCompanionship(npc) });
+  if (npc.roleId === 'companion' && !isMyChild(npc)) opts.push({ key: nextKey(), label: 'Pay for a quiet evening', action: () => payForCompanionship(npc) });
   if (npc.roleId === 'curator') opts.push({ key: nextKey(), label: 'View the exhibits', action: () => viewMuseumExhibit(npc) });
   if (npc.roleId === 'storagekeeper') opts.push({ key: nextKey(), label: 'Access your storage', action: () => openContainer(getPlayerStash()) });
   if (npc.roleId === 'dealer') {
     [10, 25, 50].forEach(amt => opts.push({ key: nextKey(), label: `Wager ${amt}g`, action: () => gambleAt(npc, amt) }));
   }
   opts.push({ key: nextKey(), label: 'Give gift', action: () => openGiftPicker(npc) });
-  if (!npc.spouse && !player.spouse && (npc.affection || 0) >= 80 && !NON_MARRIAGEABLE.has(npc.roleId)) opts.push({ key: nextKey(), label: 'Propose marriage', action: () => proposeMarriage(npc) });
+  if (!npc.spouse && !player.spouse && (npc.affection || 0) >= 80 && !NON_MARRIAGEABLE.has(npc.roleId) && !isMyChild(npc)) opts.push({ key: nextKey(), label: 'Propose marriage', action: () => proposeMarriage(npc) });
   if (isSpouse) {
     opts.push({ key: nextKey(), label: 'Rest at home', action: () => restAtHome(npc) });
     opts.push({ key: nextKey(), label: 'Spend a quiet evening together', action: () => spendEveningTogether(npc) });
@@ -25823,9 +25999,8 @@ function autoTravelHome() {
     runAutoLoop(() => {
       const step = pathFirstStep(player.x, player.y, goal.x, goal.y, pathRadiusFor(player.x, player.y, goal.x, goal.y, 60));
       if (!step) { log('No path found.'); return false; }
-      const nx = player.x+step.dx, ny = player.y+step.dy;
-      if (entityAt(nx,ny)) return false;
-      player.x = nx; player.y = ny; endTurn({forceFull:true});
+      if (entityAt(player.x+step.dx, player.y+step.dy)) return false;
+      if (!autoStep(step.dx, step.dy)) return false;
       if (player.x === goal.x && player.y === goal.y) { useStairsUp(); return false; }
       return true;
     });
@@ -25836,9 +26011,8 @@ function autoTravelHome() {
     runAutoLoop(() => {
       const step = pathFirstStep(player.x, player.y, found.x, found.y, pathRadiusFor(player.x, player.y, found.x, found.y, 80));
       if (!step) { log('No path found.'); return false; }
-      const nx = player.x+step.dx, ny = player.y+step.dy;
-      if (entityAt(nx,ny)) return false;
-      player.x = nx; player.y = ny; endTurn({forceFull:true});
+      if (entityAt(player.x+step.dx, player.y+step.dy)) return false;
+      if (!autoStep(step.dx, step.dy)) return false;
       return player.x !== found.x || player.y !== found.y;
     });
   }
@@ -27985,14 +28159,20 @@ function abilityPoolOf(id) {
 // nothing. Nearly every active eldritch mutation in the game was effectively free. Now keyed off
 // resource==='hp' (covers all of the above) with a real fallback chain (selfCost, then mp, then 0)
 // instead of assuming one specific field is always present.
+// The HP an HP-costing ability actually charges: selfCost, then mp as a fallback, with the mutation
+// HP-cost reductions applied. Single source of truth for paying the cost, logging it and labelling it in menus.
+function hpCostFor(ability) {
+  let cost = ability.selfCost != null ? ability.selfCost : (ability.mp || 0);
+  if (abilityPoolOf(ability.id) === 'mutation') {
+    cost = Math.round(cost * (1 - (player.mutationHpCostReduction || 0)));
+    if (ability.type === 'blinklike') cost = Math.round(cost * (1 - (player.mutationBlinkCostReduction || 0)));
+    cost = Math.max(cost > 0 ? 1 : 0, cost);
+  }
+  return cost;
+}
 function paySpellCost(ability) {
   if (ability.type === 'lifetap' || ability.type === 'bloodarmor' || ability.resource === 'hp') {
-    let cost = ability.selfCost != null ? ability.selfCost : (ability.mp || 0);
-    if (abilityPoolOf(ability.id) === 'mutation') {
-      cost = Math.round(cost * (1 - (player.mutationHpCostReduction || 0)));
-      if (ability.type === 'blinklike') cost = Math.round(cost * (1 - (player.mutationBlinkCostReduction || 0)));
-      cost = Math.max(cost > 0 ? 1 : 0, cost);
-    }
+    const cost = hpCostFor(ability);
     if (cost > 0 && player.hp <= cost) return false;
     player.hp -= cost; return true;
   }
@@ -28035,9 +28215,9 @@ function applyEffectToTarget(spell, t) {
     // back doubled", "shares back with you", "shares the spoils") but nothing actually returned
     // any HP before this -- it just dealt damage at an HP cost. Real return now, boosted further
     // by the Symbiotic/Predatory talent lines (mutationLifetapBonus) for builds that lean into it.
-    const healBack = Math.round(dmg * (0.4 + (player.mutationLifetapBonus || 0)));
+    const healBack = Math.round(dmg * ((spell.healBackPct != null ? spell.healBackPct : 0.4) + (player.mutationLifetapBonus || 0)));   // healBackPct: per-ability override (Crimson Lance 'drawn back doubled')
     if (healBack > 0) player.hp = Math.min(player.maxHp, player.hp + healBack);
-    log(`You tap your own life force! ${t.name} takes ${dmg} dark damage (-${spell.selfCost} HP)${healBack > 0 ? `, ${healBack} flowing back into you` : ''}.`);
+    log(`You tap your own life force! ${t.name} takes ${dmg} dark damage (-${hpCostFor(spell)} HP)${healBack > 0 ? `, ${healBack} flowing back into you` : ''}.`);
     if (t.hp <= 0) onDeath(t, player);
     if (spell.destructive) scorchArea(t.x, t.y, 2);
     return;
@@ -28190,19 +28370,6 @@ function castSpell(spellId) {
   }
   Sound.castSpell(spell);
 
-  if (spell.type === 'lifetap') {
-    let selfCost = spell.selfCost;
-    if (abilityPoolOf(spell.id) === 'mutation') selfCost = Math.max(1, Math.round(selfCost * (1 - (player.mutationHpCostReduction || 0))));
-    if (player.hp <= selfCost) { log('You are too weak to pay the life cost.'); return; }
-    const t = nearestHostile(spell.range);
-    if (!t) { log('No target in range.'); return; }
-    player.hp -= selfCost;
-    const dmg = Math.round(randInt(Math.random, spell.power[0], spell.power[1]) * (1 + (player.spellDmgBonus||0) + manaScalingSpellBonus()) * playerLevelPowerMult(player.level));
-    t.hp -= dmg;
-    log(`You tap your own life force! ${t.name} takes ${dmg} dark damage (-${selfCost} HP).`);
-    if (t.hp <= 0) onDeath(t, player);
-    endTurn(); return;
-  }
   if (spell.type === 'bloodbuff') {
     const cost = Math.max(1, Math.round(player.hp * (spell.selfCostPct || 0)));
     if (cost > 0 && player.hp <= cost) { log('You are too weak for this pact.'); return; }
@@ -28424,8 +28591,7 @@ function applyTerrainInteraction(spell, x, y) {
   if (spell.frost) {
     if (isWaterTile(t) || t.feature === 'chasm') {
       const wasChasm = t.feature === 'chasm';
-      t.walkable = true; t.feature = 'ice'; t.wasChasm = wasChasm;
-      t.glyph = '='; t.color = '#bfe8f5'; t.bg = '#0d1c22'; t.frozenTurns = 7;
+      freezeTileToIce(t, 7, wasChasm);
       trackFxTile(t, x, y);
       log(wasChasm ? 'A sheet of ice bridges the chasm — but not for long.' : 'The water freezes solid underfoot.');
       // Anyone (wet or not, since they're standing directly IN the water as it freezes around
@@ -33405,6 +33571,7 @@ function getDimensionChunk(dimId, cx, cy) {
   let c = dimensionChunks.get(key);
   if (c) return c;
   c = generateDimensionChunk(dimId, cx, cy);
+  separateOverlappingEntities([].concat(c.monsters || [], c.npcs || []), chunkTileAt(c));
   dimensionChunks.set(key, c);
   return c;
 }
@@ -33916,11 +34083,9 @@ function genRoomsBSP(W, H, rng, opts) {
 // Math.random(), meaning cave floors were never actually reproducible from the world seed) and
 // with fill probability/iteration count varying a little per roll so caves don't all feel like
 // the exact same density. ----
-function genCaveCA(W, H, rng) {
-  const fillProb = 0.42 + rng() * 0.06;
-  const iterations = 4 + (rng() < 0.4 ? 1 : 0);
-  let g = [];
-  for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push(rng() < fillProb || x === 0 || y === 0 || x === W - 1 || y === H - 1); g.push(row); }
+// Cellular-automaton smoothing shared by both cave generators: a cell becomes wall when 5+ of its 8 neighbours are wall
+// (out-of-bounds counts as wall). Deterministic, no rng. g[y][x] === true means wall; returns the smoothed grid.
+function smoothCaveGrid(g, W, H, iterations) {
   for (let it = 0; it < iterations; it++) {
     const ng = [];
     for (let y = 0; y < H; y++) {
@@ -33938,6 +34103,14 @@ function genCaveCA(W, H, rng) {
     }
     g = ng;
   }
+  return g;
+}
+function genCaveCA(W, H, rng) {
+  const fillProb = 0.42 + rng() * 0.06;
+  const iterations = 4 + (rng() < 0.4 ? 1 : 0);
+  let g = [];
+  for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push(rng() < fillProb || x === 0 || y === 0 || x === W - 1 || y === H - 1); g.push(row); }
+  g = smoothCaveGrid(g, W, H, iterations);
   const out = [];
   for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push(dtile2(g[y][x] ? '#' : '.', !g[y][x], null, 'cave')); out.push(row); }
   return { grid: out, rooms: [] };
@@ -33979,23 +34152,7 @@ function genCaveNoise(W, H, rng) {
     }
     g.push(row);
   }
-  for (let it = 0; it < 2; it++) {
-    const ng = [];
-    for (let y = 0; y < H; y++) {
-      const row = [];
-      for (let x = 0; x < W; x++) {
-        let walls = 0;
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          const nx = x + dx, ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= W || ny >= H || g[ny][nx]) walls++;
-        }
-        row.push(walls >= 5);
-      }
-      ng.push(row);
-    }
-    g = ng;
-  }
+  g = smoothCaveGrid(g, W, H, 2);
   const out = [];
   for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push(dtile2(g[y][x] ? '#' : '.', !g[y][x], null, 'cave')); out.push(row); }
   return { grid: out, rooms: [] };
@@ -34728,6 +34885,26 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
   // around 150x92, and only a handful of blocking features are ever placed per floor), and it's
   // the tile itself that gets skipped on failure, not the whole feature pass -- a statue that
   // would block the corridor just doesn't get placed there; the rest of the room still can. ----
+  // Flood fill from the up stairs over walkable tiles: can we reach the down stairs? One copy, used by both the per-feature guard
+  // (wouldDisconnectStairs) and the final safety net (guaranteeStairsReachable).
+  function stairsConnected(g) {
+    const visited = new Set([up.x + ',' + up.y]);
+    const stack = [[up.x, up.y]];
+    let reached = false;
+    while (stack.length) {
+      const [cx, cy] = stack.pop();
+      if (cx === down.x && cy === down.y) { reached = true; break; }
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nx = cx + dx, ny = cy + dy, key = nx + ',' + ny;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H || visited.has(key)) continue;
+        const nt = g[ny][nx];
+        if (!nt.walkable) continue;
+        visited.add(key);
+        stack.push([nx, ny]);
+      }
+    }
+    return reached;
+  }
   function wouldDisconnectStairs(g, x, y) {
     const t = g[y][x];
     if (!t || !t.walkable) return false;
@@ -34740,21 +34917,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
     // level (depth 2). Never let a blocking feature land on either staircase tile.
     if ((x === up.x && y === up.y) || (x === down.x && y === down.y)) return true;
     t.walkable = false;
-    const visited = new Set([up.x + ',' + up.y]);
-    const stack = [[up.x, up.y]];
-    let reached = false;
-    while (stack.length) {
-      const [cx, cy] = stack.pop();
-      if (cx === down.x && cy === down.y) { reached = true; break; }
-      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
-        const nx = cx + dx, ny = cy + dy, key = nx + ',' + ny;
-        if (nx < 0 || ny < 0 || nx >= W || ny >= H || visited.has(key)) continue;
-        const nt = g[ny][nx];
-        if (!nt.walkable) continue;
-        visited.add(key);
-        stack.push([nx, ny]);
-      }
-    }
+    const reached = stairsConnected(g);
     t.walkable = true;
     return !reached;
   }
@@ -34767,22 +34930,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
   // ever fires, guarantees the stairs stay reachable by carving a direct corridor between them
   // rather than leaving any possibility of a softlocked floor.
   function guaranteeStairsReachable(g) {
-    const visited = new Set([up.x + ',' + up.y]);
-    const stack = [[up.x, up.y]];
-    let reached = false;
-    while (stack.length) {
-      const [cx, cy] = stack.pop();
-      if (cx === down.x && cy === down.y) { reached = true; break; }
-      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
-        const nx = cx + dx, ny = cy + dy, key = nx + ',' + ny;
-        if (nx < 0 || ny < 0 || nx >= W || ny >= H || visited.has(key)) continue;
-        const nt = g[ny][nx];
-        if (!nt.walkable) continue;
-        visited.add(key);
-        stack.push([nx, ny]);
-      }
-    }
-    if (!reached) carveCorridor(g, up.x, up.y, down.x, down.y);
+    if (!stairsConnected(g)) carveCorridor(g, up.x, up.y, down.x, down.y);
     // Belt and braces for the same bug as wouldDisconnectStairs: whatever feature pass ran, both
     // staircase tiles must end up walkable stairs, never a pillar/statue/wall.
     for (const s of [up, down]) {
@@ -35313,6 +35461,96 @@ function triggerWorldHazard(t, x, y) {
     log(`You get too close to the tear and your thoughts scatter for a moment.`);
   }
 }
+// Everything that happens to the player on ARRIVING at a tile (ground hazards, gold auto-pickup, hidden traps, world hazards,
+// levers, poison gas, dungeon entrances, shrines, doors). Shared by movePlayer and by every automated mover (autoStep) --
+// before this was extracted, auto-explore / auto-travel assigned player.x/y directly and so silently skipped ALL of it: gold was
+// walked over without being picked up (even with auto-pickup on), hidden traps never fired, shrines/levers/hazards did nothing.
+// The caller must already have set player.x/y. Returns false if the player died (caller must stop: no endTurn).
+function enterTileEffects(nx, ny, t, dx, dy) {
+  applyGroundHazardsOnEnter(player, t, nx, ny, dx, dy);
+  Sound.footstep(t, curIsDungeon());
+  if (settings.autoPickupGold) {
+    const goldHere = itemsAt(nx, ny).find(i => i.id === 'gold');
+    if (goldHere) {
+      player.gold += (goldHere.amount || 1);
+      Sound.play('gold');
+      log(`You pick up ${goldHere.amount || 1} gold.`);
+      removeItemAt(nx, ny, goldHere.uid);
+    }
+  }
+  if (curIsDungeon() && t.hiddenTrap && !t.trapTriggered) {
+    t.trapTriggered = true; t.glyph = '^'; t.color = '#c93a3a';
+    if (player.trapImmune || Math.random() < (player.trapAvoidBonus || 0)) {
+      log('You spot a hidden trap just in time and step around it!');
+    } else {
+      triggerTrapAt(t, nx, ny);
+      if (!player.alive || player.hp <= 0) return false;
+    }
+  }
+  if (t.hazardKind && !curIsDungeon()) {
+    triggerWorldHazard(t, nx, ny);
+    if (!player.alive || player.hp <= 0) return false;
+  }
+  if (curIsDungeon() && t.feature === 'lever' && !t.leverPulled) {
+    t.leverPulled = true;
+    if (t.leverCorrect) {
+      log(`You pull the ${t.leverName || 'lever'}. Somewhere nearby, a heavy mechanism grinds open.`);
+      const _lvl = curDungeonLevel();
+      const _lw = _lvl ? _lvl.w : DW2, _lh = _lvl ? _lvl.h : DH2;
+      for (let yy = 0; yy < _lh; yy++) for (let xx = 0; xx < _lw; xx++) {
+        const dt = curTileAt(xx, yy);
+        if (dt && dt.feature === 'leverdoor' && dt.puzzleId === t.puzzleId) { dt.walkable = true; dt.feature = 'floor'; dt.glyph = "'"; dt.color = '#8a6a3a'; }
+      }
+      Sound.play('door');
+    } else {
+      log(`You pull the ${t.leverName || 'lever'}. Wrong choice — something goes off!`);
+      if (Math.random() < 0.5) { igniteArea(nx, ny, 2); log('Hidden vents spray flame across the room!'); }
+      else { log('An alarm rings through the dungeon!'); soundLevelAlarm(nx, ny, { silent: true }); }
+    }
+  }
+  if (curIsDungeon() && t.feature === 'poisongas') {
+    player.statusPoison = (player.statusPoison || 0) + 2;
+    log('Noxious gas stings your lungs.');
+  }
+  if (t && t.feature === 'dungeon_entrance') { const dg = dungeonRegistry.get(t.dungeonId); log(`You stand before the entrance to ${dg.name} (${dg.tier}, recommended level ${dg.recommendedLevel || 1}+). Press '>' to enter.`); }
+  if (t && t.feature === 'shrine' && !t.shrineUsed) {
+    t.shrineUsed = true;
+    const boons = [
+      () => { player.maxHp += 10; player.hp += 10; return '+10 Max HP'; },
+      () => { player.maxMp += 8; player.mp += 8; return '+8 Max MP'; },
+      () => { player.str += 1; return '+1 STR'; },
+      () => { player.dex += 1; return '+1 DEX'; },
+      () => { player.int += 1; return '+1 INT'; },
+    ];
+    // A rare free path to the same Greater Restoration a priest charges 180g for -- only ever
+    // enters the pool when it would actually do something, and even then it's one option among
+    // six, not a guaranteed cure. See payForGreaterRestoration for the paid, reliable version.
+    if (hasCurableAffliction()) boons.push(() => {
+      let fixed = [];
+      if (player.bodyParts) for (const p of BODY_PARTS) if (player.bodyParts[p].level >= 4) { player.bodyParts[p].level = 2; player.bodyParts[p].healTimer = 130; fixed.push(p.replace(/([A-Z])/g,' $1').toLowerCase()); }
+      if (fixed.length) recalcBodyPenalties(player);
+      if (player.diseases) { const before = player.diseases.length; player.diseases = player.diseases.filter(d => d.cureId !== 'greaterRestoration'); if (player.diseases.length < before) fixed.push('your chronic illness'); }
+      return `a permanent affliction mended (${fixed.join(', ')})`;
+    });
+    const result = choice(Math.random, boons)();
+    Sound.play('shrine');
+    log(`*** An ancient shrine blesses you: ${result}! ***`);
+  }
+  if (!curIsDungeon() && t && t.feature === 'door') { Sound.play('door'); log('You pass through a door.'); }
+  return true;
+}
+// One automated step (autoExplore / autoTravel*): a real move, not a teleport. Same arrival effects as walking by hand, then a
+// full-length turn. Returns false when the auto action should stop: the TILE hurt you or killed you, or the game left 'playing'
+// (a trap, hazard, shrine prompt...), so you are handed control back instead of being auto-walked through danger.
+function autoStep(dx, dy) {
+  const nx = player.x + dx, ny = player.y + dy;
+  const hp0 = player.hp;
+  player.x = nx; player.y = ny;
+  if (!enterTileEffects(nx, ny, curTileAt(nx, ny), dx, dy)) return false;
+  const hurtByTile = player.hp < hp0;   // measured BEFORE endTurn so ordinary poison/regen ticks don't count
+  endTurn({ forceFull: true });
+  return !hurtByTile && player.alive && gameState === 'playing';
+}
 function movePlayer(dx, dy, forceAttack) {
   if (gameState !== 'playing') return;
   floatingTexts = [];
@@ -35539,76 +35777,7 @@ function movePlayer(dx, dy, forceAttack) {
     return;
   }
   player.x = nx; player.y = ny;
-  applyGroundHazardsOnEnter(player, t, nx, ny, dx, dy);
-  Sound.footstep(t, curIsDungeon());
-  if (settings.autoPickupGold) {
-    const goldHere = itemsAt(nx, ny).find(i => i.id === 'gold');
-    if (goldHere) {
-      player.gold += (goldHere.amount || 1);
-      Sound.play('gold');
-      log(`You pick up ${goldHere.amount || 1} gold.`);
-      removeItemAt(nx, ny, goldHere.uid);
-    }
-  }
-  if (curIsDungeon() && t.hiddenTrap && !t.trapTriggered) {
-    t.trapTriggered = true; t.glyph = '^'; t.color = '#c93a3a';
-    if (player.trapImmune || Math.random() < (player.trapAvoidBonus || 0)) {
-      log('You spot a hidden trap just in time and step around it!');
-    } else {
-      triggerTrapAt(t, nx, ny);
-      if (!player.alive || player.hp <= 0) return;
-    }
-  }
-  if (t.hazardKind && !curIsDungeon()) {
-    triggerWorldHazard(t, nx, ny);
-    if (!player.alive || player.hp <= 0) return;
-  }
-  if (curIsDungeon() && t.feature === 'lever' && !t.leverPulled) {
-    t.leverPulled = true;
-    if (t.leverCorrect) {
-      log(`You pull the ${t.leverName || 'lever'}. Somewhere nearby, a heavy mechanism grinds open.`);
-      const _lvl = curDungeonLevel();
-      const _lw = _lvl ? _lvl.w : DW2, _lh = _lvl ? _lvl.h : DH2;
-      for (let yy = 0; yy < _lh; yy++) for (let xx = 0; xx < _lw; xx++) {
-        const dt = curTileAt(xx, yy);
-        if (dt && dt.feature === 'leverdoor' && dt.puzzleId === t.puzzleId) { dt.walkable = true; dt.feature = 'floor'; dt.glyph = "'"; dt.color = '#8a6a3a'; }
-      }
-      Sound.play('door');
-    } else {
-      log(`You pull the ${t.leverName || 'lever'}. Wrong choice — something goes off!`);
-      if (Math.random() < 0.5) { igniteArea(nx, ny, 2); log('Hidden vents spray flame across the room!'); }
-      else { log('An alarm rings through the dungeon!'); soundLevelAlarm(nx, ny, { silent: true }); }
-    }
-  }
-  if (curIsDungeon() && t.feature === 'poisongas') {
-    player.statusPoison = (player.statusPoison || 0) + 2;
-    log('Noxious gas stings your lungs.');
-  }
-  if (t && t.feature === 'dungeon_entrance') { const dg = dungeonRegistry.get(t.dungeonId); log(`You stand before the entrance to ${dg.name} (${dg.tier}, recommended level ${dg.recommendedLevel || 1}+). Press '>' to enter.`); }
-  if (t && t.feature === 'shrine' && !t.shrineUsed) {
-    t.shrineUsed = true;
-    const boons = [
-      () => { player.maxHp += 10; player.hp += 10; return '+10 Max HP'; },
-      () => { player.maxMp += 8; player.mp += 8; return '+8 Max MP'; },
-      () => { player.str += 1; return '+1 STR'; },
-      () => { player.dex += 1; return '+1 DEX'; },
-      () => { player.int += 1; return '+1 INT'; },
-    ];
-    // A rare free path to the same Greater Restoration a priest charges 180g for -- only ever
-    // enters the pool when it would actually do something, and even then it's one option among
-    // six, not a guaranteed cure. See payForGreaterRestoration for the paid, reliable version.
-    if (hasCurableAffliction()) boons.push(() => {
-      let fixed = [];
-      if (player.bodyParts) for (const p of BODY_PARTS) if (player.bodyParts[p].level >= 4) { player.bodyParts[p].level = 2; player.bodyParts[p].healTimer = 130; fixed.push(p.replace(/([A-Z])/g,' $1').toLowerCase()); }
-      if (fixed.length) recalcBodyPenalties(player);
-      if (player.diseases) { const before = player.diseases.length; player.diseases = player.diseases.filter(d => d.cureId !== 'greaterRestoration'); if (player.diseases.length < before) fixed.push('your chronic illness'); }
-      return `a permanent affliction mended (${fixed.join(', ')})`;
-    });
-    const result = choice(Math.random, boons)();
-    Sound.play('shrine');
-    log(`*** An ancient shrine blesses you: ${result}! ***`);
-  }
-  if (!curIsDungeon() && t && t.feature === 'door') { Sound.play('door'); log('You pass through a door.'); }
+  if (!enterTileEffects(nx, ny, t, dx, dy)) return;
   // The Drift's zero-G: stepping onto a the_null tile takes momentum out of your hands. endTurn()
   // fires once for this step same as any other move, then continueDriftSlide() takes over,
   // advancing (and costing further turns -- monsters keep acting) in the same direction until
@@ -37343,7 +37512,7 @@ function renderSpellbook() {
       if (entry.school !== lastSchool) { html += `<div class="dim" style="margin:4px 0 2px 8px">${entry.school}</div>`; lastSchool = entry.school; }
       const s = entry.spell;
       const resource = s.resource || 'mp';
-      const costLabel = s.type === 'lifetap' || s.type === 'bloodarmor' ? `${s.selfCost} HP` : (s.selfCostPct ? `${Math.round(s.selfCostPct*100)}% HP` : (s.mp ? `${effectiveCost(s)} ${resource}` : 'free'));
+      const costLabel = s.type === 'lifetap' || s.type === 'bloodarmor' ? `${hpCostFor(s)} HP` : (s.selfCostPct ? `${Math.round(s.selfCostPct*100)}% HP` : (s.mp ? `${effectiveCost(s)} ${resource}` : 'free'));
       html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${s.name} <span class="dim">(${costLabel})</span> - ${s.desc}</div>`;
     });
     if (totalPages > 1) html += `<div style="margin-top:6px" class="dim">Page ${player.abilityPage+1}/${totalPages} &nbsp; <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey('[')">[prev]</span> <span style="cursor:pointer;color:var(--amber)" onclick="simulateKey(']')">[next]</span></div>`;
@@ -37693,12 +37862,46 @@ function saveDataReplacer(key, value) {
   if (value instanceof Set) return undefined;
   return value;
 }
+// ---- COMPACT GRID CODEC ----------------------------------------------------------------------------
+// A dungeon floor is ~7,000 tile objects that repeat the same handful of shapes ({glyph,walkable,color,bg,feature,
+// zone}); stored raw that is ~640 KB per floor, so about seven floors exhausted the ~5 MB localStorage quota and
+// saving silently stopped working. Each tile is serialized exactly as before (same replacer), de-duplicated into a
+// palette, and the grid becomes rows of palette indices (~30x smaller). Lossless, and the loader still accepts the
+// old raw-array format, so existing saves keep working.
+//   packTileGrid(grid) -> { pal: [json...], rows: [[idx...]...] }      unpackTileGrid(packed) -> fresh tile objects
+function packTileGrid(grid) {
+  const pal = [], index = new Map(), rows = new Array(grid.length);
+  for (let y = 0; y < grid.length; y++) {
+    const row = grid[y], out = new Array(row.length);
+    for (let x = 0; x < row.length; x++) {
+      const json = JSON.stringify(row[x], saveDataReplacer) || 'null';
+      let i = index.get(json);
+      if (i === undefined) { i = pal.length; pal.push(json); index.set(json, i); }
+      out[x] = i;
+    }
+    rows[y] = out;
+  }
+  return { pal, rows };
+}
+function isPackedGrid(g) { return !!g && !Array.isArray(g) && Array.isArray(g.pal) && Array.isArray(g.rows); }
+function unpackTileGrid(p) {
+  // Tiles are mutated in play, so every cell must be its own object: shallow-copy flat templates, re-parse nested ones.
+  const tpl = p.pal.map(json => { const v = JSON.parse(json); return { v, flat: v !== null && typeof v === 'object' && !Object.values(v).some(x => x !== null && typeof x === 'object') }; });
+  return p.rows.map(r => r.map(i => { const t = tpl[i]; return t.v === null ? null : t.flat ? Object.assign({}, t.v) : JSON.parse(p.pal[i]); }));
+}
+/** Records that carry a `tiles` grid (world/dimension chunks) */
+function packRecordTiles(rec) { return rec && Array.isArray(rec.tiles) ? Object.assign({}, rec, { tiles: packTileGrid(rec.tiles) }) : rec; }
+function unpackRecordTiles(rec) { if (rec && isPackedGrid(rec.tiles)) rec.tiles = unpackTileGrid(rec.tiles); return rec; }
+/** A dungeon whose floors carry a `grid` */
+function packDungeon(dg) { return Object.assign({}, dg, { levels: dg.levels.map(l => (l && Array.isArray(l.grid)) ? Object.assign({}, l, { grid: packTileGrid(l.grid) }) : l) }); }
+function unpackDungeon(dg) { for (const l of dg.levels) if (l && isPackedGrid(l.grid)) l.grid = unpackTileGrid(l.grid); return dg; }
+
 function getSaveData(opts) {
   const dirtyChunks = [];
   const migrationBudget = { left: (opts && opts.legacyMigrations != null) ? opts.legacyMigrations : SAVE_LEGACY_MIGRATIONS_PER_SAVE };
-  for (const [key, c] of worldChunks) if (c.dirty) dirtyChunks.push([key, chunkSaveRecord(c, migrationBudget)]);
+  for (const [key, c] of worldChunks) if (c.dirty) dirtyChunks.push([key, packRecordTiles(chunkSaveRecord(c, migrationBudget))]);
   const dirtyDimChunks = [];
-  for (const [key, c] of dimensionChunks) if (c.dirty) dirtyDimChunks.push([key, c]);
+  for (const [key, c] of dimensionChunks) if (c.dirty) dirtyDimChunks.push([key, packRecordTiles(c)]);
   return {
     version: 3, seed: SEED, turnCount, zoomIndex,
     player: JSON.parse(JSON.stringify(player, saveDataReplacer)),
@@ -37709,7 +37912,7 @@ function getSaveData(opts) {
     // Dungeon levels are only ever generated when a player actually descends to that depth, so
     // dungeonRegistry is already naturally bounded by real play -- no dirty-filtering needed,
     // just save every dungeon (and every depth of it) that's been entered so far, in full.
-    dungeonRegistry: Array.from(dungeonRegistry.entries()),
+    dungeonRegistry: Array.from(dungeonRegistry.entries(), ([id, dg]) => [id, packDungeon(dg)]),
     dimensionSubDungeons: DIMENSION_SUBDUNGEONS.slice(),
     // Weather/Climate & World Events overhaul: weatherState is small (one entry per zone ever
     // visited) so it's saved in full rather than dirty-filtered; activeWorldEvents is saved as
@@ -37735,6 +37938,8 @@ function getSaveData(opts) {
     activeWarParties,
   };
 }
+const SAVE_SIZE_WARN_CHARS = 3800000; // ~76% of the common 5M-character localStorage quota
+let lastSaveWarnTurn = -9999;
 function saveGame(isAuto) {
   try {
     if (player && player.isTutorial) { if (!isAuto) log("Tutorials don't save -- just pick up wherever you like from the Tutorials menu."); return false; }
@@ -37743,10 +37948,20 @@ function saveGame(isAuto) {
     // moment the player dies, and this guard makes sure nothing (a stray autosave tick, a
     // straggling turn from an ally/companion, etc.) can accidentally recreate it afterward.
     if (player.alive === false || player.hp <= 0 || gameState === 'gameover') { if (!isAuto) log("Can't save now."); return false; }
-    localStorage.setItem(SAVE_KEY, JSON.stringify(getSaveData(), saveDataReplacer));
+    const raw = JSON.stringify(getSaveData(), saveDataReplacer);
+    localStorage.setItem(SAVE_KEY, raw);
     log(isAuto ? 'Autosaved.' : 'Game saved.');
+    if (raw.length > SAVE_SIZE_WARN_CHARS && turnCount - lastSaveWarnTurn > 500) {
+      lastSaveWarnTurn = turnCount;
+      log('*** Your save is getting large and may soon exceed browser storage. Open the menu (Esc) and use [c] Export Save to File to keep a backup. ***');
+    }
     return true;
-  } catch (e) { if (!isAuto) log('Could not save: ' + e.message); return false; }
+  } catch (e) {
+    // An autosave that fails silently means hours of progress quietly not being kept -- always say so (throttled).
+    if (!isAuto) log('Could not save: ' + e.message);
+    else if (turnCount - lastSaveWarnTurn > 300) { lastSaveWarnTurn = turnCount; log('*** WARNING: autosave FAILED (' + e.message + '). Your progress is not being kept. Open the menu (Esc) and use [c] Export Save to File to back it up. ***'); }
+    return false;
+  }
 }
 function hasSaveGame() {
   try { return typeof localStorage !== 'undefined' && !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; }
@@ -37777,9 +37992,9 @@ function applyLoadedSave(data) {
   // Restore exactly the parts of the world that were ever actually mutated. Everything else
   // (the vast majority of a large explored world) regenerates identically from SEED the moment
   // it's looked at again -- see the dirty-tracking note above chunkKey().
-  if (data.worldChunks) for (const [key, rec] of data.worldChunks) worldChunks.set(key, chunkFromSaveRecord(rec));
-  if (data.dimensionChunks) for (const [key, c] of data.dimensionChunks) dimensionChunks.set(key, c);
-  if (data.dungeonRegistry) for (const [id, dg] of data.dungeonRegistry) dungeonRegistry.set(id, dg);
+  if (data.worldChunks) for (const [key, rec] of data.worldChunks) worldChunks.set(key, chunkFromSaveRecord(unpackRecordTiles(rec)));
+  if (data.dimensionChunks) for (const [key, c] of data.dimensionChunks) dimensionChunks.set(key, unpackRecordTiles(c));
+  if (data.dungeonRegistry) for (const [id, dg] of data.dungeonRegistry) dungeonRegistry.set(id, unpackDungeon(dg));
   if (data.dimensionSubDungeons) DIMENSION_SUBDUNGEONS.push(...data.dimensionSubDungeons);
   // Weather/Climate & World Events overhaul: restore weather-per-zone and any events still
   // ticking down. Old saves made before this feature simply won't have these fields, and that's
@@ -37800,6 +38015,9 @@ function applyLoadedSave(data) {
   if (typeof data.lastWorldEventTurn === 'number') lastWorldEventTurn = data.lastWorldEventTurn;
   if (data.pendingLightningStrikes) pendingLightningStrikes = data.pendingLightningStrikes;
   if (data.activeWarParties) activeWarParties = data.activeWarParties;
+  rebuildPlacedBookIds(data);
+  for (const e of activeFxTiles) e.t._fxTracked = false;   // the previous session's registry belongs to a world that no longer exists
+  activeFxTiles = []; fxNeedsRescan = true;
   // The Living World AI framework (see near monsterAI) lets entities target each other directly by
   // object reference. A fresh `player` object is about to be created below, so any monster/NPC that
   // was saved mid-fight with the player is now pointing at a stale clone -- harmless (it just wanders
@@ -37861,7 +38079,9 @@ function loadGame() {
 function exportSave() {
   try {
     const data = getSaveData();
-    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    // Same replacer as saveGame(): without it, any monster holding a `target`/`fleeFrom` reference made this throw
+    // "Converting circular structure to JSON" -- i.e. Export Save failed exactly while you were in combat.
+    const blob = new Blob([JSON.stringify(data, saveDataReplacer)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = 'lucid_dreams_of_roguelike_save.json';
@@ -38888,6 +39108,7 @@ function clearWorldRegistries() {
   weatherState = {}; activeWorldEvents = []; lastEventCheckDay = -1;
   pendingWorldEvents = []; lastWorldEventTurn = -99999;
   pendingLightningStrikes = []; activeWarParties = [];
+  worldPlacedBookIds.clear();   // per-world: otherwise a second game in the same session inherited the first world's used-up books
 }
 function resetWorldState() {
   clearWorldRegistries();
@@ -41015,14 +41236,10 @@ function tutHasItem(p, id) {
   return p.inventory.some(it => it.id === id) || Object.values(p.equipment || {}).some(it => it && it.id === id);
 }
 function tutEquipped(p, slot, id) { return !!(p.equipment[slot] && p.equipment[slot].id === id); }
-function tutKnowsRecipe(p, id) { return (p.knownRecipes || []).includes(id); }
-function tutKnowsSpell(p, id) { return (p.knownSpells || []).includes(id); }
-function tutKnowsTechnique(p, id) { return (p.knownTechniques || []).includes(id); }
 // NOTE: dead monsters are spliced out of level.monsters entirely (see removeDeadEntity in the
 // core engine), not merely flagged alive:false -- so "no matching monster is currently alive"
 // is the correct (and only) signal here, matching every tutorial that was placed with this tag.
 function tutTagDead(level, tag) { return !level.monsters.some(m => m.tutorialTag === tag && m.alive); }
-function tutTagAlive(level, tag) { return level.monsters.some(m => m.tutorialTag === tag && m.alive); }
 
 // ---------------------------------------------------------------------------------------------
 // ---- The tutorial player: a clean, capable, level-5 "generalist" every part can build on -------
@@ -42617,6 +42834,28 @@ if (typeof castSpell === 'function') {
   const _orig_castSpell = castSpell;
   castSpell = function (id) { const t0 = turnCount; GameBus.emit('castStart', { id }); const r = _orig_castSpell.apply(this, arguments); GameBus.emit('cast', { id, ok: turnCount > t0 }); return r; };
 }
+// A tile-targeted cast (every damage spell, and blinks) is TWO calls: castSpell() only opens the targeting prompt (no turn passes,
+// so the wrapper above reports ok:false), and confirmTileTarget() is where the cost is paid and the spell resolves. Nothing
+// announced that second half, so targeted spells never counted for Feats ("Cast 40 spells"), never paid Thessaly's +0.6 per cast
+// or Solenne's holy-cast bonus, never triggered the raise-dead tenets, and kills they made were credited as MELEE (the `_casting`
+// flag was already cleared). Announce the resolution as a real cast. Only spell/blink targeting carries a `.spell`; throws and
+// companion orders are not casts.
+const _orig_confirmTileTarget = confirmTileTarget;
+confirmTileTarget = function (wx, wy) {
+  const p = pendingTarget;
+  if (!p || !p.spell) return _orig_confirmTileTarget.apply(this, arguments);
+  const t0 = turnCount, id = p.spell.id;
+  GameBus.emit('castStart', { id });
+  const r = _orig_confirmTileTarget.apply(this, arguments);
+  GameBus.emit('cast', { id, ok: turnCount > t0 });
+  return r;
+};
+const _orig_generateDungeonLevel = generateDungeonLevel;
+generateDungeonLevel = function () {
+  const lvl = _orig_generateDungeonLevel.apply(this, arguments);
+  if (lvl && lvl.grid) separateOverlappingEntities([].concat(lvl.monsters || [], lvl.npcs || []), (x, y) => (lvl.grid[y] && lvl.grid[y][x]) || null);
+  return lvl;
+};
 const _orig_useItem = useItem;
 useItem = function (it) { const r = _orig_useItem.apply(this, arguments); GameBus.emit('itemUsed', { it }); return r; };
 
@@ -42883,11 +43122,6 @@ INSPECT_SECTIONS.splice(1, 0, { id: 'affixes', build(c) {
 const MANEUVER_TUNING = { interruptFrac: 0.2, exposedCrit: 1.0 };
 
 function _mvSeen(m) { return posVisibleToPlayer(m.x, m.y); }
-function _mvLine(a, b) { // tiles from a toward b (exclusive of a), 8-dir greedy
-  const out = []; let x = a.x, y = a.y;
-  const dx = Math.sign(b.x - a.x), dy = Math.sign(b.y - a.y);
-  return { dx, dy };
-}
 function _mvStrike(m, tiles, mult, hitMsg) {
   // Hit every hostile entity standing on one of the tiles. Returns the entities hit (parried/dodged ones included).
   const targets = [], struck = [];
