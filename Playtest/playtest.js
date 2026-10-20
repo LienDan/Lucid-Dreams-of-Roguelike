@@ -1,32 +1,68 @@
 #!/usr/bin/env node
 // =====================================================================================================
-// playtest.js -- autopilot for "Lucid Dreams of Roguelike"
+// playtest.js -- command line front door for the "Lucid Dreams of Roguelike" playtest kit.
+//
+//   node playtest.js [play]   one autopilot run                (legacy env vars still work: SEED=501 SECS=900 node playtest.js)
+//   node playtest.js matrix   many builds x seeds in parallel, aggregated report (balance / crash hunting)
+//   node playtest.js audit    data + system audit: every item, monster, spell, recipe, save round-trip, world generation
+//   node playtest.js balance  controlled duels: every class vs a monster ladder (noise-free balance numbers)
+//   node playtest.js classbp  per-class win-rate table vs monster strength (finds weak/strong starting kits)
+//   node playtest.js smoke    drives every screen/hotkey with rendering ON and reports exceptions
+//   node playtest.js list     species / classes / scenarios you can pass to --species / --class / --scenario
+//   node playtest.js help
+//
+// ONE FILE: the whole kit lives in this file (needs only Node + the jsdom package from package.json). The sections below are the old
+// lib/ files, each between '==== FILE: <path> ====' banners; search for a banner to find a module. To change the kit, edit that section.
+// See also the README section at the very end of this file (what each command is for, how to add an audit check, how the bot works).
+// Programmatic use:  const { boot, ev, key, newGame, createCharacter, playLife } = require('./playtest.js');
 // =====================================================================================================
-// One autopilot (replaces the old novice/casual/veteran/optimal profiles). It runs inside the game's own
-// JS realm, reads the real game state, and simulates fights (Monte Carlo) before taking them.
-// Usage:  node playtest.js            env: SEED=n  SECS=seconds  TICKS=n  STOP=level
-// Extra env: BEAT=seconds (progress line), DEVLVL=n / DEVSTAGE=n (start a test life at that level / story stage), TRACE, CANDS.
-// STATUS: this bot has beaten the game (killed GOD, player.gameCompleted === true) with no debug flags, on seed 501,
-// after roughly 230,000 game turns from a fresh character. It levels to 99, clears the story, finds every dimension
-// gate (boss kill, Dream Sanctum altar, item + standing-stones), kills each guardian, then the Antagonist and GOD.
-// That win came from one character carried across many process restarts (see CKPT/RESUME) while bugs were fixed
-// along the way; it has not yet been re-run end to end from scratch with the final code. Runs are not deterministic
-// even with the same SEED, and a full run takes hours, so use the checkpoint options below for long runs.
-// Long-run env: CKPT=seconds (save the character every N seconds), RESUME=1 (continue from that save),
-// CKPT_FILE=path (default /tmp/runs/ckpt_<seed>.json -- create that folder first), LIVES=n (retries after a death),
-// EV=regex (print notes that match, e.g. "WON|god-|long-hop"), DEVPOS/DEVSTAGE/DEVLVL/DEVSPELLS are test-only cheats.
-// Example: SEED=501 RESUME=1 CKPT=120 TICKS=900000000 SECS=40000 LIVES=20 BEAT=300 node playtest.js
+const path = require('path');
 
+// ==== module registry: every kit file below is registered under its old lib/ path, and __req() resolves relative requires between them ====
+const __SRC = {}, __CACHE = {};
+function __def(name, fn) { __SRC[name] = fn; }
+function __resolve(from, spec) {
+  const base = path.posix.normalize(path.posix.join(path.posix.dirname(from), spec));
+  for (const c of [base, base + '.js', base + '/index.js']) if (__SRC[c]) return c;
+  throw new Error('kit module not found: ' + spec + ' (from ' + from + ')');
+}
+function __req(name) {
+  if (__CACHE[name]) return __CACHE[name].exports;
+  const mod = { exports: {} }; __CACHE[name] = mod;
+  const vdir = path.join(__dirname, path.dirname(name)); // virtual location: same as before the merge, so path math like '..' still lands on the kit folder
+  const localRequire = (spec) => (spec.startsWith('.') ? __req(__resolve(name, spec)) : require(spec));
+  __SRC[name].call(mod.exports, mod, mod.exports, localRequire, vdir, path.join(vdir, path.basename(name)));
+  return mod.exports;
+}
+
+// ==== FILE: lib/harness.js ====
+__def("lib/harness.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// =====================================================================================================
+// harness.js -- boots the real, unmodified game inside jsdom (canvas + audio stubbed out) and gives the
+// rest of the kit three primitives:
+//   boot(htmlPath, seed)  -> jsdom DOM whose window holds a freshly loaded game (title screen)
+//   ev(win, code, ms)     -> run a code string INSIDE the game's realm; never throws (returns {ok,...})
+//   key(win, k)           -> press a key the way a player would (simulateKey)
+//
+// Error capture: the game swallows plenty of exceptions (GameBus handlers, INTERACT/DIALOGUE providers log
+// through console.error; event handlers and timers throw into jsdom's virtual console). The stock harness
+// threw all of that away. Here every one is recorded on win.__errs (deduplicated by message+top stack
+// frame) so a playtest/audit can report "the game threw X, N times" instead of silently carrying on.
+// Read them with drainErrors(win).
+// =====================================================================================================
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 const { JSDOM } = require('jsdom');
 
-// -----------------------------------------------------------------------------------------------------
-// 1. HARNESS: boot the real, unmodified game inside jsdom (canvas + audio stubbed out)
-// -----------------------------------------------------------------------------------------------------
+const KIT_DIR = path.resolve(__dirname, '..');
+
+/** Locate the game .html: explicit path > $GAME_HTML > next to the kit (or one folder up) > cwd. */
 function findGameHtml(explicit) {
   if (explicit) return explicit;
-  const dirs = [__dirname, path.join(__dirname, '..'), process.cwd(), path.join(__dirname, 'game')];
+  if (process.env.GAME_HTML) return process.env.GAME_HTML;
+  const dirs = [KIT_DIR, path.join(KIT_DIR, '..'), process.cwd(), path.join(KIT_DIR, 'game')];
   const found = [];
   for (const d of dirs) {
     let entries = [];
@@ -34,7 +70,7 @@ function findGameHtml(explicit) {
     for (const e of entries) if (e.toLowerCase().endsWith('.html')) found.push(path.join(d, e));
   }
   const games = found.filter((p) => { try { return fs.readFileSync(p, 'utf8').includes('function simulateKey('); } catch (e) { return false; } });
-  if (!games.length) throw new Error('Could not find the game .html next to playtest.js (looked in: ' + dirs.join(', ') + ')');
+  if (!games.length) throw new Error('Could not find the game .html next to the kit (looked in: ' + dirs.join(', ') + '). Set GAME_HTML=path.');
   return games[0];
 }
 
@@ -44,6 +80,7 @@ function stubCtx() {
   for (const f of ['fillRect', 'clearRect', 'strokeRect', 'fillText', 'strokeText', 'beginPath', 'closePath', 'moveTo', 'lineTo', 'arc', 'fill', 'stroke', 'save', 'restore', 'translate', 'scale', 'rotate', 'drawImage', 'setTransform', 'putImageData']) o[f] = noop;
   return new Proxy(o, { get: (t, k) => (k in t ? t[k] : undefined), set: () => true });
 }
+
 function stubAudio() {
   const noop = () => {};
   const param = () => ({ value: 0, setValueAtTime: noop, linearRampToValueAtTime: noop, exponentialRampToValueAtTime: noop, cancelScheduledValues: noop });
@@ -57,32 +94,63 @@ function stubAudio() {
   };
 }
 
+/** Seeded PRNG (mulberry32) installed over the game's Math.random so runs can be repeated. */
+function seededRandom(seed) {
+  let a = (seed >>> 0) || 1;
+  return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
 let _gamePath = null;
-async function boot(htmlPath, seed) {
+
+/**
+ * Boot a fresh copy of the game.
+ * @param {string=} htmlPath  explicit game file (default: auto-detected)
+ * @param {number=} seed      seed for Math.random (world generation + combat rolls)
+ * @param {{render?:boolean, saveable?:boolean}=} opts  render:true keeps the game's drawing/DOM-update functions (slower; for smoke tests of the UI layer); saveable:true keeps chunk hashing so getSaveData() works
+ */
+async function boot(htmlPath, seed, opts) {
+  opts = opts || {};
   _gamePath = htmlPath || _gamePath || findGameHtml();
   let html = fs.readFileSync(_gamePath, 'utf8');
   html = html.replace(/@import\s+url\(['"]https:\/\/fonts\.googleapis\.com[^)]*\)\s*;?/g, '');
+  const errs = new Map(); // key -> {msg, stack, count, where}
+  const record = (where, e) => {
+    const msg = String((e && e.message) || e);
+    const stack = String((e && e.stack) || '');
+    const frame = (stack.split('\n').find((l) => /:\d+:\d+/.test(l)) || '').trim().slice(0, 120);
+    const k = where + '|' + msg.slice(0, 160) + '|' + frame;
+    const cur = errs.get(k);
+    if (cur) cur.count++; else errs.set(k, { where, msg: msg.slice(0, 300), stack: stack.split('\n').slice(0, 5).join('\n'), count: 1 });
+  };
   const dom = new JSDOM(html, {
     url: 'http://localhost/game.html', runScripts: 'dangerously', resources: 'usable', pretendToBeVisual: true,
     beforeParse(w) {
       w.HTMLCanvasElement.prototype.getContext = () => stubCtx();
       w.AudioContext = stubAudio(); w.webkitAudioContext = w.AudioContext;
-      w.scrollTo = () => {}; w.confirm = () => true; w.alert = () => {};
+      w.scrollTo = () => {}; w.confirm = () => true; w.alert = () => {}; w.prompt = () => null; w.open = () => null; // jsdom does not implement these dialogs
+      w.addEventListener('error', (ev) => record('window.onerror', ev.error || ev.message));
+      w.addEventListener('unhandledrejection', (ev) => record('unhandledrejection', ev.reason));
+      const realErr = w.console.error.bind(w.console), realWarn = w.console.warn.bind(w.console);
+      w.console.error = (...a) => { record('console.error', a.find((x) => x instanceof w.Error) || a.join(' ')); if (process.env.PT_ECHO) realErr(...a); };
+      w.console.log = (...a) => { if (process.env.PT_ECHO) process.stderr.write(a.join(' ') + '\n'); }; // the game prints debug lines (e.g. [DEATH]) that would drown every report
+      w.console.warn = (...a) => { record('console.warn', a.join(' ')); if (process.env.PT_ECHO) realWarn(...a); };
     },
   });
-  if (dom.virtualConsole) ['jsdomError', 'error', 'warn'].forEach((e) => dom.virtualConsole.on(e, () => {}));
+  if (dom.virtualConsole) dom.virtualConsole.on('jsdomError', (e) => record('jsdomError', e));
+  dom.window.__errs = errs;
   await new Promise((res) => { if (dom.window.document.readyState === 'complete') return res(); dom.window.addEventListener('load', res); setTimeout(res, 500); });
-  if (seed !== undefined && seed !== null) {
-    let a = (seed >>> 0) || 1;
-    dom.window.Math.random = function () { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  if (seed !== undefined && seed !== null) dom.window.Math.random = seededRandom(seed);
+  if (!opts.render) {
+    // Nothing is ever drawn, so skip all drawing/DOM-update work (roughly halves the cost of a turn).
+    // hashChunkTiles only exists to make saves small; skipping it is a big speed-up but makes getSaveData() fail, so runs that save
+    // (checkpoints, the save round-trip audit) pass saveable:true.
+    for (const f of ['render', 'updateSidebar', 'renderLog', 'saveGame'].concat(opts.saveable ? [] : ['hashChunkTiles'])) { try { dom.window.eval(`${f} = function(){}`); } catch (e) { /* ignore */ } }
   }
-  // Nothing is ever drawn, so skip all drawing/DOM-update work (roughly halves the cost of a turn).
-  for (const f of ['render', 'updateSidebar', 'renderLog', 'saveGame', 'hashChunkTiles']) { try { dom.window.eval(`${f} = function(){}`); } catch (e) { /* ignore */ } }
   dom.window.__dom = dom;
   return dom;
 }
 
-const vm = require('vm');
+/** Run `code` inside the game's realm. With timeoutMs the script is interrupted if it runs too long. Never throws. */
 function ev(win, code, timeoutMs) {
   try {
     if (win.__dom && timeoutMs) return { ok: true, value: new vm.Script(code).runInContext(win.__dom.getInternalVMContext(), { timeout: timeoutMs }) };
@@ -90,11 +158,36 @@ function ev(win, code, timeoutMs) {
   } catch (e) { return { ok: false, timeout: !!(e && /timed out/i.test(e.message || '')), error: (e && e.stack) || String(e) }; }
 }
 
-// -----------------------------------------------------------------------------------------------------
-// 2. THE BRAIN: this function's SOURCE is evaluated inside the game's own world, so it can call the
-//    game's functions and read its variables directly (player, curMonsters(), movePlayer(), ...).
-//    Nothing in here runs in Node. Everything is synchronous (no timers), so it is fast.
-// -----------------------------------------------------------------------------------------------------
+/** Like ev() but throws on failure and returns the bare value (handy in commands where failure is fatal). */
+function evOrThrow(win, code, timeoutMs) {
+  const r = ev(win, code, timeoutMs);
+  if (!r.ok) throw new Error(r.error);
+  return r.value;
+}
+
+/** Press a key as the player would. */
+function key(win, k) { return ev(win, `simulateKey(${JSON.stringify(k)})`); }
+
+/** Return (and clear) the errors the game swallowed since the last call: [{where,msg,stack,count}]. */
+function drainErrors(win) {
+  const out = [...win.__errs.values()];
+  win.__errs.clear();
+  return out;
+}
+
+module.exports = { KIT_DIR, findGameHtml, boot, ev, evOrThrow, key, drainErrors, seededRandom };
+});
+
+// ==== FILE: lib/brain.js ====
+__def("lib/brain.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// =====================================================================================================
+// brain.js -- THE AUTOPILOT BRAIN
+// This function's SOURCE is evaluated inside the game's own JS realm (see driver.js newGame), so it can call
+// the game's functions and read its variables directly. Nothing in it runs in Node: no require(), no fs.
+// It installs window.__B (decision helpers + B.tick). Everything is synchronous (no timers) so it is fast.
+// =====================================================================================================
+
 function BRAIN() {
   /* global player, gameState, turnCount, curMonsters, curNPCs, curIsDungeon, curDungeonLevel, curDungeon, curTileAt, curWalkable,
      chebyshev, hasLOS, effDex, effStr, getArmorOf, weaponStrDeficit, armorStrDeficit, abilityPenaltyFactor, randInt, movePlayer,
@@ -331,8 +424,15 @@ function BRAIN() {
   // ---------- items ----------
   B.useBandageIfBleeding = function () {
     if (!((player.bleedTurns || 0) > 0 || (player.bleedStacks || 0) > 0)) return false;
-    const b = player.inventory.find((i) => /bandage/i.test(i.name || '') || i.id === 'bandage');
-    if (!b) return false;
+    const b = player.inventory.find((i) => /bandage|medkit/i.test(i.name || '') || i.id === 'bandage' || i.id === 'medkit');
+    if (!b) { // no bandage: cloth binds it at once (the game's own [r] tend); with nobody near, bare-hand pressure like tendWound's timer loop (that one is async, so it is replayed here)
+      if (player.inventory.some((i) => i.id === 'cloth')) { const t0 = turnCount; try { tendWound(); } catch (e) { /* */ } return turnCount > t0; }
+      if (B.hostiles(5).some((m) => hasLOS(player.x, player.y, m.x, m.y))) return false;
+      const t0 = turnCount;
+      for (let k = 0; k < 4 && player.alive && (player.bleedStacks || 0) > 0; k++) { player.bleedClotTurns = (player.bleedClotTurns || 0) + 4; endTurn({ forceFull: true }); }
+      if ((player.bleedStacks || 0) > 0) { player.bleedStacks = Math.max(0, player.bleedStacks - 1); if (player.bleedStacks <= 0) stanchBleed(player); }
+      return turnCount > t0;
+    }
     const t0 = B.sig(); useItem(b); if (gameState !== 'playing') closeModal();
     return true;
   };
@@ -340,7 +440,7 @@ function BRAIN() {
     let best = null;
     for (const i of player.inventory) {
       if (i.type !== 'consumable') continue;
-      if (/heal/i.test(i.effect || '') || /heal|health/i.test(i.id || '')) { if (!best || (i.healAmount || 0) > (best.healAmount || 0)) best = i; }
+      if (/heal|medkit/i.test(i.effect || '') || /heal|health|medkit/i.test(i.id || '')) { if (!best || (i.healAmount || 0) > (best.healAmount || 0)) best = i; }
     }
     return best;
   };
@@ -352,7 +452,38 @@ function BRAIN() {
     if (tot < player.hp * 0.4) return false;
     const a = player.inventory.find((i) => i.type === 'consumable' && (i.effect === 'cureposion' || i.effect === 'cureall'));
     if (a) { useItem(a); if (gameState !== 'playing') closeModal(); return true; }
+    if (player.inventory.some((i) => i.id === 'herb' || i.id === 'antidote')) { const t0 = B.sig(); try { tendPoison(); } catch (e) { /* */ } if (gameState !== 'playing') closeModal(); if (B.sig() !== t0) return true; }
     if (tot >= player.hp - 3 && B.drinkHeal()) return true;
+    return false;
+  };
+  // ---------- environmental hazards: fire, gas, burning ----------
+  // A human who is standing in flames walks out of them (and into water if there is some). The autopilot used to stand
+  // still and fight/loot in a burning room until it died. Walk to the nearest tile that is neither burning nor gassed.
+  B.tileHurts = function (t) { return !!(t && ((t.fireTurns || 0) > 0 || ((t.gasTurns || 0) > 0 && t.gasKind !== 'confuse'))); };
+  B.escapeHazard = function () {
+    const here = curTileAt(player.x, player.y);
+    const burning = (player.burningTurns || 0) > 0;
+    if (!burning && !B.tileHurts(here)) return false;
+    // breadth-first search outward over walkable, unoccupied tiles; water puts a burning character out
+    const seen = new Set([player.x + ',' + player.y]); let frontier = [{ x: player.x, y: player.y, first: null }], goal = null;
+    for (let depth = 0; depth < 12 && !goal; depth++) {
+      const next = [];
+      for (const n of frontier) for (const d of DIRS) {
+        const x = n.x + d[0], y = n.y + d[1], k = x + ',' + y;
+        if (seen.has(k)) continue; seen.add(k);
+        const t = curTileAt(x, y); if (!t || !t.walkable) continue;
+        const occ = entityAt(x, y); if (occ && occ !== player) continue;
+        const first = n.first || d;
+        if (burning && isWaterTile(t) && !B.tileHurts(t)) { goal = { first }; break; }
+        if (!burning && !B.tileHurts(t)) { goal = { first }; break; }
+        if (burning && B.tileHurts(here) && !B.tileHurts(t) && !goal) { goal = { first, dry: true }; }
+        next.push({ x, y, first });
+      }
+      frontier = next;
+    }
+    if (!goal) return false;
+    const t0 = B.sig(); movePlayer(goal.first[0], goal.first[1]);
+    if (B.sig() !== t0) { B.note('escape-hazard ' + (burning ? 'burning' : 'fire/gas tile') + ' hp ' + player.hp + '/' + player.maxHp); return true; }
     return false;
   };
   B.healSpell = function (minAmt) {
@@ -390,6 +521,7 @@ function BRAIN() {
       const avg = Array.isArray(x.dmg) ? (x.dmg[0] + x.dmg[1]) / 2 : (x.dmg || 0);
       const def = Math.max(0, (x.str || 0) - effStr(player));
       s = (avg + 0) * Math.max(0.4, 1 - def * 0.05) * (x.ranged ? 0.6 : 1);
+      if ((player.int || 0) > (player.str || 0) + 2 && (player.knownSpells || []).length) s *= 0.3; // a caster fights with spells: do not trade the staff for a blade and melee
     } else s = (x.armor || 0) - Math.max(0, (x.str || 0) - effStr(player)) * 0.5;
     return s * cond;
   };
@@ -480,13 +612,13 @@ function BRAIN() {
     for (const id of ids) {
       let s = null; try { s = findAbilityById(id); } catch (e) { /* */ }
       if (!s || !Array.isArray(s.power) || !['damage', 'drain', 'smite'].includes(s.type)) continue;
-      if (s.selfExposed || s.selfCost) continue;
+      const risky = !!(s.selfExposed || s.selfCost); // pays in HP or leaves us open: a human uses these while healthy, so only skip them when hurt (see bestAbility)
       const res = s.resource || 'mp'; if (res !== 'mp' && res !== 'stamina') continue;
       const def = abilityRequirementDeficit(s), pf = abilityPenaltyFactor(def), fail = Math.min(0.5, def * 0.04);
       const pool = abilityPoolOf(id);
       const mult = (1 + (player.spellDmgBonus || 0) + (pool === 'technique' ? (player.techniqueDmgBonus || 0) : 0)) * pf * playerLevelPowerMult(player.level);
       const avg = (s.power[0] + s.power[1]) / 2 * mult * (1 - fail);
-      out.push({ s, id, res, cost: effectiveCost(s), avg, range: s.range || 1, aoe: !!s.aoe });
+      out.push({ s, id, res, cost: effectiveCost(s), avg, range: s.range || 1, aoe: !!s.aoe, risky });
     }
     return out;
   };
@@ -499,6 +631,7 @@ function BRAIN() {
       const [cur, max] = B.poolOf(a.res);
       if (cur - a.cost < max * (reserve || 0)) continue;
       if (a.cost > cur) continue;
+      if (a.risky && player.hp < player.maxHp * 0.7) continue; // self-exposing / HP-cost abilities only while healthy
       let d = a.avg; if (a.aoe) d *= 1.2; if (a.s.type === 'smite' && m && m.boss) d *= 2; // smites hit bosses twice as hard
       if (d <= melee * 1.25) continue;
       if (minRange !== undefined && a.range < minRange) continue;
@@ -766,6 +899,7 @@ function BRAIN() {
   B.tickDungeon = function () {
     if (B.useBandageIfBleeding()) return 'bandage';
     if (B.poisonCheck()) return 'antidote';
+    if (B.escapeHazard()) return 'escape-hazard';
     if (B.needRecall && turnCount < B.needRecall && !curIsDimension()) { if (B.recallOut()) { B.needRecall = 0; return 'recall'; } }
     if (B.needRecall && turnCount < B.needRecall && !curIsDimension() && B.hostiles(3).length === 0) { // no stone, no spell: the exit-waystone on the deepest floor of a big dungeon does the same job
       const dgw = curDungeon();
@@ -1230,23 +1364,34 @@ function BRAIN() {
     const bestSame = Math.max(0, ...known.filter((o) => ['damage', 'drain', 'smite'].includes(o.type) && !!o.aoe === aoe).map(avg), ...(player.knownTechniques || []).map((t) => { const o = TECHNIQUES.find((y) => y.id === t); return o && o.power && !!o.aoe === aoe && ['damage', 'smite', 'drain'].includes(o.type) ? avg(o) : 0; }));
     return avg(sp) > bestSame * 1.15;
   };
+  // martial counterpart of wantSpell: a technique worth paying a Combat Trainer for (damage that beats what we already have, requirement within reach)
+  B.wantTech = function (id) {
+    if ((player.knownTechniques || []).includes(id)) return false;
+    const t = TECHNIQUES.find((x) => x.id === id); if (!t || !Array.isArray(t.power) || !['damage', 'drain', 'smite'].includes(t.type)) return false;
+    if (30 + (t.mp || 0) * 8 > player.gold - 150 || abilityRequirementDeficit(t) > 3) return false;
+    const avg = (x) => (x.power[0] + x.power[1]) / 2 * (x.type === 'smite' ? 1.6 : 1) * (x.aoe ? 1.2 : 1);
+    const res = t.resource || 'stamina', cap = res === 'stamina' ? (player.maxStamina || 0) : (player.maxMp || 0);
+    if (cap && (t.mp || 0) > cap / 5) return false; // must be usable many times per fight
+    const have = (player.knownSpells || []).map((k) => SPELLS.find((y) => y.id === k)).concat((player.knownTechniques || []).map((k) => TECHNIQUES.find((y) => y.id === k))).filter((o) => o && Array.isArray(o.power) && ['damage', 'drain', 'smite'].includes(o.type));
+    return avg(t) > Math.max(0, ...have.map(avg)) * 1.15;
+  };
   B.trainTick = function () {
-    if (player.level < 12 || player.gold < 300 || (B.trainCool || 0) > turnCount) return false;
-    const near = curNPCs().filter((n) => n.alive && !n.hostile && n.teachSpells && n.teachSpells.some(B.wantSpell) && chebyshev(n.x, n.y, player.x, player.y) <= 1);
+    if (player.level < 5 || player.gold < 150 || (B.trainCool || 0) > turnCount) return false;
+    const near = curNPCs().filter((n) => n.alive && !n.hostile && ((n.teachSpells && n.teachSpells.some(B.wantSpell)) || (n.teachTechniques && n.teachTechniques.some(B.wantTech))) && chebyshev(n.x, n.y, player.x, player.y) <= 1);
     if (near.length) {
       const npc = near[0]; let got = 0;
       openTrain(npc);
       for (let k = 0; k < 12; k++) {
-        const idx = trainEntries.findIndex((e) => e.kind === 'spell' && B.wantSpell(e.id)); if (idx < 0) break;
+        const idx = trainEntries.findIndex((e) => (e.kind === 'spell' && B.wantSpell(e.id)) || (e.kind === 'technique' && B.wantTech(e.id))); if (idx < 0) break;
         const g = player.gold; trainLearn(String.fromCharCode(97 + idx)); if (player.gold === g) break; got++;
       }
       closeModal(); gameState = 'playing';
-      B.note('trainer ' + npc.name + ' taught ' + got + ' spells; know ' + (player.knownSpells || []).join(','));
+      B.note('trainer ' + npc.name + ' taught ' + got + ' abilities; know ' + (player.knownSpells || []).concat(player.knownTechniques || []).join(','));
       B.trip2 = null; B.trainCool = turnCount + (got ? 100 : 2000); return 'train';
     }
     if (!B.trip2) {
       let best = null, bd = 1e9;
-      for (const c of worldChunks.values()) { if (!c.npcs) continue; for (const n of c.npcs) { if (!n.alive || n.hostile || !n.teachSpells || !n.teachSpells.some(B.wantSpell)) continue; const d = chebyshev(n.x, n.y, player.x, player.y); if (d < bd && d < 500) { bd = d; best = n; } } }
+      for (const c of worldChunks.values()) { if (!c.npcs) continue; for (const n of c.npcs) { if (!n.alive || n.hostile || !((n.teachSpells && n.teachSpells.some(B.wantSpell)) || (n.teachTechniques && n.teachTechniques.some(B.wantTech)))) continue; const d = chebyshev(n.x, n.y, player.x, player.y); if (d < bd && d < 500) { bd = d; best = n; } } }
       if (!best) { B.trainCool = turnCount + 1500; return false; }
       B.trip2 = { npc: best, t0: turnCount };
     }
@@ -1570,6 +1715,7 @@ function BRAIN() {
     B.xpIdle();
     if (B.useBandageIfBleeding()) return 'bandage';
     if (B.poisonCheck()) return 'antidote';
+    if (B.escapeHazard()) return 'escape-hazard';
     { const st9 = B.trailStage(); const gi9 = st9 && DIMENSION_GATE_INFO[st9.targetDimensionId];
       if (gi9 && gi9.kind === 'item_structure' && gi9.secondBossId && B.hasItemNamed(gi9.itemName) && !B.hasItemNamed(gi9.secondItemName) && player.level >= 90) { // a strong character just fights the gate's roaming boss instead of dithering over the estimate
         const bm = B.findBoss(gi9.secondBossId);
@@ -1689,6 +1835,13 @@ function BRAIN() {
       else if (li < 0 || B.doorTry[dk] > 4) { li = pendingChoiceOptions.findIndex((o) => /leave/i.test(o.label)); if (B.lastMv) B.doorBlock[dk] = 1; B._sc = null; B.tp = null; } resolveChoiceKey(String.fromCharCode(97 + Math.max(0, li))); if (gameState !== 'playing') { try { closeModal(); } catch (e) { /* */ } gameState = 'playing'; }
       return 'door-leave';
     }
+    if (gameState === 'choice' && /^Encounter:/.test(pendingChoiceTitle || '')) { // world-event encounters: usually take a viable option (exercises every outcome), sometimes walk away
+      const ok = pendingChoiceOptions.map((o, i) => [o, i]).filter(([o]) => !/\(needs /.test(o.label) && !/^(Leave it be|Leave)/i.test(o.label));
+      const pick = ok.length && Math.random() < 0.8 ? ok[Math.floor(Math.random() * ok.length)][1] : pendingChoiceOptions.length - 1;
+      B.note('encounter ' + pendingChoiceTitle.slice(11) + ' -> ' + (pendingChoiceOptions[pick] || {}).label);
+      resolveChoiceKey(String.fromCharCode(97 + pick)); if (gameState !== 'playing') { try { closeModal(); } catch (e) { /* */ } gameState = 'playing'; }
+      return 'encounter';
+    }
     if (gameState === 'choice') { const ct = pendingChoiceTitle + ' | ' + pendingChoiceOptions.map((o) => o.label).join(' / '); if (B.lastCt !== ct) { B.lastCt = ct; B.note('uichoice ' + ct.slice(0, 300) + ' @' + player.x + ',' + player.y); } }
     if (gameState !== 'playing') return 'ui:' + gameState;
     const wd0 = curIsDimension(), px0 = player.x, py0 = player.y, dd0 = player.dungeonDepth;
@@ -1699,7 +1852,11 @@ function BRAIN() {
     if (actK === B.lastAct) B.streak = (B.streak || 0) + 1; else { B.lastAct = actK; B.streak = 0; }
     if (B.streak === 400 && (act === 'rest' || act === 'hold' || act === 'wait' || act === 'shelter' || act === 'hide')) {
       B.noRestUntil = turnCount + 300; B.ignore = B.ignore || {}; B.hideUntil = 0; B.refugeUntil = 0;
-      B.note('LOOP BREAK ' + act + ' hp ' + player.hp + '/' + player.maxHp + ' stam ' + player.stamina + '/' + player.maxStamina + ' temp ' + Math.round(currentTemperature()) + ' hunger ' + player.hunger + ' turn ' + turnCount);
+      B.note('LOOP BREAK ' + act + ' hp ' + player.hp + '/' + player.maxHp + ' stam ' + player.stamina + '/' + player.maxStamina + ' temp ' + Math.round(currentTemperature()) + ' hunger ' + player.hunger + ' turn ' + turnCount + ' | ' + (function () {
+        // everything that can stop or mask natural regeneration, so a "rested 400 times and hp did not move" loop is diagnosable from the log alone
+        const o = { mp: player.mp + '/' + player.maxMp, mode: player.mode, depth: player.dungeonDepth, gs: gameState, regen: player.regen, regenBlocked: player.noRegen || player.regenBlocked, poison: player.statusPoison, bleed: player.bleedTurns, burning: player.burningTurns, starving: player.starving, wounds: player.wounds && JSON.stringify(player.wounds).slice(0, 120), monstersNear: curMonsters().filter((m) => m.alive && chebyshev(m.x, m.y, player.x, player.y) <= 8).map((m) => m.name + ':' + m.aiState).slice(0, 4).join(','), canRest: B.canRest(), restFail: B.restFail, noRestUntil: B.noRestUntil };
+        try { return JSON.stringify(o); } catch (e) { return String(e); }
+      })());
     }
     if (actK === 'dance' && B.streak === 600 && curIsDungeon()) {
       const th = B.threats(); const sm = B.simulate(th, 60);
@@ -1709,24 +1866,204 @@ function BRAIN() {
   };
 }
 
-// -----------------------------------------------------------------------------------------------------
-// 3. DRIVER
-// -----------------------------------------------------------------------------------------------------
-function key(win, k) { return ev(win, `simulateKey(${JSON.stringify(k)})`); }
 
+module.exports = BRAIN;
+});
+
+// ==== FILE: lib/duel.js ====
+__def("lib/duel.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// =====================================================================================================
+// duel.js -- controlled one-on-one fights, run inside the game realm AFTER the brain is installed (uses window.__B).
+// Gives a noise-free read on balance: "how often does a level-N <class> beat a <monster> at <scale>, and at what cost?"
+// DUEL() installs window.__DUEL.run(monsterId, {scale, trials, maxTurns, dist}) -> {win, hpLostPct, turns, deaths}.
+// The fighter follows a plain policy (cast self-buffs/summons/a debuff unless support:false, then the best damage ability if worthwhile, else melee, drink a heal below 35% hp) and never flees,
+// so the numbers measure raw strength, not the autopilot's caution.
+// =====================================================================================================
+function DUEL() {
+  /* global movePlayer, SPELLS, castSpell, confirmTileTarget, cancelTileTargeting, player, curMonsters, worldChunks, makeMonster, addMonsterToWorld, curTileAt, entityAt, endTurn, chebyshev, hasLOS, gameState, closeModal */
+  const D = (window.__DUEL = {});
+  const B = window.__B;
+  D.arena = function (dist) {
+    for (const m of curMonsters().slice()) { m.alive = false; m.hp = 0; }
+    try { for (const c of worldChunks.values()) c.monsters = []; } catch (e) { /* */ }
+    for (let r = 0; r < 80; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      const x = player.x + dx, y = player.y + dy; let ok = true;
+      for (let yy = -3; yy <= 3 && ok; yy++) for (let xx = -2; xx <= dist + 2 && ok; xx++) { const t = curTileAt(x + xx, y + yy); if (!t || !t.walkable || entityAt(x + xx, y + yy)) ok = false; }
+      if (ok) { player.x = x; player.y = y; return { x, y }; }
+    }
+    return null;
+  };
+  // Level the character to L, spending each level's stat points on the stat its OWN abilities require (int for spell kits, dex/str for technique kits), then the talent points.
+  // Why: levelling in one jump and spending afterwards with the autopilot's policy dumped ~45 points into INT even for a Warrior (STR 15, INT 53), so every martial ability
+  // carried a big requirement penalty and martial classes looked far weaker than casters. Spend as you go, class-aware.
+  D.levelTo = function (L) {
+    const st = { int: 0, str: 0, dex: 0 };
+    for (const id of (player.knownSpells || []).concat(player.knownTechniques || [])) { let a = null; try { a = findAbilityById(id); } catch (e) { /* */ } if (a && a.reqStat && st[a.reqStat] !== undefined) st[a.reqStat]++; }
+    const primary = st.int > 0 && st.int >= st.str + st.dex ? 'int' : (st.dex > st.str ? 'dex' : 'str');
+    const order = { int: [2, 2, 3, 2, 1], str: [0, 0, 3, 0, 1], dex: [1, 1, 3, 1, 0] }[primary]; // 0 str, 1 dex, 2 int, 3 con
+    while (player.level < L) { levelUp(); for (let i = 0; i < 400 && (player.statPoints || 0) > 0; i++) spendStat(order[i % order.length]); }
+    for (let k = 0; k < 60 && (player.talentPoints || 0) > 0; k++) if (!B.spendTalents()) break;
+    player.hp = player.maxHp; return primary;
+  };
+  // Equip the best non-unique gear a level-L character could plausibly own: per armor slot (and the weapon) the highest-armor / highest-damage base whose STR requirement the character meets and whose
+  // value tier is <= ceil(L/5)-1, rolled common at the level's item power multiplier; the weapon is the class's own, re-rolled at that multiplier. The starter kit has armor 5-11 where a real level-20 character wears ~100, which made STR-based
+  // melee classes (who rely on armor, not evasion) look weak; this removes that artifact. Opt-in (--gear) so bare-kit numbers stay comparable.
+  D.gearUp = function (L) {
+    const vt = Math.max(1, Math.ceil(L / 5) - 1), pm = itemPowerMult(depthScaleForPlayerLevel(L));
+    const ok = (b) => !b.isUnique && !b.setId && !b.craftOnly && (b.valueTier || 0) <= vt && (b.str || 0) <= player.str;
+    const equip = (id) => { const it = makeItem(id, 1, Math.random, pm); if (!it) return; player.inventory.push(it); try { equipItem(it); } catch (e) { /* */ } };
+    for (const slot of ['body', 'head', 'feet', 'gloves', 'cloak']) {
+      const best = ITEM_BASES.filter((b) => b.type === 'armor' && b.slot === slot && ok(b)).sort((x, y) => (y.armor || 0) - (x.armor || 0))[0];
+      if (best) equip(best.id);
+    }
+    if (player.equipment.offhand) { const sh = ITEM_BASES.filter((b) => b.type === 'armor' && b.slot === 'offhand' && ok(b)).sort((x, y) => (y.armor || 0) - (x.armor || 0))[0]; if (sh) equip(sh.id); }
+    const cur = player.equipment.hand; // same weapon, re-rolled at this depth's power multiplier (what a found/crafted copy of it would be)
+    if (cur && cur.type === 'weapon' && cur.id) equip(cur.id);
+    player.hp = player.maxHp; return Math.round(getArmorOf(player));
+  };
+  D.restore = function () {
+    player.hp = player.maxHp; player.mp = player.maxMp; player.stamina = player.maxStamina; if (player.maxCharge) player.charge = player.maxCharge;
+    for (const k of ['statusPoison', 'statusFear', 'statusConfuse', 'statusSlow', 'frozenSolidTurns', 'stunnedTurns', 'bleedTurns', 'burningTurns', 'wetTurns', 'oiledTurns', 'statusChill', 'statusHeat']) player[k] = 0;
+    player.buffs = {}; player.allies = []; player.alive = true;
+  };
+  // Support policy: a class built on buffs/summons/debuffs is judged unfairly by a damage-only bot. Before and during the fight cast
+  // known self-buffs and summons (recast every ~15 turns) and debuff the target once. Costs mana like anything else.
+  D.support = function (m, turn) {
+    if (turn % 15 !== 1) return false;
+    let cast = false;
+    for (const id of player.knownSpells || []) {
+      const sp = SPELLS.find((x) => x.id === id); if (!sp) continue;
+      const selfy = (sp.type === 'buff' || sp.type === 'summon') && !(sp.range > 0 && sp.type === 'buff' && sp.stat === undefined);
+      const debuff = sp.type === 'debuff' && turn === 1;
+      if (!selfy && !debuff) continue;
+      if (sp.type === 'summon' && (player.allies || []).length >= 2) continue;
+      const cost = sp.mp || 0; if (player.mp - cost < player.maxMp * 0.3) continue;
+      const mp0 = player.mp, t0 = B.sig();
+      try { castSpell(id); if (gameState === 'tiletarget') { confirmTileTarget(debuff ? m.x : player.x, debuff ? m.y : player.y); } if (gameState === 'tiletarget') cancelTileTargeting(); } catch (e) { /* */ }
+      if (gameState !== 'playing') { try { closeModal(); } catch (e) { /* */ } gameState = 'playing'; }
+      if (player.mp < mp0 || B.sig() !== t0) cast = true;
+      if (cast && sp.type === 'summon') break; // one summon per window
+    }
+    return cast;
+  };
+  // Escape policy (opt-in via support:'kite'): when hurt and in melee, blink to a free tile 4+ away so ranged/control kits get room to work.
+  D.escape = function (m) {
+    for (const id of player.knownSpells || []) {
+      const sp = SPELLS.find((x) => x.id === id); if (!sp || sp.type !== 'blinklike' || player.mp < (sp.mp || 0)) continue;
+      let spot = null;
+      for (let r = 6; r >= 4 && !spot; r--) for (let dy = -r; dy <= r && !spot; dy++) for (let dx = -r; dx <= r && !spot; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const x = player.x + dx, y = player.y + dy, t = curTileAt(x, y);
+        if (t && t.walkable && !entityAt(x, y) && chebyshev(x, y, m.x, m.y) >= 4 && hasLOS(player.x, player.y, x, y)) spot = { x, y };
+      }
+      if (!spot) return false;
+      const mp0 = player.mp, px = player.x, py = player.y;
+      try { castSpell(id); if (gameState === 'tiletarget') confirmTileTarget(spot.x, spot.y); if (gameState === 'tiletarget') cancelTileTargeting(); } catch (e) { /* */ }
+      if (gameState !== 'playing') { try { closeModal(); } catch (e) { /* */ } gameState = 'playing'; }
+      if (player.mp < mp0 || player.x !== px || player.y !== py) return true;
+    }
+    return false;
+  };
+  D.fight = function (id, scale, dist, maxTurns, support) {
+    const spot = D.arena(dist); if (!spot) return null;
+    D.restore();
+    const m = makeMonster(id, spot.x + dist, spot.y, scale, Math.random); m.alive = true; m.aiState = 'combat'; m.engaged = true; m.sleeper = false;
+    addMonsterToWorld(m);
+    const hp0 = player.hp; let turns = 0, minHp = player.hp;
+    while (turns < maxTurns && m.alive && m.hp > 0 && player.alive && player.hp > 0) {
+      turns++;
+      if (gameState !== 'playing') { try { closeModal(); } catch (e) { /* */ } gameState = 'playing'; }
+      const t0 = B.sig();
+      if (support === 'kite' && chebyshev(m.x, m.y, player.x, player.y) <= 1 && player.hp < player.maxHp * 0.6 && (turns - (D._lastEsc || -99)) > 8 && (D._lastEsc = turns, D.escape(m))) { /* blinked away */ }
+      else if (support && D.support(m, turns)) { /* buffed / summoned / debuffed (took its turn) */ }
+      else if (player.hp < player.maxHp * 0.35 && B.drinkHeal()) { /* drank */ }
+      else if (chebyshev(m.x, m.y, player.x, player.y) <= 1) { if (!B.tryCast(m, 0.2)) B.attackAdjacent([m]); }
+      else if (B.tryCast(m, 0.2)) { /* cast */ }
+      else if (turns > 4) { const t1 = B.sig(); movePlayer(Math.sign(m.x - player.x), Math.sign(m.y - player.y)); if (B.sig() === t1) endTurn({ forceFull: true }); } // it will not come to us (shy/ranged/fleeing): go and get it
+      else endTurn({ forceFull: true }); // let it come to us
+      if (B.sig() === t0) endTurn(); // never stall
+      if (player.hp < minHp) minHp = player.hp;
+    }
+    const won = !(m.alive && m.hp > 0) && player.alive && player.hp > 0;
+    m.alive = false; m.hp = 0;
+    const died = !(player.alive && player.hp > 0);
+    return { won, died, turns, hpLostPct: Math.max(0, (hp0 - Math.max(0, player.hp)) / hp0) , minHpPct: Math.max(0, minHp) / hp0 };
+  };
+  D.run = function (id, opts) {
+    opts = opts || {}; const trials = opts.trials || 8; let wins = 0, deaths = 0, lost = 0, turns = 0, ran = 0, worst = 1;
+    for (let i = 0; i < trials; i++) {
+      const r = D.fight(id, opts.scale || 1, opts.dist || 5, opts.maxTurns || 80, opts.support === undefined ? true : opts.support); if (!r) continue; ran++;
+      if (r.died) deaths++;
+      if (r.won) { wins++; lost += r.hpLostPct; turns += r.turns; worst = Math.min(worst, r.minHpPct); }
+    }
+    D.restore();
+    return { id, trials: ran, win: ran ? wins / ran : 0, death: ran ? deaths / ran : 0, stall: ran ? (ran - wins - deaths) / ran : 0, hpLostPct: wins ? lost / wins : 1, turns: wins ? turns / wins : 0, worstMinHp: worst };
+  };
+}
+module.exports = DUEL;
+});
+
+// ==== FILE: lib/driver.js ====
+__def("lib/driver.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// =====================================================================================================
+// driver.js -- creates characters and drives the autopilot (BRAIN) tick by tick from Node.
+//   newGame(opts)              boot the game + install the brain
+//   resolveBuild(win, spec)    {species:'dwarf'|'c'|2, archetype:'mage', scenario:'town'} -> creation letters
+//   createCharacter(win, b)    run the creation screens
+//   playLife(opts)             play one character until it dies / wins / runs out of budget -> result object
+// =====================================================================================================
+const fs = require('fs');
+const { boot, ev, key, drainErrors } = require('./harness');
+const BRAIN = require('./brain');
+
+/** Boot the game and inject the autopilot brain (window.__B). */
 async function newGame(opts) {
   opts = opts || {};
-  const dom = await boot(undefined, opts.seed);
+  const dom = await boot(opts.html, opts.seed, Object.assign({ saveable: !!process.env.CKPT }, opts.boot));
   const win = dom.window;
-  ev(win, '(' + BRAIN.toString() + ')()');
+  const r = ev(win, '(' + BRAIN.toString() + ')()');
+  if (!r.ok) throw new Error('brain failed to install: ' + r.error);
   return dom;
 }
 
-// species/archetype/scenario letters: see the lists printed by --list
+// Default character (what the autopilot was tuned on): dwarf commander starting in a town.
+// Letters are positional in the game's creation lists -- use resolveBuild() to pick by name instead.
 const BUILD = { species: 'c' /* dwarf */, archetype: 'i' /* commander */, scenario: 'd' /* town */ };
+
+const letterOf = (i) => String.fromCharCode(97 + i);
+
+/**
+ * Turn a human-friendly build spec into the letters the creation screens expect.
+ * Each field may be a letter ('c'), a 0-based index (2), or an id/name (case-insensitive substring ok).
+ */
+function resolveBuild(win, spec) {
+  spec = spec || BUILD;
+  const tables = JSON.parse(ev(win, 'JSON.stringify({species:SPECIES.map(s=>[s.id,s.name]),archetype:ARCHETYPES.map(s=>[s.id,s.name]),scenario:START_SCENARIOS.map(s=>[s.id,s.name])})').value);
+  const out = {};
+  for (const field of ['species', 'archetype', 'scenario']) {
+    const v = spec[field], list = tables[field];
+    let idx = -1;
+    if (typeof v === 'number') idx = v;
+    else if (typeof v === 'string' && /^[a-z]$/.test(v) && list.length > 1 && !list.some((e) => e[0] === v)) idx = v.charCodeAt(0) - 97;
+    else if (typeof v === 'string') {
+      const q = v.toLowerCase();
+      idx = list.findIndex((e) => e[0].toLowerCase() === q || e[1].toLowerCase() === q);
+      if (idx < 0) idx = list.findIndex((e) => e[0].toLowerCase().includes(q) || e[1].toLowerCase().includes(q));
+    }
+    if (idx < 0 || idx >= list.length) throw new Error(`unknown ${field} "${v}". Options: ${list.map((e, i) => letterOf(i) + '=' + e[0]).join(' ')}`);
+    out[field] = letterOf(idx);
+  }
+  return out;
+}
+
+/** Run the creation screens. Returns true when the game reached 'playing'. */
 function createCharacter(win, b) {
   b = b || BUILD;
-  for (const k of ['a', b.species, b.archetype, b.scenario]) key(win, k);
+  const letters = resolveBuild(win, b);
+  for (const k of ['a', letters.species, letters.archetype, letters.scenario]) key(win, k);
   return ev(win, "gameState === 'playing'").value === true;
 }
 
@@ -1753,6 +2090,8 @@ async function playLife(opts) {
   const posRing = []; let travelDumped = false;
   let curDumped = false, lastBeat = Date.now(), prevCounts = {};
   let result = { outcome: 'budget', ticks: 0 };
+  const levelTurns = {}; // level -> game turn on which it was reached (pace of progression)
+  const depthMax = { v: 0 };
   const maxTicks = opts.maxTicks || 100000;
   for (let i = 0; i < maxTicks; i++) {
     const tkT0 = Date.now();
@@ -1790,7 +2129,7 @@ async function playLife(opts) {
       log(`  [beat ${((Date.now() - t0) / 1000).toFixed(0)}s] lvl ${lvl} turn ${turn} depth ${depth} stage ${stg} ` + ev(win, "(function(){var s=curStoryStage();return s?s.id+'/'+s.type+'/'+(s.targetBossId||s.targetTier||''):'-'})()").value + ' ' + JSON.stringify(Object.entries(win2).sort((a, b) => b[1] - a[1]).slice(0, 7)) + ' ' + ev(win, "(function(){try{var g=__B.goalDungeon;var w=[...dungeonRegistry.values()].filter(function(d){return !d.isTutorial&&__B.stageWants(d)});var near=w.map(function(d){return Math.max(Math.abs(d.x-player.x),Math.abs(d.y-player.y))}).sort(function(a,b){return a-b})[0];return 'goal='+(g?g.id+'/'+g.tier+'/d'+Math.max(Math.abs(g.x-player.x),Math.abs(g.y-player.y)):'-')+' scanR='+__B.scanR+' wanted='+w.length+' nearestWanted='+near+' pos='+player.x+','+player.y+' tp='+(__B.tp?__B.tp.key+'/'+__B.tp.steps.length:'-')+' trip='+(__B.trip?__B.trip.x+','+__B.trip.y:'-')+' trip2='+(__B.trip2?__B.trip2.npc.name+'@'+__B.trip2.npc.x+','+__B.trip2.npc.y:'-')+' kt='+(__B.kt?__B.kt.x+','+__B.kt.y:'-')+' wd='+w.slice(0,2).map(function(d){return d.id+':f1='+__B.dungeonFloorLevel(d,1)+',fmax='+__B.dungeonFloorLevel(d,d.maxDepth)+',md='+d.maxDepth+',log='+JSON.stringify(__B.dungeonLog[d.id]||{})+',dz='+__B.dangerZones().filter(function(z){return Math.max(Math.abs(z.x-d.x),Math.abs(z.y-d.y))<=z.r+2}).length}).join(';')+' why='+JSON.stringify(__B.tpWhy)}catch(e){return 'beaterr'}})()").value);
     }
     if (opts.statusEvery && i % opts.statusEvery === 0 && i) log(`  [status] tick ${i} turn ${turn} lvl ${lvl} depth ${depth} ${((Date.now() - t0) / 1000).toFixed(0)}s ` + JSON.stringify(Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5)));
-    if (lvl !== lastLvl) { log(`level ${lvl} at turn ${turn} (${((Date.now() - t0) / 1000).toFixed(0)}s) nextBossReady=${ev(win, '__B.nextBossReady()').value}`); lastLvl = lvl; }
+    if (lvl !== lastLvl) { levelTurns[lvl] = turn; log(`level ${lvl} at turn ${turn} (${((Date.now() - t0) / 1000).toFixed(0)}s) nextBossReady=${ev(win, '__B.nextBossReady()').value}`); lastLvl = lvl; }
     if (opts.maxSeconds && Date.now() - t0 > opts.maxSeconds * 1000) { result.outcome = 'time'; break; }
     if (v.startsWith('idle') && opts.stopOnIdle) { result.outcome = v; break; }
   }
@@ -1802,31 +2141,1815 @@ async function playLife(opts) {
   if (result.outcome === 'died') result.inv = ev(win, 'JSON.stringify([player.gold].concat(player.inventory.filter((i)=>i.type==="consumable").map((i)=>i.name+"x"+(i.qty||1))))').value;
   if (result.outcome === 'died') result.deathLog = ev(win, '(player.deathLog&&player.deathLog.length?player.deathLog:logMessages.map(function(x){return typeof x==="string"?x:(x&&x.text)||""})).slice(-16)').value;
   result.seconds = (Date.now() - t0) / 1000;
+  result.levelTurns = levelTurns;
+  result.gameErrors = drainErrors(win);
+  result.build = opts.build || BUILD;
   return result;
 }
 
-module.exports = { boot, ev, key, newGame, createCharacter, playLife, BRAIN };
 
-if (require.main === module) {
-  (async () => {
-    const seed = parseInt(process.env.SEED || '1', 10);
-    const prep = process.env.DEVLVL ? (win) => { // test helper: start with a pre-levelled character at a chosen story stage
-      const L = parseInt(process.env.DEVLVL, 10), S = process.env.DEVSTAGE === 'final' ? 'player.story.stages.findIndex((x) => x.id === "confrontation")' : (/^[a-z_]+$/.test(process.env.DEVSTAGE || '') ? 'player.story.stages.findIndex((x) => x.id === "' + process.env.DEVSTAGE + '")' : parseInt(process.env.DEVSTAGE || '-1', 10));
-      ev(win, `while (player.level < ${L}) { levelUp(); } player.hp = player.maxHp; for (let k = 0; k < 400 && (player.statPoints || 0) > 0; k++) __B.spendPoints(); __B.spendTalents(); player.gold += 20000;` + (process.env.DEVPOS ? `player.x=${process.env.DEVPOS.split(',')[0]};player.y=${process.env.DEVPOS.split(',')[1]};try{loadChunksAround&&loadChunksAround()}catch(e){}` : '') + (process.env.DEVSPELLS ? `for (const id of ${JSON.stringify((process.env.DEVSPELLS || '').split(','))}) if (!player.knownSpells.includes(id)) player.knownSpells.push(id);` : '') + (S !== -1 ? `for (let i = 0; i < ${S}; i++) { player.story.stages[i].done = true; } player.story.stageIndex = ${S};` : ''), 60000);
-    } : null;
-    const lives = parseInt(process.env.LIVES || '1', 10); let r = null, spent = 0; const budget = parseInt(process.env.SECS || '120', 10);
-    for (let life = 1; life <= lives; life++) { // a character that dies is replaced by a new one (same world seed), until the time budget is gone
-      r = await playLife({ prep, seed, maxTicks: parseInt(process.env.TICKS || '30000', 10), maxSeconds: Math.max(10, budget - spent), log: console.log, stopOnIdle: !!process.env.STOP, statusEvery: parseInt(process.env.STATUS || '0', 10), beatSecs: parseInt(process.env.BEAT || '0', 10) });
-      spent += r.seconds || 0; if (r.outcome !== 'died' || budget - spent < 30) break; console.log('  inv: ' + r.inv); console.log('  death trace: ' + (r.trace || []).slice(-12).join(' ; ') + '\n  deathLog: ' + JSON.stringify(r.deathLog)); console.log('LIFE ' + life + ' ended in death at level ' + (r.final && r.final.lvl) + ' (' + (r.final && r.final.cause) + '); starting life ' + (life + 1));
+module.exports = { newGame, resolveBuild, createCharacter, playLife, BUILD };
+});
+
+// ==== FILE: lib/probes/abilities.js ====
+__def("lib/probes/abilities.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// Dynamic probes that USE abilities in a live world (needs a character).
+// Shared setup (listed in `uses`, installed on A before fn runs): A.arena() puts the player on open ground with a tanky dummy target 2 tiles east.
+const ARENA = function (A) {
+  A.arena = function (monsterId, hp, dist) {
+    for (const m of curMonsters().slice()) { m.alive = false; m.hp = 0; }
+    try { for (const c of worldChunks.values()) c.monsters = []; } catch (e) { /* */ }
+    let spot = null;
+    for (let r = 0; r < 60 && !spot; r++) for (let dy = -r; dy <= r && !spot; dy++) for (let dx = -r; dx <= r && !spot; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      const x = player.x + dx, y = player.y + dy; let ok = true;
+      for (let yy = -2; yy <= 2 && ok; yy++) for (let xx = -3; xx <= 5 && ok; xx++) { const t = curTileAt(x + xx, y + yy); if (!t || !t.walkable || entityAt(x + xx, y + yy)) ok = false; }
+      if (ok) spot = { x, y };
     }
-    console.log(r.outcome, JSON.stringify(r.final), r.seconds.toFixed(0) + 's');
-    console.log(JSON.stringify(r.counts));
-    try { console.log('travel failures: ' + (r.why || '')); } catch (e) { /* */ }
-    if (r.diagText) console.log(r.diagText);
-    if (r.loops && r.loops.length) console.log(r.loops.join('\n'));
-    if (r.events) console.log((process.env.EV ? r.events.filter((e) => new RegExp(process.env.EV).test(e)).slice(-40) : r.events.slice(-12)).join('\n'));
-    if (process.env.TRACE && r.trace) console.log(r.trace.join('\n'));
-    if (r.deathLog) console.log(r.deathLog.join('\n'));
-    process.exit(0);
-  })();
+    if (!spot) return null;
+    player.x = spot.x; player.y = spot.y;
+    const m = makeMonster(monsterId || 'goblin', spot.x + (dist || 2), spot.y, 1, Math.random);
+    m.hp = m.maxHp = hp || 5000; m.armor = 0; m.atk = [0, 0]; m.str = 0; m.dex = 1; m.poison = 0; m.abilities = []; m.behavior = 'turret'; m.alive = true; m.aiState = 'combat'; m.engaged = true; m.sleeper = false;
+    addMonsterToWorld(m);
+    return m;
+  };
+  A.refill = function () {
+    // big pools: this probe tests what an ability DOES, not whether a level-1 character can afford it
+    player.maxHp = Math.max(player.maxHp, 400); player.maxMp = Math.max(player.maxMp, 400); player.maxStamina = Math.max(player.maxStamina, 400); player.maxCharge = Math.max(player.maxCharge || 0, 400);
+    player.hp = player.maxHp; player.mp = player.maxMp; player.stamina = player.maxStamina; player.charge = player.maxCharge;
+    player.str = Math.max(player.str, 60); player.dex = Math.max(player.dex, 60); player.int = Math.max(player.int, 60); // soft stat requirements would make casts fizzle
+    for (const k of ['statusPoison', 'statusFear', 'statusConfuse', 'statusSlow', 'frozenSolidTurns', 'stunnedTurns', 'bleedTurns']) player[k] = 0;
+    player.abilityCooldowns = {};
+    // earlier casts must not leak into later ones: weather, buffs, summons, fire on the ground
+    player.buffs = {}; player.allies = []; player.statusChill = 0; player.statusHeat = 0; player.burningTurns = 0; player.wetTurns = 0; player.oiledTurns = 0;
+    try { const st = ensureWeather(zoneKey()); st.id = 'clear'; st.turnsRemaining = 500; } catch (e) { /* underground */ }
+    try { activeFxTiles = []; } catch (e) { /* */ }
+  };
+  A.settle = function () { // leave any prompt the ability opened
+    for (let i = 0; i < 4 && gameState !== 'playing'; i++) {
+      if (gameState === 'tiletarget') { try { cancelTileTargeting(); } catch (e) { /* */ } }
+      try { closeModal(); } catch (e) { /* */ }
+      gameState = 'playing';
+    }
+  };
+};
+
+module.exports = [
+  {
+    id: 'abilities.cast-all',
+    desc: 'cast every spell / technique / active cyberware / active mutation at a dummy: no exceptions, no NaN, resources are paid, damage abilities hurt',
+    needsPlayer: true,
+    uses: [ARENA],
+    seconds: 240,
+    fn(A) {
+      const finite = (v) => typeof v === 'number' && isFinite(v);
+      const list = [].concat(SPELLS, TECHNIQUES, CYBERNETICS.filter((c) => c.activation === 'active'), MUTATIONS.filter((m) => m.activation === 'active'));
+      const snap = () => ({ hp: player.hp, mp: player.mp, st: player.stamina, ch: player.charge, buffs: JSON.stringify(player.buffs), log: logMessages.length, inv: player.inventory.length, ents: curMonsters().length, ally: curMonsters().filter((m) => m.kind === 'ally').length, x: player.x, y: player.y, turn: turnCount });
+      let casts = 0, noops = 0, free = 0;
+      A.arena('goblin', 5000, 2); A.refill(); const hb = player.hp; endTurn(); const drift = Math.max(0, hb - player.hp); // what a do-nothing turn costs (ambient damage) must not be blamed on the ability
+      for (const ab of list) {
+        const dmgType = ['damage', 'execute', 'smite', 'lifetap', 'drain', 'multihit', 'direct'].includes(ab.type);
+        let hurt = false, changedAny = false, paid = null, selfHurt = 0; const cost0 = false;
+        for (let trial = 0; trial < 3; trial++) {
+          const tgt = A.arena('goblin', 5000, ab.range === 1 ? 1 : 2);
+          if (!tgt) { A.warn('abilities', ab.id, 'could not build an arena'); break; }
+          A.refill();
+          if (!player.knownSpells.includes(ab.id) && !player.knownTechniques.includes(ab.id)) {
+            if (SPELLS.includes(ab)) player.knownSpells.push(ab.id); else if (TECHNIQUES.includes(ab)) player.knownTechniques.push(ab.id);
+            else if (CYBERNETICS.includes(ab)) (player.installedCyber = player.installedCyber || []).push(ab.id); else (player.mutations = player.mutations || []).push(ab.id);
+          }
+          player.stunnedTurns = 0; player.statusFear = 0;
+          const before = snap(), hp0 = tgt.hp;
+          const pool = ab.resource || 'mp';
+          try {
+            castSpell(ab.id);
+            if (gameState === 'tiletarget') confirmTileTarget(...(pendingTarget && pendingTarget.kind === 'blink' ? [player.x, player.y + 3] : [tgt.x, tgt.y]));
+          } catch (e) { A.err('abilities', ab.id, 'castSpell threw: ' + String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); A.settle(); break; }
+          A.settle(); casts++;
+          if (gameState === 'gameover' || !player.alive) { A.err('abilities', ab.id, 'the caster DIED casting it (cause ' + player.deathCause + ') at hp ' + before.hp + '/' + player.maxHp); return; }
+          const after = snap();
+          if (!cost0 && after.hp < before.hp && !(ab.resource === 'hp' || ab.type === 'lifetap' || ab.type === 'bloodbuff' || ab.type === 'bloodarmor' || ab.selfCost)) selfHurt = Math.max(selfHurt, before.hp - after.hp - drift);
+          for (const k of ['hp', 'mp', 'st', 'ch', 'x', 'y']) if (after[k] !== undefined && !finite(after[k])) A.err('abilities', ab.id, `player.${k} became ${after[k]}`);
+          if (!finite(tgt.hp)) A.err('abilities', ab.id, 'target hp became ' + tgt.hp);
+          if (tgt.hp < hp0) hurt = true;
+          const changed = JSON.stringify(before) !== JSON.stringify(after) || tgt.hp !== hp0;
+          if (changed) changedAny = true;
+          const hpPay = pool === 'hp' || ab.type === 'lifetap' || ab.type === 'bloodarmor' || ab.type === 'bloodbuff' || ab.selfCost != null;
+          const key = hpPay ? 'hp' : pool === 'stamina' ? 'st' : pool === 'charge' ? 'ch' : 'mp';
+          paid = paid || (after[key] !== before[key]);
+          A.refill();
+        }
+        if (!changedAny) { noops++; A.warn('abilities.noop', ab.id, `${ab.name} (${ab.type}) changed nothing in 3 casts`); }
+        else if (dmgType && !hurt) A.warn('abilities.nodamage', ab.id, `${ab.name} (${ab.type}) never reduced the target's hp in 3 casts`);
+        if (selfHurt > 0) A.info('abilities.selfdamage', ab.id, `${ab.name} (${ab.type}${ab.aoe ? ', aoe r' + ab.aoeRadius : ''}) hurt its own caster for ${selfHurt} (friendly fire is INTENDED design; informational only) with the target ${ab.range === 1 ? 1 : 2} tile(s) away`);
+        const cost = ab.selfCost != null ? ab.selfCost : ab.mp;
+        if (changedAny && cost > 0 && paid === false && !['blinklike'].includes(ab.type)) { free++; A.warn('abilities.free', ab.id, `${ab.name} lists a cost of ${cost} (${ab.resource || 'mp'}) but the pool never changed`); }
+      }
+      A.stat('abilityCasts', casts); A.stat('abilityNoops', noops); A.stat('abilitiesThatNeverPaid', free);
+    },
+  },
+];
+module.exports.ARENA = ARENA;
+});
+
+// ==== FILE: lib/probes/bosses.js ====
+__def("lib/probes/bosses.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+const ARENA2 = function (A) {
+  A.arenaBoss = function (id, dist) { // like A.arena but keeps the monster's real stats/AI
+    for (const m of curMonsters().slice()) { m.alive = false; m.hp = 0; }
+    try { for (const c of worldChunks.values()) c.monsters = []; } catch (e) { /* */ }
+    let spot = null;
+    for (let r = 0; r < 80 && !spot; r++) for (let dy = -r; dy <= r && !spot; dy++) for (let dx = -r; dx <= r && !spot; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      const x = player.x + dx, y = player.y + dy; let ok = true;
+      for (let yy = -4; yy <= 4 && ok; yy++) for (let xx = -4; xx <= 8 && ok; xx++) { const t = curTileAt(x + xx, y + yy); if (!t || !t.walkable || entityAt(x + xx, y + yy)) ok = false; }
+      if (ok) spot = { x, y };
+    }
+    if (!spot) return null;
+    player.x = spot.x; player.y = spot.y;
+    const m = makeMonster(id, spot.x + (dist || 3), spot.y, 3, Math.random);
+    m.alive = true; m.aiState = 'combat'; m.engaged = true; m.sleeper = false;
+    addMonsterToWorld(m);
+    return m;
+  };
+};
+module.exports = [
+  {
+    id: 'bosses.scripted-ai',
+    desc: 'run every boss / scripted-AI monster for 3 phases against an unkillable player: no exceptions, no NaN, and measure damage output',
+    needsPlayer: true, uses: [ARENA2], seconds: 600,
+    fn(A) {
+      const finite = (v) => typeof v === 'number' && isFinite(v);
+      const ids = Object.keys(MONSTER_BASES).filter((id) => MONSTER_BASES[id].boss || MONSTER_BASES[id].scriptedAI);
+      let ran = 0;
+      for (const id of ids) {
+        const m = A.arenaBoss(id, 3);
+        if (!m) { A.warn('bosses', id, 'no arena space'); continue; }
+        player.maxHp = 1e7; player.hp = 1e7;
+        // tally every point of damage the player takes (regeneration is ignored) by wrapping the hp accessor
+        let backing = 1e7, tally = 0;
+        Object.defineProperty(player, 'hp', { configurable: true, enumerable: true, get() { return backing; }, set(v) { if (v < backing) tally += backing - v; backing = Math.min(v, 1e7); } }); player.mp = player.maxMp = 1000; player.stamina = player.maxStamina = 1000; player.armor = player.armor || 0;
+        const dmg = [];
+        for (const frac of [1, 0.6, 0.25]) {
+          m.hp = Math.max(1, Math.round(m.maxHp * frac)); const hp0 = tally;
+          for (let t = 0; t < 40; t++) {
+            try { endTurn(); } catch (e) { A.err('bosses', id, `endTurn threw at ${Math.round(frac * 100)}% hp, turn ${t}: ${String(e && e.stack || e).split('\n').slice(0, 3).join(' | ')}`); break; }
+            if (gameState !== 'playing') { try { closeModal(); } catch (e) { /* */ } gameState = 'playing'; }
+            if (!player.alive) { player.alive = true; }
+            if (!m.alive || m.hp <= 0) break;
+            if (!finite(m.hp) || !finite(player.hp)) { A.err('bosses', id, `hp became NaN (boss ${m.hp}, player ${player.hp})`); break; }
+          }
+          dmg.push(Math.round((tally - hp0) / 40 * 10) / 10);
+          if (!m.alive) break;
+          // keep the player in reach so melee bosses are measured fairly
+          if (chebyshev(m.x, m.y, player.x, player.y) > 8) { player.x = m.x - 2; player.y = m.y; }
+        }
+        installVitalGuards(player); player.hp = player.maxHp = 500; // put the normal accessor back
+        ran++;
+        A.stat('bossDmgPerTurn:' + id, dmg.join('/'));
+        if (dmg.every((d) => d <= 0) && !MONSTER_BASES[id].waterOnly && !MONSTER_BASES[id].aquatic) A.warn('bosses.passive', id, `${m.name} dealt no damage to a motionless player in 120 turns (hp phases ${dmg.join('/')})`);
+      }
+      A.stat('bossesRun', ran);
+    },
+  },
+];
+module.exports.ARENA2 = ARENA2;
+});
+
+// ==== FILE: lib/probes/content.js ====
+__def("lib/probes/content.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// Probes over authored content that players interact with: recipes, NPC roles and their dialogue trees.
+const HELP = function (A) {
+  A.settle = function () { for (let i = 0; i < 6 && gameState !== 'playing' && gameState !== 'gameover'; i++) { if (gameState === 'tiletarget') { try { cancelTileTargeting(); } catch (e) { /* */ } } try { closeModal(); } catch (e) { /* */ } gameState = 'playing'; dialogueNPC = null; } };
+  A.invCount = function (id) { return player.inventory.filter((i) => i.id === id).reduce((a, i) => a + (i.qty || i.amount || 1), 0); };
+};
+module.exports = [
+  {
+    id: 'content.recipes',
+    desc: 'craft every recipe from scratch: the recipe is craftable with its listed inputs, consumes them, and yields its output',
+    needsPlayer: true, uses: [HELP], seconds: 240,
+    fn(A) {
+      let crafted = 0;
+      for (const r of RECIPES) {
+        A.settle(); player.inventory = []; player.hp = player.maxHp = 500; player.stamina = player.maxStamina;
+        if (!player.knownRecipes.includes(r.id)) player.knownRecipes.push(r.id);
+        for (const inp of r.inputs) {
+          const base = ITEM_BASES.find((b) => b.id === inp.id); if (!base) continue;
+          const it = makeItem(inp.id, 0, Math.random, 1);
+          if (NO_STACK_TYPES && NO_STACK_TYPES.has(it.type)) { for (let q = 0; q < inp.qty; q++) player.inventory.push(makeItem(inp.id, 0, Math.random, 1)); }
+          else { it.qty = inp.qty; it.amount = inp.qty; player.inventory.push(it); }
+        }
+        let can; try { can = hasIngredients(r); } catch (e) { A.err('content.recipes', r.id, 'hasIngredients threw ' + e.message); continue; }
+        if (!can) { A.err('content.recipes', r.id, `${r.name}: inputs ${JSON.stringify(r.inputs)} do not satisfy hasIngredients() even when held`); continue; }
+        const before = A.invCount(r.output.id);
+        try { craftRecipe(r.id); } catch (e) { A.err('content.recipes', r.id, `craftRecipe threw: ${String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')}`); A.settle(); continue; }
+        A.settle(); crafted++;
+        if (!player.alive) { player.alive = true; }
+        const after = A.invCount(r.output.id);
+        if (after <= before && !player.inventory.some((i) => i.id === r.output.id || (i.name && ITEM_BASES.find((b) => b.id === r.output.id) && i.name.includes(ITEM_BASES.find((b) => b.id === r.output.id).name)))) A.warn('content.recipes', r.id, `${r.name}: crafting produced no ${r.output.id} in the inventory (may be a proc/needs station)`);
+      }
+      A.stat('recipesCrafted', crafted);
+    },
+  },
+  {
+    id: 'content.npc-roles',
+    desc: 'build an NPC of every role/species and open their dialogue, then press every dialogue option: no exceptions, no stuck modal',
+    needsPlayer: true, uses: [HELP], seconds: 400,
+    fn(A) {
+      let talked = 0, options = 0;
+      const speciesIds = SPECIES.map((s) => s.id);
+      let k = 0;
+      for (const role of ROLES) {
+        const sp = speciesIds[k++ % speciesIds.length];
+        let npc;
+        try { npc = makeNPC(role.id, player.x + 1, player.y, Math.random, 'Auditville', sp); } catch (e) { A.err('content.npc', role.id, 'makeNPC threw ' + String(e.stack).split('\n').slice(0, 2).join(' | ')); continue; }
+        if (!npc) { A.err('content.npc', role.id, 'makeNPC returned nothing'); continue; }
+        if (typeof npc.hp !== 'number' || !isFinite(npc.hp)) A.err('content.npc', role.id, 'npc hp ' + npc.hp);
+        if (!npc.name || /undefined|NaN/.test(npc.name)) A.err('content.npc', role.id, 'bad npc name ' + npc.name);
+        npc.hostile = false; npc.asleep = false;
+        A.settle(); player.hp = player.maxHp; player.gold = 5000;
+        try { openDialogue(npc); } catch (e) { A.err('content.npc', role.id, 'openDialogue threw ' + String(e.stack).split('\n').slice(0, 3).join(' | ')); A.settle(); continue; }
+        talked++;
+        const opts = (typeof dialogueOptions !== 'undefined' && dialogueOptions) ? dialogueOptions.slice() : [];
+        for (const o of opts) {
+          if (!o || typeof o.action !== 'function' || /attack|fight|duel|rob|steal|kill|marry|propose|renounce|leave/i.test(o.label || '')) continue;
+          options++;
+          try { o.action(); } catch (e) { A.err('content.npc', role.id + ' / ' + o.label, 'option threw ' + String(e.stack).split('\n').slice(0, 3).join(' | ')); }
+          A.settle(); if (!player.alive) player.alive = true;
+          try { openDialogue(npc); } catch (e) { A.err('content.npc', role.id, 'reopen threw ' + e.message); A.settle(); break; }
+        }
+        A.settle();
+      }
+      A.stat('npcsTalkedTo', talked); A.stat('dialogueOptionsPressed', options);
+    },
+  },
+];
+});
+
+// ==== FILE: lib/probes/coverage.js ====
+__def("lib/probes/coverage.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// Content-coverage census. These are DESIGN checks, not correctness checks: they warn where the game is thin so new content can be aimed at the gaps.
+// (They found the v0.51.3 monster/spell packs.) Thresholds are conservative; raise or lower them in the constants at the top of each probe.
+module.exports = [
+  {
+    id: 'coverage.spell-tiers',
+    desc: 'per school: no empty tier between its lowest and highest tier (a caster must always have something to learn next), and every school has some damage or control option',
+    fn(A) {
+      const bySchool = {};
+      for (const s of SPELLS) { const k = s.school || '?'; (bySchool[k] = bySchool[k] || []).push(s); }
+      for (const [school, list] of Object.entries(bySchool)) {
+        const tiers = list.map((s) => s.tier || 1);
+        const lo = Math.min(...tiers), hi = Math.max(...tiers);
+        const have = new Set(tiers);
+        const holes = []; for (let t = lo; t <= hi; t++) if (!have.has(t)) holes.push(t);
+        if (holes.length && list.length >= 5) A.warn('coverage.spell-tiers', school, `${school} has no tier ${holes.join(', ')} spell (${list.length} spells, tiers ${lo}-${hi})`);
+        if (hi < 5 && list.length >= 5) A.info('coverage.spell-tiers', school, `${school} tops out at tier ${hi}`);
+        if (!list.some((s) => s.type === 'damage' || s.type === 'lifetap' || s.type === 'summon' || s.type === 'execute')) A.info('coverage.spell-tiers', school, `${school} has no direct way to deal damage (fine for a support school; a problem for a class built on it)`);
+      }
+      A.stat('spellSchools', Object.keys(bySchool).length);
+    },
+  },
+  {
+    id: 'coverage.monster-pools',
+    desc: 'per dungeon theme and floor band (1-3 / 4-6 / 7+): the pool the generator REALLY uses (dungeonMonsterPool). Warns on thin pools, and on off-theme monsters in a faction-locked theme (the old silent fallback to generic tier-1 monsters)',
+    fn(A) {
+      const MIN_POOL = 4;
+      let thin = 0, offTheme = 0;
+      for (const [k, meta] of Object.entries(DUNGEON_THEMES)) {
+        const locked = !!(meta.factions && meta.factions.length);
+        const maxDepth = (meta.depthRange || [3, 3])[1];
+        for (const depth of [1, 4, 7]) {
+          if (depth > maxDepth) continue;
+          const pool = dungeonMonsterPool(meta, depth);
+          const hasOwn = locked && Object.values(MONSTER_BASES).some((b) => b.dtier && !b.boss && meta.factions.includes(b.faction));
+          if (locked && !hasOwn && depth === 1) A.info('coverage.monster-pools', k, `${k}: no ordinary monster belongs to its factions (${meta.factions.join('+')}), so every floor draws from the whole bestiary`);
+          if (hasOwn) {
+            const off = pool.filter((i) => !meta.factions.includes(MONSTER_BASES[i].faction));
+            if (off.length && pool.length) { offTheme++; A.warn('coverage.monster-pools', k, `${k} floor ${depth}: ${off.length}/${pool.length} rollable monsters are off-theme (${meta.factions.join('+')}): ${off.slice(0, 4).join(', ')}`); }
+          }
+          if (pool.length < MIN_POOL) { thin++; A.warn('coverage.monster-pools', k, `${k} floor ${depth} can roll only ${pool.length} ordinary monsters`); }
+        }
+      }
+      A.stat('thinMonsterPools', thin); A.stat('offThemePools', offTheme);
+    },
+  },
+];
+});
+
+// ==== FILE: lib/probes/economy.js ====
+__def("lib/probes/economy.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// Economy probes: every shop role stocks sensible goods at every level, prices are sane, buying+selling back is never profitable
+// (the game's own TRADE_SELL_TO_BUY_CAP invariant), and the trade UI can be driven end to end.
+module.exports = [
+  {
+    id: 'economy.shops',
+    desc: 'every shop role x tier x player level: non-empty stock of valid items with finite positive prices; sell price never exceeds buy price (no arbitrage); trade screen opens and buys/sells without exceptions',
+    needsPlayer: true, seconds: 240,
+    fn(A) {
+      const tiers = ['novice', 'journeyman', 'master'];
+      let shops = 0, arb = 0;
+      const rng = Math.random;
+      // The Merchant profession (and its settlement market multipliers on materials) is the INTENDED way to profit from trade, and a random run can carry it,
+      // so price the shops as a profession-free player; otherwise this probe flakes on material arbitrage depending on the build it happened to get.
+      const savedProfs = player.professionsLearned; player.professionsLearned = {};
+      for (const roleId of SHOP_ROLES) {
+        for (const lvl of [1, 20, 60]) {
+          for (const tier of tiers) {
+            player.level = lvl;
+            let npc;
+            try { npc = makeNPC(roleId, player.x + 1, player.y, rng, null, 'human'); } catch (e) { A.err('economy.shops', roleId, 'makeNPC threw: ' + String(e && e.message)); continue; }
+            npc.tier = tier;
+            let stock;
+            try { stock = generateShopInventory(roleId, rng, npc); } catch (e) { A.err('economy.shops', roleId, `generateShopInventory(${tier}, L${lvl}) threw: ${String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')}`); continue; }
+            shops++;
+            if (!stock.length) A.err('economy.shops', roleId, `empty stock (${tier}, L${lvl})`);
+            for (const it of stock) {
+              if (!it || !it.id || !it.name) { A.err('economy.shops', roleId, 'stock entry without id/name'); continue; }
+              if (!ITEM_BASES.some((b) => b.id === it.id)) A.err('economy.shops', roleId, 'stock item ' + it.id + ' is not a known base');
+              if (!(it.value > 0) || !isFinite(it.value)) { A.warn('economy.shops', it.id, `value ${it.value} (${roleId})`); continue; }
+              const buy = tradeBuyPrice(it, npc), sell = tradeSellPrice(it, npc);
+              if (!(buy > 0) || !isFinite(buy)) A.err('economy.shops', it.id, `buy price ${buy}`);
+              if (!isFinite(sell) || sell < 0) A.err('economy.shops', it.id, `sell price ${sell}`);
+              if (sell > buy) { arb++; A.err('economy.shops', it.id, `arbitrage: ${roleId} sells ${it.name} for ${buy} but buys it back for ${sell}`); }
+            }
+          }
+        }
+      }
+      // drive the real trade UI once
+      const npc = makeNPC('merchant', player.x + 1, player.y, rng, null, 'human'); npc.shop = generateShopInventory('merchant', rng, npc);
+      player.gold = 100000; player.level = 10;
+      try {
+        openTrade(npc);
+        for (let i = 0; i < 4; i++) simulateKey(String.fromCharCode(97 + i));
+        simulateKey('Tab'); for (let i = 0; i < 3; i++) simulateKey(String.fromCharCode(97 + i));
+        simulateKey('Escape');
+      } catch (e) { A.err('economy.shops', 'ui', 'trade UI threw: ' + String(e && e.stack || e).split('\n').slice(0, 3).join(' | ')); }
+      try { closeModal(); } catch (e) { /* */ } gameState = 'playing'; dialogueNPC = null;
+      player.professionsLearned = savedProfs;
+      A.stat('shopsChecked', shops); A.stat('arbitrageCases', arb);
+    },
+  },
+];
+});
+
+// ==== FILE: lib/probes/emergence.js ====
+__def("lib/probes/emergence.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// Emergence probes: the elemental COMBO layer (Wet / Oiled / Burning / Frozen). Checks both that each combo fires and that every piece of content that is
+// supposed to take part is wired to it. Add a new primed state or payoff to the game -> add a case to COMBOS below.
+const { ARENA } = require('./abilities');
+module.exports = [
+  {
+    id: 'emergence.combos',
+    desc: 'every elemental combo fires for BOTH sources (player spell, monster ability, monster melee): oil+fire, wet+frost, wet+shock, soak douses fire / rinses oil, oil beads off the soaked, oil feeds a fire',
+    needsPlayer: true, uses: [ARENA], seconds: 120,
+    fn(A) {
+      const fresh = (n) => { A.refill(); const m = A.arena('goblin', 5000, n || 2); if (!m) return null; m.wetTurns = m.oiledTurns = m.burningTurns = m.frozenSolidTurns = 0; return m; };
+      const say = (id, ok, msg) => { if (!ok) A.err('emergence.combos', id, msg); };
+      const spl = (o) => Object.assign({ id: 'probe_spell', name: 'Probe', type: 'damage', power: [3, 3], range: 5, mp: 0 }, o);
+      let m = fresh(); if (!m) { A.warn('emergence.combos', 'arena', 'no open ground to test on'); return; }
+      // ---- player spells ----
+      m.oiledTurns = 20; applyEffectToTarget(spl({ igniteGround: true }), m); say('spell oil+fire', m.burningTurns > 0, 'a fire spell did not ignite an Oiled target');
+      m = fresh(); m.wetTurns = 20; applyEffectToTarget(spl({ frost: true }), m); say('spell wet+frost', m.frozenSolidTurns > 0, 'a frost spell did not freeze a Wet target solid');
+      m = fresh(); m.wetTurns = 20; const wm = weatherElementMultiplier({ chainLightning: true }, m), wm2 = weatherElementMultiplier({ element: 'shock' }, m);
+      say('wet+shock', wm >= 1.5 && wm2 >= 1.5, `shock vs a Wet target multiplied by ${wm}/${wm2}, expected ~1.6 (chainLightning flag / element:'shock')`);
+      m = fresh(); applyEffectToTarget(spl({ soak: 10 }), m); say('spell soak', m.wetTurns >= 10, 'soak:10 did not make the target Wet');
+      m = fresh(); m.burningTurns = 5; m.oiledTurns = 5; applyEffectToTarget(spl({ soak: 10 }), m); say('soak douses', m.burningTurns === 0 && m.oiledTurns === 0, 'soaking should put out fire AND rinse oil');
+      m = fresh(); applyEffectToTarget(spl({ oil: 30 }), m); say('spell oil', m.oiledTurns >= 30, 'oil:30 did not coat the target');
+      m = fresh(); m.wetTurns = 10; applyEffectToTarget(spl({ oil: 30 }), m); say('oil beads', !(m.oiledTurns > 0), 'oil stuck to a soaked target');
+      m = fresh(); m.burningTurns = 3; applyEffectToTarget(spl({ oil: 30 }), m); say('oil feeds fire', m.burningTurns > 3, 'oil thrown on a burning target should feed the fire');
+      m = fresh(); m.wetTurns = 10; applyEffectToTarget(spl({ consumeWet: true, wetMult: 2 }), m); say('consumeWet', !(m.wetTurns > 0), 'consumeWet should flash the water to steam (Wet cleared)');
+      m = fresh(); m.wetTurns = 10; const a1 = weatherElementMultiplier({ wetMult: 1.5 }, m), a2 = (m.wetTurns = 0, weatherElementMultiplier({ wetMult: 1.5 }, m)); say('wetMult', a1 === 1.5 && a2 === 1, 'wetMult should apply only against a Wet target');
+      m = fresh(); m.frozenSolidTurns = 3; say('frozenMult', weatherElementMultiplier({ frozenMult: 2 }, m) === 2, 'frozenMult should double damage vs a frozen target'); m.frozenSolidTurns = 0; say('frozenMult dry', weatherElementMultiplier({ frozenMult: 2 }, m) === 1, 'frozenMult applied to a target that is not frozen');
+      m = fresh(); applyEffectToTarget(spl({ oilGround: 1 }), m); say('oilGround', isOiledTile(curTileAt(m.x, m.y)), 'oilGround did not slick the ground under the target');
+      // ---- monster abilities against the player ----
+      const hit = (abId, prep) => { A.refill(); const c = A.arena('goblin', 50, 3); c.alive = true; player.hp = player.maxHp = 5000; if (prep) prep(); monsterCastAt(c, MONSTER_ABILITY_LIBRARY[abId], player); return c; };
+      hit('firebolt', () => { player.oiledTurns = 20; }); say('ability oil+fire', player.burningTurns > 0, 'a monster Firebolt did not ignite an Oiled player');
+      hit('frostbolt', () => { player.wetTurns = 20; }); say('ability wet+frost', player.frozenSolidTurns > 0, 'a monster Frostbolt did not freeze a Wet player');
+      hit('throw_bomb', () => { player.oiledTurns = 20; }); say('ability aoe oil+fire', player.burningTurns > 0, 'a monster Firebomb (aoe) did not ignite an Oiled player');
+      for (const [id, field, label] of [['water_jet', 'wetTurns', 'Water Jet'], ['drench_wave', 'wetTurns', 'Drenching Wave'], ['tar_spit', 'oiledTurns', 'Tar Spit'], ['throw_oilflask', 'oiledTurns', 'Oil Flask'], ['throw_brine', 'wetTurns', 'Brine Flask']]) {
+        if (!MONSTER_ABILITY_LIBRARY[id]) { A.err('emergence.combos', id, 'ability missing from MONSTER_ABILITY_LIBRARY'); continue; }
+        hit(id, () => { player[field] = 0; }); say('ability ' + id, player[field] > 0, `${label} did not set ${field} on the player`);
+      }
+      // ---- monster melee ----
+      { A.refill(); const c = A.arena('goblin', 50, 1); c.soakStrike = 10; c.atk = [1, 1]; c.str = 5; let got = false; for (let i = 0; i < 300 && !got; i++) { player.hp = player.maxHp = 5000; try { doAttack(c, player); } catch (e) { A.err('emergence.combos', 'melee', 'doAttack threw: ' + e.message); break; } got = player.wetTurns > 0; } say('melee soakStrike', got, 'soakStrike never made the player Wet in 300 melee hits'); }
+      { A.refill(); const c = A.arena('goblin', 50, 1); c.oilStrike = 20; c.atk = [1, 1]; c.str = 5; let got = false; for (let i = 0; i < 300 && !got; i++) { player.hp = player.maxHp = 5000; player.wetTurns = 0; try { doAttack(c, player); } catch (e) { A.err('emergence.combos', 'melee', 'doAttack threw: ' + e.message); break; } got = player.oiledTurns > 0; } say('melee oilStrike', got, 'oilStrike never oiled the player in 300 melee hits'); }
+      // ---- AI picks the payoff ----
+      { const fb = MONSTER_ABILITY_LIBRARY.firebolt, tj = MONSTER_ABILITY_LIBRARY.tar_spit, mm = MONSTER_ABILITY_LIBRARY.magicmissile; m = fresh();
+        say('ai bare', abilityComboScore(tj, m) > abilityComboScore(mm, m), 'a bare target should favour a primer over a plain bolt');
+        m.oiledTurns = 9; say('ai oiled', abilityComboScore(fb, m) > abilityComboScore(mm, m) && abilityComboScore(tj, m) < 0, 'an Oiled target should favour fire and make Tar Spit pointless');
+        m.oiledTurns = 0; m.wetTurns = 9; say('ai wet', abilityComboScore(MONSTER_ABILITY_LIBRARY.frostbolt, m) > 0 && abilityComboScore(tj, m) < 0 && abilityComboScore(MONSTER_ABILITY_LIBRARY.water_jet, m) < 0, 'a Wet target should favour frost/shock and make soak/oil pointless'); }
+      // ---- elemental resistance gear: wearing it changes the player field, monster bolts/blasts of that element are reduced, taking it off restores everything ----
+      for (const [id, field, el] of [['stormcloak', 'shockDmgReduction', 'shock'], ['embercloak', 'fireDmgReduction', 'fire'], ['frostweave_mantle', 'frostDmgReduction', 'frost'], ['amulet_elements', 'frostDmgReduction', 'frost']]) {
+        A.refill(); const it = makeItem(id, 0, Math.random); const before = player[field] || 0;
+        player.inventory.push(it); equipItem(it);
+        const worn = player[field] || 0;
+        say('resist gear ' + id, worn > before, `wearing ${id} did not raise player.${field} (${before} -> ${worn})`);
+        say('resist factor ' + id, Math.abs(elementResistFactor(player, el) - (1 - Math.min(0.9, worn))) < 1e-9, `elementResistFactor(player, '${el}') wrong`);
+        unequipSlot(it.slot);
+        say('resist gear off ' + id, Math.abs((player[field] || 0) - before) < 1e-9, `taking ${id} off left player.${field} at ${player[field]} (was ${before})`);
+      }
+      { A.refill(); player.frostDmgReduction = 0.5; let a = 0, b = 0; const N = 40;
+        for (let i = 0; i < N; i++) { player.hp = player.maxHp = 5000; const c = A.arena('goblin', 50, 3); c.alive = true; player.frostDmgReduction = 0; const h0 = player.hp; monsterCastAt(c, Object.assign({}, MONSTER_ABILITY_LIBRARY.frostbolt, { power: [300, 300] }), player); a += h0 - player.hp; player.hp = player.maxHp = 5000; player.frostDmgReduction = 0.5; player.wetTurns = player.frozenSolidTurns = 0; const h1 = player.hp; monsterCastAt(c, Object.assign({}, MONSTER_ABILITY_LIBRARY.frostbolt, { power: [300, 300] }), player); b += h1 - player.hp; player.frozenSolidTurns = 0; player.frostDmgReduction = 0.5; c.alive = false; c.hp = 0; }
+        say('frost resist bolt', b < a * 0.8, `a 50% frost resistance should clearly cut monster Frostbolt damage (no resist ${a}, 50% ${b} over ${N} casts)`); player.frostDmgReduction = 0; }
+      // ---- Resistance potions/food: the buff halves monster bolts/blasts of its element (all three elements, plus the all-in-one elixir) ----
+      for (const [id, el] of [['potion_fireres', 'fire'], ['potion_frostres', 'frost'], ['potion_shockres', 'shock']]) {
+        A.refill(); player.fireDmgReduction = player.frostDmgReduction = player.shockDmgReduction = 0;
+        const it = makeItem(id, 0, Math.random); if (!it) { A.err('emergence.combos', id, 'makeItem returned nothing'); continue; }
+        const f0 = elementResistFactor(player, el); player.inventory.push(it); useItem(it);
+        say('resist buff ' + id, f0 === 1 && Math.abs(elementResistFactor(player, el) - 0.5) < 1e-9, `${id}: factor before ${f0}, after ${elementResistFactor(player, el)} (want 1 -> 0.5)`);
+      }
+      { A.refill(); const it = makeItem('potion_elementward', 0, Math.random); if (!it) A.err('emergence.combos', 'potion_elementward', 'makeItem returned nothing'); else { player.inventory.push(it); useItem(it);
+        say('elementward', ['fire', 'frost', 'shock'].every(e => Math.abs(elementResistFactor(player, e) - 0.5) < 1e-9), 'Elixir of the Elements should halve fire, frost and shock'); } }
+      A.refill();
+    },
+  },
+  {
+    id: 'emergence.scrolls',
+    desc: 'area scrolls (scrollblast / soaksplash / oilsplash) apply their element and combo rider; scroll value ladder reaches the deeper loot tiers',
+    needsPlayer: true, uses: [ARENA], seconds: 60,
+    fn(A) {
+      const say = (id, ok, msg) => { if (!ok) A.err('emergence.scrolls', id, msg); };
+      const fresh = () => { A.refill(); const m = A.arena('goblin', 5000, 3); if (!m) return null; m.alive = true; m.hp = m.maxHp = 5000; m.wetTurns = m.oiledTurns = m.burningTurns = m.frozenSolidTurns = 0; m.fireImmune = m.frostImmune = m.shockImmune = false; return m; };
+      const cast = (id, m, prep) => { const it = makeItem(id, 0, Math.random); if (!it) { A.err('emergence.scrolls', id, 'makeItem returned nothing'); return 0; } if (prep) prep(m); const h0 = m.hp; resolveThrowAtTile(it, m.x, m.y); return h0 - m.hp; };
+      let m = fresh(); if (!m) { A.warn('emergence.scrolls', 'arena', 'no open ground'); return; }
+      const mean = (id, prep) => { let t = 0; for (let i = 0; i < 12; i++) { m = fresh(); t += cast(id, m, prep); } return t / 12; };
+      const dry = mean('scroll_thunderclap'), wet = mean('scroll_thunderclap', (x) => { x.wetTurns = 20; });
+      say('thunderclap wet', wet > dry * 1.3, `Thunderclap on soaked targets should clearly out-damage dry ones (dry ${dry.toFixed(1)}, wet ${wet.toFixed(1)})`);
+      m = fresh(); cast('scroll_inferno', m); say('inferno ignites', m.burningTurns > 0 || m.hp <= 0, 'Inferno did not ignite a dry target');
+      m = fresh(); cast('scroll_inferno', m, (x) => { x.wetTurns = 20; }); say('inferno vs wet', !(m.burningTurns > 0), 'Inferno ignited a soaked target');
+      m = fresh(); cast('scroll_deepfreeze', m, (x) => { x.wetTurns = 20; }); say('deepfreeze wet', m.frozenSolidTurns > 0, 'Deep Freeze did not freeze a soaked target solid');
+      m = fresh(); cast('scroll_deepfreeze', m); say('deepfreeze dry', !(m.frozenSolidTurns > 0), 'Deep Freeze froze a dry target solid (needs Wet)');
+      m = fresh(); m.frostImmune = true; say('deepfreeze immune', cast('scroll_deepfreeze', m) === 0, 'Deep Freeze hurt a frost-immune target');
+      m = fresh(); m.fireImmune = true; say('inferno immune', cast('scroll_inferno', m) === 0, 'Inferno hurt a fire-immune target');
+      m = fresh(); cast('scroll_downpour', m); say('downpour', m.wetTurns > 0, 'Downpour did not soak the target');
+      m = fresh(); cast('scroll_slick', m); say('slick', m.oiledTurns > 0, 'Slickness did not oil the target');
+      m = fresh(); say('annihilate', cast('scroll_annihilate', m) >= 60, 'Annihilation did less than 60 damage');
+      // ---- late-game potions: each must work when drunk, and the consumable ladder must reach past 150g ----
+      for (const id of ['elixir_vitality', 'draught_archmage', 'elixir_ironhide', 'elixir_swiftness', 'elixir_grand_regen', 'potion_deadeye']) {
+        A.refill(); const it = makeItem(id, 0, Math.random); if (!it) { A.err('emergence.scrolls', id, 'makeItem returned nothing'); continue; }
+        player.hp = Math.max(1, Math.floor(player.maxHp / 4)); player.mp = 0; const hp0 = player.hp, mp0 = player.mp; player.inventory.push(it); useItem(it);
+        const stat = { buffarmor: 'armor', buffhaste: 'actionspeed', buffregen: 'regen', buffcrit: 'crit' }[it.effect];
+        const ok = it.effect === 'heal' ? player.hp > hp0 : it.effect === 'mana' ? player.mp > mp0 : getBuff(stat) > 0;
+        say(id, ok, `${id} (${it.effect}) had no visible effect when drunk`);
+      }
+      { const cons = ITEM_BASES.filter(b => b.type === 'consumable' && !b.craftOnly && b.effect !== 'food' && !b.foodFlavor); A.stat('potionsOver150g', cons.filter(b => (b.value || 0) >= 150).length);
+        if (cons.filter(b => (b.value || 0) >= 150).length < 5) A.warn('emergence.scrolls', 'potion-ladder', 'fewer than 5 non-food consumables worth >=150g'); }
+      // value ladder: deeper loot tiers only cap value upward, so a flat ladder means late loot never improves
+      const sc = ITEM_BASES.filter(b => b.type === 'scroll');
+      A.stat('scrollBases', sc.length); A.stat('scrollsOver100g', sc.filter(b => (b.value || 0) >= 100).length);
+      if (sc.filter(b => (b.value || 0) >= 100).length < 4) A.warn('emergence.scrolls', 'ladder', 'fewer than 4 scrolls worth >=100g: late-game scroll loot is flat');
+      A.refill();
+    },
+  },
+  {
+    id: 'emergence.tags',
+    desc: 'content that LOOKS elemental is tagged so the combo layer sees it (fire spells ignite oil, frost spells freeze the wet, shock spells conduct), and primer fields are well-formed',
+    fn(A) {
+      const fireRe = /\b(fire|flame|inferno|blaze|incinerat|napalm|pyre)\b/i, frostRe = /\b(frost|ice|glacial|blizzard|freez)/i, shockRe = /\b(lightning|thunder|shock|electr)/i;
+      let tagged = 0;
+      for (const s of [].concat(SPELLS, TECHNIQUES)) {
+        const dmg = s.type === 'damage'; if (!dmg) continue;
+        const hay = `${s.id} ${s.name}`;
+        if (fireRe.test(hay) && !s.igniteGround && s.element !== 'fire') A.warn('emergence.tags', s.id, `${s.name} reads as fire but has neither igniteGround nor element:'fire', so it won't ignite Oiled targets`);
+        if (frostRe.test(hay) && !s.frost && s.element !== 'frost') A.warn('emergence.tags', s.id, `${s.name} reads as frost but has no frost flag, so it can't freeze a Wet target`);
+        if (shockRe.test(hay) && !s.chainLightning && s.element !== 'shock') A.warn('emergence.tags', s.id, `${s.name} reads as shock but has neither chainLightning nor element:'shock', so a Wet target won't conduct it`);
+        tagged++;
+      }
+      const okNum = (v) => v === true || (typeof v === 'number' && isFinite(v) && v > 0);
+      for (const src of [].concat(SPELLS, TECHNIQUES, Object.entries(MONSTER_ABILITY_LIBRARY).map(([k, v]) => Object.assign({ id: k }, v)))) {
+        for (const k of ['soak', 'oil', 'oilGround', 'wetMult', 'oiledMult', 'frozenMult']) if (src[k] !== undefined && src[k] !== 0 && !okNum(src[k])) A.err('emergence.tags', src.id, `${k} must be a positive number, got ${src[k]}`);
+        if (src.soak && src.oil) A.warn('emergence.tags', src.id, 'has both soak and oil; soaking rinses oil off, so oil would never stick');
+      }
+      for (const [id, b] of Object.entries(MONSTER_BASES)) for (const k of ['soakStrike', 'oilStrike']) if (b[k] !== undefined && !okNum(b[k])) A.err('emergence.tags', id, `${k} must be a positive number`);
+      A.stat('damageSpellsChecked', tagged);
+      const primeSpells = [].concat(SPELLS, TECHNIQUES).filter((s) => s.soak || s.oil || s.oilGround).length, primeMon = Object.values(MONSTER_BASES).filter((b) => b.soakStrike || b.oilStrike || (b.abilities || []).some((a) => (MONSTER_ABILITY_LIBRARY[a] || {}).soak || (MONSTER_ABILITY_LIBRARY[a] || {}).oil)).length;
+      A.stat('primerSpells', primeSpells); A.stat('primerMonsters', primeMon);
+      if (primeSpells < 4) A.warn('emergence.tags', 'primerSpells', `only ${primeSpells} spells can set up Wet/Oiled`);
+      if (primeMon < 6) A.warn('emergence.tags', 'primerMonsters', `only ${primeMon} monsters can set up Wet/Oiled`);
+    },
+  },
+];
+});
+
+// ==== FILE: lib/probes/events.js ====
+__def("lib/probes/events.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// World-event probes. ENCOUNTERS are events with a decision in them (type:'encounter', choices -> weighted outcomes that are themselves event defs). Add one to WORLD_EVENTS
+// and this probe validates its shape and EXECUTES every outcome of every choice in a live game, so a typo'd item id, a missing handler or a thrown exception shows up here.
+const { ARENA } = require('./abilities');
+module.exports = [
+  {
+    id: 'events.encounters',
+    desc: 'every encounter event: well-formed (choices, needs, outcomes, ids that exist) and every outcome of every choice runs without throwing',
+    needsPlayer: true, uses: [ARENA], seconds: 120,
+    fn(A) {
+      const encs = WORLD_EVENTS.filter((e) => e.type === 'encounter');
+      A.stat('encounterEvents', encs.length);
+      if (encs.length < 6) A.warn('events.encounters', 'count', `only ${encs.length} encounter events; ordinary events are mostly flavor text`);
+      const itemOk = (id) => ITEM_BASES.some((b) => b.id === id);
+      const seen = new Set(); let ran = 0;
+      for (const e of encs) {
+        if (seen.has(e.id)) A.err('events.encounters', e.id, 'duplicate event id'); seen.add(e.id);
+        if (!e.msg) A.err('events.encounters', e.id, 'no msg');
+        if (!Array.isArray(e.choices) || !e.choices.length) { A.err('events.encounters', e.id, 'no choices'); continue; }
+        e.choices.forEach((ch, ci) => {
+          const where = `${e.id} choice ${ci + 1} (${ch.label})`;
+          if (!ch.label) A.err('events.encounters', e.id, `choice ${ci + 1} has no label`);
+          if (!Array.isArray(ch.outcomes) || !ch.outcomes.length) { A.err('events.encounters', e.id, where + ': no outcomes'); return; }
+          const n = ch.needs;
+          if (n && n.item && !itemOk(n.item)) A.err('events.encounters', e.id, `${where}: needs unknown item ${n.item}`);
+          if (n && n.stat && !(typeof player[n.stat[0]] === 'number')) A.err('events.encounters', e.id, `${where}: needs unknown stat ${n.stat[0]}`);
+          const flat = []; ch.outcomes.forEach((o) => { for (let x = o; x; x = x.also) flat.push(x); });
+          for (const o of flat) {
+            if (!WORLD_EVENT_HANDLERS[o.type]) { A.err('events.encounters', e.id, `${where}: outcome type '${o.type}' has no handler`); continue; }
+            if (o.type === 'grantItem' && !itemOk(o.item)) A.err('events.encounters', e.id, `${where}: grants unknown item ${o.item}`);
+            if (o.type === 'spawnWave' && !validEventPool(o.pool)) A.err('events.encounters', e.id, `${where}: spawnWave pool '${o.pool}' is empty or unknown`);
+            if (!o.msg) A.warn('events.encounters', e.id, `${where}: outcome '${o.type}' has no msg (the player sees nothing)`);
+            if (typeof o.w === 'number' && !(o.w > 0)) A.err('events.encounters', e.id, `${where}: non-positive weight`);
+          }
+          // execute every outcome for real, several times, on a healthy player
+          for (const o of ch.outcomes) for (let k = 0; k < 3; k++) {
+            A.refill(); const m = A.arena('goblin', 50, 6); if (m) { m.alive = false; m.hp = 0; }
+            player.hp = player.maxHp = 3000; player.gold = Math.max(player.gold, 200);
+            try { runEncounterOutcome(o); ran++; } catch (x) { A.err('events.encounters', e.id, `${where}: outcome '${o.type}' threw: ${String(x && x.stack || x).split('\n').slice(0, 2).join(' | ')}`); }
+            if (!Number.isFinite(player.hp) || !Number.isFinite(player.gold)) A.err('events.encounters', e.id, `${where}: outcome '${o.type}' left hp/gold non-finite`);
+            if (gameState !== 'playing') { try { closeModal(); } catch (y) { /* */ } gameState = 'playing'; }
+            player.alive = true;
+          }
+        });
+        // the full dispatch path, as the scheduler uses it: presents a real choice menu
+        A.refill(); const m2 = A.arena('goblin', 50, 20); if (m2) { m2.alive = false; m2.hp = 0; }
+        player.inventory.push(makeItem('water_flask', 0, Math.random));
+        try {
+          scheduleOrApplyWorldEvent(e);
+          if (gameState !== 'choice' || !pendingChoiceOptions || pendingChoiceOptions.length < 2) A.err('events.encounters', e.id, `dispatch did not open a choice menu (gameState=${gameState})`);
+          else { resolveChoiceKey(String.fromCharCode(97 + pendingChoiceOptions.length - 1)); if (gameState === 'choice') A.err('events.encounters', e.id, 'choosing the last (leave) option did not close the menu'); }
+        } catch (x) { A.err('events.encounters', e.id, 'dispatch threw: ' + String(x && x.stack || x).split('\n').slice(0, 2).join(' | ')); }
+        if (gameState !== 'playing') { try { closeModal(); } catch (y) { /* */ } gameState = 'playing'; }
+      }
+      A.stat('encounterOutcomesRun', ran);
+    },
+  },
+];
+});
+
+// ==== FILE: lib/probes/faith.js ====
+__def("lib/probes/faith.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// Faith probes: every deity is well-formed, can be pledged to, its boons apply and revert cleanly (finite stats), its invocation and event hooks
+// do not throw, and wrath/renounce leave the player in a sane state.
+module.exports = [
+  {
+    id: 'faith.deities',
+    desc: 'each deity: schema (tenets, 5 boon ranks, invoke), pledge -> max piety -> boons applied with finite stats, invoke, hook events, offering, wrath and renounce, without exceptions',
+    needsPlayer: true, seconds: 120,
+    fn(A) {
+      const ids = Object.keys(DEITIES);
+      const settle = () => { try { closeModal(); } catch (e) { /* */ } gameState = 'playing'; dialogueNPC = null; };
+      const finite = (id, what) => { for (const k of ['hp', 'maxHp', 'mp', 'maxMp', 'str', 'dex', 'con', 'int', 'wil', 'cha']) if (typeof player[k] === 'number' && !isFinite(player[k])) { A.err('faith.deities', id, `${what}: ${k} became ${player[k]}`); player[k] = 10; } };
+      for (const id of ids) {
+        const d = DEITIES[id];
+        if (d.id !== id) A.err('faith.deities', id, 'deity.id "' + d.id + '" does not match its key');
+        for (const f of ['name', 'title', 'domain', 'blurb']) if (!d[f]) A.err('faith.deities', id, 'missing ' + f);
+        if (!Array.isArray(d.tenets) || !d.tenets.length) A.err('faith.deities', id, 'no tenets');
+        const ranks = (d.boons || []).map((b) => b.rank).join(',');
+        if (ranks !== '1,2,3,4,5') A.warn('faith.deities', id, 'boon ranks are ' + ranks + ' (expected 1..5)');
+        if (!d.invoke || typeof d.invoke.run !== 'function' || !(d.invoke.cooldown >= 0) || !(d.invoke.cost >= 0)) A.err('faith.deities', id, 'invoke needs {cooldown,cost,run}');
+        if (!Object.keys(d.on || {}).length && !Object.keys(d.events || {}).length) A.warn('faith.deities', id, 'no piety hooks (on.kill/item/cast...): piety can only come from offerings');
+        try {
+          settle(); player.faith = null; player.hp = player.maxHp = Math.max(player.maxHp, 100); turnCount += 5000;
+          pledgeTo(id, 'the probe');
+          if (!player.faith || player.faith.god !== id) { A.err('faith.deities', id, 'pledgeTo did not set the god'); continue; }
+          addPiety(FAITH_TUNING.maxPiety); finite(id, 'max piety');
+          if (faithTier(player.faith.piety) !== 5) A.warn('faith.deities', id, 'max piety does not reach tier 5');
+          // hooks, fed plausible events
+          const mon = Object.values(MONSTER_BASES)[0];
+          const events = { kill: { def: Object.assign({ kind: 'monster' }, mon), killer: player, target: {} }, item: { it: makeItem('healing_potion', 0, Math.random, 1) }, cast: { ok: true, spell: SPELLS[0] } };
+          for (const k of Object.keys(d.on)) { try { const v = d.on[k](events[k] || {}); if (typeof v !== 'number' || !isFinite(v)) A.warn('faith.deities', id, `on.${k} returned ${v}`); } catch (e) { A.err('faith.deities', id, `on.${k} threw: ${String(e && e.message)}`); } }
+          for (const k of Object.keys(d.events || {})) { try { const v = d.events[k]({}); if (typeof v !== 'number' || !isFinite(v)) A.warn('faith.deities', id, `events.${k} returned ${v}`); } catch (e) { A.err('faith.deities', id, `events.${k} threw: ${String(e && e.message)}`); } }
+          player.faith.invokedAt = {}; invokeGod(); settle(); finite(id, 'invoke');
+          player.gold = 5000; player.faith.offeredAt = -9999; makeOffering(); settle();
+          syncBoons(); finite(id, 'syncBoons');
+          player.hp = player.maxHp; godWrath('abandon'); settle(); finite(id, 'wrath');
+          if (player.faith.god) A.err('faith.deities', id, 'still pledged after wrath');
+          if (player.hp < 1) { A.err('faith.deities', id, 'wrath left hp ' + player.hp); player.hp = player.maxHp; }
+          pledgeTo(id); renounceFaith(true); finite(id, 'renounce');
+        } catch (e) { A.err('faith.deities', id, 'threw: ' + String(e && e.stack || e).split('\n').slice(0, 3).join(' | ')); }
+        player.alive = true; settle();
+      }
+      player.faith = null;
+      A.stat('deities', ids.length);
+    },
+  },
+];
+});
+
+// ==== FILE: lib/probes/index.js ====
+__def("lib/probes/index.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// Probe registry. To add a check: put { id, desc, fn(A), needsPlayer?, seconds? } in any file here and list the file below.
+//   fn(A) runs INSIDE the game realm (no require/fs). A.err/warn/info(area, id, msg) report; A.stat(name, value) records a metric.
+//   uses:[fn(A)] -> helper installers run in the game first (e.g. A.arena()); share them via a module-level const.
+//   needsPlayer:true -> a character is created first (state-dependent checks: casting, saving, generating worlds).
+//   A thrown exception is reported as an error finding, so a probe can just call game code and let it blow up.
+module.exports = [].concat(
+  require('./items'),
+  require('./refs'),
+  require('./monsters'),
+  require('./abilities'),
+  require('./worldgen'),
+  require('./bosses'),
+  require('./content'),
+  require('./talents'),
+  require('./economy'),
+  require('./story'),
+  require('./faith'),
+  require('./coverage'),
+  require('./emergence'),
+  require('./events'),
+  require('./training'),
+  require('./systems')
+);
+});
+
+// ==== FILE: lib/probes/items.js ====
+__def("lib/probes/items.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// Probes about item DATA (ITEM_BASES) and what makeItem() builds from it.
+// Each probe: { id, desc, fn(A) }. fn's SOURCE runs inside the game; A is the finding reporter (see audit.js).
+module.exports = [
+  {
+    id: 'items.schema',
+    desc: 'every ITEM_BASES entry has the fields its type needs and sane numbers',
+    fn(A) {
+      const seen = new Map();
+      const finite = (v) => typeof v === 'number' && isFinite(v);
+      const SLOTS = new Set(['hand', 'offhand', 'body', 'head', 'feet', 'ring', 'amulet', 'gloves', 'cloak']);
+      for (const b of ITEM_BASES) {
+        const id = b.id;
+        if (!id) { A.err('items', '?', 'item without id: ' + JSON.stringify(b).slice(0, 80)); continue; }
+        if (seen.has(id)) A.err('items', id, 'duplicate id (also "' + seen.get(id).name + '")');
+        seen.set(id, b);
+        if (!b.name || /undefined|NaN/.test(b.name)) A.err('items', id, 'bad name ' + b.name);
+        if (!b.type) A.err('items', id, 'missing type');
+        if (!b.glyph) A.warn('items', id, 'missing glyph');
+        if (b.value !== undefined && (!finite(b.value) || b.value < 0)) A.err('items', id, 'bad value ' + b.value);
+        if (b.type === 'weapon') {
+          if (!Array.isArray(b.dmg) || b.dmg.length !== 2 || !finite(b.dmg[0]) || !finite(b.dmg[1])) A.err('items', id, 'weapon without numeric dmg [lo,hi]: ' + JSON.stringify(b.dmg));
+          else if (b.dmg[0] > b.dmg[1] || b.dmg[0] < 0) A.err('items', id, 'weapon dmg range inverted/negative ' + JSON.stringify(b.dmg));
+          if (b.slot !== 'hand' && b.slot !== 'offhand') A.warn('items', id, 'weapon slot ' + b.slot);
+        }
+        if (b.type === 'armor') {
+          if (!SLOTS.has(b.slot)) A.err('items', id, 'armor with unknown slot ' + b.slot);
+          if (b.armor !== undefined && !finite(b.armor)) A.err('items', id, 'armor not numeric');
+        }
+        if (b.str !== undefined && (!finite(b.str) || b.str < 0)) A.err('items', id, 'bad str requirement ' + b.str);
+        for (const k of Object.keys(b)) { const v = b[k]; if (typeof v === 'number' && !isFinite(v)) A.err('items', id, 'field ' + k + ' is ' + v); }
+      }
+      A.stat('itemBases', ITEM_BASES.length);
+    },
+  },
+  {
+    id: 'items.make',
+    desc: 'makeItem() output is finite and well formed for every base across rarities and power multipliers',
+    fn(A) {
+      const finite = (v) => typeof v === 'number' && isFinite(v);
+      let made = 0;
+      for (const b of ITEM_BASES) {
+        for (const rarity of [0, 1, 2, 3]) for (const pm of [1, 4, 25]) {
+          let it;
+          try { it = makeItem(b.id, rarity, Math.random, pm); } catch (e) { A.err('items.make', b.id, `throws (rarity ${rarity}, x${pm}): ${e.message}`); break; }
+          made++;
+          if (!it) { A.err('items.make', b.id, 'returned null'); break; }
+          if (/undefined|NaN/.test(it.name)) A.err('items.make', b.id, 'bad generated name ' + it.name);
+          if (!finite(it.value) || it.value < 1) A.err('items.make', b.id, 'bad value ' + it.value);
+          if (it.dmg && (!finite(it.dmg[0]) || !finite(it.dmg[1]) || it.dmg[0] > it.dmg[1] || it.dmg[0] < 1)) A.err('items.make', b.id, `bad dmg ${JSON.stringify(it.dmg)} (rarity ${rarity}, x${pm})`);
+          if (b.type === 'armor' && !finite(it.armor)) A.err('items.make', b.id, 'armor NaN');
+          for (const s in it.bonuses || {}) if (!finite(it.bonuses[s])) A.err('items.make', b.id, 'bonus ' + s + ' NaN');
+          if (it.str !== undefined && !finite(it.str)) A.err('items.make', b.id, 'str req NaN');
+        }
+      }
+      A.stat('itemsGenerated', made);
+    },
+  },
+  {
+    id: 'items.value-curve',
+    desc: 'gold value should rise with power: flags weapons/armor far cheaper than a weaker item of the same slot (shop/economy sanity)',
+    fn(A) {
+      const weap = ITEM_BASES.filter((b) => b.type === 'weapon' && b.dmg && !b.noShop && b.value > 0);
+      const avg = (b) => (b.dmg[0] + b.dmg[1]) / 2;
+      // value per average damage point; outliers by >6x from the median are almost always data typos
+      const ratios = weap.map((b) => b.value / avg(b)).sort((a, b) => a - b);
+      const med = ratios[Math.floor(ratios.length / 2)];
+      for (const b of weap) { const r = b.value / avg(b); if (r > med * 8 || r < med / 8) A.warn('items.economy', b.id, `value ${b.value} for avg dmg ${avg(b).toFixed(1)} (median gold/dmg ${med.toFixed(1)})`); }
+      A.stat('medianGoldPerWeaponDmg', +med.toFixed(2));
+    },
+  },
+];
+});
+
+// ==== FILE: lib/probes/monsters.js ====
+__def("lib/probes/monsters.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+const { ARENA2 } = require('./bosses');
+module.exports = [
+  {
+    id: 'monsters.schema',
+    desc: 'monster definitions: numeric stats, loot chances, behaviors the AI knows',
+    fn(A) {
+      const finite = (v) => typeof v === 'number' && isFinite(v);
+      for (const [id, m] of Object.entries(MONSTER_BASES)) {
+        if (!m.name) A.err('monsters', id, 'no name');
+        for (const k of ['hp', 'str', 'dex', 'xp']) if (!finite(m[k]) || m[k] < 0) A.err('monsters', id, `bad ${k}: ${m[k]}`);
+        if (!(m.hp > 0)) A.err('monsters', id, 'hp must be > 0');
+        if (!Array.isArray(m.atk) || !finite(m.atk[0]) || !finite(m.atk[1]) || m.atk[0] > m.atk[1] || m.atk[0] < 0) A.err('monsters', id, 'bad atk ' + JSON.stringify(m.atk));
+        if (m.armor !== undefined && (!finite(m.armor) || m.armor < 0)) A.err('monsters', id, 'bad armor ' + m.armor);
+        for (const l of m.loot || []) {
+          if (!(l.chance >= 0 && l.chance <= 1)) A.err('monsters', id, `loot ${l.id} chance ${l.chance} outside 0..1`);
+          if (l.min !== undefined && l.max !== undefined && l.min > l.max) A.err('monsters', id, `loot ${l.id} min>max`);
+        }
+        if (!m.glyph) A.warn('monsters', id, 'no glyph');
+        if (!m.desc && !(typeof MONSTER_DESCRIPTIONS !== 'undefined' && MONSTER_DESCRIPTIONS[id])) A.warn('monsters', id, 'no description');
+      }
+      A.stat('monsterBases', Object.keys(MONSTER_BASES).length);
+    },
+  },
+  {
+    id: 'monsters.make',
+    desc: 'makeMonster() works for every monster at shallow and deep scale (no NaN, no throw)',
+    fn(A) {
+      const finite = (v) => typeof v === 'number' && isFinite(v);
+      for (const id of Object.keys(MONSTER_BASES)) for (const ds of [1, 5, 14]) {
+        let m; try { m = makeMonster(id, 5, 5, ds, Math.random); } catch (e) { A.err('monsters.make', id, `throws at depthScale ${ds}: ${e.message}`); break; }
+        for (const k of ['hp', 'maxHp', 'str', 'xp']) if (!finite(m[k])) A.err('monsters.make', id, `${k} = ${m[k]} at depthScale ${ds}`);
+        if (!m.atk || !finite(m.atk[0]) || !finite(m.atk[1])) A.err('monsters.make', id, 'atk NaN at depthScale ' + ds);
+      }
+    },
+  },
+  {
+    id: 'monsters.xp-curve',
+    desc: 'XP per unit of threat should be roughly consistent; flags monsters that pay far more/less than their stats justify',
+    fn(A) {
+      const rows = [];
+      for (const [id, m] of Object.entries(MONSTER_BASES)) {
+        if (m.xp <= 0 || m.boss) continue;
+        const dpt = (m.atk[0] + m.atk[1]) / 2 + (m.str || 0) / 4;
+        const threat = Math.sqrt(m.hp * (dpt + 1)) * (1 + (m.armor || 0) * 0.08);
+        rows.push({ id, ratio: m.xp / threat, xp: m.xp, threat });
+      }
+      rows.sort((a, b) => a.ratio - b.ratio);
+      const med = rows[Math.floor(rows.length / 2)].ratio;
+      for (const r of rows) if (r.ratio > med * 4 || r.ratio < med / 5) A.warn('monsters.xp', r.id, `xp ${r.xp} vs threat ${r.threat.toFixed(1)} (xp/threat ${r.ratio.toFixed(2)}, median ${med.toFixed(2)})`);
+      A.stat('medianXpPerThreat', +med.toFixed(2));
+    },
+  },
+  {
+    id: 'monsters.behave',
+    desc: 'drop every ordinary monster next to an unkillable, motionless player for 30 turns: no exceptions/NaN, and it should DO something (hit, move, summon, burst gas); flag inert and wildly over/under-damaging monsters against their tier',
+    needsPlayer: true, uses: [ARENA2], seconds: 600,
+    fn(A) {
+      const finite = (v) => typeof v === 'number' && isFinite(v);
+      const rows = [];
+      for (const [id, base] of Object.entries(MONSTER_BASES)) {
+        if (base.boss || base.scriptedAI || base.waterOnly || base.powerDraw) continue; // bosses have their own probe; water-bound / ally constructs need special arenas
+        const m = A.arenaBoss(id, base.ambush ? 2 : 4);
+        if (!m) { A.warn('monsters.behave', id, 'no arena space'); continue; }
+        player.maxHp = 1e7; player.hp = 1e7;
+        let backing = 1e7, tally = 0;
+        Object.defineProperty(player, 'hp', { configurable: true, enumerable: true, get() { return backing; }, set(v) { if (v < backing) tally += backing - v; backing = Math.min(v, 1e7); } });
+        const x0 = m.x, y0 = m.y, n0 = curMonsters().filter((q) => q.alive).length; let moved = false;
+        for (let t = 0; t < 30; t++) {
+          try { endTurn(); } catch (e) { A.err('monsters.behave', id, `endTurn threw on turn ${t}: ${String(e && e.stack || e).split('\n').slice(0, 3).join(' | ')}`); break; }
+          if (gameState !== 'playing') { try { closeModal(); } catch (e) { /* */ } gameState = 'playing'; }
+          if (!player.alive) player.alive = true;
+          if (m.x !== x0 || m.y !== y0) moved = true;
+          if (!m.alive || m.hp <= 0) break;
+          if (!finite(m.hp) || !finite(player.hp)) { A.err('monsters.behave', id, `hp became NaN (monster ${m.hp}, player ${player.hp})`); break; }
+        }
+        installVitalGuards(player); player.hp = player.maxHp = 500;
+        const summoned = curMonsters().filter((q) => q.alive).length > n0;
+        const dpt = tally / 30;
+        rows.push({ id, tier: base.dtier || 0, dpt });
+        const passive = base.behavior === 'support' || base.behavior === 'flee' || base.prey;
+        if (!passive && tally <= 0 && !moved && !summoned) A.warn('monsters.inert', id, `${m.name} neither hit, moved nor summoned in 30 turns next to the player (behavior ${base.behavior})`);
+      }
+      // outliers against the monster's own tier (median damage per turn of monsters that dealt damage)
+      const byTier = {};
+      for (const r of rows) if (r.dpt > 0) (byTier[r.tier] = byTier[r.tier] || []).push(r.dpt);
+      const med = (a) => { a = a.slice().sort((x, y) => x - y); return a[Math.floor(a.length / 2)]; };
+      for (const r of rows) {
+        const a = byTier[r.tier]; if (!a || a.length < 5 || !(r.dpt > 0)) continue;
+        const md = med(a);
+        if (r.dpt > md * 4) A.warn('monsters.dpt', r.id, `deals ${r.dpt.toFixed(1)} dmg/turn vs tier-${r.tier} median ${md.toFixed(1)} (over 4x)`);
+      }
+      for (const t in byTier) A.stat('monsterDptMedianTier' + t, +med(byTier[t]).toFixed(2));
+      A.stat('monstersBehaved', rows.length);
+    },
+  },
+];
+});
+
+// ==== FILE: lib/probes/refs.js ====
+__def("lib/probes/refs.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// Probes about cross-table references: every id a table mentions must exist in the table it points at.
+module.exports = [
+  {
+    id: 'refs.items',
+    desc: 'every item id mentioned by drop tables, recipes, sets, shops, starters, rewards exists',
+    fn(A) {
+      const items = new Set(ITEM_BASES.map((b) => b.id));
+      const chk = (where, id, ctx) => { if (id && !items.has(id)) A.err('refs.items', where, `unknown item id "${id}"${ctx ? ' (' + ctx + ')' : ''}`); };
+      for (const [mid, m] of Object.entries(MONSTER_BASES)) for (const l of m.loot || []) chk('monster:' + mid, l.id, 'loot');
+      for (const r of RECIPES) { for (const i of r.inputs || []) chk('recipe:' + r.id, i.id, 'input'); if (r.output) chk('recipe:' + r.id, r.output.id, 'output'); }
+      for (const [k, s] of Object.entries(ITEM_SETS)) for (const p of s.pieces || []) chk('set:' + k, p, 'piece');
+      for (const [k, d] of Object.entries(BOSS_UNIQUE_DROPS)) chk('bossUnique:' + k, d.itemId);
+      for (const [k, d] of Object.entries(BOSS_MATERIAL_DROPS)) chk('bossMaterial:' + k, d.itemId);
+      for (const [k, d] of Object.entries(COMMON_UNIQUE_DROPS)) chk('commonUnique:' + k, d.itemId);
+      for (const m of MILESTONE_REWARDS) chk('milestone:' + m.id, m.itemId);
+      for (const [k, v] of Object.entries(ROLE_DEATH_LOOT)) for (const id of v) chk('roleLoot:' + k, id);
+      for (const id of FISH_CATCH_TABLE) chk('fish', id);
+      for (const [k, c] of Object.entries(CROPS)) { /* crops reference items by key */ if (c.seedItem) chk('crop:' + k, c.seedItem); if (c.yieldItem) chk('crop:' + k, c.yieldItem); }
+      for (const id of HUNTER_LOOT_IDS) chk('hunterLoot', id);
+      for (const id of CONTAINER_FOOD_IDS) chk('containerFood', id);
+      for (const id of CONTAINER_MATERIAL_IDS) chk('containerMaterial', id);
+    },
+  },
+  {
+    id: 'refs.monsters',
+    desc: 'every monster id mentioned by biomes, dimensions, events, quests, bosses exists',
+    fn(A) {
+      const mons = new Set(Object.keys(MONSTER_BASES));
+      const chk = (where, id, ctx) => { if (id && !mons.has(id)) A.err('refs.monsters', where, `unknown monster id "${id}"${ctx ? ' (' + ctx + ')' : ''}`); };
+      for (const [k, b] of Object.entries(BIOMES)) for (const e of b.encounter || []) chk('biome:' + k, e[0]);
+      for (const [k, d] of Object.entries(DIMENSIONS)) for (const [bk, b] of Object.entries(d.biomes || {})) for (const e of b.encounter || []) chk('dimension:' + k + '/' + bk, e[0]);
+      for (const [k, v] of Object.entries(EVENT_MONSTER_POOLS)) for (const id of v) chk('eventPool:' + k, id);
+      for (const id of QUEST_MONSTER_POOL) chk('questPool', id);
+      for (const b of STORY_BOSSES) chk('storyBoss', b.id);
+      for (const b of OVERWORLD_BOSSES) chk('overworldBoss', b.id);
+      for (const b of TRAIL_GUARDIANS) chk('trailGuardian', b.id);
+      for (const id of UNDEAD_IDS) chk('UNDEAD_IDS', id);
+      for (const id of SILVER_BONUS_IDS) chk('SILVER_BONUS_IDS', id);
+      for (const k of Object.keys(BOSS_POWER)) chk('BOSS_POWER', k);
+      for (const k of Object.keys(BOSS_UNIQUE_DROPS)) chk('BOSS_UNIQUE_DROPS', k);
+      for (const k of Object.keys(COMMON_UNIQUE_DROPS)) chk('COMMON_UNIQUE_DROPS', k);
+      for (const k of Object.keys(BOSS_MATERIAL_DROPS)) chk('BOSS_MATERIAL_DROPS', k);
+      for (const k of Object.keys(LEGACY_MONSTER_FACTIONS)) chk('LEGACY_MONSTER_FACTIONS', k);
+      for (const [k, d] of Object.entries(DIMENSION_TRAIL_GUARDIANS)) chk('trailGuardianOf:' + k, typeof d === 'string' ? d : d && d.id);
+    },
+  },
+  {
+    id: 'refs.themes',
+    desc: 'dungeon themes: generators exist, depth ranges sane, faction pools non-empty',
+    fn(A) {
+      for (const [k, t] of Object.entries(DUNGEON_THEMES)) {
+        if (!t.name) A.err('themes', k, 'no name');
+        if (!Array.isArray(t.depthRange) || t.depthRange[0] > t.depthRange[1] || t.depthRange[0] < 1) A.err('themes', k, 'bad depthRange ' + JSON.stringify(t.depthRange));
+        for (const g of t.genPool || []) if (!DUNGEON_GENERATORS[g[0]]) A.err('themes', k, 'unknown generator ' + g[0]);
+        if (!DUNGEON_TIER_WEIGHTS[t.tier] && t.tier !== 'dimension') A.err('themes', k, 'unknown tier ' + t.tier);
+      }
+      for (const [k, p] of Object.entries(DUNGEON_THEME_GENPOOLS)) for (const g of p) if (!DUNGEON_GENERATORS[g[0]]) A.err('themes', k, 'genpool unknown generator ' + g[0]);
+    },
+  },
+  {
+    id: 'refs.abilities',
+    desc: 'spells/techniques/talents/mutations/cyberware: unique ids, prerequisites exist, required fields valid',
+    fn(A) {
+      const finite = (v) => typeof v === 'number' && isFinite(v);
+      const uniq = (list, area) => { const s = new Set(); for (const x of list) { if (s.has(x.id)) A.err(area, x.id, 'duplicate id'); s.add(x.id); } return s; };
+      const spells = uniq(SPELLS, 'spells'), techs = uniq(TECHNIQUES, 'techniques'), talents = uniq(TALENTS_V2, 'talents');
+      uniq(MUTATIONS, 'mutations'); uniq(CYBERNETICS, 'cybernetics');
+      for (const s of SPELLS) {
+        if (!s.name || !s.type) A.err('spells', s.id, 'missing name/type');
+        if (s.mp !== undefined && (!finite(s.mp) || s.mp < 0)) A.err('spells', s.id, 'bad mp cost ' + s.mp);
+        if (s.power !== undefined && !(finite(s.power) || (Array.isArray(s.power) && s.power.every(finite)))) A.err('spells', s.id, 'bad power ' + JSON.stringify(s.power));
+        if (Array.isArray(s.power) && s.power[0] > s.power[1]) A.err('spells', s.id, 'power range inverted');
+        if (s.range !== undefined && !finite(s.range)) A.err('spells', s.id, 'bad range');
+      }
+      for (const t of TECHNIQUES) {
+        if (!t.name || !t.type) A.err('techniques', t.id, 'missing name/type');
+        if (t.mp !== undefined && (!finite(t.mp) || t.mp < 0)) A.err('techniques', t.id, 'bad cost ' + t.mp);
+        if (Array.isArray(t.power) && t.power[0] > t.power[1]) A.err('techniques', t.id, 'power range inverted');
+      }
+      for (const t of TALENTS_V2) {
+        for (const r of [].concat(t.requires || [])) { const id = typeof r === 'string' ? r : r && r.id; if (id && !talents.has(id)) A.err('talents', t.id, 'requires unknown talent ' + id); }
+        if (t.requires && [].concat(t.requires).includes(t.id)) A.err('talents', t.id, 'requires itself');
+      }
+      // cycle check on the talent prerequisite graph
+      const byId = new Map(TALENTS_V2.map((t) => [t.id, t]));
+      const state = new Map();
+      const dfs = (id, path) => {
+        if (state.get(id) === 2) return; if (state.get(id) === 1) { A.err('talents', id, 'prerequisite cycle: ' + path.join('>')); return; }
+        state.set(id, 1); const t = byId.get(id); for (const r of [].concat((t && t.requires) || [])) { const rid = typeof r === 'string' ? r : r && r.id; if (rid && byId.has(rid)) dfs(rid, path.concat(rid)); } state.set(id, 2);
+      };
+      for (const t of TALENTS_V2) dfs(t.id, [t.id]);
+      for (const a of ARCHETYPES) {
+        // starter abilities named by archetype apply() functions
+        const src = String(a.apply);
+        for (const m of src.matchAll(/knownTechniques\.push\(([^)]*)\)/g)) for (const q of m[1].split(',')) { const id = q.trim().replace(/['"`]/g, ''); if (id && !techs.has(id)) A.err('archetypes', a.id, 'starter technique "' + id + '" does not exist'); }
+        for (const m of src.matchAll(/knownSpells\.push\(([^)]*)\)/g)) for (const q of m[1].split(',')) { const id = q.trim().replace(/['"`]/g, ''); if (id && !spells.has(id)) A.err('archetypes', a.id, 'starter spell "' + id + '" does not exist'); }
+        // balance lesson (v0.51.3): five starter kits had NO reliable damage (only buffs/blinks/execute-finishers) and won 40-60% of duels the other classes won ~99%.
+        // Every archetype must start with at least one plain damage ability (no HP cost / exposure) or a summon.
+        { const ids = []; for (const m of src.matchAll(/known(?:Spells|Techniques)\.push\(([^)]*)\)/g)) for (const q of m[1].split(',')) { const id = q.trim().replace(/['"`]/g, ''); if (id) ids.push(id); }
+          const offense = ids.some((id) => { let ab = null; try { ab = findAbilityById(id); } catch (e) { /* */ } return ab && ((['damage', 'drain', 'smite'].includes(ab.type) && Array.isArray(ab.power) && !ab.selfCost && !ab.selfExposed) || ab.type === 'summon'); });
+          if (!offense) A.err('archetypes', a.id, 'starter kit has no reliable damage ability (needs a plain damage/drain/smite spell or technique, or a summon): ' + ids.join(','));
+        }
+        for (const m of src.matchAll(/makeStarterItem\(['"]([^'"]+)['"]/g)) if (!ITEM_BASES.some((b) => b.id === m[1])) A.err('archetypes', a.id, 'starter item "' + m[1] + '" does not exist');
+      }
+    },
+  },
+];
+});
+
+// ==== FILE: lib/probes/story.js ====
+__def("lib/probes/story.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// Main-quest probes: generate the questline many times, validate every stage's references, then play it to the end (taking every
+// choice branch across runs) so a dead-end / unreachable ending / throwing stage is caught.
+module.exports = [
+  {
+    id: 'story.playthrough',
+    desc: 'generateMainQuest x many: stage refs resolve (bosses, dimensions, guardians); stepping through advanceStory/resolveMainQuestChoice reaches the final stage without exceptions or stalls, on every choice branch',
+    needsPlayer: true, seconds: 240,
+    fn(A) {
+      const runs = 24;
+      const choiceTaken = new Set(); let finished = 0;
+      for (let run = 0; run < runs; run++) {
+        let st;
+        try { player.story = null; st = player.story = generateMainQuest(Math.random); } catch (e) { A.err('story.playthrough', 'generate', 'generateMainQuest threw: ' + String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); continue; }
+        const checkStage = (s) => {
+          if (!s.id || !s.type || !s.title) A.err('story.playthrough', s.id || '?', 'stage missing id/type/title');
+          if (s.targetBossId && !MONSTER_BASES[s.targetBossId]) A.err('story.playthrough', s.id, 'targetBossId ' + s.targetBossId + ' is not a monster');
+          if (s.targetMonsterId && !MONSTER_BASES[s.targetMonsterId]) A.err('story.playthrough', s.id, 'targetMonsterId ' + s.targetMonsterId + ' is not a monster');
+          if (s.targetDimensionId && !DIMENSIONS[s.targetDimensionId]) A.err('story.playthrough', s.id, 'targetDimensionId ' + s.targetDimensionId + ' is not a dimension');
+          if (s.type === 'dungeon_tier' && !DUNGEON_TIER_WEIGHTS[s.targetTier]) A.err('story.playthrough', s.id, 'unknown dungeon tier ' + s.targetTier);
+        };
+        st.stages.forEach(checkStage);
+        for (const s of st.stages) if (s.branches) for (const k in s.branches) s.branches[k].forEach(checkStage);
+        let steps = 0, last = -1, stuck = 0;
+        try {
+          player.hp = player.maxHp = 9999;
+          while (steps++ < 200) {
+            const cur = player.story.stages[player.story.stageIndex];
+            if (!cur) { finished++; break; }
+            if (cur.type === 'choice') {
+              const keys = Object.keys(cur.branches);
+              const pick = keys[run % keys.length];
+              choiceTaken.add(cur.id + ':' + pick);
+              resolveMainQuestChoice(cur, pick);
+            } else advanceStory();
+            try { closeModal(); } catch (e) { /* */ } gameState = 'playing'; dialogueNPC = null;
+            if (player.story.stageIndex === last) { if (++stuck > 3) { A.err('story.playthrough', cur.id, 'story stalled on stage ' + cur.id + ' (' + cur.type + ')'); break; } } else { stuck = 0; last = player.story.stageIndex; }
+          }
+          if (steps >= 200) A.err('story.playthrough', 'loop', 'story did not finish in 200 steps');
+        } catch (e) { A.err('story.playthrough', 'walk', 'walking the quest threw: ' + String(e && e.stack || e).split('\n').slice(0, 3).join(' | ')); }
+        player.alive = true;
+      }
+      player.story = null;
+      A.stat('storyRuns', runs); A.stat('storyFinished', finished); A.stat('storyChoiceBranchesTaken', choiceTaken.size);
+    },
+  },
+];
+});
+
+// ==== FILE: lib/probes/systems.js ====
+__def("lib/probes/systems.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// Probes that exercise whole game systems with a live character.
+const HELPERS = function (A) {
+  A.settle = function () { for (let i = 0; i < 4 && gameState !== 'playing' && gameState !== 'gameover'; i++) { if (gameState === 'tiletarget') { try { cancelTileTargeting(); } catch (e) { /* */ } } try { closeModal(); } catch (e) { /* */ } gameState = 'playing'; } };
+  A.vitals = function () { player.maxHp = Math.max(player.maxHp, 500); player.hp = player.maxHp; player.mp = Math.max(player.mp, 100); player.stamina = player.maxStamina; };
+  A.numbersOk = function (obj, label, ids) { // report any non-finite player vitals
+    for (const k of ['hp', 'maxHp', 'mp', 'maxMp', 'stamina', 'maxStamina', 'gold', 'str', 'dex', 'int', 'con', 'wil', 'cha', 'xp', 'level']) if (typeof player[k] !== 'number' || !isFinite(player[k])) { A.err(label, ids, `player.${k} is ${player[k]}`); return false; }
+    return true;
+  };
+};
+
+module.exports = [
+  {
+    id: 'systems.use-items',
+    desc: 'use every consumable / scroll / rune / recipe item once: no exceptions, no NaN vitals',
+    needsPlayer: true, uses: [HELPERS], seconds: 240,
+    fn(A) {
+      let used = 0;
+      const bases = ITEM_BASES.filter((b) => ['consumable', 'scroll', 'recipe', 'rune', 'misc', 'material'].includes(b.type));
+      for (const b of bases) {
+        A.vitals(); A.settle();
+        let it; try { it = makeItem(b.id, 1, Math.random, 1); } catch (e) { A.err('systems.use-items', b.id, 'makeItem threw ' + e.message); continue; }
+        if (!it) continue;
+        player.inventory.push(it);
+        const gold0 = player.gold;
+        try { useItem(it); } catch (e) { A.err('systems.use-items', b.id, `useItem(${b.name}) threw: ${String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')}`); }
+        A.settle(); used++;
+        if (gameState === 'gameover' || !player.alive) { A.warn('systems.use-items', b.id, `using ${b.name} killed the player (${player.deathCause}) -- fine if it is a poison/curse item`); return; }
+        A.numbersOk(player, 'systems.use-items', b.id + ' (' + b.name + ')');
+      }
+      A.stat('itemsUsed', used);
+    },
+  },
+  {
+    id: 'systems.equip-all',
+    desc: 'equip and unequip every weapon/armor piece: no exceptions, stats stay finite, slots stay consistent',
+    needsPlayer: true, uses: [HELPERS], seconds: 240,
+    fn(A) {
+      let n = 0;
+      for (const b of ITEM_BASES.filter((i) => i.type === 'weapon' || i.type === 'armor')) {
+        A.vitals(); A.settle();
+        let it; try { it = makeItem(b.id, 2, Math.random, 3); } catch (e) { continue; }
+        if (!it) continue;
+        player.inventory.push(it);
+        try { equipItem(it); n++; } catch (e) { A.err('systems.equip-all', b.id, `equipItem threw: ${String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')}`); A.settle(); continue; }
+        A.settle();
+        if (!A.numbersOk(player, 'systems.equip-all', b.id)) { player.str = player.dex = player.int = player.con = 10; }
+        try { recalcVitalsFromStats && recalcVitalsFromStats(); } catch (e) { A.err('systems.equip-all', b.id, 'recalcVitals threw ' + e.message); }
+        try { if (typeof getArmorOf === 'function') { const a = getArmorOf(player); if (!isFinite(a)) A.err('systems.equip-all', b.id, 'getArmorOf = ' + a); } } catch (e) { A.err('systems.equip-all', b.id, 'getArmorOf threw ' + e.message); }
+      }
+      A.stat('itemsEquipped', n);
+    },
+  },
+  {
+    id: 'systems.save-roundtrip',
+    desc: 'getSaveData -> JSON -> applyLoadedSave keeps the character intact (twice, after generating a dungeon floor)',
+    needsPlayer: true, uses: [HELPERS], seconds: 120,
+    fn(A) {
+      const keys = ['level', 'hp', 'maxHp', 'mp', 'gold', 'x', 'y', 'str', 'dex', 'int', 'con', 'wil', 'cha', 'xp'];
+      for (let round = 0; round < 2; round++) {
+        if (round === 1) { try { const th = Object.keys(DUNGEON_THEMES)[3]; const lvl = generateDungeonLevel(th, 2, 3, 'standard', 'small', 0); dungeonRegistry.set('audit_dg', { id: 'audit_dg', theme: th, levels: [lvl], x: 5, y: 5, maxDepth: 3, variant: 'standard', size: 'small' }); } catch (e) { A.warn('systems.save', 'dungeon', 'could not seed a dungeon for the 2nd round: ' + e.message); } }
+        const before = {}; for (const k of keys) before[k] = player[k];
+        const inv0 = player.inventory.length, spells0 = player.knownSpells.length, turn0 = turnCount;
+        let raw;
+        try { raw = JSON.stringify(getSaveData(), saveDataReplacer); } catch (e) { A.err('systems.save', 'serialize', 'round ' + round + ' getSaveData/stringify threw: ' + String(e.stack).split('\n').slice(0, 4).join(' | ')); return; }
+        A.stat('saveChars', raw.length);
+        try { applyLoadedSave(JSON.parse(raw)); } catch (e) { A.err('systems.save', 'load', 'applyLoadedSave threw: ' + String(e.stack).split('\n').slice(0, 2).join(' | ')); return; }
+        A.settle();
+        for (const k of keys) if (player[k] !== before[k]) A.err('systems.save', k, `player.${k} changed across save/load: ${before[k]} -> ${player[k]}`);
+        if (player.inventory.length !== inv0) A.err('systems.save', 'inventory', `inventory ${inv0} -> ${player.inventory.length}`);
+        if (player.knownSpells.length !== spells0) A.err('systems.save', 'spells', `knownSpells ${spells0} -> ${player.knownSpells.length}`);
+        if (turnCount !== turn0) A.err('systems.save', 'turn', `turnCount ${turn0} -> ${turnCount}`);
+        if (gameState !== 'playing') A.err('systems.save', 'state', 'gameState is ' + gameState + ' after load');
+        try { endTurn(); endTurn(); } catch (e) { A.err('systems.save', 'post-load-turn', 'endTurn threw after load: ' + e.message); }
+      }
+    },
+  },
+];
+});
+
+// ==== FILE: lib/probes/talents.js ====
+__def("lib/probes/talents.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// Talent tree probes: the prerequisite graph is well-formed and every talent can actually be bought and applied.
+module.exports = [
+  {
+    id: 'talents.graph',
+    desc: 'every talent has a unique id/name/desc, a sane tier, and its prerequisite talent exists, is a lower tier, and the chain terminates (no cycles)',
+    fn(A) {
+      const byId = new Map(); let n = 0;
+      for (const t of TALENTS_V2) {
+        n++;
+        if (!t.id || !t.name || !t.desc) A.err('talents.graph', t.id || '?', 'missing id/name/desc');
+        if (byId.has(t.id)) A.err('talents.graph', t.id, 'duplicate talent id');
+        byId.set(t.id, t);
+        if (typeof t.apply !== 'function') A.err('talents.graph', t.id, 'apply is not a function');
+        if (!(t.tier >= 1 && t.tier <= 9)) A.warn('talents.graph', t.id, 'unusual tier ' + t.tier);
+      }
+      let maxLevel = 0;
+      for (const t of TALENTS_V2) {
+        if (t.requires && t.requires.level > maxLevel) maxLevel = t.requires.level;
+        const seen = new Set([t.id]); let cur = t;
+        while (cur && cur.requires && cur.requires.talent) {
+          const p = byId.get(cur.requires.talent);
+          if (!p) { A.err('talents.graph', t.id, 'requires unknown talent "' + cur.requires.talent + '"'); break; }
+          if (seen.has(p.id)) { A.err('talents.graph', t.id, 'prerequisite cycle through ' + p.id); break; }
+          if (p.tier >= t.tier) A.warn('talents.graph', t.id, `prerequisite ${p.id} (tier ${p.tier}) is not a lower tier than ${t.id} (tier ${t.tier})`);
+          if (cur.requires.level && p.requires && p.requires.level > cur.requires.level) A.warn('talents.graph', t.id, `needs level ${cur.requires.level} but its prerequisite ${p.id} needs ${p.requires.level}`);
+          seen.add(p.id); cur = p;
+        }
+      }
+      A.stat('talents', n); A.stat('talentMaxLevelReq', maxLevel);
+    },
+  },
+  {
+    id: 'talents.buy-all',
+    desc: 'buy every talent through the real purchase path: no exceptions, vitals and core stats stay finite, and talents that exist in the shop list can be bought',
+    needsPlayer: true, seconds: 120,
+    fn(A) {
+      player.level = 60; player.talents = {}; player.talentPoints = 9999;
+      let bought = 0;
+      for (const t of TALENTS_V2) {
+        try { purchaseTalent(t); bought++; } catch (e) { A.err('talents.buy-all', t.id, 'purchase threw: ' + String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); continue; }
+        if (!player.talents[t.id]) A.err('talents.buy-all', t.id, 'purchase did not record the talent');
+        for (const k of ['hp', 'maxHp', 'mp', 'maxMp', 'str', 'dex', 'con', 'int', 'wil', 'cha']) if (typeof player[k] === 'number' && !isFinite(player[k])) { A.err('talents.buy-all', t.id, k + ' became ' + player[k]); player[k] = 10; }
+      }
+      try { closeModal(); } catch (e) { /* */ } gameState = 'playing';
+      A.stat('talentsBought', bought);
+    },
+  },
+];
+});
+
+// ==== FILE: lib/probes/training.js ====
+__def("lib/probes/training.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// How a character GETS new abilities. Lesson (v0.51.3): TECHNIQUES (every martial class ability beyond the 2-3 a class starts with) had no learning path at all:
+// trainers and tomes only taught spells. This probe proves every technique is reachable through BOTH a trainer (Combat Trainer / 'weaponmaster') and a manual (tome with techId),
+// and that buying from the trainer and studying a manual really change player.knownTechniques.
+module.exports = [
+  {
+    id: 'training.techniques',
+    desc: 'every technique is obtainable (Combat Trainer teach pool + manual drop pool); training and manual studying teach it; trainer role is placed in towns/cities/capitals',
+    needsPlayer: true, seconds: 90,
+    fn(A) {
+      const say = (id, ok, msg) => { if (!ok) A.err('training', id, msg); };
+      // 1. reachability: a master Combat Trainer can teach tier<=5, manuals are drawn by mana/stamina cost band
+      const unreachableByTrainer = TECHNIQUES.filter((t) => (t.tier || 1) > 5).map((t) => t.id);
+      say('trainer-pool', !unreachableByTrainer.length, 'techniques above tier 5 can never be taught by a trainer: ' + unreachableByTrainer.join(','));
+      const seen = new Set();
+      for (let i = 0; i < 6000; i++) { const tier = i % TOME_TIERS.length; const m = makeManual(tier, Math.random); if (m && m.techId) seen.add(m.techId); }
+      const never = TECHNIQUES.filter((t) => !seen.has(t.id)).map((t) => t.id);
+      say('manual-pool', never.length === 0, `${never.length} techniques never roll as a manual in 6000 draws: ${never.slice(0, 12).join(',')}`);
+      A.stat('techniques', TECHNIQUES.length); A.stat('techniquesAsManuals', seen.size);
+      // 2. role is actually placed
+      for (const k of ['village', 'town', 'city', 'capital']) say('pool-' + k, (ROLE_POOLS[k] || []).includes('weaponmaster'), `ROLE_POOLS.${k} has no weaponmaster`);
+      say('role-def', ROLES.some((r) => r.id === 'weaponmaster'), 'no weaponmaster role definition');
+      // 3. trainer teaches, tier-gated, and the Learn flow works
+      for (const tier of ['novice', 'journeyman', 'master']) {
+        let npc; try { npc = makeNPC('weaponmaster', player.x + 1, player.y, Math.random, null, 'human'); } catch (e) { A.err('training', 'makeNPC', String(e && e.message)); return; }
+        // re-roll teach list for the requested tier the same way makeNPC does for a fresh NPC of that tier
+        npc.tier = tier; let n = 0, tries = 0, got = null;
+        while (tries++ < 40 && !(got && got.tier === tier)) { const c = makeNPC('weaponmaster', player.x + 1, player.y, Math.random, null, 'human'); if (c.tier === tier) got = c; }
+        if (!got) { A.info('training', 'tier-' + tier, 'no ' + tier + ' trainer in 40 spawns'); continue; }
+        const maxTier = tier === 'novice' ? 2 : tier === 'master' ? 5 : 3;
+        say('teach-' + tier, got.teachTechniques && got.teachTechniques.length >= 2, `${tier} Combat Trainer teaches ${(got.teachTechniques || []).length} techniques`);
+        for (const id of got.teachTechniques || []) { const t = TECHNIQUES.find((x) => x.id === id); say('teach-valid-' + id, !!t && (t.tier || 1) <= maxTier, `${tier} trainer teaches ${id} (tier ${t && t.tier}) above tier ${maxTier}`); }
+        if (tier === 'journeyman' || tier === 'novice') {
+          player.knownTechniques = []; player.gold = 5000; const id0 = got.teachTechniques[0];
+          openTrain(got); const g0 = player.gold; trainLearn('a');
+          say('learn-' + tier, player.knownTechniques.includes(id0) && player.gold < g0, `buying "${id0}" from a ${tier} trainer did not teach it / charge gold`);
+          try { closeModal(); } catch (e) { /* */ } gameState = 'playing';
+        }
+      }
+      // 4. manual study
+      { player.knownTechniques = []; const man = makeManual(1, Math.random); player.inventory.push(man); useItem(man);
+        say('manual-study', player.knownTechniques.includes(man.techId) && !player.inventory.some((i) => i.uid === man.uid), `studying ${man.name} did not teach ${man.techId} / consume the manual`);
+        const man2 = makeManual(1, Math.random); man2.techId = man.techId; player.inventory.push(man2); useItem(man2);
+        say('manual-dupe', !player.inventory.some((i) => i.uid === man2.uid), 'a duplicate manual was not consumed (would be an infinite stack)'); }
+      player.knownTechniques = []; player.hp = player.maxHp;
+    },
+  },
+];
+});
+
+// ==== FILE: lib/probes/worldgen.js ====
+__def("lib/probes/worldgen.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// Probes that generate parts of the world and validate the result.
+module.exports = [
+  {
+    id: 'worldgen.dungeons',
+    desc: 'generate every dungeon theme at several depths/sizes/variants: connected stairs, sane entities, nothing in walls, no overlaps',
+    needsPlayer: true,
+    seconds: 600,
+    fn(A) {
+      const finite = (v) => typeof v === 'number' && isFinite(v);
+      const sizes = DUNGEON_SIZE_TIERS.map((s) => s.id), variants = DUNGEON_VARIANTS.map((v) => v.id);
+      let floors = 0, slow = 0, adjacentSpawns = 0, totalMon = 0, totalWalk = 0;
+      const bfs = (g, w, h, a, b) => {
+        const seen = new Set([a.x + ',' + a.y]), q = [[a.x, a.y]];
+        while (q.length) {
+          const [x, y] = q.pop();
+          if (x === b.x && y === b.y) return true;
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx, ny = y + dy, k = nx + ',' + ny;
+            if (seen.has(k) || nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+            const t = g[ny] && g[ny][nx]; if (!t || !t.walkable) continue;
+            seen.add(k); q.push([nx, ny]);
+          }
+        }
+        return false;
+      };
+      let n = 0;
+      for (const [theme, meta] of Object.entries(DUNGEON_THEMES)) {
+        const maxD = Math.max(meta.depthRange[1], 3);
+        for (const depth of [1, Math.ceil(maxD / 2), maxD]) {
+          const size = sizes[(n * 3 + depth) % sizes.length], variant = variants[(n + depth) % variants.length]; n++;
+          const t0 = Date.now(); let lvl;
+          try { lvl = generateDungeonLevel(theme, depth, maxD, variant, size, 0); } catch (e) { A.err('worldgen', theme, `d${depth} ${size}/${variant}: generateDungeonLevel threw ${e.message}`); continue; }
+          const dt = Date.now() - t0; floors++; if (dt > 2500) { slow++; A.warn('worldgen.perf', theme, `d${depth} ${size} took ${dt}ms`); }
+          const where = `${theme} d${depth} ${size}/${variant}/${lvl.genId}`;
+          if (!lvl.grid || lvl.grid.length !== lvl.h) { A.err('worldgen', where, 'grid height mismatch'); continue; }
+          let walk = 0;
+          for (let y = 0; y < lvl.h; y++) for (let x = 0; x < lvl.w; x++) { const t = lvl.grid[y][x]; if (!t) { A.err('worldgen', where, `null tile at ${x},${y}`); y = lvl.h; break; } if (t.walkable) walk++; }
+          totalWalk += walk;
+          const up = lvl.upStairs, down = lvl.downStairs;
+          const okAt = (p) => p && lvl.grid[p.y] && lvl.grid[p.y][p.x] && lvl.grid[p.y][p.x].walkable;
+          if (!up || !okAt(up)) A.err('worldgen', where, 'up stairs missing or not on walkable ground ' + JSON.stringify(up));
+          if (down && !okAt(down)) A.err('worldgen', where, 'down stairs not on walkable ground');
+          if (up && down && okAt(up) && okAt(down) && !bfs(lvl.grid, lvl.w, lvl.h, up, down)) A.err('worldgen', where, 'down stairs unreachable from up stairs');
+          const occupied = new Map();
+          for (const m of [].concat(lvl.monsters, lvl.npcs || [])) {
+            if (!finite(m.x) || !finite(m.y) || !lvl.grid[m.y] || !lvl.grid[m.y][m.x] || !lvl.grid[m.y][m.x].walkable) { A.err('worldgen', where, `${m.name} stands in a wall/out of bounds at ${m.x},${m.y}`); continue; }
+            const k = m.x + ',' + m.y; if (occupied.has(k)) A.err('worldgen', where, `${m.name} and ${occupied.get(k)} share tile ${k}`); occupied.set(k, m.name);
+            if (!finite(m.hp) || m.hp <= 0) A.err('worldgen', where, `${m.name} has hp ${m.hp}`);
+            if (up && m.kind === 'monster' && Math.max(Math.abs(m.x - up.x), Math.abs(m.y - up.y)) <= 2) { adjacentSpawns++; if (m.boss) A.warn('worldgen.spawn', where, `boss ${m.name} spawns within 2 tiles of the arrival stairs`); }
+          }
+          totalMon += lvl.monsters.length;
+          for (const it of lvl.items || []) if (!lvl.grid[it.y] || !lvl.grid[it.y][it.x] || !lvl.grid[it.y][it.x].walkable) A.err('worldgen', where, `item ${(it.item && it.item.name) || '?'} lies in a wall at ${it.x},${it.y}`);
+          for (const c of lvl.containers || []) if (!lvl.grid[c.y] || !lvl.grid[c.y][c.x]) A.err('worldgen', where, 'container out of bounds');
+          if (lvl.monsters.length === 0 && walk > 400) A.warn('worldgen.empty', where, `no monsters on a ${walk}-tile floor`);
+        }
+      }
+      A.stat('dungeonFloors', floors); A.stat('slowFloors', slow); A.stat('monstersWithin2OfArrival', adjacentSpawns); A.stat('monstersPer100Tiles', +(totalMon / Math.max(1, totalWalk) * 100).toFixed(2));
+    },
+  },
+  {
+    id: 'worldgen.overworld',
+    desc: 'generate a wide stretch of overworld chunks: no exceptions, no entity stacked in a wall or on another, settlements have people',
+    needsPlayer: true,
+    seconds: 300,
+    fn(A) {
+      const finite = (v) => typeof v === 'number' && isFinite(v);
+      let chunks = 0, mons = 0;
+      for (let cy = -14; cy <= 14; cy += 2) for (let cx = -14; cx <= 14; cx += 2) {
+        let c; try { c = getChunk(cx, cy); } catch (e) { A.err('worldgen.overworld', `${cx},${cy}`, 'getChunk threw ' + e.message); continue; }
+        chunks++;
+        const occ = new Map();
+        for (const m of c.monsters || []) {
+          mons++;
+          if (!finite(m.hp) || m.hp <= 0 || !finite(m.x)) { A.err('worldgen.overworld', `${cx},${cy}`, `${m.name} bad hp/pos`); continue; }
+          const t = curTileAt(m.x, m.y);
+          if (t && !t.walkable && !m.flying && !m.swimmer && !/ocean|water|lake|river|reef|sea/i.test(String(t.biome || t.name))) A.warn('worldgen.overworld', `${cx},${cy}`, `${m.name} stands on non-walkable ${t.biome || t.name} at ${m.x},${m.y}`);
+          const k = m.x + ',' + m.y; if (occ.has(k)) A.err('worldgen.overworld', `${cx},${cy}`, `${m.name} stacked with ${occ.get(k)} at ${k}`); occ.set(k, m.name);
+        }
+      }
+      A.stat('overworldChunks', chunks); A.stat('overworldMonsters', mons);
+    },
+  },
+];
+});
+
+// ==== FILE: lib/commands/audit.js ====
+__def("lib/commands/audit.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// =====================================================================================================
+// audit -- static + dynamic checks of game data and systems. Exits 1 when any error-level finding exists.
+//   node playtest.js audit [--only=items,refs] [--skip=systems.world] [--json] [--warn] [--verbose] [--seed=7]
+//   --warn also prints warnings (hidden by default: they are judgement calls, errors are bugs).
+// Add checks in lib/probes/*.js (see probes/index.js).
+// =====================================================================================================
+const { boot, ev, drainErrors } = require('../harness');
+const { createCharacter } = require('../driver');
+const probes = require('../probes');
+
+/** Source of the reporter handed to every probe (runs in the game realm). */
+function REPORTER_SRC() {
+  const R = { findings: [], stats: {}, cap: {} };
+  const push = (sev) => (area, id, msg) => {
+    const k = sev + '|' + area + '|' + id + '|' + msg;
+    R.cap[area] = (R.cap[area] || 0) + 1;
+    if (R.cap[area] > 400) return; // a systemic bug must not bury the report
+    R.findings.push({ sev, area: String(area), id: String(id), msg: String(msg).slice(0, 400), k });
+  };
+  R.err = push('error'); R.warn = push('warn'); R.info = push('info');
+  R.stat = (k, v) => { R.stats[k] = v; };
+  window.__AUDIT = R;
 }
+
+/** Source text of a probe function as an expression (method shorthand `fn(A){}` has no `function` keyword). */
+function fnSource(fn) {
+  const s = fn.toString();
+  return /^(async\s+)?(function\b|\(|[A-Za-z_$][\w$]*\s*=>)/.test(s) ? s : '({' + s + '}).fn';
+}
+
+async function run(args) {
+  const only = args.only ? String(args.only).split(',') : null;
+  const skip = args.skip ? String(args.skip).split(',') : [];
+  const wanted = probes.filter((p) => (!only || only.some((o) => p.id.startsWith(o))) && !skip.some((s) => p.id.startsWith(s)));
+  const seed = parseInt(args.seed || '7', 10);
+  const results = [], stats = {};
+  let dom = await boot(undefined, seed, { saveable: true });
+  let withPlayer = false;
+  const t00 = Date.now();
+  for (const p of wanted) {
+    if (p.needsPlayer && !withPlayer) {
+      if (!createCharacter(dom.window)) throw new Error('could not create a character for dynamic probes');
+      withPlayer = true;
+    }
+    const win = dom.window;
+    ev(win, '(' + REPORTER_SRC.toString() + ')()');
+    const t0 = Date.now();
+    for (const h of p.uses || []) ev(win, `(${fnSource(h)})(window.__AUDIT)`);
+    const r = ev(win, `(${fnSource(p.fn)})(window.__AUDIT)`, (p.seconds || 120) * 1000);
+    const findings = JSON.parse(ev(win, 'JSON.stringify(window.__AUDIT.findings)').value || '[]');
+    Object.assign(stats, JSON.parse(ev(win, 'JSON.stringify(window.__AUDIT.stats)').value || '{}'));
+    if (!r.ok) findings.push({ sev: 'error', area: p.id, id: '(probe)', msg: (r.timeout ? 'TIMED OUT: ' : 'THREW: ') + r.error.split('\n').slice(0, 3).join(' | ').slice(0, 500) });
+    for (const e of drainErrors(win)) findings.push({ sev: 'error', area: p.id, id: '(game exception)', msg: `[${e.where}] x${e.count} ${e.msg} @ ${(e.stack.split('\n')[1] || '').trim()}` });
+    results.push({ id: p.id, desc: p.desc, ms: Date.now() - t0, findings });
+    if (!args.json) process.stderr.write(`  ${p.id.padEnd(26)} ${String(Date.now() - t0).padStart(6)}ms  ${findings.filter((f) => f.sev === 'error').length} errors, ${findings.filter((f) => f.sev === 'warn').length} warnings\n`);
+  }
+  const errors = results.flatMap((r) => r.findings.filter((f) => f.sev === 'error'));
+  const warns = results.flatMap((r) => r.findings.filter((f) => f.sev === 'warn'));
+  if (args.json) { console.log(JSON.stringify({ stats, results }, null, 1)); return { exitCode: errors.length ? 1 : 0 }; }
+  const show = (list, label) => {
+    const byArea = new Map();
+    for (const f of list) { if (!byArea.has(f.area)) byArea.set(f.area, []); byArea.get(f.area).push(f); }
+    for (const [area, fs] of byArea) { console.log(`\n${label} [${area}] (${fs.length})`); for (const f of fs.slice(0, args.verbose ? 1000 : 25)) console.log(`  ${f.id}: ${f.msg}`); if (fs.length > 25 && !args.verbose) console.log(`  ... ${fs.length - 25} more (use --verbose)`); }
+  };
+  show(errors, 'ERROR');
+  if (args.warn) show(warns, 'warn');
+  console.log(`\nStats: ${JSON.stringify(stats)}`);
+  console.log(`Audit finished in ${((Date.now() - t00) / 1000).toFixed(1)}s: ${errors.length} errors, ${warns.length} warnings${args.warn ? '' : ' (run with --warn to list)'}`);
+  return { exitCode: errors.length ? 1 : 0 };
+}
+module.exports = { run };
+});
+
+// ==== FILE: lib/commands/balance.js ====
+__def("lib/commands/balance.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// =====================================================================================================
+// balance -- controlled duels: every class (or a chosen few) against a ladder of monsters at the same strength.
+//   node playtest.js balance --curve=1,5,10,20 [--classes=..]   win rate per class as the character levels (scale = depthScaleForPlayerLevel(L), tier = ceil(L/6), capped at 6)
+//   node playtest.js balance [--classes=all|warrior,mage] [--species=human] [--level=1] [--scale=1] [--tier=1] [--trials=8] [--monsters=a,b] [--nosupport|--kite] [--json]
+// --nosupport turns off the buff/summon/debuff casting (damage-only policy)
+// --level N levels the character up N-1 times (stats/talents spent by the autopilot's own helpers) before fighting;
+// --scale is the monster depthScale (1 = ground floor of the first dungeon); --tier picks all non-boss monsters with dtier <= tier.
+// Output: per class the win rate against the whole ladder plus the worst matchups. Great for "is class X unfairly weak/strong at level N?".
+// =====================================================================================================
+const { newGame, createCharacter } = require('../driver');
+const { ev } = require('../harness');
+const DUEL = require('../duel');
+
+async function curve(args) {
+  const levels = String(args.curve).split(',').map((n) => parseInt(n, 10));
+  const classes = args.classes === 'all' ? null : String(args.classes || 'warrior,mage,rogue').split(',');
+  const species = args.species || 'human', trials = parseInt(args.trials || 4, 10);
+  const probe = await newGame({ seed: 5 });
+  const tables = JSON.parse(ev(probe.window, 'JSON.stringify({classes:ARCHETYPES.map(a=>a.id),mon:Object.entries(MONSTER_BASES).filter(([id,m])=>!m.boss&&!m.miniboss&&!m.waterOnly&&!m.aquatic&&!m.summonId&&m.behavior!=="turret"&&m.behavior!=="flee"&&!m.splitInto&&!m.powerDraw).map(([id,m])=>[id,m.dtier===undefined?0:m.dtier])})').value);
+  const list = classes || tables.classes;
+  const rows = [];
+  for (const cl of list) {
+    const row = { class: cl, win: {} };
+    for (const L of levels) {
+      const tier = Math.min(6, Math.max(1, Math.ceil(L / 6)));
+      // the monsters of the tier the player is expected to meet at this level (not the whole ladder below it)
+      const mons = tables.mon.filter((e) => e[1] === tier || (tier === 1 && e[1] === 0)).map((e) => e[0]);
+      const dom = await newGame({ seed: 11 }); const win = dom.window;
+      if (!createCharacter(win, { species, archetype: cl, scenario: 'town' })) continue;
+      ev(win, '(' + DUEL.toString() + ')()');
+      ev(win, `__DUEL.levelTo(${L});`, 120000);
+      let w = 0, n = 0;
+      for (const id of mons) { const r = ev(win, `JSON.stringify(__DUEL.run(${JSON.stringify(id)}, {scale:depthScaleForPlayerLevel(${L}), trials:${trials}, support:${args.nosupport ? 'false' : args.kite ? "'kite'" : 'true'}}))`, 120000); if (r.ok) { w += JSON.parse(r.value).win; n++; } }
+      row.win[L] = n ? w / n : null;
+    }
+    rows.push(row);
+    console.error('  ' + cl.padEnd(13) + levels.map((L) => `L${L}:${row.win[L] == null ? '--' : Math.round(row.win[L] * 100) + '%'}`).join('  '));
+  }
+  if (args.json) { console.log(JSON.stringify(rows)); return; }
+  console.log('\nclass         ' + levels.map((L) => ('L' + L).padEnd(6)).join(''));
+  for (const r of rows) console.log(r.class.padEnd(14) + levels.map((L) => (r.win[L] == null ? '--' : Math.round(r.win[L] * 100) + '%').padEnd(6)).join(''));
+  console.log('\nA class whose win% falls off a cliff between two columns marks a difficulty spike (or a bot limit: the duel policy only casts damage spells).');
+}
+
+async function run(args) {
+  if (args.curve) return curve(args);
+  const probe = await newGame({ seed: 5 });
+  const tables = JSON.parse(ev(probe.window, 'JSON.stringify({classes:ARCHETYPES.map(a=>a.id),mon:Object.entries(MONSTER_BASES).filter(([id,m])=>!m.boss&&!m.miniboss&&!m.waterOnly&&!m.aquatic&&!m.summonId&&m.behavior!=="turret"&&m.behavior!=="flee"&&!m.splitInto&&!m.powerDraw).map(([id,m])=>[id,m.dtier===undefined?0:m.dtier])})').value);
+  const tier = parseInt(args.tier === undefined ? 1 : args.tier, 10);
+  const monsters = args.monsters ? String(args.monsters).split(',') : tables.mon.filter((e) => e[1] <= tier).map((e) => e[0]);
+  const classes = args.classes === 'all' ? tables.classes : String(args.classes || 'warrior,mage,rogue').split(',');
+  const species = args.species || 'human', level = parseInt(args.level || 1, 10), scale = parseFloat(args.scale || 1), trials = parseInt(args.trials || 8, 10);
+  console.error(`balance: ${classes.length} classes x ${monsters.length} monsters, ${trials} trials each, level ${level}, scale ${scale}`);
+  const out = [];
+  for (const cl of classes) {
+    const dom = await newGame({ seed: 11 }); const win = dom.window;
+    if (!createCharacter(win, { species, archetype: cl, scenario: 'town' })) { console.error('could not create ' + cl); continue; }
+    ev(win, '(' + DUEL.toString() + ')()');
+    ev(win, `__DUEL.levelTo(${level});`, 120000);
+    const info = JSON.parse(ev(win, 'JSON.stringify({hp:player.maxHp,mp:player.maxMp,str:player.str,dex:player.dex,int:player.int,spells:player.knownSpells.length,tech:(player.knownTechniques||[]).length,weapon:(player.equipment.hand||{}).name,armor:getArmorOf(player)})').value);
+    const rows = [];
+    for (const id of monsters) {
+      const r = ev(win, `JSON.stringify(__DUEL.run(${JSON.stringify(id)}, {scale:${scale}, trials:${trials}, support:${args.nosupport ? 'false' : args.kite ? "'kite'" : 'true'}}))`, 120000);
+      if (r.ok) rows.push(JSON.parse(r.value)); else rows.push({ id, error: r.error.split('\n')[0] });
+    }
+    const ok = rows.filter((r) => !r.error);
+    const mean = ok.reduce((a, r) => a + r.win, 0) / Math.max(1, ok.length);
+    const cost = ok.filter((r) => r.win > 0).reduce((a, r) => a + r.hpLostPct, 0) / Math.max(1, ok.filter((r) => r.win > 0).length);
+    out.push({ class: cl, info, mean, cost, rows, errors: rows.filter((r) => r.error).length });
+    console.error(`  ${cl.padEnd(13)} win ${(mean * 100).toFixed(0)}%  avg hp cost ${(cost * 100).toFixed(0)}%  (hp ${info.hp}, mp ${info.mp}, ${info.weapon || 'unarmed'}, armor ${info.armor})`);
+  }
+  if (args.json) { console.log(JSON.stringify(out)); return; }
+  out.sort((a, b) => a.mean - b.mean);
+  console.log(`\nclass         win%  hpCost%  worst matchups`);
+  for (const o of out) console.log(o.class.padEnd(13) + String(Math.round(o.mean * 100)).padEnd(6) + String(Math.round(o.cost * 100)).padEnd(9) + o.rows.filter((r) => !r.error).sort((a, b) => a.win - b.win).slice(0, 4).map((r) => `${r.id}:${Math.round(r.win * 100)}%`).join(' ') + (o.errors ? `  (${o.errors} errors)` : ''));
+  const bad = out.flatMap((o) => o.rows.filter((r) => r.error).map((r) => `${o.class}/${r.id}: ${r.error}`));
+  if (bad.length) { console.log('\nErrors:'); for (const b of bad.slice(0, 10)) console.log('  ' + b); }
+}
+module.exports = { run };
+});
+
+// ==== FILE: lib/commands/classbp.js ====
+__def("lib/commands/classbp.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// =====================================================================================================
+// classbp -- per-class "breakpoint" table: win rate against the whole non-boss monster ladder (dtier <= --tier) at several monster strengths.
+//   node playtest.js classbp [--classes=all|a,b] [--level=20] [--scales=3.5,6,10,16] [--trials=3] [--tier=4] [--jobs=2] [--kit=school] [--gear] [--out=file.json]
+// One child process per class (a class takes ~2 min at 4 scales x 216 monsters x 3 trials). Reading it: scale 3.5 is native for a level-20 character;
+// the interesting column is the highest scale where a class still wins >=50%. A class that is far below its peers at EVERY scale usually has a
+// kit problem (see "balance lessons" in the README: no reliable starter damage, or abilities the autopilot refuses to use) rather than bad stats.
+// NOTE the character is levelled by levelUp() + the bot's own stat/talent spending, so abilities learned from trainers/books are NOT included: this measures
+// the starting kit at that level, the same for every class.
+// =====================================================================================================
+const path = require('path');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const { newGame, createCharacter } = require('../driver');
+const { ev } = require('../harness');
+const DUEL = require('../duel');
+
+async function one(args) {
+  const cl = args.one, L = parseInt(args.level || 20, 10), tier = parseInt(args.tier || 4, 10), trials = parseInt(args.trials || 3, 10);
+  const scales = String(args.scales || '3.5,6,10,16').split(',').map(Number);
+  const dom = await newGame({ seed: 11 }); const win = dom.window;
+  if (!createCharacter(win, { species: args.species || 'human', archetype: cl, scenario: 'town' })) { console.error('could not create ' + cl); process.exit(1); }
+  ev(win, '(' + DUEL.toString() + ')()');
+  ev(win, `__DUEL.levelTo(${L});`);
+  if (args.gear) ev(win, '__DUEL.gearUp(' + L + ')');
+  // --kit=school: give the class EVERY ability of the schools it starts in up to tier ceil(level/5), as a character with trainers/tomes/manuals would have; default is the bare starting kit
+  if (args.kit === 'school') ev(win, `(function(){ var T = Math.ceil(${L} / 5), ids = player.knownSpells.concat(player.knownTechniques || []), schools = {};
+    ids.forEach(function (id) { var a = findAbilityById(id); if (a && a.school) schools[a.school] = 1; });
+    SPELLS.forEach(function (x) { if (schools[x.school] && (x.tier || 1) <= T && player.knownSpells.indexOf(x.id) < 0) player.knownSpells.push(x.id); });
+    TECHNIQUES.forEach(function (x) { if (schools[x.school] && (x.tier || 1) <= T && player.knownTechniques.indexOf(x.id) < 0) player.knownTechniques.push(x.id); }); })()`);
+  const info = JSON.parse(ev(win, 'JSON.stringify({hp:player.maxHp,mp:player.maxMp,spells:player.knownSpells.length,tech:(player.knownTechniques||[]).length,armor:getArmorOf(player)})').value);
+  const mons = JSON.parse(ev(win, `JSON.stringify(Object.entries(MONSTER_BASES).filter(([id,m])=>!m.boss&&!m.miniboss&&!m.waterOnly&&!m.aquatic&&!m.summonId&&m.behavior!=="flee"&&(m.dtier||0)<=${tier}).map(e=>e[0]))`).value);
+  const res = { class: cl, level: L, info, scales: {} };
+  for (const S of scales) {
+    let w = 0, n = 0, cost = 0, cn = 0; const worst = [];
+    for (const id of mons) {
+      const r = ev(win, `JSON.stringify(__DUEL.run(${JSON.stringify(id)},{scale:${S},trials:${trials},support:true}))`, 120000);
+      if (!r.ok) continue; const o = JSON.parse(r.value); w += o.win; n++; worst.push([id, o.win]); if (o.win > 0) { cost += o.hpLostPct; cn++; }
+    }
+    worst.sort((a, b) => a[1] - b[1]);
+    res.scales[S] = { win: w / Math.max(1, n), cost: cost / Math.max(1, cn), n, worst: worst.slice(0, 5).map((x) => x[0] + ':' + Math.round(x[1] * 100)) };
+  }
+  console.log('@@CLASSBP ' + JSON.stringify(res));
+}
+
+function child(cl, args) {
+  return new Promise((resolve) => {
+    const argv = [path.join(__dirname, '..', '..', 'playtest.js'), 'classbp', `--one=${cl}`, ...['level', 'scales', 'trials', 'tier', 'species', 'kit', 'gear'].filter((k) => args[k] !== undefined).map((k) => `--${k}=${args[k]}`)];
+    const p = spawn(process.execPath, argv, { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = ''; p.stdout.on('data', (d) => { out += d; });
+    p.on('close', () => { const l = out.split('\n').find((x) => x.startsWith('@@CLASSBP ')); resolve(l ? JSON.parse(l.slice(10)) : { class: cl, error: true }); });
+  });
+}
+
+async function run(args) {
+  if (args.one) return one(args);
+  const probe = await newGame({ seed: 5 });
+  const all = JSON.parse(ev(probe.window, 'JSON.stringify(ARCHETYPES.map(a=>a.id))').value);
+  const classes = !args.classes || args.classes === 'all' ? all : String(args.classes).split(',');
+  const jobs = Math.max(1, parseInt(args.jobs || 2, 10)), results = []; let i = 0;
+  console.error(`classbp: ${classes.length} classes, level ${args.level || 20}, ${jobs} at a time (~2 min per class)`);
+  await Promise.all(Array.from({ length: jobs }, async () => { while (i < classes.length) { const k = i++; const r = await child(classes[k], args); results.push(r); console.error('  done ' + classes[k]); } }));
+  const good = results.filter((r) => !r.error); const sc = Object.keys((good[0] || { scales: {} }).scales);
+  const last = sc[sc.length - 1];
+  good.sort((a, b) => (a.scales[last] ? a.scales[last].win : 0) - (b.scales[last] ? b.scales[last].win : 0));
+  console.log('class'.padEnd(14) + 'hp'.padStart(5) + ' spl tech ' + sc.map((s) => ('x' + s).padStart(6)).join(''));
+  for (const r of good) console.log(r.class.padEnd(14) + String(r.info.hp).padStart(5) + String(r.info.spells).padStart(4) + String(r.info.tech).padStart(5) + ' ' + sc.map((s) => (Math.round(r.scales[s].win * 100) + '%').padStart(6)).join('') + '   worst@' + last + ': ' + r.scales[last].worst.slice(0, 3).join(','));
+  if (results.some((r) => r.error)) console.log('failed: ' + results.filter((r) => r.error).map((r) => r.class).join(', '));
+  if (args.out) fs.writeFileSync(args.out, JSON.stringify(good, null, 1));
+}
+module.exports = { run };
+});
+
+// ==== FILE: lib/commands/list.js ====
+__def("lib/commands/list.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// list -- print the character creation options (species / classes / scenarios) with the names --species/--class/--scenario accept.
+const { boot, ev } = require('../harness');
+async function run() {
+  const dom = await boot();
+  const t = JSON.parse(ev(dom.window, 'JSON.stringify({species:SPECIES.map(s=>[s.id,s.name]),classes:ARCHETYPES.map(s=>[s.id,s.name]),scenarios:START_SCENARIOS.map(s=>[s.id,s.name])})').value);
+  for (const k of Object.keys(t)) console.log(k.toUpperCase() + ': ' + t[k].map((e) => e[0]).join(', '));
+}
+module.exports = { run };
+});
+
+// ==== FILE: lib/commands/matrix.js ====
+__def("lib/commands/matrix.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// =====================================================================================================
+// matrix -- play many characters (class x species x scenario x seed) in parallel child processes and aggregate.
+//   node playtest.js matrix --classes=all --species=dwarf --seeds=1,2 --secs=120 [--jobs=4] [--lives=3] [--scenario=town] [--out=report.json]
+//   Lists accept 'all' or comma separated names. Each run is `play --json`, so everything `play` takes (devlvl, devstage, ...) is forwarded.
+// Reading the report: "lvl" is where the character ended the time budget (progression pace), deaths are listed with cause,
+// "errs" counts exceptions the GAME swallowed (always worth a look), loops are bot/game soft-lock suspects.
+// NOTE the autopilot is melee/consumable-centric: a weak caster/summoner result may be the BOT, not the class. Read the death log first.
+// =====================================================================================================
+const os = require('os');
+const path = require('path');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const { boot, ev } = require('../harness');
+
+function runOne(job, forward) {
+  return new Promise((resolve) => {
+    const argv = [path.join(__dirname, '..', '..', 'playtest.js'), 'play', '--json', `--seed=${job.seed}`, `--species=${job.species}`, `--class=${job.class}`, `--scenario=${job.scenario}`, ...forward];
+    const t0 = Date.now();
+    const p = spawn(process.execPath, argv, { env: Object.assign({}, process.env), stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '', err = '';
+    p.stdout.on('data', (d) => { out += d; }); p.stderr.on('data', (d) => { err += d; });
+    p.on('close', (code) => {
+      const line = out.split('\n').find((l) => l.startsWith('@@RESULT '));
+      let res = null; try { res = line ? JSON.parse(line.slice(9)) : null; } catch (e) { /* */ }
+      resolve({ job, code, res, seconds: (Date.now() - t0) / 1000, crash: res ? null : (err.split('\n').filter(Boolean).slice(-4).join(' | ') || 'no result (exit ' + code + ')') });
+    });
+  });
+}
+
+async function pool(items, n, fn, onDone) {
+  let i = 0; const results = [];
+  await Promise.all(Array.from({ length: n }, async () => { while (i < items.length) { const k = i++; results[k] = await fn(items[k]); if (onDone) onDone(results[k], k + 1, items.length); } }));
+  return results;
+}
+
+async function run(args) {
+  const dom = await boot();
+  const tables = JSON.parse(ev(dom.window, 'JSON.stringify({species:SPECIES.map(s=>s.id),classes:ARCHETYPES.map(s=>s.id),scenarios:START_SCENARIOS.map(s=>s.id)})').value);
+  const pick = (v, all, def) => (v === undefined ? def : (v === 'all' ? all : String(v).split(',')));
+  const classes = pick(args.classes, tables.classes, ['commander']), species = pick(args.species, tables.species, ['dwarf']);
+  const scenarios = pick(args.scenario, tables.scenarios, ['town']), seeds = String(args.seeds || '1').split(',').map(Number);
+  const jobs = [];
+  for (const sp of species) for (const cl of classes) for (const sc of scenarios) for (const seed of seeds) jobs.push({ species: sp, class: cl, scenario: sc, seed });
+  const conc = parseInt(args.jobs || Math.max(1, Math.min(os.cpus().length - 1, 6)), 10);
+  const forward = [`--secs=${args.secs || 120}`, `--lives=${args.lives || 1}`];
+  for (const k of ['ticks', 'devlvl', 'devstage', 'devpos', 'devspells']) if (args[k] !== undefined) forward.push(`--${k}=${args[k]}`);
+  console.error(`matrix: ${jobs.length} runs, ${conc} at a time, ${args.secs || 120}s each`);
+  const results = await pool(jobs, conc, (j) => runOne(j, forward), (r, n, total) => console.error(`  [${n}/${total}] ${r.job.species}/${r.job.class}/${r.job.scenario}#${r.job.seed}: ` + (r.res ? `${r.res.outcome} L${r.res.final && r.res.final.lvl}` : 'CRASH ' + r.crash)));
+
+  const rows = results.map((r) => {
+    const f = (r.res && r.res.final) || {};
+    return { build: `${r.job.species}/${r.job.class}/${r.job.scenario}#${r.job.seed}`, outcome: r.res ? r.res.outcome : 'CRASH', lvl: f.lvl, turn: f.turn, deaths: r.res ? r.res.deaths.length : 0, causes: r.res ? r.res.deaths.map((d) => d.cause + '@L' + d.lvl) : [], errs: r.res ? r.res.gameErrors.length : 0, loops: r.res && r.res.loops ? r.res.loops.length : 0, crash: r.crash, res: r.res };
+  });
+  rows.sort((a, b) => (a.lvl || 0) - (b.lvl || 0));
+  console.log('\nbuild'.padEnd(46) + 'outcome'.padEnd(9) + 'lvl'.padEnd(5) + 'turn'.padEnd(8) + 'deaths'.padEnd(8) + 'errs  loops  notes');
+  for (const r of rows) console.log(r.build.padEnd(45) + ' ' + String(r.outcome).padEnd(8) + String(r.lvl).padEnd(5) + String(r.turn).padEnd(8) + String(r.deaths).padEnd(8) + String(r.errs).padEnd(6) + String(r.loops).padEnd(7) + (r.crash || r.causes.join(',')));
+  const lv = rows.map((r) => r.lvl || 0), avg = lv.reduce((a, b) => a + b, 0) / Math.max(1, lv.length);
+  const causes = {}; for (const r of rows) for (const c of r.causes) { const k = c.split('@')[0]; causes[k] = (causes[k] || 0) + 1; }
+  console.log(`\nmean level ${avg.toFixed(1)}  min ${Math.min(...lv)}  max ${Math.max(...lv)}  deaths ${rows.reduce((a, r) => a + r.deaths, 0)}  causes ${JSON.stringify(causes)}`);
+  const errs = new Map(); for (const r of rows) if (r.res) for (const e of r.res.gameErrors) { const k = e.where + ' ' + e.msg; errs.set(k, (errs.get(k) || 0) + e.count); }
+  if (errs.size) { console.log('\nGame exceptions seen during play:'); for (const [k, n] of [...errs].sort((a, b) => b[1] - a[1]).slice(0, 15)) console.log(`  x${n} ${k}`); }
+  if (args.out) { fs.writeFileSync(args.out, JSON.stringify(rows, null, 1)); console.log('\nfull results ->', args.out); }
+  return { exitCode: rows.some((r) => r.outcome === 'CRASH') ? 1 : 0 };
+}
+module.exports = { run };
+});
+
+// ==== FILE: lib/commands/play.js ====
+__def("lib/commands/play.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// =====================================================================================================
+// play -- one autopilot run (the original playtest.js behaviour), now with build selection and JSON output.
+//   node playtest.js play [--seed=1] [--secs=120] [--ticks=30000] [--lives=1] [--species=dwarf --class=commander --scenario=town]
+//                         [--devlvl=N --devstage=id|N|final --devpos=x,y --devspells=a,b] [--ev=regex] [--trace] [--json]
+// Every flag also works as the legacy upper-case env var (SEED, SECS, TICKS, LIVES, DEVLVL, ...).
+// =====================================================================================================
+const { ev } = require('../harness');
+const { playLife, resolveBuild } = require('../driver');
+
+function opt(args, name, def) {
+  const env = process.env[name.toUpperCase()];
+  if (args[name] !== undefined && args[name] !== true) return args[name];
+  if (env !== undefined) return env;
+  return def;
+}
+
+/** Test-only cheat: start at a chosen level / story stage / position with extra spells. */
+function makePrep(args) {
+  const devlvl = opt(args, 'devlvl');
+  if (!devlvl) return null;
+  const devstage = opt(args, 'devstage', ''), devpos = opt(args, 'devpos'), devspells = opt(args, 'devspells');
+  return (win) => {
+    const L = parseInt(devlvl, 10);
+    const S = devstage === 'final' ? 'player.story.stages.findIndex((x) => x.id === "confrontation")'
+      : (/^[a-z_]+$/.test(devstage) ? 'player.story.stages.findIndex((x) => x.id === "' + devstage + '")' : parseInt(devstage || '-1', 10));
+    ev(win, `while (player.level < ${L}) { levelUp(); } player.hp = player.maxHp; for (let k = 0; k < 400 && (player.statPoints || 0) > 0; k++) __B.spendPoints(); __B.spendTalents(); player.gold += 20000;`
+      + (devpos ? `player.x=${devpos.split(',')[0]};player.y=${devpos.split(',')[1]};try{loadChunksAround&&loadChunksAround()}catch(e){}` : '')
+      + (devspells ? `for (const id of ${JSON.stringify(String(devspells).split(','))}) if (!player.knownSpells.includes(id)) player.knownSpells.push(id);` : '')
+      + (S !== -1 ? `for (let i = 0; i < ${S}; i++) { player.story.stages[i].done = true; } player.story.stageIndex = ${S};` : ''), 60000);
+  };
+}
+
+async function run(args) {
+  const seed = parseInt(opt(args, 'seed', '1'), 10);
+  const lives = parseInt(opt(args, 'lives', '1'), 10);
+  const budget = parseInt(opt(args, 'secs', '120'), 10);
+  const json = !!args.json || !!process.env.PT_JSON;
+  const log = json ? (m) => process.stderr.write(m + '\n') : console.log; // keep stdout clean for the machine-readable result
+  const build = (args.species || args.class || args.scenario) ? { species: args.species || 'dwarf', archetype: args.class || 'commander', scenario: args.scenario || 'town' } : undefined;
+  const prep = makePrep(args);
+  let r = null, spent = 0;
+  const deaths = [], allErrors = [];
+  for (let life = 1; life <= lives; life++) { // a character that dies is replaced by a new one (same world seed), until the time budget is gone
+    r = await playLife({
+      prep, seed, build, maxTicks: parseInt(opt(args, 'ticks', '30000'), 10), maxSeconds: Math.max(10, budget - spent), log,
+      stopOnIdle: !!opt(args, 'stop'), statusEvery: parseInt(opt(args, 'status', '0'), 10), beatSecs: parseInt(opt(args, 'beat', '0'), 10),
+    });
+    spent += r.seconds || 0;
+    for (const e of r.gameErrors || []) allErrors.push(e);
+    if (r.outcome === 'died') deaths.push({ life, lvl: r.final && r.final.lvl, cause: r.final && r.final.cause, turn: r.final && r.final.turn, depth: r.final && r.final.depth, deathLog: (r.deathLog || []).slice(-8) });
+    if (r.outcome !== 'died' || budget - spent < 30) break;
+    log('  inv: ' + r.inv); log('  death trace: ' + (r.trace || []).slice(-12).join(' ; ') + '\n  deathLog: ' + JSON.stringify(r.deathLog));
+    log('LIFE ' + life + ' ended in death at level ' + (r.final && r.final.lvl) + ' (' + (r.final && r.final.cause) + '); starting life ' + (life + 1));
+  }
+  const summary = { seed, build: r.build, outcome: r.outcome, final: r.final, seconds: Math.round(r.seconds), levelTurns: r.levelTurns, deaths, counts: r.counts, loops: r.loops, gameErrors: allErrors };
+  if (json) { console.log('@@RESULT ' + JSON.stringify(summary)); return summary; }
+  log(r.outcome + ' ' + JSON.stringify(r.final) + ' ' + r.seconds.toFixed(0) + 's');
+  log(JSON.stringify(r.counts));
+  try { log('travel failures: ' + (r.why || '')); } catch (e) { /* */ }
+  if (r.diagText) log(r.diagText);
+  if (r.loops && r.loops.length) log(r.loops.join('\n'));
+  if (r.events) log((process.env.EV ? r.events.filter((e) => new RegExp(process.env.EV).test(e)).slice(-40) : r.events.slice(-12)).join('\n'));
+  if (process.env.TRACE && r.trace) log(r.trace.join('\n'));
+  if (r.deathLog) log(r.deathLog.join('\n'));
+  if (allErrors.length) { log('\nGAME ERRORS (swallowed exceptions the game raised during this run):'); for (const e of allErrors) log(`  x${e.count} [${e.where}] ${e.msg}\n      ${e.stack.split('\n')[1] || ''}`); }
+  return summary;
+}
+
+module.exports = { run, opt };
+});
+
+// ==== FILE: lib/commands/smoke.js ====
+__def("lib/commands/smoke.js", function (module, exports, require, __dirname, __filename) {
+'use strict';
+// =====================================================================================================
+// smoke -- UI-layer smoke test. Boots with real rendering ON (render/updateSidebar/renderLog kept), creates a
+// character, then presses every printable key (plain and Shift), each followed by Escape, in several game
+// states (overworld, dungeon, after a few turns). Reports every exception the game threw or swallowed.
+//   node playtest.js smoke [--species= --class= --scenario= --seed= --json]
+// Add states to STATES below to cover more screens.
+// =====================================================================================================
+const { newGame, createCharacter } = require('../driver');
+const { ev, key, drainErrors } = require('../harness');
+
+const KEYS = [...'abcdefghijklmnopqrstuvwxyz0123456789,./;\'[]-=`<>?'].concat(['Escape', 'Enter', 'Tab', ' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+const SHIFTED = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
+
+/** Each state prepares the game and returns a label. Extend freely. */
+/** A state prepares a freshly created character. Extend freely to cover more screens. */
+const STATES = [
+  { id: 'start', prep: () => '' },
+  { id: 'after-turns', prep: (win) => { for (let i = 0; i < 25; i++) key(win, ['h', 'j', 'k', 'l'][i % 4]); } },
+  { id: 'dungeon', prep: (win) => { ev(win, 'enterDungeon([...dungeonRegistry.keys()][0]); markSeen && markSeen();'); } },
+  { id: 'dungeon-turns', prep: (win) => { ev(win, 'enterDungeon([...dungeonRegistry.keys()][0])'); for (let i = 0; i < 30; i++) key(win, ['h', 'j', 'k', 'l', '.'][i % 5]); } },
+];
+
+async function run(args) {
+  const spec = { species: args.species || 'human', archetype: args.class || 'warrior', scenario: args.scenario || 'town' };
+  const seed = parseInt(args.seed || 3, 10);
+  const found = new Map();
+  let presses = 0, resets = 0, win = null, state = null;
+  // A fresh game in the state's starting position. Some keys legitimately leave the play screen (quit to title, save/load), so we rebuild.
+  async function fresh(st) {
+    win = (await newGame({ seed, boot: { render: true, saveable: true } })).window;
+    if (!createCharacter(win, spec)) { console.error('could not create character'); process.exit(2); }
+    st.prep(win); drainErrors(win); resets++;
+  }
+  const press = async (k, st) => {
+    const gs0 = ev(win, 'gameState').value;
+    key(win, k); presses++;
+    for (const e of drainErrors(win)) { const id = e.msg + '|' + st.id + '/' + gs0; if (!found.has(id)) found.set(id, { ...e, keys: [] }); found.get(id).keys.push(k); }
+    key(win, 'Escape'); key(win, 'Escape');
+    ev(win, 'try { if (player.hp <= 0) { player.hp = player.maxHp; } } catch (e) {}');
+    if (ev(win, 'gameState').value !== 'playing') await fresh(st);
+  };
+  for (const st of STATES) {
+    state = st; await fresh(st);
+    for (const k of KEYS.concat(SHIFTED)) await press(k, st);
+    console.error(`  state ${st.id}: ${presses} presses, ${found.size} distinct errors so far (${resets} rebuilds)`);
+  }
+  const out = [...found.values()];
+  if (args.json) console.log(JSON.stringify(out)); else {
+    for (const e of out) console.log(`[${e.where}] ${e.msg}\n   keys: ${[...new Set(e.keys)].join(' ')}\n   ${e.stack.split('\n').slice(0, 3).join('\n   ')}`);
+    console.log(`smoke: ${presses} key presses, ${out.length} distinct errors`);
+  }
+  process.exit(out.length ? 1 : 0);
+}
+module.exports = { run };
+});
+
+// ==== FILE: playtest.js (launcher) ====
+const H = __req('lib/harness.js');
+const D = __req('lib/driver.js');
+const BRAIN = __req('lib/brain.js');
+
+/** "--a=1 --flag positional" -> { _: ['positional'], a: '1', flag: true } */
+function parseArgs(argv) {
+  const out = { _: [] };
+  for (const a of argv) {
+    const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
+    if (m) out[m[1]] = m[2] === undefined ? true : m[2]; else out._.push(a);
+  }
+  return out;
+}
+
+const COMMANDS = { play: 'play', matrix: 'matrix', audit: 'audit', smoke: 'smoke', balance: 'balance', classbp: 'classbp', list: 'list', help: 'help' };
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const name = COMMANDS[args._[0]] ? args._.shift() : 'play';
+  if (name === 'help') { const L = require('fs').readFileSync(__filename, 'utf8').split('\n'), i0 = L.findIndex((l) => l.includes('command line front door')), i1 = L.findIndex((l, i) => i > i0 && l.startsWith('// See also')); console.log(L.slice(i0, i1 + 1).map((l) => l.replace(/^\/\/ ?/, '')).join('\n')); return; }
+  const cmd = __req('lib/commands/' + name + '.js');
+  const res = await cmd.run(args);
+  process.exit(res && typeof res.exitCode === 'number' ? res.exitCode : 0);
+}
+
+module.exports = { boot: H.boot, ev: H.ev, key: H.key, drainErrors: H.drainErrors, newGame: D.newGame, createCharacter: D.createCharacter, resolveBuild: D.resolveBuild, playLife: D.playLife, BRAIN };
+
+if (require.main === module) main().catch((e) => { console.error(e && e.stack || e); process.exit(2); });
+
+/* ==== FILE: README.md ====
+> LAYOUT NOTE: this kit is ONE file. Every `lib/...` path mentioned below is a section of playtest.js between `==== FILE: lib/... ====` banners (search for the banner). To add a probe or command, add a `__def("lib/probes/x.js", function (module, exports, require, __dirname, __filename) { ... });` block (and list a new probe in the `lib/probes/index.js` section; a new command in COMMANDS at the bottom). `require("./x")` between sections works as before. package.json is only needed for the jsdom dependency (`npm install jsdom`).
+
+# Playtest kit for *Lucid Dreams of Roguelike*
+
+Boots the **real, unmodified** game in jsdom and drives it. Put this folder next to the game `.html` (or set `GAME_HTML=path`), then `npm install`.
+
+```
+node playtest.js play    [--species= --class= --scenario= --devlvl= --devstage= --devpos= --devspells= --json]   one autopilot life
+node playtest.js matrix  --jobs=2 [--out=file.json]      class x species x scenario x seed grid, aggregated deaths/causes/exceptions
+node playtest.js audit   [--only= --skip= --warn --json --verbose --seed=]   data + system probes (exit 1 on errors)
+node playtest.js balance --classes=all --level=1 --tier=1 --trials=6 [--scale= --monsters= --json]   noise-free duel ladder
+node playtest.js balance --curve=1,8,16,30 --classes=warrior,mage   win rate by character level (difficulty-spike hunt)
+node playtest.js smoke   [--class= --species= --seed=]   UI smoke test: every key (plain+Shift) in 4 states with rendering on; rebuilds the game when a key leaves the play screen
+node playtest.js list                                    species / class / scenario ids
+```
+
+## Layout
+- `lib/harness.js` boot/ev/key + capture of every swallowed exception (`drainErrors`).
+- `lib/brain.js` the autopilot (evaluated *inside* the game realm; no Node APIs there).
+- `lib/driver.js` newGame / createCharacter / playLife.  `lib/duel.js` duel simulator.
+- `lib/probes/*.js` one file per area (items, refs, monsters incl. `monsters.behave`, abilities, worldgen, bosses, content, talents, economy, story, faith, `coverage` = content-gap census for monster pools (uses the game's own `dungeonMonsterPool`) and spell tiers, `emergence` = the elemental combo layer, `events` = encounter events); register in `lib/probes/index.js`. A probe is `{id, desc, run(A)}`; use `A.err/A.warn/A.stat`, `uses:[helper]` for shared source.
+- `lib/commands/*.js` one file per CLI command; register in `COMMANDS` in `playtest.js`.
+
+## Notes for future maintainers
+- **Design pillars: immersion, complexity, realism, emergent gameplay.** Friendly fire and AoE hitting the caster/allies is *intended*. Probes report it as info only; never "fix" it.
+- Duel bot chases monsters that will not approach (an earlier version scored "stalls" as losses and understated every class). `balance` JSON rows carry `win`, `death`, `stall`. Ladder excludes bosses, aquatic, summoners, turrets, fleers, splitters and player-summon constructs (`powerDraw`).
+- Level-1 ladder (25 classes, 5 trials): 23 classes cluster 91-100%; bloodmage (52% -> 78% at 10 trials) and illusionist (68% -> 88%) are lowest, but trial noise is large. Their remaining 0% matchups are bear/yeti/bandit-class melee threats. Not changed; re-measure with more trials and a better policy before touching them.
+- Autopilot early deaths: read `deaths[].deathLog` and `counts` (action histogram; `final.stats.rests` undercounts) before blaming a monster. Cross-check with a duel: e.g. orc rogue/necromancer/mage/warrior beat slime, spider, scorpion and cultist 100% of 20 duels at L1 losing <=8% hp, yet the autopilot died to slimes at L1 (it ends up holding/retreating at low hp), so those were bot deaths. Real findings came from deaths with one clear cause the duel confirms (the Cultist's 3-spell rotation, poison with no starting cure).
+- Mid-game check (8 builds each at L12 and L25 via `--devlvl`, 60s): 0 deaths, 0 game errors. One unreproduced `LOOP BREAK rest` (dwarf warrior L27, hp 485/693 not regenerating over 400 rest actions); the loop-break note now dumps regen-relevant state (poison/bleed/wounds/nearby monsters/canRest) so a recurrence can be diagnosed from the log.
+- **Elemental combo layer (emergence).** Wet / Oiled / Burning / Frozen combos are data-driven: put `soak:turns`, `oil:turns`, `oilGround:radius` (also `wetMult`, `oiledMult`, `consumeWet`, `primeFirst`) on a spell or MONSTER_ABILITY_LIBRARY entry, `soakStrike`/`oilStrike` on a monster, `alwaysWet`/`alwaysOiled`/`shockImmune` for creatures made of it. Engine: `ELEMENT_PRIMERS`, `applyPrimers`, `applyAbilityContact`, `abilityComboScore` (the AI's payoff-first ordering). `emergence.combos` fires every combo through all three sources (spell, monster ability, monster melee); `emergence.tags` warns when something that reads as fire/frost/shock is not tagged so the combo layer sees it. Add a new primed state = one row in ELEMENT_PRIMERS + one case in emergence.combos.
+- **Encounter events** (`type:'encounter'` in WORLD_EVENTS): choices gated by item/gold/stat, each rolling a weighted outcome that is itself an event def (any WORLD_EVENT_HANDLERS type, chainable with `also`). `events.encounters` validates every one and executes every outcome in a live game; the autopilot takes a viable option 80% of the time so matrices exercise them.
+- Dungeon pool lesson: measure the pool the generator really uses (`dungeonMonsterPool(meta, depth)`), per floor band. A census at the theme's *max* tier hid that floors 1-3 of sixteen themes were silently generic.
+- Runs are not deterministic even with a seed; judge balance over many seeds/duels, not single runs.
+- Sandbox has ~2 CPUs: use `--jobs=2` and tick budgets rather than wall-clock.
+- `balance` duels cast self-buffs, summons and one debuff (`--nosupport` for damage-only). This lifted summoner from 31% to 96%, so check the policy before judging a class. Chronomancer, illusionist and bloodmage still sit near 43% at level 1: their kit is escape/control (phantom step, time skip, kiting) which a stand-and-fight duel never uses. Treat as unproven, not as a verdict; a kiting policy is the next step.
+- `boot` stubs rendering for speed; pass `{render:true}` for UI tests, `{saveable:true}` when saving.
+- Game convention: bump PATCH in the title version and add a factual changelog line per change.
+
+### Elemental resistance gear
+Items may carry `fireDmgReduction`/`frostDmgReduction`/`shockDmgReduction` (keys in `EQUIP_FLAT_BONUS_KEYS`). Monster abilities read them through `elementResistFactor(entity, element)`. `emergence.combos` checks equip/unequip round-trips and that a resisted bolt does less damage (use a high-power ability copy: armor floors normal bolt damage at 1, hiding resistance).
+
+### Scrolls
+`emergence.scrolls` runs every area scroll through `resolveThrowAtTile` against a 5000-hp arena monster and checks the combo rider (wet shock bonus, ignition, freeze-on-wet, immunities) plus that scrolls >=100g exist (the loot cap rises with tier, so a flat value ladder means flat late loot). New area scroll: `effect:'scrollblast', element:'fire|frost|shock|void', power:[lo,hi], radius`.
+
+Resistance buffs (`resistfire/resistfrost/resistshock`) and gear fields both flow through `elementResistFactor`; the probe in `emergence.combos` drives the potions via `useItem`. Add a new element by extending that helper, not by patching individual ability branches.
+
+`emergence.scrolls` also drinks every late-game potion and warns if fewer than 5 non-food consumables cost >=150g (the loot value cap rises with tier, so a flat ladder = flat late loot).
+
+### Balance lessons: class kits (`classbp`)
+`node playtest.js classbp --classes=all --level=20` prints each class's win rate vs the whole non-boss ladder at monster scales 3.5/6/10/16 (~2 min per class, 2 at a time; takes ~30 min for all 25). It measures the STARTING kit (+levelUp/bot stat spending), not trainer/tome abilities, identical for every class. Two things it caught:
+- Starter kits with no reliable damage (buffs/blinks/execute-finishers only) lost 40-60% of duels the other classes won ~99%. `refs` now errors if an archetype's starter abilities have no plain damage/drain/smite spell or technique (or summon).
+- The bot used to refuse every ability with `selfExposed` or `selfCost`, so the Berserker's only damaging technique was never cast. The bot now uses these while HP >= 70% (`risky` flag in `B.dmgAbilities`). When a class looks weak, trace one duel before touching its numbers: it may be the policy, not the class.
+Duels at native level are saturated (~100%); compare classes at the higher scales.
+
+### Learning paths (`training.techniques`)
+Spells are learned from Spell Trainers (`trainer`) and tomes; techniques from Combat Trainers (`weaponmaster`, `npc.teachTechniques`) and manuals (`makeManual`, a tome item with `techId`). A new ability registry needs a matching acquisition path AND a probe that every entry is reachable: the technique registry was unreachable for the entire life of the game until this probe's census (`school x tier` counts, then grepping every `knownTechniques.push`) exposed it.
+
+### Harness lesson: level characters class-aware (`__DUEL.levelTo`)
+Levelling in one jump and then spending stat points with the autopilot policy dumped ~45 points into INT for EVERY class (Warrior: STR 15, INT 53), which put a heavy requirement penalty on all martial abilities and made martial classes look far weaker than casters. `balance`/`classbp` now use `__DUEL.levelTo(L)`, which spends each level's points on the stat the class's own abilities require. `classbp --kit=school` gives each class every ability of its starting schools up to tier ceil(L/5) (what trainers/manuals would provide). Trained-kit table, level 20, human, monster scale x10/x16/x24 (native is 3.5): casters and dex martials 94-99% at x16; str martials (warrior, chef, tinkerer, cyberadept) 64-71%; at x24 (7x native, mostly academic) every martial class is 1-44%. The remaining spread is NOT yet tuned: dex-based martials (evasion) and casters (ranged) beat str-based martials at depth.
+
+`classbp --gear` additionally equips each class the best non-unique armor (per slot, STR requirement met, value tier <= ceil(L/5)-1) plus its own weapon re-rolled at the level's item power multiplier (`__DUEL.gearUp`). The bare starter kit has armor 5-11 where a real level-20 character wears ~70-90, and armor is a flat subtraction, so geared vs ungeared changes the STR-melee classes a lot: level 20, trained kit, x16 monster strength: warrior 71% -> 89%, lancer 77% -> 89%, commander 83% -> 93%, brawler 81% -> 91%, while casters/dex classes stay 98-99%. Conclusion recorded: the STR-melee 'weakness' was mostly missing gear in the harness, not a balance problem; no game change was made for it. x24 (7x native strength) stays 2-5% for STR melee vs 28-63% for casters/dex classes, but that is far beyond where a level-20 character plays.
+
+### Bot gaps found by autopilot runs
+- The autopilot used to learn only *spells* from trainers, and only from level 12. It now also buys techniques from Combat Trainers (`B.wantTech`, from level 5). Class-balance duels use `levelTo`/`--kit=school`, so they never exercised this path.
+- `B.gearScore` ranks weapons by raw damage, so autopilot mages swap their staff for a blade and then melee (28 casts vs 502 attacks in one 200 s run). Treat caster autopilot results as "mage played badly" rather than "mage is weak".
+- Bleeding is the autopilot's commonest early death (4 of ~7 low-level mage runs). It is a designed mechanic ("fighting on makes it worse", stacks to 6, up to ~5 dmg/turn); the bot just lacks bandages and keeps meleeing. The bot ignored Medkits (they stanch bleeding too); fixed in `useBandageIfBleeding` and `healingItem`.
+- `gearScore` now multiplies weapon score by 0.3 for INT-heavy characters with spells; mage casts rose (7-28 per run to 55-220) but the bot still sometimes holds a maul. Not a game issue.
+
+### Early boss check: Thessaly Voss (broken_blade), level 6, native scale, 8 trials each
+Ungeared starter kits lose or split against her (mage, illusionist, druid, bloodmage, summoner 0%; elementalist 50%; stormcaller, paladin, monk, rogue 100%). With `__DUEL.gearUp(6)` (shop-tier armor and weapon) all seven classes tested win 100%. She is a gear check, not a class wall; no game change. Note `__DUEL.run` reports `turns` over wins only, so a 0 there means "never won", not "died instantly".
+
+### Matrix 25 classes x 1 seed (human, 150 s, 2 lives), after the bot fixes above
+No game errors, no detected loops; mean level 7.3 (min 2, max 10), 2 deaths. One druid run logged 28,140 `back-away` actions at level 2 over 30k turns before dying to Fenrik (the loop detector did not flag it; 12 further druid runs did not reproduce it). The bot now also tends bleeding without a bandage (cloth, else bare-hand pressure replayed from `tendWound`, which is async). Bleeding deaths in druid runs went from 2/6 to 0/6, but 3/6 still died at level 1 (Crystal Wisp, fire, Alpha Wolf), so early-game lethality is worth a closer look.
+
+### Early bleed grace (game change, v0.51.3)
+Level 1-4 autopilot lives (8 classes x 6 seeds, 40 s): 11 deaths, 5 of them bleeding. Player bleed ticks now use the EARLY_GRACE ladder (x0.6 at level 1-2, x0.8 at 3-4). Re-run on the same seeds: 8 deaths, 3 bleeding, mean level 3.2 -> 3.4. n=48 per arm and runs are non-deterministic, so this is directional only.
+
+*/
