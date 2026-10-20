@@ -540,7 +540,7 @@
            whatever meaningfully changed that session -- new content/dimensions/bosses -> bump minor,
            smaller additions/balance/bugfixes -> bump patch. Only drop "-alpha" once the original request
            is fully complete (see the 100% completion note near the top of the main JS block). -->
-      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.51.2-alpha</div>
+      <div class="title-version" style="position:fixed;bottom:8px;right:12px;font-size:11px;opacity:0.45;letter-spacing:0.5px;pointer-events:none;">v0.51.3-alpha</div>
     </div>
   </div>
 
@@ -553,6 +553,40 @@
 // only (what/where), not reasoning -- see git-style history in project handoff notes if needed.
 //
 // ---- CHANGELOG (factual, condensed) ----
+// - v0.51.3: EARLY BLEED. Player bleed ticks use the EARLY_GRACE ladder (x0.6 at level 1-2, x0.8 at 3-4; min 1). Autopilot runs at level 1-4 died to bleeding in 5 of 48 lives, ahead of any monster.
+// - v0.51.3: SUMMON SCALING. Conjured allies were built at exactly the player's level-based scale, so the Summoner held up at native depth but collapsed deeper (trained-kit duel table, level 20: 48% wins at 2.8x native monster strength vs 92-100% for every other class). spawnAlly now multiplies the ally scale by ALLY_SCALE_MULT (1.35): Summoner 48% -> 95% at 2.8x, 58% -> 87% at 4.6x native; Necromancer unchanged (93% -> 95%).
+// - v0.51.3: SCHOOL TIER GAPS. Tactics had one damaging technique across tiers 1-5, Chronomancy and Illusion had none at tiers 3 and 5, Storm Magic none at tier 2. Added Line Breaker, Phalanx Charge, Commander's Verdict, Field Marshal's Strike (Tactics); Echo Strike, Moment of Ruin (Chronomancy); Nightmare Lance, Waking Nightmare (Illusion); Static Lash (Storm). Every one of those four schools now has a damage ability at every tier 1-5; all are learnable from trainers/tomes/manuals.
+// - v0.51.3: MARTIAL TRAINING (bug-class gap). The game has 138 TECHNIQUES (every martial class ability) but nothing in normal play could teach one: trainers and tomes only taught spells, so every martial class kept only its 2-3 starting techniques for the whole game (the in-game text already promised 'learn spells/techniques from trainers or tomes'). Added the Combat Trainer role (novice teaches tier<=2, journeyman <=3, master up to 5; same price formula as spells; found in villages, towns, cities, capitals and fighting pits) and technique Manuals (a tome with techId: chest 14%, boss 40%, loose 3%). A probe verifies all 138 techniques can roll as manuals and that buying/studying works.
+// - v0.51.3: STARTER-KIT BALANCE. Duel measurements across all 25 classes found six starting kits with no reliable damage: at level 20 vs native-strength monsters Commander won 62%, Berserker 62%, Blood Mage 32%, Chronomancer 49%, Illusionist 46%, Occultist 43%, Cyber-Adept 41% (everyone else ~99%); at level 1 Illusionist won 50%, Blood Mage 74%, Chronomancer 87%. Added one cheap tier-1 damage ability each: Temporal Sting (slows), Phantom Jab, Eldritch Bolt, Blood Bolt (drains), Decisive Blow, Servo Strike, Cleaving Chop. After: all 25 classes win ~97-100% at native strength and 52-82% at 16x monster strength. (Life Tap was tried first for the Blood Mage and made it worse: 6 HP per cast from a 30 HP pool.)
+// - v0.51.3: LATE-GAME POTIONS. The non-food consumable ladder stopped near 120g, so deep loot tiers rolled the same potions as tier 1. Added Elixir of Vitality (heal 200), Draught of the Archmage (mana 100), Elixir of Ironhide, Elixir of Swiftness, Elixir of Grand Regeneration, Potion of the Deadeye (130-260g), all on existing effects.
+// - v0.51.3: RESISTANCE UNIFIED. elementResistFactor now also reads the Resistance buffs (halves; player only), and monster bolts route all three elements (fire/frost/shock) through it, so Fire/Frost Resistance potions finally reduce monster fire bolts and every monster blast (before they only touched frost bolts and breath weapons). New buff 'resistshock' + Potion of Shock Resistance, and Elixir of the Elements (all three, 40 turns, 110g).
+// - v0.51.3: GREATER SCROLLS. All 16 older scrolls were worth <=40g with fixed power, so deeper loot tiers (which only raise the value cap) never rolled anything better. Added 8 (70-520g): Downpour (soak), Slickness (oil), Thunderclap (shock, big vs soaked), Deep Freeze (freezes soaked targets solid), Inferno (ignites; soaked resist), Annihilation (void), Restoration, Bulwark. New 'scrollblast' effect reads weatherElementMultiplier + immunities + shatter. Scroll of Lightning now gets the wet-conduction bonus and Fireball the soaked penalty (they bypassed the combo layer before).
+// - v0.51.3: ELEMENTAL RESISTANCE GEAR. New equip stats fireDmgReduction/frostDmgReduction/shockDmgReduction (summed on equip/unequip); monster frost/shock bolts and all-element monster blasts now honour them via elementResistFactor (capped 90%). 16 new items: 8 late-game shields (heater, oakheart, bulwark, stormbreak buckler, quenchward, aegis of the deep, dragonscale, mirror bulwark), 4 cloaks, 3 rings, 1 amulet. Shields previously topped out at armor 5.
+// v0.51.3 Playtest-kit pass (found with the rebuilt headless kit: audit / matrix / balance).
+//   - BUG: placePillars could drop a pillar onto a monster/NPC/item tile (entombing it); now skips occupied tiles (grand-room and sparse branches).
+//   - BALANCE: common tier-1 spellcasters (Cultist etc.) knew all 3 of their spells and cast a bolt every turn from 6 tiles (5 of 6 early deaths in a 22-character autopilot matrix); they now know one spell each. Tier 2+ unchanged.
+//   - BALANCE: new characters start with one Antidote next to the two Bandages (poison had no starting counter; a Giant Spider could deal ~18 damage over time to a 28 hp start).
+//   - CONTENT: FACTION DEPTH PACK, 44 new monsters for the thinnest monster pools (found by a per-theme pool analysis: deep cosmic/non-Euclidean/virus/celestial/plant/eldritch/dragon dungeons drew from 6-7 monsters, the Bandit Hideout from 3, the Goblin Warren from 5). Adds tier-3/4/5 ordinary monsters per faction with distinct roles (ambushers, healers, summoners, armoured walls, ranged control).
+//   - CONTENT: SPELL TIER GAP-FILL, 19 spells: tier-2 spells for the six schools that had none (Restoration, Summoning, Illusion, Nature, Chronomancy, Golem Magic), tier-4 for Illusion/Blood Magic/Chronomancy, and the first damage spells for Illusion and Chronomancy (those casters previously had no way to kill anything but melee).
+//   - ENGINE: damage spells honour the data-driven `slowStatus` field (previously only debuff spells did), used by the new Temporal Shear / Barbed Vines / Chrono Burst.
+//   - BUG: occupiedInLevel ignored NPCs, so statues/pillars could entomb a captive or prisoner; NPCs now count as occupying a tile.
+//   - BUG: a boss could be placed on a non-walkable tile (inside a wall); now relocated to the nearest free walkable tile and its home reset.
+//   - BUG: placeLockedVault could place the vault key on a non-floor feature tile; the key now only goes on plain walkable floor.
+//   - CONTENT: 168 monsters had no description text; added MONSTER_DESCRIPTIONS_PACK3 (applied only where a monster has no desc).
+//   - EMERGENCE: ELEMENTAL PRIMERS. Wet and Oiled could only come from standing in a puddle or throwing an oil flask, so the oil+fire / water+frost / water+shock combos rarely happened. Any spell,
+//     monster ability or monster melee can now set them up through data fields (soak, oil, oilGround, soakStrike, oilStrike; payoff multipliers wetMult / oiledMult; consumeWet; primeFirst). See ELEMENT_PRIMERS.
+//     Soaking douses fire and rinses oil, oil won't stick to a soaked target and feeds a burning one. Monster abilities now get the same fire-on-Oiled / frost-on-Wet payoffs monster melee already had, and the AI
+//     tries the payoff first (abilityComboScore) and skips primers that would be wasted. Plain Lightning Bolt now conducts through wet targets. Creatures can be permanently Wet/Oiled (alwaysWet/alwaysOiled) or shock-immune.
+//   - CONTENT: 9 spells on top of it: Drench, Squall, Riptide, Scalding Steam, Flash Freeze, Deluge (Elemental Mastery) and Grease Flask, Tar Bolt, Napalm (Alchemy).
+//   - CONTENT: ELEMENTAL ROSTER, 13 monsters: Water/Tar/Storm/Ice/Earth/Magma Elementals, Squall Sprite, Hydromancer, Stormcaller, Goblin Greaser, Oil Runner, and the boss The Tempest Regent, plus a new
+//     dungeon theme, The Confluence (water pools, oil slicks, elementals). Sea creatures, slimes and cubes now arrive dripping (soakStrike). Goblin Warrens, Smuggler's Dens and Mineshafts get generated oil slicks (hazard:'oil').
+//   - CONTENT: 7 martial techniques that use the combo layer (Flask Toss, Stock Pot Splash, Pressure Hose, Steam Vent, Breaking Blow [x2.2 vs Frozen Solid, new frozenMult field], Pitch Arrow, Flaming Arrow) and a Flask of Water
+//     throwable (soaks a splash and douses ground fire). The Oil Flask now goes through the same primer rules as everything else, and the in-game status help explains how combos are set up.
+//   - EVENTS: ENCOUNTERS, world events with a decision. 38 of 112 events were pure flavor text. New type:'encounter' (choices gated by an item / gold / stat, optionally paid for, each rolling a weighted outcome that is
+//     itself an event def, so every existing handler works as a consequence; new handlers grantItem and primePlayer). Nine to start: Overturned Oil Wagon, Stranded Water-Carrier, Wounded Traveler, The Alchemist at the
+//     Crossroads, The Whispering Well, Roadside Dice, Hidden Spring, Tar Seep, Abandoned Camp. Several care what you carry (water flask, firebomb, bandage), tying events to the elemental layer.
+//   - BUG: themed dungeon pools. When a faction-locked theme had no monster at the floor's tier ceiling, floors silently used every generic tier-1 monster: floors 1-3 of sixteen themes (Sky Bastion, Derelict Hulk, Folded Vault,
+//     Wyrmreach Lair, ...) were skeletons and goblins, and floors 4-6 often rolled from one or two monsters. dungeonMonsterPool() now tops a themed pool up to 4 of the theme's own cheapest monsters.
 // v0.51.2 Audit pass (headless-harness verified: 950 ability casts, 3,535 items, 279 monsters, 253 talents, save round-trips).
 //   - BUG: Crimson Lance set player.hp to NaN (castSpell's stale lifetap branch read spell.selfCost, which it lacks) and that
 //     same branch shadowed the real lifetap handler, so NO lifetap ability ever healed its caster and the Symbiotic/Predatory
@@ -3125,7 +3159,7 @@ const SPELLS = [
   { id:'magicmissile', name:'Magic Missile', mp:3, type:'damage', power:[3,7], range:6, desc:'A bolt of arcane force that rarely misses.' },
   { id:'firebolt', name:'Firebolt', mp:5, type:'damage', power:[5,11], range:5, desc:'Hurls a searing bolt of flame.' },
   { id:'frostbolt', name:'Frostbolt', mp:5, type:'damage', power:[4,9], range:5, frost:true, desc:'A shard of ice that also chills the foe.' },
-  { id:'lightning', name:'Lightning Bolt', mp:7, type:'damage', power:[7,15], range:7, desc:'A crackling bolt, strikes hard at range.' },
+  { id:'lightning', name:'Lightning Bolt', mp:7, type:'damage', power:[7,15], range:7, element:'shock', desc:'A crackling bolt, strikes hard at range.' },
   { id:'heal', name:'Heal', mp:6, type:'heal', power:[12,22], range:0, desc:'Mends your wounds.' },
   { id:'regen', name:'Regeneration', mp:8, type:'buff', stat:'regen', power:3, dur:8, range:0, desc:'Steady healing over time.' },
   { id:'shield', name:'Arcane Shield', mp:6, type:'buff', stat:'armor', power:5, dur:10, range:0, desc:'Wraps you in a protective ward.' },
@@ -3159,6 +3193,7 @@ const ROLES = [
   { id:'blacksmith', name:'Blacksmith', color:'#c98a4a', hp:16, str:12, dex:6, atk:[2,5], armor:1 },
   { id:'innkeeper', name:'Innkeeper', color:'#c9a06a', hp:12, str:6, dex:5, atk:[1,3], armor:0 },
   { id:'trainer', name:'Spell Trainer', color:'#4ac9c9', hp:14, str:5, dex:6, atk:[1,3], armor:0 },
+  { id:'weaponmaster', name:'Combat Trainer', color:'#c97a4a', hp:22, str:11, dex:9, atk:[2,5], armor:2 }, // v0.51.3: teaches martial TECHNIQUES (trainers/tomes only ever taught spells)
   { id:'child', name:'Child', color:'#c9c9a0', hp:6, str:2, dex:6, atk:[1,1], armor:0 },
   { id:'elder', name:'Elder', color:'#9a9a9a', hp:8, str:3, dex:3, atk:[1,2], armor:0 },
 ];
@@ -4055,6 +4090,24 @@ function pickTomeSpell(tier, rng) {
   if (!pool.length) pool = SPELLS;
   return choice(rng, pool);
 }
+// v0.51.3: technique MANUALS. Tomes only ever taught spells and techniques had no learning path at all (only the 2-3 a class starts with). A manual is a 'tome' item that carries a techId.
+function pickManualTechnique(tier, rng) {
+  const band = TOME_TIERS[tier] || TOME_TIERS[0];
+  const prevMax = tier > 0 ? TOME_TIERS[tier-1].maxMp : -1;
+  let pool = TECHNIQUES.filter(t => (t.mp || 0) > prevMax && (t.mp || 0) <= band.maxMp);
+  if (!pool.length) pool = TECHNIQUES;
+  return choice(rng, pool);
+}
+function makeManual(tier, rng) {
+  rng = rng || Math.random;
+  tier = Math.max(0, Math.min(TOME_TIERS.length-1, tier));
+  const tech = pickManualTechnique(tier, rng);
+  const band = TOME_TIERS[tier];
+  return {
+    uid: 'i' + Math.random().toString(36).slice(2, 10), id: 'manual_' + tech.id, type: 'tome', techId: tech.id,
+    name: `${band.name} Manual of ${tech.name}`, glyph: '?', color: band.color, value: 20 + (tech.mp||1) * 6,
+  };
+}
 function makeTome(tier, rng) {
   rng = rng || Math.random;
   tier = Math.max(0, Math.min(TOME_TIERS.length-1, tier));
@@ -4665,6 +4718,50 @@ TECHNIQUES.push(
   { id:'grandinvention', name:'Grand Invention', resource:'stamina', mp:48, type:'damage', power:[42,64], range:1, aoe:true, aoeRadius:2, destructive:true, school:'Tinkering', tier:5, desc:"Your magnum opus — a device you're still not sure should be legal." },
 );
 
+// ---- v0.51.3 ELEMENTAL-COMBO TECHNIQUES: martial characters could not start or cash in a Wet/Oiled combo at all (only casters could, and only with the primer
+// spells). Same data fields as the spells (soak, oil, oilGround, wetMult, consumeWet, frozenMult, igniteGround), so they compose with every monster and ally. ----
+TECHNIQUES.push(
+  { id:'flasktoss', name:'Flask Toss', resource:'stamina', mp:12, type:'damage', power:[4,8], range:5, aoe:true, aoeRadius:1, oil:50, oilGround:1, element:'oil', school:'Throwing', tier:2, desc:'A flask of lamp oil thrown to burst at the target\'s feet. It hurts a little, and everything it touches is ready to burn.' },
+  { id:'stockpotsplash', name:'Stock Pot Splash', resource:'stamina', mp:10, type:'damage', power:[5,10], range:2, soak:12, element:'water', school:'Culinary Arts', tier:2, desc:'A pot of broth, flung. It scalds nobody and soaks everybody, which a Flambé would never forgive.' },
+  { id:'pressurehose', name:'Pressure Hose', resource:'stamina', mp:12, type:'damage', power:[4,9], range:4, knockback:1, soak:14, element:'water', school:'Tinkering', tier:2, desc:'A boiler-fed jet of water that shoves and soaks. Excellent before anything involving lightning or ice.' },
+  { id:'steamvent', name:'Steam Vent', resource:'stamina', mp:26, type:'damage', power:[16,24], range:3, aoe:true, aoeRadius:2, wetMult:1.9, consumeWet:true, element:'steam', school:'Tinkering', tier:4, desc:'You crack a valve at the target. Dry foes get a hot breath; soaked foes are flash-boiled for nearly double.' },
+  { id:'breakingblow', name:'Breaking Blow', resource:'stamina', mp:18, type:'damage', power:[14,22], range:1, frozenMult:2.2, school:'Brawling', tier:3, desc:'A single blow placed where the ice is thinnest. Against a foe frozen solid it does more than double damage, on top of the shatter.' },
+  { id:'pitcharrow', name:'Pitch Arrow', resource:'stamina', mp:12, type:'damage', power:[7,12], range:6, oil:40, element:'oil', school:'Archery', tier:2, desc:'An arrow with its head dipped in pitch. The wound is minor; the coating is the point.' },
+  { id:'flamingarrow', name:'Flaming Arrow', resource:'stamina', mp:14, type:'damage', power:[9,15], range:6, igniteGround:true, school:'Archery', tier:2, desc:'An arrow wrapped in burning rag. Archers finally get a spark, and an oiled target, a very short future.' }
+);
+// Starter offense (v0.51.3): the Commander and Cyber-Adept started with only buffs / nothing, so their plain melee lagged far behind every other martial class in duels.
+TECHNIQUES.push(
+  { id:'decisiveblow', name:'Decisive Blow', resource:'stamina', mp:10, type:'damage', power:[8,15], range:1, school:'Tactics', tier:1, desc:'A measured strike at the exact moment the enemy line wavers.' },
+  // ---- Tactics had ONE damaging technique across tiers 1-5 (Commander could not scale offense); each tier now has one, powers matched to Swordsmanship/Brawling at the same tier ----
+  { id:'linebreaker', name:'Line Breaker', resource:'stamina', mp:14, type:'damage', power:[12,20], range:1, school:'Tactics', tier:2, desc:'Slam the shield rim into the enemy line and break its footing.' },
+  { id:'phalanxcharge', name:'Phalanx Charge', resource:'stamina', mp:22, type:'damage', power:[20,32], range:1, school:'Tactics', tier:3, desc:'A disciplined lunge behind a wall of steel.' },
+  { id:'commandersverdict', name:'Commander\'s Verdict', resource:'stamina', mp:30, type:'damage', power:[32,50], range:1, school:'Tactics', tier:4, desc:'One decisive stroke, delivered as if it had already been decided.' },
+  { id:'fieldmarshalstrike', name:'Field Marshal\'s Strike', resource:'stamina', mp:48, type:'damage', power:[52,80], range:1, school:'Tactics', tier:5, desc:'The blow every battle plan was built to make possible.' },
+  { id:'cleavingchop', name:'Cleaving Chop', resource:'stamina', mp:10, type:'damage', power:[8,15], range:1, school:'Berserker Arts', tier:1, desc:'A heavy, honest swing with nothing held back and nothing left open.' },
+  { id:'servostrike', name:'Servo Strike', resource:'stamina', mp:10, type:'damage', power:[8,15], range:1, school:'Tinkering', tier:1, desc:'A hydraulic-assisted blow; the implant does most of the work.' }
+);
+
+
+// ---- v0.51.3 ELEMENTAL WARDS + LATE SHIELDS. Shields topped out at 90 gold / 5 armor and no gear gave fire, frost or shock resistance, which mattered once monster bolts and the
+// Wet/Oiled/Frozen combos started leaning on those elements. Resistance is a plain damage reduction (fireDmgReduction etc., summed by the generic equip loop). ----
+ITEM_BASES.push(
+  { id:'heater_shield', name:'Heater Shield', type:'armor', slot:'offhand', armor:4, glyph:'(', color:'#b6bcc4', value:60 },
+  { id:'oakheart_shield', name:'Oakheart Shield', type:'armor', slot:'offhand', armor:6, glyph:'(', color:'#7a5a2a', value:140, thornsPercent:0.04, desc:'Slabs of ancient oak, banded in iron and a little resentful of whatever hits it.' },
+  { id:'bulwark_shield', name:'Bulwark Shield', type:'armor', slot:'offhand', armor:8, glyph:'(', color:'#9aa4b0', value:320, desc:'A wall you carry. It is heavy enough that carrying it is a decision.' },
+  { id:'stormbreak_buckler', name:'Stormbreak Buckler', type:'armor', slot:'offhand', armor:5, glyph:'(', color:'#c0c8ff', value:260, shockDmgReduction:0.35, desc:'Rubber-backed and glass-studded, made by someone who was struck once and decided never again.' },
+  { id:'quenchward', name:'Quenchward', type:'armor', slot:'offhand', armor:6, glyph:'(', color:'#4a9ae0', value:300, fireDmgReduction:0.3, desc:'A wet-hide shield kept damp by a spell nobody remembers casting. Fire respects it.' },
+  { id:'aegis_of_the_deep', name:'Aegis of the Deep', type:'armor', slot:'offhand', armor:9, glyph:'(', color:'#2a8aa0', value:520, frostDmgReduction:0.25, desc:'Cold-forged from a drowned bell, and it still rings in low water.' },
+  { id:'dragonscale_shield', name:'Dragonscale Shield', type:'armor', slot:'offhand', armor:11, glyph:'(', color:'#c9702a', value:780, fireDmgReduction:0.2, frostDmgReduction:0.15, desc:'Overlapping scales from something that did not like weather of any kind.' },
+  { id:'mirror_bulwark', name:'Mirror Bulwark', type:'armor', slot:'offhand', armor:10, glyph:'(', color:'#dfe6ee', value:900, thornsPercent:0.08, spellDmgBonus:0.05, desc:'Polished until it gives back not just light but intent.' },
+  { id:'stormcloak', name:'Stormcloak', type:'armor', slot:'cloak', armor:2, glyph:'[', color:'#9aa8e0', value:240, shockDmgReduction:0.3, desc:'Oilcloth woven with copper thread, which should not help and does.' },
+  { id:'embercloak', name:'Embercloak', type:'armor', slot:'cloak', armor:2, glyph:'[', color:'#e0702a', value:280, fireDmgReduction:0.3, desc:'Asbestos-grey and faintly warm, as though it has already been through the worst.' },
+  { id:'frostweave_mantle', name:'Frostweave Mantle', type:'armor', slot:'cloak', armor:2, glyph:'[', color:'#bfe8ff', value:260, frostDmgReduction:0.3, desc:'Dense, quilted, and impossible to be cold in.' },
+  { id:'cloak_four_winds', name:'Cloak of the Four Winds', type:'armor', slot:'cloak', armor:3, glyph:'[', color:'#8ac0d0', value:620, fireDmgReduction:0.15, frostDmgReduction:0.15, shockDmgReduction:0.15, desc:'It lets every weather in and every weather out, and keeps none of them.' },
+  { id:'ring_ember_ward', name:'Ring of Ember Warding', type:'armor', slot:'ring', armor:0, glyph:'=', color:'#e0502a', value:220, fireDmgReduction:0.25 },
+  { id:'ring_rime_ward', name:'Ring of Rime Warding', type:'armor', slot:'ring', armor:0, glyph:'=', color:'#8ad0e0', value:220, frostDmgReduction:0.25 },
+  { id:'ring_grounding', name:'Ring of Grounding', type:'armor', slot:'ring', armor:0, glyph:'=', color:'#c0c0ff', value:240, shockDmgReduction:0.3, desc:'A band of dull copper that wants very much to be somewhere else, electrically.' },
+  { id:'amulet_elements', name:'Amulet of the Elements', type:'armor', slot:'amulet', armor:0, glyph:'=', color:'#c8a0ff', value:700, fireDmgReduction:0.15, frostDmgReduction:0.15, shockDmgReduction:0.15, desc:'Four small stones, one for each weather and one for sorting them out.' }
+);
 // ---- cybernetics: installed augments powered by Charge; some passive, some active ----
 // Passive ones apply/remove a permanent-while-installed stat bonus. Active ones are cast like
 // spells/techniques once installed, spending Charge.
@@ -5603,6 +5700,15 @@ ITEM_BASES.push(
   { id:'potion_invisibility', name:'Potion of Invisibility', type:'consumable', effect:'invisibility', dur:15, glyph:'!', color:'#c0c0e0', value:60 },
   { id:'potion_haste', name:'Potion of Haste', type:'consumable', effect:'buffhaste', power:4, dur:15, glyph:'!', color:'#e0e05a', value:50 },
   { id:'potion_fireres', name:'Potion of Fire Resistance', type:'consumable', effect:'resistfire', dur:25, glyph:'!', color:'#e0785a', value:30 },
+  // ---- late-game potions (v0.51.3): the consumable ladder stopped at ~120g, so tier-3/4 loot rolled the same potions as tier 1. Every effect here already existed; these are the strong versions ----
+  { id:'elixir_vitality', name:'Elixir of Vitality', type:'consumable', effect:'heal', power:200, glyph:'!', color:'#ff4a4a', value:260, desc:'Heals a huge amount at once. Expensive and worth it.' },
+  { id:'draught_archmage', name:'Draught of the Archmage', type:'consumable', effect:'mana', power:100, glyph:'!', color:'#6a8aff', value:220 },
+  { id:'elixir_ironhide', name:'Elixir of Ironhide', type:'consumable', effect:'buffarmor', power:14, dur:40, glyph:'!', color:'#9aa6b8', value:130 },
+  { id:'elixir_swiftness', name:'Elixir of Swiftness', type:'consumable', effect:'buffhaste', power:6, dur:25, glyph:'!', color:'#e8e84a', value:160 },
+  { id:'elixir_grand_regen', name:'Elixir of Grand Regeneration', type:'consumable', effect:'buffregen', power:12, dur:30, glyph:'!', color:'#5ae08a', value:190 },
+  { id:'potion_deadeye', name:'Potion of the Deadeye', type:'consumable', effect:'buffcrit', power:0.3, dur:30, glyph:'!', color:'#e8a04a', value:150 },
+  { id:'potion_shockres', name:'Potion of Shock Resistance', type:'consumable', effect:'resistshock', dur:25, glyph:'!', color:'#e8e84a', value:30, desc:'Halves lightning damage from monsters for a while.' },
+  { id:'potion_elementward', name:'Elixir of the Elements', type:'consumable', effect:'resistall', dur:40, glyph:'!', color:'#c8a0ff', value:110, desc:'Halves fire, frost and lightning damage from monsters for 40 turns.' },
   { id:'potion_frostres', name:'Potion of Frost Resistance', type:'consumable', effect:'resistfrost', dur:25, glyph:'!', color:'#8ad0e0', value:30 },
   { id:'potion_poisonres', name:'Potion of Poison Resistance', type:'consumable', effect:'resistpoison', dur:25, glyph:'!', color:'#5ac95a', value:30 },
   { id:'potion_bleedres', name:'Potion of Clotting', type:'consumable', effect:'resistbleed', dur:25, glyph:'!', color:'#c9503a', value:30, desc:"Thickens the blood for a while -- fresh wounds simply won't take." },
@@ -5919,6 +6025,8 @@ ITEM_BASES.push(
   // damage on its own. Thrown onto an enemy directly, it also coats THEM (see resolveThrowAtTile's
   // 'oilsplash' case), setting up a guaranteed ignite from any follow-up fire attack.
   { id:'oil_flask', name:'Oil Flask', type:'consumable', effect:'oilsplash', radius:2, oilTurns:60, glyph:'!', color:'#8a6a2a', value:16, desc:'A corked flask of thick, dark oil. Shatters into a slick, volatile puddle -- coat the ground as a trap, or douse a foe directly and follow up with fire.' },
+  // v0.51.3: the counterpart to the Oil Flask. Soaks everything in its splash and puts out fires on the ground (see ELEMENT_PRIMERS): the set-up for frost and lightning, the cure for your own fire.
+  { id:'water_flask', name:'Flask of Water', type:'consumable', effect:'soaksplash', radius:2, soakTurns:14, glyph:'!', color:'#4a9ae0', value:8, desc:'A corked flask of plain water. Thrown, it soaks everything it splashes and douses fire on the ground: a set-up for frost and lightning, and the end of an oil fire plan.' },
   { id:'gas_grenade', name:'Gas Grenade', type:'consumable', effect:'aoepoison', power:6, radius:3, glyph:'*', color:'#5ac93a', value:26 },
   { id:'greater_gas_grenade', name:'Greater Gas Grenade', type:'consumable', effect:'aoepoison', power:12, radius:4, glyph:'*', color:'#3a9a1a', value:55 },
   { id:'flashbang', name:'Flashbang', type:'consumable', effect:'aoeconfuse', power:4, radius:4, glyph:'*', color:'#e0e0a0', value:24 },
@@ -5932,6 +6040,16 @@ ITEM_BASES.push(
   { id:'scroll_poison', name:'Scroll of Toxic Cloud', type:'scroll', effect:'aoepoison', power:8, radius:3, glyph:'?', color:'#5ac93a', value:30 },
   { id:'scroll_recall', name:'Scroll of Recall', type:'scroll', effect:'recall', glyph:'?', color:'#5ae0d0', value:40 },
   { id:'scroll_cureall', name:'Scroll of Cleansing', type:'scroll', effect:'cureall', glyph:'?', color:'#e0e0a0', value:26 },
+  // ---- greater scrolls (v0.51.3): the original 16 scrolls all cost <=40g with fixed power, so deeper loot tiers (which only cap value upward) never rolled anything better. These scale
+  // up the value ladder and each carries an element combo (soak/oil primers, shock on wet, fire ignition, frost freezing wet targets) ----
+  { id:'scroll_downpour', name:'Scroll of Downpour', type:'scroll', effect:'soaksplash', radius:4, soakTurns:22, glyph:'?', color:'#4a9ae0', value:70, desc:'A rain-cloud on paper. Soaks everything in a wide circle and douses ground fire. Pair with Thunderclap or Deep Freeze.' },
+  { id:'scroll_slick', name:'Scroll of Slickness', type:'scroll', effect:'oilsplash', radius:3, oilTurns:90, glyph:'?', color:'#7a6a3a', value:55, desc:'Coats a patch of ground (or a single creature) in volatile oil. Anything fiery will light it.' },
+  { id:'scroll_thunderclap', name:'Scroll of Thunderclap', type:'scroll', effect:'scrollblast', element:'shock', power:[22,36], radius:3, glyph:'?', color:'#e8e84a', value:110, desc:'A sphere of lightning. Soaked targets conduct it for far more damage.' },
+  { id:'scroll_deepfreeze', name:'Scroll of Deep Freeze', type:'scroll', effect:'scrollblast', element:'frost', power:[20,34], radius:3, freezeTurns:4, frozenMult:1.5, glyph:'?', color:'#9fe0ff', value:150, desc:'A killing cold. Soaked targets freeze solid; striking them shatters the ice. Douses ground fire.' },
+  { id:'scroll_inferno', name:'Scroll of Inferno', type:'scroll', effect:'scrollblast', element:'fire', power:[28,46], radius:3, igniteTurns:6, glyph:'?', color:'#ff6a2a', value:170, desc:'A wall of fire. Ignites everything it touches and the ground below (soaked targets resist; oiled ones burn longer).' },
+  { id:'scroll_restoration', name:'Scroll of Restoration', type:'scroll', effect:'heal', power:120, glyph:'?', color:'#ff5a5a', value:140 },
+  { id:'scroll_bulwark', name:'Scroll of Bulwark', type:'scroll', effect:'buffarmor', power:16, dur:30, glyph:'?', color:'#6aaae8', value:120 },
+  { id:'scroll_annihilate', name:'Scroll of Annihilation', type:'scroll', effect:'scrollblast', element:'void', power:[70,110], radius:4, glyph:'?', color:'#9a4ae0', value:520, desc:'Unmakes whatever stands in the circle. No immunities, no combos, just ruin.' },
   // ---- repair kits (v3 durability system) ----
   { id:'repair_kit', name:'Repair Kit', type:'consumable', effect:'repair', power:25, glyph:'&', color:'#a09070', value:18 },
   { id:'masters_repair_kit', name:"Master's Repair Kit", type:'consumable', effect:'repair', power:60, glyph:'&', color:'#e0a03a', value:55 },
@@ -7353,6 +7471,74 @@ SPELLS.push(
   { id:'natureswrath', name:"Verdant Ruin", mp:46, type:'damage', power:[36,56], range:5, aoe:true, aoeRadius:2, poison:8, school:'Herblore', tier:5, desc:'Every toxin you know how to brew, unleashed at once.' },
 );
 
+// ===================== v0.51.3 SPELL TIER GAP-FILL =====================
+// Found with the playtest kit's school x tier census: Restoration, Summoning, Illusion, Nature, Chronomancy and Golem Magic had NO tier-2 spells
+// (a caster of those schools went straight from starter spells to tier 3), Blood Magic and Illusion had no tier 4, and Illusion/Chronomancy had no
+// damage spell at all, so their casters could only win through a weak melee weapon. Every entry uses an existing spell type/handler; reqStat/req are
+// assigned by the requirement pass directly below, and tomes/trainers pick these up automatically (they draw from SPELLS).
+SPELLS.push(
+  // ---- Restoration, tier 2 ----
+  { id:'lifebloom', name:'Lifebloom', mp:16, type:'buff', stat:'regen', power:5, dur:14, range:0, school:'Restoration', tier:2, desc:'A slow green radiance settles into your skin and keeps knitting you together.' },
+  { id:'vitalsurge', name:'Vital Surge', mp:20, type:'heal', power:[24,36], range:0, school:'Restoration', tier:2, desc:'Close the worst of your wounds in one rush of borrowed vitality.' },
+  // ---- Summoning, tier 2 ----
+  { id:'summondirewolf', name:'Summon Dire Wolf', mp:18, type:'summon', range:0, summonId:'dire_wolf', duration:60, school:'Summoning', tier:2, desc:'A grey shape the size of a pony pads out of nowhere and takes up a place at your flank.' },
+  { id:'summonbonearcher', name:'Summon Bone Archer', mp:20, type:'summon', range:0, summonId:'skeleton_archer', duration:60, school:'Summoning', tier:2, desc:'A skeleton rises with a bow already drawn and no particular opinion about who it is aimed at.' },
+  // ---- Illusion: tier 2 (and its first damage spell), tier 4 ----
+  { id:'phantasmalstrike', name:'Phantasmal Strike', mp:14, type:'damage', power:[12,20], range:5, school:'Illusion', tier:2, desc:'A killing blow from something that is not there; the wound, unfortunately, is.' },
+  { id:'veilofshadow', name:'Veil of Shadow', mp:16, type:'buff', stat:'evasion', power:0.2, dur:14, range:0, school:'Illusion', tier:2, desc:'You are a little hard to look at directly, and a great deal harder to hit.' },
+  { id:'phantasmalkiller', name:'Phantasmal Killer', mp:36, type:'damage', power:[32,50], range:6, school:'Illusion', tier:4, desc:'The target\'s own terror takes shape and does the rest.' },
+  { id:'waveofdespair', name:'Wave of Despair', mp:34, type:'debuff', stat:'fear', power:1, dur:10, range:6, aoe:true, aoeRadius:3, school:'Illusion', tier:4, desc:'A crushing certainty that nothing here is worth the effort rolls out across the room.' },
+  { id:'greatermirrorarmy', name:'Greater Mirror Army', mp:40, type:'buff', stat:'evasion', power:0.32, dur:18, range:0, school:'Illusion', tier:4, desc:'So many of you that the enemy has stopped believing in the original.' },
+  // ---- Nature, tier 2 ----
+  { id:'barbedvines', name:'Barbed Vines', mp:15, type:'damage', power:[11,19], range:5, slowStatus:3, school:'Nature', tier:2, desc:'Thorned vines erupt from the ground, tearing and holding fast.' },
+  { id:'stormofleaves', name:'Storm of Leaves', mp:17, type:'damage', power:[10,17], range:5, aoe:true, aoeRadius:2, school:'Nature', tier:2, desc:'A whirl of leaves with edges like razors, from a season that never ends.' },
+  // ---- Chronomancy, tier 2 and 4 ----
+  { id:'temporalshear', name:'Temporal Shear', mp:16, type:'damage', power:[13,21], range:6, slowStatus:3, school:'Chronomancy', tier:2, desc:'You cut a moment out of the foe\'s next breath; it arrives a little late and a lot hurt.' },
+  { id:'stasisbubble', name:'Stasis Bubble', mp:18, type:'debuff', stat:'dex', power:-12, dur:8, range:5, slowStatus:6, school:'Chronomancy', tier:2, desc:'A pocket of held time closes around the target, and not much happens inside it.' },
+  { id:'chronoburst', name:'Chrono Burst', mp:36, type:'damage', power:[28,44], range:6, aoe:true, aoeRadius:2, slowStatus:4, school:'Chronomancy', tier:4, desc:'A breath of unspent time released all at once, and everything near it stumbles.' },
+  { id:'borrowedtime', name:'Borrowed Time', mp:40, type:'buff', stat:'actionspeed', power:2, dur:8, range:0, school:'Chronomancy', tier:4, desc:'You take a few seconds from later; the debt will be collected, but not yet.' },
+  // ---- Golem Magic, tier 2 ----
+  { id:'stonefist', name:'Stone Fist', mp:14, type:'damage', power:[12,20], range:2, knockback:1, school:'Golem Magic', tier:2, desc:'A fist of animated rock swings out of the ground, with the patience of a mountain behind it.' },
+  { id:'ironresolve', name:'Iron Resolve', mp:16, type:'buff', stat:'armor', power:11, dur:14, range:0, school:'Golem Magic', tier:2, desc:'Your skin takes on the temper of the golems you build.' },
+  // ---- Blood Magic, tier 2 and 4 ----
+  { id:'rendflesh', name:'Rend Flesh', mp:14, type:'execute', power:[10,18], range:5, school:'Blood Magic', tier:2, desc:'The wound opens along every line it was already thinking about.' },
+  { id:'vampiricsurge', name:'Vampiric Surge', mp:0, selfCost:24, healBackPct:0.9, type:'lifetap', power:[32,50], range:6, school:'Blood Magic', tier:4, desc:'You open a vein and the foe\'s life comes back through it, nearly all of it.' }
+);
+// ===================== v0.51.3 ELEMENTAL PRIMER SPELLS =====================
+// Until now nothing could make a target Wet or Oiled except standing in a puddle or throwing an oil flask, so the game's elemental combos (oil+fire,
+// wet+frost, wet+shock) almost never happened. These spells are the set-ups and payoffs; the engine side is ELEMENT_PRIMERS / applyEffectToTarget.
+// Fields (all optional, all data-driven): soak:turns (Wet), oil:turns (Oiled), oilGround:radius (slick the floor), wetMult / oiledMult (damage multiplier vs a
+// primed target), consumeWet (boil the water off for the bonus), primeFirst (apply primers BEFORE the damage so the same cast can pay them off).
+// Water spells deliberately make a bad fire-fighting partner: a Wet target shrugs off fire, so Drench your own fire plan and you've hurt yourself.
+SPELLS.push(
+  // ---- Elemental Mastery: the water line ----
+  { id:'drench', name:'Drench', mp:6, type:'damage', power:[2,5], range:6, soak:14, element:'water', school:'Elemental Mastery', tier:1, desc:'A hurled sheet of water that hurts very little and soaks completely. Set-up for frost and lightning; poison for your own fire.' },
+  { id:'squall', name:'Squall', mp:15, type:'damage', power:[6,11], range:6, aoe:true, aoeRadius:2, soak:14, element:'water', school:'Elemental Mastery', tier:2, desc:'A sudden slanting downpour in a small patch of the room. Everything under it is soaked to the skin.' },
+  { id:'riptide', name:'Riptide', mp:22, type:'damage', power:[16,26], range:6, knockback:2, soak:16, element:'water', school:'Elemental Mastery', tier:3, desc:'A fist of seawater that hits like a wall and drags the foe back with it, dripping.' },
+  { id:'scaldingsteam', name:'Scalding Steam', mp:22, type:'damage', power:[14,22], range:5, aoe:true, aoeRadius:2, wetMult:1.9, consumeWet:true, element:'steam', school:'Elemental Mastery', tier:3, desc:'A shriek of superheated vapour. Mediocre against the dry; against the soaked it flash-boils the water on them, for nearly double, and burns off your own set-up.' },
+  { id:'flashfreeze', name:'Flash Freeze', mp:30, type:'damage', power:[16,26], range:5, aoe:true, aoeRadius:2, frost:true, wetMult:1.5, school:'Elemental Mastery', tier:4, desc:'The temperature falls off a cliff. Soaked foes lock solid; dry ones just wish they were somewhere warmer.' },
+  { id:'deluge', name:'Deluge', mp:60, type:'damage', power:[30,48], range:7, aoe:true, aoeRadius:4, soak:22, element:'water', school:'Elemental Mastery', tier:5, desc:'The ceiling gives way. For a long moment there is nothing in the room but falling water, and afterwards nothing in it dry, burning, or oily.' },
+  // ---- Alchemy: the oil line ----
+  { id:'greaseflask', name:'Grease Flask', mp:7, type:'damage', power:[1,3], range:6, aoe:true, aoeRadius:2, oil:50, oilGround:2, element:'oil', school:'Alchemy', tier:1, desc:'A flask of rendered fat and lamp oil. It does almost no damage; it makes the floor and everything on it exquisitely flammable.' },
+  { id:'tarbolt', name:'Tar Bolt', mp:13, type:'damage', power:[8,14], range:5, oil:50, slowStatus:3, element:'oil', school:'Alchemy', tier:2, desc:'A glob of hot black tar. It sticks, it slows, and it burns beautifully.' },
+  { id:'napalm', name:'Napalm', mp:34, type:'damage', power:[24,38], range:6, aoe:true, aoeRadius:2, oil:30, oilGround:2, igniteGround:true, primeFirst:true, destructive:true, element:'fire', school:'Alchemy', tier:4, desc:'Oil, then a spark, in one motion. The whole puddle goes at once and so does anyone standing in or near it. Throw it far, and do not stand on anything you spilled.' }
+);
+// ---- Starter offense for the utility casters (v0.51.3). Duel measurements showed Chronomancer/Illusionist/Occultist/Blood Mage started with no reliable damage (win rates 50-87% at level 1 against
+// tier<=2 monsters while every other class was at 95-100%). Each gets one cheap tier-1 bolt in its own flavor (Life Tap was tried for the Blood Mage and made it WORSE: it costs 6 HP of a 30 HP pool per cast); the rest of the kit stays the utility it was. ----
+SPELLS.push(
+  { id:'chronosting', name:'Temporal Sting', mp:5, type:'damage', power:[4,9], range:5, slowStatus:2, school:'Chronomancy', tier:1, desc:'A sliver of the foe\'s own future arrives early, and hurts on the way in.' },
+  { id:'phantomjab', name:'Phantom Jab', mp:5, type:'damage', power:[4,9], range:5, school:'Illusion', tier:1, desc:'A blow from a shadow that is not quite there -- but the bruise is.' },
+  // ---- tier gaps found by the school x tier census: Chronomancy/Illusion had no damage at tiers 3 and 5, Storm Magic none at tier 2 ----
+  { id:'echostrike', name:'Echo Strike', mp:24, type:'damage', power:[20,32], range:6, slowStatus:3, school:'Chronomancy', tier:3, desc:'The blow lands, and then lands again a heartbeat later from the past.' },
+  { id:'momentofruin', name:'Moment of Ruin', mp:68, type:'damage', power:[54,82], range:7, aoe:true, aoeRadius:2, slowStatus:4, school:'Chronomancy', tier:5, desc:'Every injury the area will ever suffer, delivered at once.' },
+  { id:'nightmarelance', name:'Nightmare Lance', mp:24, type:'damage', power:[20,32], range:6, school:'Illusion', tier:3, desc:'A lance of someone else\'s worst night, run through the target.' },
+  { id:'wakingnightmare', name:'Waking Nightmare', mp:66, type:'damage', power:[52,80], range:7, aoe:true, aoeRadius:2, school:'Illusion', tier:5, desc:'The dream stops pretending to be one.' },
+  { id:'staticlash', name:'Static Lash', mp:16, type:'damage', power:[14,24], range:6, chainLightning:true, school:'Storm Magic', tier:2, desc:'A whip of charge. Soaked targets conduct it viciously.' },
+  { id:'bloodbolt', name:'Blood Bolt', mp:5, type:'drain', power:[4,9], range:5, school:'Blood Magic', tier:1, desc:'A thread of the foe\'s own blood, pulled taut and snapped back into you.' },
+  { id:'eldritchbolt', name:'Eldritch Bolt', mp:5, type:'damage', power:[5,10], range:5, school:'Arcane', tier:1, desc:'A bolt of something the eye refuses to hold onto.' }
+);
+
+
 // ---- v3 balance pass: soft stat requirements for spells & techniques ----
 // A wizard could always learn Meteor Swarm at 10 STR and a warrior could always learn it too --
 // nothing gated ability *power* against the stat that ability's school actually represents.
@@ -7383,11 +7569,11 @@ function abilityPenaltyFactor(deficit) { return Math.max(0.4, 1 - deficit * 0.05
 
 // ---- expanded dungeon themes: from 9 to 29, with hazard flavor and loot bias ----
 Object.assign(DUNGEON_THEMES, {
-  mineshaft:        { name:'Old Mineshaft', tier:'common', genre:'cave', depthRange:[2,5], dtierMax:1 },
-  goblin_warren:    { name:'Goblin Warren', tier:'common', genre:'cave', depthRange:[2,4], dtierMax:1 },
+  mineshaft:        { name:'Old Mineshaft', tier:'common', genre:'cave', depthRange:[2,5], dtierMax:1, hazard:'oil' },
+  goblin_warren:    { name:'Goblin Warren', tier:'common', genre:'cave', depthRange:[2,4], dtierMax:1, hazard:'oil' },
   flooded_cave:     { name:'Flooded Cave', tier:'common', genre:'cave', depthRange:[2,5], dtierMax:1, hazard:'water' },
   bandit_hideout:   { name:'Bandit Hideout', tier:'common', genre:'rooms', depthRange:[1,3], dtierMax:1 },
-  smugglers_den:    { name:"Smuggler's Den", tier:'common', genre:'rooms', depthRange:[2,4], dtierMax:1 },
+  smugglers_den:    { name:"Smuggler's Den", tier:'common', genre:'rooms', depthRange:[2,4], dtierMax:1, hazard:'oil' },
   old_barracks:     { name:'Old Barracks', tier:'uncommon', genre:'rooms', depthRange:[3,6], dtierMax:2 },
   witch_hut:        { name:"Witch's Hut", tier:'uncommon', genre:'rooms', depthRange:[2,4], dtierMax:2 },
   sunken_temple:     { name:'Sunken Temple', tier:'uncommon', genre:'rooms', depthRange:[3,6], dtierMax:2, hazard:'water' },
@@ -7491,7 +7677,7 @@ const SETTLEMENT_FLAVORS = {
   university:{ name:'College of ', weight:4, preferredBiomes:null, rolePool:['scholar','scholar','priest','alchemist','curator','elder','cartographer','scribe','archivist','oracle'], layoutStyle:'radial', decor:['sacred'], boundaryShape:'circular' },
   spa:       { name:'Hot Springs of ', weight:3, preferredBiomes:['mountain','tundra'], rolePool:['healer','innkeeper','merchant','alchemist','tavernkeeper'], layoutStyle:'organic', decor:['garden'], boundaryShape:'blob' },
   caravan:   { name:'Caravan Stop: ', weight:6, preferredBiomes:['desert','plains'], rolePool:['merchant','merchant','guard','sailor','dockhand','tollkeeper','farrier','courier'], tents:true, layoutStyle:'organic', decor:['camp','market'], boundaryShape:'blob' },
-  gladiator: { name:'Fighting Pits of ', weight:3, preferredBiomes:null, rolePool:['gladiator','gladiator','trainer','guard','merchant','dealer','duelist','executioner'], layoutStyle:'grid', decor:['arena'], boundaryShape:'square' },
+  gladiator: { name:'Fighting Pits of ', weight:3, preferredBiomes:null, rolePool:['gladiator','gladiator','trainer','weaponmaster','weaponmaster','guard','merchant','dealer','duelist','executioner'], layoutStyle:'grid', decor:['arena'], boundaryShape:'square' },
   orchard:   { name:'Orchard of ', weight:6, preferredBiomes:['plains','forest'], rolePool:['farmer','farmer','brewer','merchant','child','elder','vintner','beekeeper'], layoutStyle:'organic', decor:['farm'], boundaryShape:'blob' },
   herbalist: { name:'Herbalist Grove of ', weight:4, preferredBiomes:['forest','denseforest'], rolePool:['alchemist','alchemist','ranger','elder','healer'], noWalls:true, layoutStyle:'organic', decor:['grove','garden'], boundaryShape:'blob' },
   refugee:   { name:'Refugee Camp of ', weight:3, preferredBiomes:null, rolePool:['beggar','beggar','elder','child','guard','farmer','ratcatcher','fence'], tents:true, layoutStyle:'organic', decor:['camp'], boundaryShape:'blob' },
@@ -9580,6 +9766,8 @@ for (const theme in DUNGEON_THEME_FACTIONS) if (DUNGEON_THEMES[theme]) DUNGEON_T
 // two new dungeon themes so cyberpunk enemies (security drones, androids, rogue AI) have a home
 // that actually makes sense to find them in, instead of a random fantasy dungeon
 Object.assign(DUNGEON_THEMES, {
+  // v0.51.3: a place built around the elemental combo layer. Water pools, oil slicks, elementals that are made of both, and a regent who rains on everyone.
+  elemental_confluence: { name:'The Confluence', tier:'rare', genre:'cave', depthRange:[7,11], dtierMax:4, factions:['elemental'], hazard:'confluence' },
   ruined_lab: { name:'Ruined Lab', tier:'uncommon', genre:'rooms', depthRange:[4,7], dtierMax:2, lootBias:'cyber', factions:['cyber','construct'] },
   corrupted_facility: { name:'Corrupted Facility', tier:'rare', genre:'rooms', depthRange:[7,11], dtierMax:4, lootBias:'cyber', factions:['cyber','eldritch'] },
   // tier:'dimension' is intentionally not a key in DUNGEON_TIER_WEIGHTS, so the normal overworld
@@ -9679,6 +9867,7 @@ const DUNGEON_THEME_GENPOOLS = {
   // its pool so it actually reads as a lair.
   wyrmreach_lair:     [['hybrid_cave_ruins', 35], ['cave_ca', 25], ['rooms_bsp', 20], ['maze', 20]],
   ruined_lab:         [['rooms_bsp', 45], ['maze', 35], ['grand_hall', 20]],
+  elemental_confluence: [['cave_ca', 40], ['hybrid_cave_ruins', 35], ['drunken_walk', 25]],
   corrupted_facility: [['rooms_bsp', 45], ['maze', 40], ['grand_hall', 15]],
   brass_citadel:      [['rooms_bsp', 35], ['grand_hall', 35], ['maze', 20], ['hybrid_cave_ruins', 10]],
   // a factory floor of construct assembly lines should be regular and grid-like, never a cave.
@@ -10463,6 +10652,155 @@ function settlementCrimeRumor(npc) {
   return ev.text;
 }
 
+// ===================== v0.51.3 FACTION DEPTH PACK =====================
+// Found with the playtest kit's theme-pool analysis: most late-game themed dungeons drew their ordinary monsters from a pool of only 6-7 entries
+// (e.g. every deep cosmic / non-Euclidean / virus dungeon rolled from the same handful, often with 0-1 at the theme's top tier), and the two
+// earliest hideouts had 3 and 5. Each faction below gains monsters at the tiers it was missing, each with a distinct job (ambusher, healer,
+// summoner, armoured wall, ranged control...) so a deep dungeon asks different questions on different floors. Pure data: the load-time
+// heuristics below classify these like any other monster. Add a monster by adding one entry here (and its `desc`).
+Object.assign(MONSTER_BASES, {
+  // ---- early hideouts (tier 1) ----
+  bandit_scout:     { name:'Bandit Scout', glyph:'p', color:'#b8a070', hp:10, str:5, dex:13, atk:[1,4], armor:0, xp:8, behavior:'kiter', preferredRange:4, range:6, dtier:1, faction:'human', thrower:true, abilities:['throw_frost'], fleeHpPct:0.3, dropGold:true,
+                      desc:'A lean figure who keeps to the edges, throwing flasks and falling back the moment you close.' },
+  bandit_cutthroat: { name:'Bandit Cutthroat', glyph:'p', color:'#9a6a4a', hp:15, str:8, dex:11, atk:[2,6], armor:1, xp:10, behavior:'aggressive', dtier:1, faction:'human', dropGold:true, inflictsWounds:true, fleeHpPct:0.25,
+                      desc:'A scarred robber with a short blade and no interest in talking first.' },
+  bandit_lookout:   { name:'Bandit Lookout', glyph:'p', color:'#c0a878', hp:11, str:5, dex:12, atk:[1,5], armor:0, xp:8, behavior:'ranged', dtier:1, faction:'human', thrower:true, abilities:['throw_frost'], dropGold:true, fleeHpPct:0.3,
+                      desc:'Perched where the hideout can see the road, and quick to throw something at whatever walks it.' },
+  goblin_scrapper:  { name:'Goblin Scrapper', glyph:'g', color:'#6a9a3a', hp:12, str:6, dex:10, atk:[1,5], armor:1, xp:7, behavior:'aggressive', dtier:1, faction:'goblinoid', speciesId:'goblin', loot:[{id:'ore',chance:0.3,min:1,max:1}], fleeHpPct:0.25,
+                      desc:'A goblin in mismatched plate scavenged from better-armed victims, charging in with a dented pot for a helm.' },
+  goblin_sneak:     { name:'Goblin Sneak', glyph:'g', color:'#4a7a3a', hp:8, str:5, dex:14, atk:[2,5], armor:0, xp:8, behavior:'stalker', ambush:true, ambushRange:2, dtier:1, faction:'goblinoid', speciesId:'goblin', fleeHpPct:0.3,
+                      desc:'Small, quiet and patient, it waits in the dark of the warren for someone to walk past with their back turned.' },
+  goblin_firebug:   { name:'Goblin Firebug', glyph:'g', color:'#e0802a', hp:8, str:4, dex:11, atk:[1,3], armor:0, xp:9, behavior:'ranged', dtier:1, faction:'goblinoid', speciesId:'goblin', thrower:true, abilities:['throw_bomb'], fleeHpPct:0.3,
+                      desc:'Gleefully lobs homemade firebombs, and has never once checked who is standing next to the target.' },
+
+  // ---- dream ----
+  sleepwalker:      { name:'Sleepwalker', glyph:'h', color:'#a8b8d8', hp:36, str:9, dex:5, atk:[2,6], armor:0, xp:22, behavior:'aggressive', dtier:2, faction:'dream', causesConfuse:true,
+                      desc:'A slow, open-eyed figure who walks straight through anything in its way, and anyone who meets its gaze loses their footing.' },
+  drowsy_wisp:      { name:'Drowsy Wisp', glyph:'o', color:'#c8d0f0', hp:16, str:4, dex:11, atk:[1,4], armor:0, xp:12, behavior:'ranged', dtier:1, faction:'dream', abilities:['curse_slow'], usesMp:true, flying:true,
+                      desc:'A soft, slow light that settles on your shoulders, and suddenly everything is a great deal of effort.' },
+  pillow_golem:     { name:'Pillow Golem', glyph:'G', color:'#e8d8e8', hp:44, str:12, dex:3, atk:[2,6], armor:5, xp:24, behavior:'aggressive', dtier:2, faction:'dream', fearless:true,
+                      desc:'Stuffed, patched and absolutely tireless, it only wants to hold you down until morning.' },
+  dream_eater:      { name:'Dream Eater', glyph:'t', color:'#7a6aaa', hp:30, str:8, dex:12, atk:[3,7], armor:0, xp:26, behavior:'stalker', dtier:2, faction:'dream', lifesteal:true, predator:true,
+                      desc:'It feeds on the half-remembered, and leaves its prey with a lingering feeling that something important is missing.' },
+  lullaby_wraith:   { name:'Lullaby Wraith', glyph:'w', color:'#8aa0d8', hp:44, str:8, dex:13, atk:[3,8], armor:0, xp:36, behavior:'ranged', dtier:3, faction:'dream', abilities:['curse_slow','fearaura'], usesMp:true, flying:true,
+                      desc:'A thin, humming shape that sings you toward sleep while something unseen drags at your limbs.' },
+  nightmare_steed:  { name:'Nightmare Steed', glyph:'H', color:'#4a3a8a', hp:62, str:17, dex:12, atk:[5,12], armor:2, xp:48, behavior:'charger', dtier:4, faction:'dream', causesFear:true, swiftMover:true,
+                      desc:'A horse made of the moment before waking, hooves striking sparks from a floor that is not there.' },
+
+  // ---- cosmic ----
+  comet_hound:      { name:'Comet Hound', glyph:'d', color:'#c0e0ff', hp:48, str:14, dex:15, atk:[3,7], armor:1, xp:38, behavior:'stalker', dtier:3, faction:'cosmic', swiftMover:true, fire:2,
+                      desc:'A lean pack hunter with a tail of burning dust, running the long cold between worlds.' },
+  hull_crawler:     { name:'Hull Crawler', glyph:'c', color:'#8a98a8', hp:60, str:16, dex:8, atk:[5,11], armor:6, xp:42, behavior:'aggressive', dtier:3, faction:'cosmic', corrosive:true, armorPierce:1, loot:[{id:'iron_ingot',chance:0.25,min:1,max:1}],
+                      desc:'A plated parasite that eats the walls of dead ships, and tests your armour the same way.' },
+  vacuum_stalker:   { name:'Vacuum Stalker', glyph:'v', color:'#2a2a4a', hp:66, str:15, dex:18, atk:[6,13], armor:1, xp:55, behavior:'stalker', ambush:true, ambushRange:3, dtier:4, faction:'cosmic', causesFear:true, swiftMover:true,
+                      desc:'You never see it arrive: the air thins, the lights dim, and then it is already beside you.' },
+  gravity_well:     { name:'Gravity Well', glyph:'O', color:'#6a4aaa', hp:52, str:6, dex:4, atk:[1,3], armor:0, xp:46, behavior:'gascloud', dtier:4, faction:'cosmic', gasRadius:4, gasDamage:12,
+                      desc:'A patch of space that has decided to fall inward, crushing whatever drifts too close.' },
+  the_dimming:      { name:'The Dimming', glyph:'*', color:'#9a9ac8', hp:140, str:20, dex:12, atk:[8,17], armor:6, xp:110, behavior:'ranged', dtier:5, faction:'cosmic', abilities:['confuseray','drainlife','fearaura'], usesMp:true, causesFear:true,
+                      desc:'Not a creature but an absence in the shape of one, where each star behind it goes out a little more.' },
+
+  // ---- non-Euclidean ----
+  corner_lurker:    { name:'Corner Lurker', glyph:'l', color:'#8a6a9a', hp:50, str:13, dex:17, atk:[5,11], armor:0, xp:38, behavior:'stalker', ambush:true, ambushRange:2, dtier:3, faction:'nonEuclid', phaser:true,
+                      desc:'It lives in the angle that should not be there, and steps out of it only to bite.' },
+  echo_self:        { name:'Echo Self', glyph:'@', color:'#b0a8d8', hp:54, str:14, dex:13, atk:[5,11], armor:2, xp:40, behavior:'aggressive', dtier:3, faction:'nonEuclid', causesConfuse:true,
+                      desc:'A copy of you that arrives half a moment late, and says what you were about to say.' },
+  knot_beast:       { name:'Knot Beast', glyph:'K', color:'#7a5a9a', hp:88, str:19, dex:8, atk:[5,12], armor:5, xp:58, behavior:'relentless', dtier:4, faction:'nonEuclid', multiattack:2,
+                      desc:'Too many limbs, tied in a way that does not come undone, all of them reaching.' },
+  hypotenuse:       { name:'The Hypotenuse', glyph:'/', color:'#c0b0f0', hp:58, str:9, dex:12, atk:[4,10], armor:2, xp:56, behavior:'ranged', dtier:4, faction:'nonEuclid', abilities:['confuseray','curse_slow'], usesMp:true,
+                      desc:'The longest side of a shape nobody drew, reaching across the room to reach you.' },
+  seventh_wall:     { name:'The Seventh Wall', glyph:'#', color:'#6a6a8a', hp:150, str:22, dex:4, atk:[8,16], armor:12, xp:115, behavior:'relentless', dtier:5, faction:'nonEuclid', multiTile:2,
+                      desc:'A room has six walls. This is the other one, and it is walking toward you.' },
+
+  // ---- virus ----
+  bit_rot:          { name:'Bit Rot', glyph:'r', color:'#a8e0a0', hp:54, str:11, dex:10, atk:[4,9], armor:0, xp:36, behavior:'aggressive', dtier:3, faction:'virus', corrosive:true, armorPierce:1,
+                      desc:'A creeping decay that turns whatever it touches into noise.' },
+  memory_leak:      { name:'Memory Leak', glyph:'m', color:'#60c0a0', hp:64, str:13, dex:6, atk:[5,10], armor:2, xp:42, behavior:'aggressive', dtier:3, faction:'virus', regen:3,
+                      desc:'It takes more of the world with every moment and gives none of it back, and cannot quite be killed fast enough.' },
+  segfault:         { name:'Segfault', glyph:'x', color:'#ff5a5a', hp:58, str:13, dex:15, atk:[6,13], armor:1, xp:52, behavior:'erratic', dtier:4, faction:'virus', phaser:true, causesConfuse:true,
+                      desc:'It lands somewhere it should not be able to reach, hits you, and is gone before the error is logged.' },
+  fork_bomb:        { name:'Fork Bomb', glyph:'F', color:'#ffb040', hp:62, str:10, dex:10, atk:[3,8], armor:2, xp:60, behavior:'adaptive', dtier:4, faction:'virus', summonId:'corrupted_pixel', summonMax:4,
+                      desc:'Each time it runs, it runs again, and each copy is a little worse than the last.' },
+  zero_day:         { name:'Zero-Day', glyph:'0', color:'#ff2a6a', hp:120, str:19, dex:15, atk:[9,18], armor:3, xp:105, behavior:'adaptive', dtier:5, faction:'virus', armorPierce:2,
+                      desc:'Nobody has seen this before, so nobody has a defence prepared.' },
+
+  // ---- celestial ----
+  hymn_weaver:      { name:'Hymn Weaver', glyph:'h', color:'#fff0c0', hp:42, str:7, dex:12, atk:[2,6], armor:1, xp:38, behavior:'support', dtier:3, faction:'celestial', healPower:[5,11], healRange:6, flying:true,
+                      desc:'Its song closes wounds, but only for those who have not yet been silenced.' },
+  gilded_sentinel:  { name:'Gilded Sentinel', glyph:'S', color:'#e0c060', hp:92, str:20, dex:7, atk:[6,13], armor:12, xp:62, behavior:'relentless', dtier:4, faction:'celestial', fearless:true,
+                      desc:'Beaten gold over a hollow, standing guard long after whatever it guarded was forgotten.' },
+  fallen_seraphim:  { name:'Fallen Seraphim', glyph:'A', color:'#e0a0ff', hp:78, str:14, dex:14, atk:[6,13], armor:3, xp:64, behavior:'ranged', dtier:4, faction:'celestial', abilities:['firebolt','fearaura'], usesMp:true, flying:true,
+                      desc:'The wings are charred to the bone, and the voice is still lovely.' },
+  radiant_judge:    { name:'Radiant Judge', glyph:'J', color:'#fff8c8', hp:150, str:22, dex:11, atk:[9,18], armor:9, xp:118, behavior:'relentless', dtier:5, faction:'celestial', fire:3, causesFear:true,
+                      desc:'It does not weigh your deeds. It has already weighed them.' },
+
+  // ---- plant ----
+  strangler_vine:   { name:'Strangler Vine', glyph:'S', color:'#3a8a3a', hp:66, str:16, dex:7, atk:[5,12], armor:2, xp:40, behavior:'stalker', ambush:true, ambushRange:2, dtier:3, faction:'plant', multiattack:2, loot:[{id:'herb',chance:0.5,min:1,max:2}],
+                      desc:'A rope of living green that holds still until you step within reach.' },
+  blightcap_brute:  { name:'Blightcap Brute', glyph:'M', color:'#8a8a3a', hp:72, str:17, dex:6, atk:[5,11], armor:3, xp:44, behavior:'aggressive', dtier:3, faction:'plant', poison:2,
+                      desc:'A hulking fungus with a cap the colour of old bruises, shedding spores with every swing.' },
+  mossback_golem:   { name:'Mossback Golem', glyph:'G', color:'#4a7a4a', hp:104, str:21, dex:4, atk:[6,13], armor:8, xp:62, behavior:'relentless', dtier:4, faction:'plant', regen:3, loot:[{id:'wood',chance:0.6,min:2,max:4}],
+                      desc:'A rolling heap of stone and root, mending itself slowly from the ground it walks on.' },
+  bloom_matron:     { name:'Bloom Matron', glyph:'B', color:'#e06aa0', hp:72, str:9, dex:7, atk:[3,8], armor:2, xp:60, behavior:'adaptive', dtier:4, faction:'plant', summonId:'thornling', summonMax:4,
+                      desc:'Beautiful from a distance, and ringed by the thorned young she keeps close.' },
+  worldroot_warden: { name:'Worldroot Warden', glyph:'T', color:'#2a6a2a', hp:155, str:24, dex:5, atk:[8,17], armor:8, xp:112, behavior:'relentless', dtier:5, faction:'plant', regen:4, multiattack:2, multiTile:2, loot:[{id:'wood',chance:0.9,min:3,max:6}],
+                      desc:'The oldest thing in the vault, and it will outlast you.' },
+
+  // ---- eldritch ----
+  tindalos_hound:   { name:'Tindalos Hound', glyph:'d', color:'#5a9a9a', hp:52, str:14, dex:15, atk:[3,7], armor:0, xp:42, behavior:'stalker', dtier:3, faction:'eldritch', phaser:true, swiftMover:true,
+                      desc:'It comes out of the corners of time, and you cannot outrun something that was always already behind you.' },
+  void_cantor:      { name:'Void Cantor', glyph:'c', color:'#7a5ac0', hp:62, str:9, dex:11, atk:[3,8], armor:1, xp:58, behavior:'ranged', dtier:4, faction:'eldritch', abilities:['confuseray','drainlife','fearaura'], usesMp:true, causesFear:true,
+                      desc:'It sings one low note under all the others, and your thoughts begin to come apart on it.' },
+  shoggoth_spawn:   { name:'Shoggoth Spawn', glyph:'&', color:'#3a4a3a', hp:94, str:19, dex:6, atk:[5,12], armor:2, xp:62, behavior:'relentless', dtier:4, faction:'eldritch', multiattack:2, causesFear:true, regen:2,
+                      desc:'A wet, shifting mass with too many eyes that open and close in no order.' },
+  nameless_colossus:{ name:'Nameless Colossus', glyph:'N', color:'#4a2a6a', hp:165, str:25, dex:6, atk:[8,17], armor:4, xp:120, behavior:'relentless', dtier:5, faction:'eldritch', multiTile:2, causesFear:true, causesConfuse:true,
+                      desc:'Its shape resists description, so descriptions of it vary, and all of them end the same way.' },
+
+  // ---- dragon ----
+  ashwing:          { name:'Ashwing', glyph:'a', color:'#c04a2a', hp:56, str:15, dex:13, atk:[5,11], armor:2, xp:46, behavior:'charger', dtier:3, faction:'dragon', flying:true, fire:2,
+                      desc:'A lesser flier trailing embers, drawn to the heat of the lair like a moth.' },
+  scaled_brute:     { name:'Scaled Brute', glyph:'D', color:'#6a8a4a', hp:88, str:20, dex:7, atk:[6,13], armor:9, xp:62, behavior:'relentless', dtier:4, faction:'dragon', inflictsWounds:true,
+                      desc:'A broad, armoured thing that serves the wyrm for a share of the hoard.' },
+  wyrm_priest:      { name:'Wyrm Priest', glyph:'p', color:'#d08a2a', hp:66, str:11, dex:11, atk:[4,9], armor:3, xp:60, behavior:'ranged', dtier:4, faction:'dragon', abilities:['firebolt','healself'], usesMp:true,
+                      desc:'A robed worshipper who has decided the dragon is a god, and fights as one who is sure of it.' },
+  elder_drake:      { name:'Elder Drake', glyph:'D', color:'#c06a2a', hp:145, str:23, dex:10, atk:[8,17], armor:7, xp:115, behavior:'charger', dtier:5, faction:'dragon', multiTile:2, breathWeapon:'fire', flying:true,
+                      desc:'The oldest of the wyrm\'s brood, patient now, and still enough to burn the room down.' },
+});
+
+Object.assign(MONSTER_BASES, {
+  // ===================== v0.51.3 ELEMENTAL ROSTER (the combo layer's cast) =====================
+  // Wet/Oiled/Burning/Frozen combos existed but nothing in the bestiary could START one, and the 'elemental' faction had a single monster. These
+  // creatures are built around the combos: water and tar things are PERMANENTLY Wet/Oiled (alwaysWet / alwaysOiled, so frost freezes a water
+  // elemental solid, lightning conducts through it, and fire sets a tar elemental alight), casters that set a target up and then cash it in, and
+  // throwers that oil you for their friends' fire. Mixed groups combo each other's work on purpose; the AI tries the payoff first (abilityComboScore).
+  water_elemental:  { name:'Water Elemental', glyph:'e', color:'#4a9ae0', hp:32, str:9, dex:9, atk:[2,5], armor:0, xp:24, behavior:'aggressive', dtier:2, faction:'elemental', alwaysWet:true, soakStrike:12, usesMp:true, abilities:['water_jet'],
+                      desc:'A knot of standing water that has decided to walk. Everything it touches comes away soaked, which is its whole plan, and it is always soaked itself, which is its whole weakness.' },
+  squall_sprite:    { name:'Squall Sprite', glyph:'w', color:'#9ad0f0', hp:20, str:5, dex:15, atk:[2,5], armor:0, xp:20, behavior:'ranged', preferredRange:4, dtier:2, faction:'elemental', flying:true, alwaysWet:true, usesMp:true, abilities:['drench_wave'], fleeHpPct:0.25,
+                      desc:'A small, furious rainstorm with a face. It follows you into the room and then it rains on everyone, including whoever you were hoping to set on fire.' },
+  tar_elemental:    { name:'Tar Elemental', glyph:'e', color:'#2a2a2a', hp:62, str:12, dex:4, atk:[3,7], armor:1, xp:40, behavior:'aggressive', dtier:3, faction:'elemental', alwaysOiled:true, oilStrike:40, usesMp:true, abilities:['tar_spit'],
+                      desc:'Something black and slow that was a seep of pitch before it learned to hate. It sticks to what it touches, and it is the most flammable thing for fifty miles.' },
+  storm_elemental:  { name:'Storm Elemental', glyph:'e', color:'#c0d0ff', hp:48, str:8, dex:14, atk:[3,8], armor:0, xp:42, behavior:'ranged', preferredRange:4, dtier:3, faction:'elemental', flying:true, shockImmune:true, usesMp:true, abilities:['static_arc'],
+                      desc:'A bruise-coloured cloud with a throat full of thunder. It arcs lightning at whoever is standing in the wettest place and has never once missed the joke.' },
+  ice_elemental:    { name:'Ice Elemental', glyph:'e', color:'#bfe8ff', hp:54, str:11, dex:7, atk:[3,7], armor:3, xp:40, behavior:'aggressive', dtier:3, faction:'elemental', frost:3, frostImmune:true, usesMp:true, abilities:['frostbolt'],
+                      desc:'A glacier with opinions. It cannot be chilled, and it freezes anything that has been standing in water solid, including you.' },
+  earth_elemental:  { name:'Earth Elemental', glyph:'E', color:'#8a6a3a', hp:84, str:16, dex:3, atk:[4,9], armor:6, xp:46, behavior:'aggressive', dtier:3, faction:'elemental',
+                      desc:'A slab of rock and root that walks as though the ground were tilting it forward. It has no tricks. It does not need any.' },
+  magma_elemental:  { name:'Magma Elemental', glyph:'E', color:'#e0502a', hp:86, str:15, dex:6, atk:[5,11], armor:4, xp:66, behavior:'aggressive', dtier:4, faction:'elemental', fire:4, fireImmune:true, usesMp:true, abilities:['firebolt'],
+                      desc:'Molten rock held together by spite. It lights whatever it hits, and it is delighted by oil.' },
+  hydromancer:      { name:'Hydromancer', glyph:'p', color:'#5ab0e0', hp:24, str:6, dex:9, atk:[1,4], armor:0, xp:26, behavior:'ranged', preferredRange:5, dtier:2, faction:'human', usesMp:true, abilities:['water_jet','frostbolt'], fleeHpPct:0.3,
+                      desc:'A robed mage who wets you first and freezes you second. The order is the whole spell.' },
+  stormcaller:      { name:'Stormcaller', glyph:'p', color:'#e0e060', hp:32, str:7, dex:10, atk:[2,5], armor:0, xp:44, behavior:'ranged', preferredRange:5, dtier:3, faction:'human', usesMp:true, abilities:['water_jet','static_arc'], fleeHpPct:0.3,
+                      desc:'Drenches the target, then calls the lightning down the wet. Fights best near water and worst in a dry cellar.' },
+  goblin_greaser:   { name:'Goblin Greaser', glyph:'g', color:'#8a8a3a', hp:9, str:4, dex:10, atk:[1,3], armor:0, xp:8, behavior:'ranged', dtier:1, faction:'goblinoid', speciesId:'goblin', thrower:true, abilities:['throw_oilflask'], fleeHpPct:0.3,
+                      desc:'Carries a sack of lamp oil and an unreasonable faith in the Firebug standing behind it.' },
+  smuggler_oilrunner:{ name:'Oil Runner', glyph:'p', color:'#a07a3a', hp:13, str:6, dex:10, atk:[1,4], armor:0, xp:9, behavior:'ranged', dtier:1, faction:'human', thrower:true, abilities:['throw_oilflask'], dropGold:true, fleeHpPct:0.3,
+                      desc:'Moves lamp oil for people who do not ask what it is for, and throws it, when pressed, at people who do.' },
+  tempest_regent:   { name:'The Tempest Regent', glyph:'&', color:'#6ab0ff', hp:120, str:17, dex:11, atk:[5,11], armor:2, xp:150, behavior:'ranged', preferredRange:4, dtier:4, boss:true, bossPower:4, faction:'elemental', flying:true, shockImmune:true, usesMp:true, abilities:['drench_wave','static_arc','frostbolt'],
+                      engageLine:'The air goes damp, then heavy. "Stand in the rain a moment," says the sky.', deathLine:'It comes apart as ordinary weather, and for the first time in a long while it is only raining.',
+                      desc:'The sovereign of a place where all the weathers meet and none of them agree. It soaks the room first. Everything that follows is a consequence.' },
+});
+// retrofit: things that live in or are made of water arrive dripping (soakStrike), so frost and lightning allies/spells pay off against what they fight
+for (const id of ['drowned_sailor','tide_reaver','kraken_spawn','brinelord','current_stalker','tideglass_horror','the_fathom_touched','gelatinous_cube']) if (MONSTER_BASES[id] && MONSTER_BASES[id].soakStrike === undefined) MONSTER_BASES[id].soakStrike = 10;
+if (MONSTER_BASES.slime && MONSTER_BASES.slime.soakStrike === undefined) MONSTER_BASES.slime.soakStrike = 8;
 // ---- 2) ABILITIES: a monster-side spell/eldritch/cyber/thrown library. Shares the same
 // damage/status vocabulary as the player's own spells (bolt/drain/debuff/heal/buff/summon)
 // so a Necromancer's Drain Life and the player's own Drain Life *feel* like the same spell,
@@ -10483,6 +10821,14 @@ const MONSTER_ABILITY_LIBRARY = {
   overclock:    { name:'Overclock', kind:'buff', statField:'atk', power:4, dur:6, range:0, resource:'charge', cost:5, cooldown:8 },
   throw_bomb:   { name:'Firebomb', kind:'aoe', element:'fire', power:[4,9], radius:2, range:5, resource:'ammo', cooldown:3, thrown:true },
   throw_frost:  { name:'Frost Flask', kind:'aoe', element:'frost', power:[3,7], radius:2, range:5, resource:'ammo', cooldown:3, thrown:true },
+  // ---- v0.51.3 ELEMENTAL PRIMERS: abilities that SET UP a combo (Wet / Oiled) rather than just deal damage. tryMonsterCast skips a primer whose
+  // target is already primed and tries a matching payoff (fire on Oiled, frost/shock on Wet) first, so mixed groups combo each other's work.
+  water_jet:    { name:'Water Jet', kind:'bolt', element:'water', power:[2,6], range:6, resource:'mp', cost:4, cooldown:3, soak:14 },
+  drench_wave:  { name:'Drenching Wave', kind:'aoe', element:'water', power:[3,7], radius:2, range:5, resource:'mp', cost:7, cooldown:5, soak:14 },
+  tar_spit:     { name:'Tar Spit', kind:'bolt', element:'oil', power:[2,6], range:5, resource:'mp', cost:4, cooldown:3, soak:0, oil:50, slow:1 },
+  throw_oilflask:{ name:'Oil Flask', kind:'aoe', element:'oil', power:[1,4], radius:1, range:5, resource:'ammo', cooldown:3, thrown:true, oil:50, oilGround:1 },
+  throw_brine:  { name:'Brine Flask', kind:'aoe', element:'water', power:[1,4], radius:1, range:5, resource:'ammo', cooldown:3, thrown:true, soak:14 },
+  static_arc:   { name:'Static Arc', kind:'bolt', element:'shock', power:[4,10], range:5, resource:'mp', cost:5, cooldown:3 },
 };
 
 // ---- 3) DATA HEURISTICS: wire abilities/traits onto existing MONSTER_BASES entries by
@@ -10592,6 +10938,11 @@ for (const _mid in MONSTER_BASES) {
     else if (base.faction === 'drowned') pool = ['frostbolt', 'curse_slow', 'drainlife'];
     else pool = ['firebolt', 'frostbolt', 'magicmissile'];
     if (base.boss || base.miniboss) pool = pool.concat(['healself']);
+    // v0.51.3: a tier-1 caster (e.g. the Cultist: 13 hp, met at character level 1) used to carry the whole 3-spell list, which with independent
+    // cooldowns meant a bolt EVERY turn from 6 tiles (frostbolt even slowed you so you could not close) -- ~6 dmg/turn against a 28-32 hp
+    // starting character; in an 11-species autopilot matrix the Cultist caused 5 of 6 first-life deaths. Common tier-1 casters now know ONE spell
+    // (stable per monster id) and are still casters; tier 2+ keep the full list.
+    else if (base.dtier === 1 && pool.length > 1) { let h = 0; for (const ch of String(base.id || name)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; pool = [pool[h % pool.length]]; }
     base.abilities = pool;
     base.usesMp = true;
     continue;
@@ -10793,6 +11144,7 @@ let uidCounter = 1;
 // fields that pass straight from a MONSTER_BASES template onto the live instance, unscaled,
 // so that special mechanics (splitting, summoning, breath weapons, etc.) work at runtime.
 const MONSTER_EXTRA_FIELDS = [
+  'soakStrike', 'oilStrike', 'wetImmune', 'alwaysWet', 'alwaysOiled', 'shockImmune', // v0.51.3 elemental primers (see ELEMENT_PRIMERS)
   'faction', 'dmgType', 'inflictsWounds', 'splitInto', 'splitCount', 'multiTile', 'breathWeapon', 'gasRadius', 'gasDamage',
   'summonId', 'summonMax', 'ambush', 'ambushRange', 'burrower', 'phaser', 'berserkHpPct',
   'multiattack', 'range', 'preferredRange', 'miniboss', 'flying', 'aquatic', 'waterOnly', 'armorPierce',
@@ -10979,6 +11331,8 @@ function makeMonster(monsterId, x, y, depthScale, rng) {
   else if (['ranged', 'kiter', 'turret'].includes(m.behavior) && !m.usesMp) { m.maxAmmo = Math.max(4, Math.round(6 + scale * 1.5)); m.ammo = m.maxAmmo; }
   if (m.behavior === 'charger' || m.multiTile || m.breathWeapon) { m.maxStamina = Math.max(20, Math.round(24 * Math.sqrt(scale))); m.stamina = m.maxStamina; }
   m.abilityCooldowns = {};
+  if (m.alwaysWet) m.wetTurns = 9999;     // v0.51.3: a water creature IS the puddle: frost freezes it solid, lightning conducts through it, fire is halved against it
+  if (m.alwaysOiled) m.oiledTurns = 9999; // ...and a tar creature is fuel: any fire hit sets it alight
   // a species-mapped humanoid (orc raider, dark elf, construct golem, ...) gets that species'
   // real racial traits applied, same hook the player and NPCs use.
   if (m.speciesId) applyRacialTraits(m, getSpecies(m.speciesId));
@@ -11341,17 +11695,17 @@ function isRoadOrGate(chunk, x, y) { const t = chunk.tiles[y][x]; return t.featu
 
 const ROLE_POOLS = {
   hamlet: ['farmer','farmer','farmer','elder','child','shepherd'],
-  village: ['merchant','blacksmith','innkeeper','farmer','guard','elder','child','trainer','tavernkeeper','cobbler','weaver','potter'],
-  town: ['merchant','blacksmith','innkeeper','trainer','priest','ranger','baker','tailor','farmer','guard','guard','watchman','elder','child','hunter','alchemist','tavernkeeper','storagekeeper','guildclerk',
+  village: ['merchant','blacksmith','innkeeper','farmer','guard','elder','child','trainer','weaponmaster','tavernkeeper','cobbler','weaver','potter'],
+  town: ['merchant','blacksmith','innkeeper','trainer','weaponmaster','priest','ranger','baker','tailor','farmer','guard','guard','watchman','elder','child','hunter','alchemist','tavernkeeper','storagekeeper','guildclerk',
     'cobbler','weaver','potter','mason','barber','scribe','locksmith','tanner','beekeeper','shepherd','dyer'],
-  city: ['merchant','merchant','blacksmith','innkeeper','innkeeper','trainer','necromancer_trainer','priest','noble','noble','captain','guard','guard','guard','watchman','watchman','alchemist','bard','tailor','baker','chef','fisherman','stablehand','beggar','elder',
+  city: ['merchant','merchant','blacksmith','innkeeper','innkeeper','trainer','weaponmaster','necromancer_trainer','priest','noble','noble','captain','guard','guard','guard','watchman','watchman','alchemist','bard','tailor','baker','chef','fisherman','stablehand','beggar','elder',
     'tavernkeeper','tavernkeeper','companion','curator','storagekeeper','dealer','guildclerk',
     'jeweler','glassblower','cooper','roofer','midwife','undertaker','gravedigger','cartographer','candlemaker','mercenary','courier','apothecary_assistant','shipwright','ropemaker','furrier','blacksmith_apprentice','herald','jester','seamstress','wheelwright','vintner','cheesemonger','mason','locksmith'],
   // ---- Settlement Overhaul: capital tier -- a true kingdom-capital roster. Every building type
   // in the game can show up here, with extra weight on the "grand" civic buildings (nobles,
   // guild, museum, casino, temple staff) that make a capital feel like the seat of a kingdom
   // rather than an oversized town.
-  capital: ['merchant','merchant','merchant','blacksmith','blacksmith','innkeeper','innkeeper','innkeeper','trainer','necromancer_trainer','priest','priest','noble','noble','noble','captain','captain',
+  capital: ['merchant','merchant','merchant','blacksmith','blacksmith','innkeeper','innkeeper','innkeeper','trainer','weaponmaster','weaponmaster','necromancer_trainer','priest','priest','noble','noble','noble','captain','captain',
     'guard','guard','guard','guard','watchman','watchman','watchman','alchemist','bard','bard','tailor','baker','chef','chef','fisherman','stablehand','beggar','elder','scholar',
     'tavernkeeper','tavernkeeper','tavernkeeper','companion','curator','curator','storagekeeper','dealer','dealer','guildclerk','guildclerk','carpenter','brewer',
     'jeweler','glassblower','cooper','roofer','midwife','undertaker','gravedigger','cartographer','candlemaker','mercenary','mercenary','courier','apothecary_assistant','shipwright','ropemaker','furrier','blacksmith_apprentice','herald','herald','jester','seamstress','wheelwright','vintner','cheesemonger','mason','locksmith','barber','scribe','dyer','beekeeper'],
@@ -11359,7 +11713,7 @@ const ROLE_POOLS = {
 const SHOP_ROLES = new Set(['merchant','blacksmith','innkeeper','alchemist','tailor','chef','baker','tavernkeeper','guildclerk','cobbler','weaver','potter','jeweler','glassblower','cooper','seamstress','furrier','candlemaker','cheesemonger','vintner','beekeeper','tanner','ropemaker','wheelwright','shipwright',
   // ---- NPC/Profession Overhaul part 2 ----
   'silversmith','armorer','fletcher','fence','quartermaster','distiller','confectioner','butcher','fishmonger']);
-const TRAINER_ROLES = new Set(['trainer','necromancer_trainer']);
+const TRAINER_ROLES = new Set(['trainer','necromancer_trainer','weaponmaster']);
 const QUEST_GIVER_ROLES = new Set(['elder','innkeeper','guard','captain','watchman','noble','ranger','guildclerk','tavernkeeper','herald','courier']);
 
 
@@ -11438,7 +11792,14 @@ function makeNPC(roleId, x, y, rng, settlementName, speciesId) {
   applyRacialTraits(npc, species);
   npc.armor += (npc.talentArmor || 0);
   if (SHOP_ROLES.has(roleId) || roleId === 'fisherman') { npc.shop = generateShopInventory(roleId, rng, npc); npc.gold = randInt(rng, 80, 300); npc.shopRestockDay = Math.floor(turnCount / DAY_LENGTH); }
-  if (TRAINER_ROLES.has(roleId)) {
+  if (roleId === 'weaponmaster') {
+    // Martial counterpart of the spell trainer: teaches TECHNIQUES, tier-gated by how senior the trainer is (a novice only knows the basics, a master teaches up to tier 5).
+    npc.teachSpells = []; npc.teachTechniques = [];
+    const maxTier = npc.tier === 'novice' ? 2 : npc.tier === 'master' ? 5 : 3;
+    const techPool = TECHNIQUES.filter(t => (t.tier || 1) <= maxTier);
+    const n = randInt(rng, ...(npc.tier === 'novice' ? [2,3] : npc.tier === 'master' ? [5,8] : [3,5]));
+    for (let i = 0; i < n && techPool.length; i++) { const t = techPool.splice(Math.floor(rng()*techPool.length), 1)[0]; if (t) npc.teachTechniques.push(t.id); }
+  } else if (TRAINER_ROLES.has(roleId)) {
     npc.teachSpells = [];
     const spellPool = roleId === 'necromancer_trainer'
       ? SPELLS.filter(s => s.school === 'Necromancy' || s.id === 'drain')
@@ -12115,7 +12476,7 @@ function rectsOverlapWithGap(a, b, gap) {
 //
 // Which roles get which room-count tier is a single lookup (INTERIOR_SHOP_ROLES /
 // pickInteriorRoomTarget) -- adding a role to the "gets a real interior" category is a one-line change.
-const INTERIOR_SHOP_ROLES = new Set([...SHOP_ROLES, 'priest', 'scholar', 'trainer', 'necromancer_trainer', 'curator', 'guildclerk', 'dealer', 'companion']);
+const INTERIOR_SHOP_ROLES = new Set([...SHOP_ROLES, 'priest', 'scholar', 'trainer', 'weaponmaster', 'necromancer_trainer', 'curator', 'guildclerk', 'dealer', 'companion']);
 function pickInteriorRoomTarget(roleId, rect, rng, isGrand) {
   const minDim = Math.min(rect.w, rect.h);
   if (isGrand) return minDim >= 7 ? 4 : (minDim >= 5 ? 2 : 1);
@@ -13866,6 +14227,9 @@ function weatherElementMultiplier(spellLike, target) {
       if (spellLike.poison || spellLike.gasCloud || spellLike.element === 'poison') mult *= (em.poison || 1);
     }
   }
+  if (spellLike && target && spellLike.wetMult && entityIsWet(target)) mult *= spellLike.wetMult; // v0.51.3 data-driven "exploits a soaked target" field
+  if (spellLike && target && spellLike.oiledMult && entityIsOiled(target)) mult *= spellLike.oiledMult;
+  if (spellLike && target && spellLike.frozenMult && isEntityFrozenSolid(target)) mult *= spellLike.frozenMult;
   if (spellLike && target && entityIsWet(target)) {
     if (spellLike.chainLightning || spellLike.element === 'shock') mult *= 1.6;
     if (spellLike.igniteGround || spellLike.element === 'fire') mult *= 0.5;
@@ -13881,6 +14245,7 @@ function weatherElementMultiplier(spellLike, target) {
   if (target) {
     if (target.fireImmune && (spellLike.igniteGround || spellLike.element === 'fire')) mult = 0;
     if (target.frostImmune && (spellLike.frost || spellLike.element === 'frost')) mult = 0;
+    if (target.shockImmune && (spellLike.chainLightning || spellLike.element === 'shock')) mult = 0;
   }
   return mult;
 }
@@ -14458,6 +14823,60 @@ const WORLD_EVENT_HANDLERS = {
   },
   pullIntoInterstice(def) { pullPlayerIntoInterstice(); },
 };
+// ---------------------------------------------------------------- ENCOUNTER EVENTS (v0.51.3) ----
+// 38 of the 112 world events were pure flavor text and almost none asked the player anything. An ENCOUNTER is an event with a decision in it: it describes a
+// situation, offers choices (each optionally gated by an item, gold or stat, and optionally paying for itself), and each choice rolls a weighted outcome. Outcomes
+// are just OTHER world-event defs ({type:'grantGold', ...}) run through WORLD_EVENT_HANDLERS, so every existing handler (spawnWave, igniteAround, oilSlick,
+// healPlayer, buffPlayer...) works as an outcome for free, and the new primer handler (primePlayer) plugs the elemental layer into them. An outcome may chain
+// another with `also`. Adding an encounter = one object in WORLD_EVENTS; adding a new kind of consequence = one handler. Uses the generic presentChoice() modal;
+// Escape (or the last option) walks away. Skipped while something hostile is engaged nearby: nobody stops to haggle mid-fight.
+function encounterNeedProblem(need) {
+  if (!need) return null;
+  if (need.item && !player.inventory.some(i => i.id === need.item)) return 'needs ' + ((ITEM_BASES.find(b => b.id === need.item) || {}).name || need.item);
+  if (need.gold && player.gold < need.gold) return 'needs ' + need.gold + ' gold';
+  if (need.stat && (player[need.stat[0]] || 0) < need.stat[1]) return 'needs ' + String(need.stat[0]).toUpperCase() + ' ' + need.stat[1];
+  return null;
+}
+function encounterPay(need) {
+  if (!need) return;
+  if (need.gold) player.gold = Math.max(0, player.gold - need.gold);
+  if (need.item) { const it = player.inventory.find(i => i.id === need.item); if (it) removeOneFromInventory(it); }
+}
+function runEncounterOutcome(o) {
+  if (!o) return;
+  const h = WORLD_EVENT_HANDLERS[o.type];
+  if (h) h(o);
+  if (o.also && player.alive !== false && player.hp > 0) runEncounterOutcome(o.also);
+}
+function pickWeighted(list) {
+  const total = list.reduce((a, o) => a + (o.w || 1), 0); let r = Math.random() * total;
+  for (const o of list) { r -= (o.w || 1); if (r <= 0) return o; }
+  return list[list.length - 1];
+}
+Object.assign(WORLD_EVENT_HANDLERS, {
+  grantItem(def) {
+    const n = def.count ? randInt(Math.random, def.count[0], def.count[1]) : 1;
+    for (let i = 0; i < n; i++) addItemToList(player.inventory, makeItem(def.item, 0, Math.random));
+    log(`${def.msg} (+${n} ${(ITEM_BASES.find(b => b.id === def.item) || {}).name || def.item})`);
+  },
+  primePlayer(def) { log(def.msg); applyPrimers({ soak: def.soak, oil: def.oil }, player, 'the encounter'); },
+  encounter(def) {
+    if (curMonsters().some(m => m.alive !== false && m.hp > 0 && m.engaged && !m.friendly && chebyshev(m.x, m.y, player.x, player.y) <= 9)) return; // not now
+    log(def.msg);
+    const options = def.choices.map(ch => ({
+      label: ch.label + (encounterNeedProblem(ch.needs) ? `  (${encounterNeedProblem(ch.needs)})` : ''),
+      action: () => {
+        const problem = encounterNeedProblem(ch.needs);
+        if (problem) { log(`You can't: it ${problem}.`); return; }
+        encounterPay(ch.needs);
+        runEncounterOutcome(pickWeighted(ch.outcomes));
+        updateSidebar();
+      },
+    }));
+    options.push({ label: def.leaveLabel || 'Leave it be', action: () => log(def.leaveMsg || 'You move on.') });
+    presentChoice('Encounter: ' + def.name, options, 'Letter/click to choose, Esc to walk away.');
+  },
+});
 function applyWorldEvent(def) {
   const handler = WORLD_EVENT_HANDLERS[def.type];
   if (!handler) return;
@@ -14654,6 +15073,115 @@ const WORLD_EVENTS = [
   { id:'ev_assembly_surge', name:'Assembly Surge', rarity:'uncommon', scope:['clockwork_expanse'], type:'buffPlayer', stat:'armor', power:2, turns:60, msg:'A passing maintenance swarm mistakes you for machinery and tightens a few loose fittings before moving on.' },
   { id:'ev_server_glitch', name:'Server Glitch', rarity:'uncommon', scope:['neo_kalyx'], type:'grantXp', xp:[6,14], msg:'You exploit a momentary glitch in a public terminal for a small windfall of useful information.' },
 ];
+// ---- v0.51.3 ENCOUNTERS: world events with a decision (see the ENCOUNTER EVENTS block above WORLD_EVENT_HANDLERS) ----
+WORLD_EVENTS.push(
+  { id:'ev_enc_oil_wagon', name:'Overturned Oil Wagon', rarity:'uncommon', scope:'overworld', type:'encounter',
+    msg:"A merchant's wagon lies on its side across the road, one wheel still turning. Dark oil is seeping out of split casks and into the dust.",
+    choices:[
+      { label:'Salvage the sound flasks', outcomes:[
+        { w:5, type:'grantItem', item:'oil_flask', count:[1,3], msg:'A few flasks have survived, packed tight in straw.' },
+        { w:3, type:'oilSlick', radius:1, oilTurns:80, msg:'A cask gives way under your boot and you go down in it.' },
+        { w:2, type:'grantGold', gold:[8,20], msg:"Under the casks, the driver's strongbox, unlocked and unwatched." } ] },
+      { label:'Throw water on the spill and siphon it safely', needs:{ item:'water_flask' }, outcomes:[
+        { type:'grantItem', item:'oil_flask', count:[2,4], msg:'Quenched and safe to handle, the oil fills three flasks without a spark.', also:{ type:'grantXp', xp:[8,16], msg:'It is a very satisfying kind of competence.' } } ] },
+      { label:'Torch it from a safe distance', needs:{ item:'firebomb' }, outcomes:[
+        { type:'igniteAround', radius:4, msg:'The wagon goes up with a roar that rattles your teeth.', also:{ type:'grantXp', xp:[10,20], msg:'You stay for the whole show.' } } ] },
+    ] },
+  { id:'ev_enc_water_carrier', name:'Stranded Water-Carrier', rarity:'common', scope:'overworld', type:'encounter',
+    msg:'A water-seller sits beside a cart with a cracked axle, three casks of fresh water going warm in the sun.',
+    choices:[
+      { label:'Buy a flask of water (8 gold)', needs:{ gold:8 }, outcomes:[ { type:'grantItem', item:'water_flask', count:[1,2], msg:'He fills them to the brim and wishes you a dry road.' } ] },
+      { label:'Help him mend the axle', needs:{ stat:['str',11] }, outcomes:[
+        { w:3, type:'grantItem', item:'water_flask', count:[2,4], msg:'He presses flasks on you in thanks.' },
+        { w:2, type:'grantGold', gold:[10,25], msg:'He pays what he can, and a bit more than he can.' } ] },
+      { label:'Take his water by force', outcomes:[
+        { w:4, type:'grantItem', item:'water_flask', count:[2,3], msg:'He does not fight back. That is somehow worse.', also:{ type:'corruptionShift', amount:2, msg:'You feel it settle on you.' } },
+        { w:2, type:'damagePlayer', dmg:[3,9], dmgSource:'a water-seller with a cudgel', msg:'He had a cudgel under the seat.' } ] },
+    ] },
+  { id:'ev_enc_wounded_traveler', name:'Wounded Traveler', rarity:'uncommon', scope:'overworld', type:'encounter',
+    msg:'A traveler sits against a milestone with a bloody sleeve held shut, watching the road without much hope.',
+    choices:[
+      { label:'Bind his wounds', needs:{ item:'bandage' }, outcomes:[
+        { w:4, type:'grantGold', gold:[15,40], msg:'He empties his purse into your hand and will not hear otherwise.' },
+        { w:3, type:'grantXp', xp:[15,30], msg:'He tells you what he saw on the road ahead, which turns out to be useful.' },
+        { w:2, type:'grantItem', item:'potion_heal', count:[1,1], msg:'He insists on giving you the last of his own supplies.' } ] },
+      { label:'Give him a healing potion', needs:{ item:'potion_heal' }, outcomes:[
+        { type:'grantGold', gold:[30,60], msg:'He is on his feet in a minute and generous in two.', also:{ type:'buffPlayer', stat:'evasion', power:0.08, turns:120, msg:'His blessing, or just good luck, settles on you.' } } ] },
+      { label:'Go through his pack while he is out', outcomes:[
+        { w:3, type:'grantGold', gold:[10,30], msg:'Not much, but not nothing.' },
+        { w:2, type:'corruptionShift', amount:1, msg:'You find coins, and a worse feeling than you expected.' },
+        { w:1, type:'spawnWave', pool:'bandits', count:2, msg:'His friends return from the treeline, and they are not forgiving.' } ] },
+    ] },
+  { id:'ev_enc_mad_alchemist', name:'The Alchemist at the Crossroads', rarity:'rare', scope:'overworld', type:'encounter',
+    msg:'A wild-eyed alchemist has set up a folding table at the crossroads, half his stock steaming, half of it smoking, and waves you over with a spoon.',
+    choices:[
+      { label:'Buy a mystery flask (25 gold)', needs:{ gold:25 }, outcomes:[
+        { w:3, type:'grantItem', item:'potion_haste', count:[1,1], msg:'"A good one!" he says, as if surprised.' },
+        { w:2, type:'grantItem', item:'firebomb', count:[1,2], msg:'It is a firebomb. He seems to have known.' },
+        { w:2, type:'primePlayer', oil:60, msg:'It was grease. All of it, on you. He apologizes with visible sincerity.' },
+        { w:2, type:'primePlayer', soak:14, msg:'It was water. A great deal of water, in your face.' },
+        { w:1, type:'grantItem', item:'potion_giant_strength', count:[1,1], msg:'He has genuinely no idea how this one got in the box.' } ] },
+      { label:'Volunteer to test his newest creation', outcomes:[
+        { w:3, type:'buffPlayer', stat:'armor', power:6, turns:120, msg:'Your skin takes on the texture of old bark. "Splendid!"' },
+        { w:3, type:'igniteAround', radius:3, msg:'"Fire! Not the intended result! Fascinating!"' },
+        { w:2, type:'primePlayer', oil:60, msg:'You are coated in something slick and faintly flammable. "Hold still, and whatever you do, stay away from fire."' },
+        { w:1, type:'damagePlayer', dmg:[6,14], dmgSource:"an alchemist's experiment", msg:'The flask goes off in your hand.' } ] },
+    ], leaveMsg:'"Your loss!" he calls after you, already pouring something into something.' },
+  { id:'ev_enc_whispering_well', name:'The Whispering Well', rarity:'rare', scope:'overworld', type:'encounter',
+    msg:'A stone well stands alone in the middle of nowhere, its rope fresh, its water far down, and something at the bottom is murmuring your name wrong.',
+    choices:[
+      { label:'Drop in a coin and make a wish (1 gold)', needs:{ gold:1 }, outcomes:[
+        { w:4, type:'grantXp', xp:[20,40], msg:'The murmur considers, and approves.' },
+        { w:3, type:'buffPlayer', stat:'evasion', power:0.1, turns:150, msg:'Something lifts the weight from your feet.' },
+        { w:2, type:'corruptionShift', amount:3, msg:'The wish is granted, in the way that wishes to wells are.' } ] },
+      { label:'Draw up a bucket of water', outcomes:[
+        { w:3, type:'grantItem', item:'water_flask', count:[1,3], msg:'Cold, clean, and quiet.' },
+        { w:3, type:'healPlayer', heal:[10,25], msg:'It tastes like the first day of spring.' } ] },
+      { label:'Climb down the rope', needs:{ stat:['dex',12] }, outcomes:[
+        { w:3, type:'grantGold', gold:[40,100], msg:'Coins, centuries of them, none of them from anyone who got their wish.' },
+        { w:2, type:'damagePlayer', dmg:[8,20], dmgSource:'a fall down a well', msg:'The rope parts. The well is deeper than it looked, and the bottom is not.' } ] },
+    ] },
+  { id:'ev_enc_roadside_gambler', name:'Roadside Dice', rarity:'common', scope:'overworld', type:'encounter',
+    msg:'A man with a blanket and three worn dice looks up with a smile as practiced as the dice are not.',
+    choices:[
+      { label:'Wager 10 gold', needs:{ gold:10 }, outcomes:[
+        { w:4, type:'grantGold', gold:[20,20], msg:'The dice are kind. He pays up with the air of someone who has seen it before.' },
+        { w:6, type:'flavor', msg:'The dice are not kind.' } ] },
+      { label:'Wager 50 gold', needs:{ gold:50 }, outcomes:[
+        { w:4, type:'grantGold', gold:[100,100], msg:'A triple. He stares at the blanket for a while.' },
+        { w:6, type:'flavor', msg:'He rolls a very ordinary pair and gathers up your gold without comment.' } ] },
+      { label:'Swap in your own loaded die', needs:{ stat:['dex',14] }, outcomes:[
+        { w:5, type:'grantGold', gold:[30,60], msg:'The swap is clean. So is your exit.' },
+        { w:3, type:'damagePlayer', dmg:[4,10], dmgSource:'an angry gambler', msg:'He catches your wrist, and then your jaw.' } ] },
+    ] },
+  { id:'ev_enc_hidden_spring', name:'Hidden Spring', rarity:'common', scope:'overworld', type:'encounter',
+    msg:'Water you can hear before you see: a small spring tucked in the rocks, cold and clear.',
+    choices:[
+      { label:'Drink', outcomes:[ { type:'healPlayer', heal:[8,20], msg:'Cold enough to ache, and exactly what you needed.' } ] },
+      { label:'Fill a flask', outcomes:[ { type:'grantItem', item:'water_flask', count:[1,2], msg:'You fill what you can carry.' } ] },
+      { label:'Wade in and soak yourself', outcomes:[ { type:'primePlayer', soak:20, msg:'You wade in to the chest. Fire will not trouble you for a while, and neither will oil. Lightning is another matter.', also:{ type:'healPlayer', heal:[4,10], msg:'It is, at least, restful.' } } ] },
+    ] },
+  { id:'ev_enc_tar_seep', name:'Tar Seep', rarity:'uncommon', scope:'overworld', type:'encounter',
+    msg:'The ground is weeping black here, a slow seep of pitch pooling in a hollow and smelling like a lamp shop on fire.',
+    choices:[
+      { label:'Scoop tar into empty flasks', outcomes:[
+        { w:4, type:'grantItem', item:'oil_flask', count:[1,2], msg:'Thick, black, and good enough to burn.' },
+        { w:2, type:'oilSlick', radius:1, oilTurns:100, msg:'The crust is thinner than it looks and you sink to the knee.' } ] },
+      { label:'Light the seep', needs:{ item:'firebomb' }, outcomes:[
+        { type:'igniteAround', radius:3, msg:'The seep goes up in a column of black smoke, and keeps burning.', also:{ type:'grantXp', xp:[8,18], msg:'You can see it from a long way off, and so can anyone else.' } } ] },
+    ] },
+  { id:'ev_enc_abandoned_camp', name:'Abandoned Camp', rarity:'common', scope:'any', type:'encounter',
+    msg:'A camp, left in a hurry: tents still staked, a cookfire gone to embers, a pack half-open by the door.',
+    choices:[
+      { label:'Search the tents', outcomes:[
+        { w:4, type:'grantGold', gold:[6,22], msg:'A few coins in a boot.' },
+        { w:3, type:'grantItem', item:'food_ration', count:[1,2], msg:'Dry rations, still good.' },
+        { w:2, type:'spawnWave', pool:'bandits', count:2, msg:'The owners were not gone far, and they were not the kind you want to find you looting.' } ] },
+      { label:'Douse the embers and take the stash buried beneath them', needs:{ item:'water_flask' }, outcomes:[
+        { type:'grantGold', gold:[25,70], msg:'You wet the ashes down and dig. They were hiding something.', also:{ type:'grantItem', item:'potion_heal', count:[1,1], msg:'And a potion, tucked inside a pot.' } } ] },
+      { label:'Rest by the fire', outcomes:[ { type:'healPlayer', heal:[10,25], msg:'The warmth is a luxury you did not expect today.' } ] },
+    ] },
+);
 
 // ---------------------------------------------------------------- SCHEDULER ----
 let activeWorldEvents = []; // [{ def, turnsLeft }]
@@ -15064,7 +15592,7 @@ const ROLE_CONTAINER_PROFILES = {
   farmer: ['sack','crate'], elder: ['bookshelf','desk'], child: ['sack'],
   merchant: ['crate','chest'], blacksmith: ['weaponrack','crate'], innkeeper: ['barrel','cabinet'],
   guard: ['weaponrack'], watchman: ['weaponrack'], captain: ['weaponrack','chest'],
-  trainer: ['bookshelf','desk'], necromancer_trainer: ['bookshelf','coffin'],
+  trainer: ['bookshelf','desk'], weaponmaster: ['weaponrack','desk'], necromancer_trainer: ['bookshelf','coffin'],
   priest: ['bookshelf','reliquary'], ranger: ['sack','crate'], hunter: ['sack','crate'],
   baker: ['barrel','sack'], chef: ['barrel','sack'], tailor: ['cabinet','crate'],
   alchemist: ['cabinet','desk'], noble: ['cabinet','vault','desk'], bard: ['desk','cabinet'],
@@ -15329,6 +15857,60 @@ function shatterFrozenEntity(e) {
   if (player.isTutorial) player._tutSawShatter = true;
   if (posVisibleToPlayer(e.x, e.y)) log(`The ice around ${e === player ? 'you' : e.name} shatters violently! (+${bonus} damage)`);
   return bonus;
+}
+// ============================================================================
+// ---- ELEMENTAL PRIMERS (v0.51.3). The oil+fire / water+frost / water+shock combos above only had three ways to start (standing in a puddle, an
+// oil flask, rain), so in practice they rarely happened. A "primer" is any source field that sets up one of those states: { soak: turns } makes the
+// target Wet, { oil: turns } coats it in Oiled, { oilGround: radius } slicks the ground around it. The same table serves player spells (via
+// applyEffectToTarget), monster abilities (monsterCastAt), and monster melee (soakStrike / oilStrike). To add a new primed state, add a row here
+// and put its key on spells/abilities; nothing else needs touching. Payoffs (fire on Oiled, frost on Wet, shock on Wet) already exist; spells may also
+// declare wetMult / oiledMult (damage multiplier against a primed target, read in weatherElementMultiplier) and consumeWet (steam).
+// Interactions are physical rather than flat buffs: soaking douses fire and rinses oil, oil won't stick to a soaked target, and oil on a burning target feeds it. ----
+const ELEMENT_PRIMERS = [
+  { key: 'soak', apply(t, turns, srcName, vis) {
+      if (t.wetImmune) return false;
+      const was = t.wetTurns > 0;
+      t.wetTurns = Math.max(t.wetTurns || 0, turns);
+      const wasBurning = extinguishEntity(t);
+      const wasOiled = t.oiledTurns > 0; if (wasOiled) t.oiledTurns = 0;
+      if (vis) log(`${t === player ? 'You are' : t.name + ' is'} drenched${wasBurning ? ', the flames hissing out' : ''}${wasOiled ? ', the oil washing away' : ''}.`);
+      return !was || wasBurning || wasOiled;
+  } },
+  { key: 'oil', apply(t, turns, srcName, vis) {
+      if (t.oilImmune) return false;
+      if (t.wetTurns > 0) { if (vis) log(`The oil beads and slides off ${t === player ? 'you' : t.name}; ${t === player ? 'you are' : 'it is'} too soaked for it to stick.`); return false; }
+      const was = t.oiledTurns > 0;
+      t.oiledTurns = Math.max(t.oiledTurns || 0, turns);
+      if (t.burningTurns > 0) { t.burningTurns += 3; if (vis) log(`The oil on ${t === player ? 'you' : t.name} flares up, feeding the fire!`); }
+      else if (vis && !was) log(`${t === player ? 'You are' : t.name + ' is'} coated in oil.`);
+      return true;
+  } },
+];
+function applyPrimers(src, t, srcName) {
+  if (!src || !t || t.hp === undefined || t.hp <= 0) return false;
+  const vis = t === player || posVisibleToPlayer(t.x, t.y);
+  let any = false;
+  for (const p of ELEMENT_PRIMERS) { const v = src[p.key]; if (v) any = p.apply(t, v === true ? 12 : v, srcName, vis) || any; }
+  if (src.oilGround) oilArea(t.x, t.y, src.oilGround, 40);
+  return any;
+}
+// Payoffs for a monster ABILITY landing (player spells and monster melee already had these inline): fire ignites an Oiled victim, frost freezes a Wet one solid.
+function applyAbilityContact(ab, target, caster) {
+  if (!target || target.hp === undefined || target.hp <= 0) return;
+  const you = target === player ? 'you' : target.name, vis = target === player || posVisibleToPlayer(target.x, target.y);
+  if (ab.element === 'fire' && entityIsOiled(target) && igniteEntity(target, 6) && vis) log(`The oil on ${you} catches -- ${target === player ? 'you are' : 'it is'} ablaze!`);
+  if (ab.element === 'frost' && entityIsWet(target) && freezeEntitySolid(target, 3) && vis) log(`The frost seizes the water on ${you} -- frozen solid!`);
+  applyPrimers(ab, target, caster && caster.name);
+}
+// How much a monster ability would profit from being cast on `target` right now (higher = try first); -1 = pointless (target already primed).
+function abilityComboScore(ab, target) {
+  if (!ab || !target) return 0;
+  if (ab.oil && (entityIsOiled(target) || entityIsWet(target))) return -1;
+  if (ab.soak && entityIsWet(target)) return -1;
+  if (ab.element === 'fire' && entityIsOiled(target)) return 2;
+  if ((ab.element === 'frost' || ab.element === 'shock') && entityIsWet(target)) return 2;
+  if ((ab.oil || ab.soak) && !entityIsOiled(target) && !entityIsWet(target)) return 1;
+  return 0;
 }
 // ============================================================================
 // ---- BODY & HEALTH OVERHAUL: locational damage, bleeding, and procedural disease. Layered on
@@ -16282,6 +16864,7 @@ const STATUS_LABELS = {
   crit: () => 'Lucky (bonus crit chance)',
   resistfire: () => 'Fire Resistant',
   resistfrost: () => 'Frost Resistant',
+  resistshock: () => 'Shock Resistant',
   resistpoison: () => 'Poison Resistant',
   resistbleed: () => 'Clotting (bleed-resistant)',
   waterbreathing: () => 'Waterbreathing',
@@ -16311,8 +16894,8 @@ function getActiveStatusEffects(e) {
   // shown for any entity, not just the player, so a wet/oiled/burning monster telegraphs its
   // vulnerability the same way a poisoned one does.
   if (e.burningTurns > 0) out.push({ label: 'On Fire', turns: e.burningTurns, kind: 'debuff' });
-  if (e.oiledTurns > 0) out.push({ label: 'Oil-Slicked', turns: e.oiledTurns, kind: 'debuff' });
-  if (e.wetTurns > 0) out.push({ label: 'Soaked', turns: e.wetTurns, kind: 'neutral' });
+  if (e.oiledTurns > 0) out.push({ label: 'Oil-Slicked', turns: e.oiledTurns > 900 ? null : e.oiledTurns, kind: 'debuff' });
+  if (e.wetTurns > 0) out.push({ label: 'Soaked', turns: e.wetTurns > 900 ? null : e.wetTurns, kind: 'neutral' });
   if (e.frozenSolidTurns > 0) out.push({ label: 'Frozen Solid', turns: e.frozenSolidTurns, kind: 'debuff' });
   if (e.stunnedTurns > 0) out.push({ label: 'Stunned', turns: e.stunnedTurns, kind: 'debuff' });
   // ---- BODY & HEALTH OVERHAUL: wounds, bleeding, and active illness, all shown the same way
@@ -16835,7 +17418,8 @@ function totalStatBonus(it, stat) {
 // applyStatBonuses/removeStatBonuses below already generically add/subtract every key in this
 // list on equip/unequip, and every read site already existed before this list touched it.
 const EQUIP_FLAT_BONUS_KEYS = ['dodgeChance', 'critBonus', 'critDmgBonus', 'eldritchDmgBonus', 'poisonDmgReduction', 'lifestealBonus', 'spellDmgBonus', 'techniqueDmgBonus', 'bleedDmgReduction', 'bleedResistChance',
-  'fearResistBonus', 'confuseResistBonus', 'thornsPercent', 'executeBonus', 'bossDmgBonus', 'lowHpDmgBonus', 'rangedDmgBonus', 'elementalDmgBonus', 'regen'];
+  'fearResistBonus', 'confuseResistBonus', 'thornsPercent', 'executeBonus', 'bossDmgBonus', 'lowHpDmgBonus', 'rangedDmgBonus', 'elementalDmgBonus', 'regen',
+  'fireDmgReduction', 'frostDmgReduction', 'shockDmgReduction']; // v0.51.3: elemental resistance gear (monster bolts/blasts of that element read these; see elementResistFactor)
 // Maps a mutation's `category` to the player field a specialization talent can set to boost just
 // that category's damage (see applyEffectToTarget's dmgMult). Deliberately data-driven: adding a
 // new specialization line for a category not listed here is a one-line addition, not a formula change.
@@ -20904,7 +21488,7 @@ function useQuickslot(slot) {
 }
 // Legacy set kept only for describeItem()'s flavor-text lookup below; the actual "can this be
 // thrown" gate is canThrowItem() now, which covers every item type, not just this whitelist.
-const THROWABLE_EFFECTS = new Set(['aoefire','aoefrost','aoepoison','aoeconfuse','throwdmg','scrollfire','throwaoe','nukeblast','throwgas','throwemp','throwslow','throwsnare','oilsplash']);
+const THROWABLE_EFFECTS = new Set(['aoefire','aoefrost','aoepoison','aoeconfuse','throwdmg','scrollfire','throwaoe','nukeblast','throwgas','throwemp','throwslow','throwsnare','oilsplash','soaksplash','scrollblast']);
 function openItemAction(it, slot) {
   gameState = 'itemaction'; invSelected = it; invSelectedSlot = slot || null;
   let opts = [];
@@ -20919,7 +21503,7 @@ function openItemAction(it, slot) {
     if (it.type === 'chest') opts.push(['u', 'Open']);
     if (it.type === 'book' || it.type === 'note') opts.push(['u', it.type === 'note' ? 'Read note' : 'Read']);
     if (it.type === 'recipe') opts.push(['u', 'Learn']);
-    if (it.type === 'tome') opts.push(['u', 'Study (learn spell)']);
+    if (it.type === 'tome') opts.push(['u', it.techId ? 'Study (learn technique)' : 'Study (learn spell)']);
     if (it.type === 'cyberchip') opts.push(['u', 'Extract (learn blueprint)']);
     if (it.type === 'mutagen') opts.push(['u', 'Drink']);
     opts.push(['q', 'Set quickslot']);
@@ -22205,7 +22789,7 @@ const NIGHT_ACTIVE_ROLES = new Set(['guard','watchman','captain','innkeeper','ta
 // sticks to roles where "goes home after their shift" reads as normal, not roles like farmer/
 // hunter/elder/child who are already fine living wherever they were placed.
 const SEPARATE_HOME_ELIGIBLE_ROLES = new Set(['merchant','blacksmith','alchemist','tailor','chef','baker','cobbler','weaver','potter',
-  'jeweler','glassblower','cooper','seamstress','furrier','noble','priest','scholar','curator','trainer','necromancer_trainer','mason','locksmith']);
+  'jeweler','glassblower','cooper','seamstress','furrier','noble','priest','scholar','curator','trainer','weaponmaster','necromancer_trainer','mason','locksmith']);
 
 // ---- NPC/Profession Overhaul: every NPC used to get a fully generic rumor line regardless of
 // role (a farmer and a jeweler could say the exact same thing) -- this gives each profession real,
@@ -22357,11 +22941,13 @@ function renderTrain() {
   const npc = dialogueNPC;
   trainEntries = [];
   if (npc.teachSpells) for (const id of npc.teachSpells) if (!player.knownSpells.includes(id)) trainEntries.push({ kind: 'spell', id });
+  if (npc.teachTechniques) for (const id of npc.teachTechniques) if (!(player.knownTechniques || []).includes(id)) trainEntries.push({ kind: 'technique', id });
   if (npc.teachRecipes) for (const id of npc.teachRecipes) if (!player.knownRecipes.includes(id)) trainEntries.push({ kind: 'recipe', id });
   let html = `<div class="npcline">Your gold: ${player.gold}</div>`;
   trainEntries.forEach((e, i) => {
     const letter = String.fromCharCode(97 + i);
     if (e.kind === 'spell') { const s = SPELLS.find(sp => sp.id === e.id); const cost = 30 + s.mp * 8; html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${s.name} <span class="dim">(${cost}g) - ${s.desc}</span></div>`; }
+    else if (e.kind === 'technique') { const t = TECHNIQUES.find(tt => tt.id === e.id); const cost = 30 + t.mp * 8; html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] ${t.name} <span class="dim">(${cost}g, ${t.school}) - ${t.desc}</span></div>`; }
     else { const r = RECIPES.find(rp => rp.id === e.id); html += `<div class="modal-opt" onclick="simulateKey('${letter}')">[${letter}] Recipe: ${r.name} <span class="dim">(25g)</span></div>`; }
   });
   if (!trainEntries.length) html += `<div class="npcline dim">Nothing left to learn here.</div>`;
@@ -22375,6 +22961,10 @@ function trainLearn(letter) {
     const s = SPELLS.find(sp => sp.id === e.id); const cost = 30 + s.mp * 8;
     if (player.gold < cost) { log("You can't afford that spell."); return; }
     player.gold -= cost; player.knownSpells.push(e.id); log(`You learn ${s.name}!`);
+  } else if (e.kind === 'technique') {
+    const t = TECHNIQUES.find(tt => tt.id === e.id); const cost = 30 + t.mp * 8;
+    if (player.gold < cost) { log("You can't afford that training."); return; }
+    player.gold -= cost; (player.knownTechniques = player.knownTechniques || []).push(e.id); log(`You drill under the trainer and learn ${t.name}!`);
   } else {
     const r = RECIPES.find(rp => rp.id === e.id); const cost = 25;
     if (player.gold < cost) { log("You can't afford that recipe."); return; }
@@ -22682,6 +23272,7 @@ function describeEntity(e) {
 
 
 // ---- ally spawning v3: armor/permanence talents ----
+const ALLY_SCALE_MULT = 1.35; // tuning knob for conjured allies (see spawnAlly)
 function spawnAlly(monsterId, duration, nameOverride) {
   const base = MONSTER_BASES[monsterId];
   if (!base) return null;
@@ -22692,7 +23283,8 @@ function spawnAlly(monsterId, duration, nameOverride) {
     if (curWalkable(nx,ny) && !entityAt(nx,ny)) { spot = {x:nx,y:ny}; break; }
   }
   if (!spot) { log('There is no room for a summon nearby.'); return null; }
-  const a = makeMonster(monsterId, spot.x, spot.y, depthScaleForPlayerLevel(player.level), Math.random);
+  // v0.51.3: summons were built at exactly the player's native level scale, so a Summoner held its own at native depth and collapsed 2-3x deeper (duel table: 48% at 2.8x native vs 99% for every other class). A conjured ally now runs ALLY_SCALE_MULT above native.
+  const a = makeMonster(monsterId, spot.x, spot.y, depthScaleForPlayerLevel(player.level) * ALLY_SCALE_MULT, Math.random);
   a.kind = 'ally'; a.owner = true; a.duration = player.allyPermanent ? 0 : (duration || 0); a.alive = true;
   // CHA scales a freshly-summoned ally's HP, attack, and STR on top of the level-based curve above --
   // see charismaAllyMult(). A commanding presence calls out (and holds) a noticeably stronger servant.
@@ -23381,6 +23973,7 @@ function openChest(chestItem) {
   player.gold += Math.round(gold);
   if (Math.random() < 0.15) { const candidates = RECIPES.filter(r => !RECIPES_EXCLUDED_FROM_RANDOM_TEACHING.has(r.id)); const rid = choice(Math.random, candidates).id; if (!player.knownRecipes.includes(rid)) { player.knownRecipes.push(rid); gotten.push('Recipe: ' + RECIPES.find(r=>r.id===rid).name); } }
   if (Math.random() < 0.18) { const tome = makeTome(tier, Math.random); addItemToList(player.inventory, tome); gotten.push(tome.name); }
+  if (Math.random() < 0.14) { const man = makeManual(tier, Math.random); addItemToList(player.inventory, man); gotten.push(man.name); } // v0.51.3: technique manuals
   log(`You break open the chest and find: ${gotten.join(', ')}, and ${gold} gold!`);
   updateSidebar();
 }
@@ -23551,6 +24144,8 @@ function dropLoot(def) {
     if (def.boss && Math.random() < 0.4) { const chestItem = makeItem('chest', 0, Math.random); chestItem.tier = Math.min(4, pTier + 1); chestItem.powerMult = itemPowerMult(def.powerScale || 1); addItemToList(items, chestItem); }
     if (def.boss && Math.random() < 0.5) addItemToList(items, makeTome(randInt(Math.random,2,3), Math.random));
     else if (Math.random() < 0.03) addItemToList(items, makeTome(randInt(Math.random,0,1), Math.random));
+    if (def.boss && Math.random() < 0.4) addItemToList(items, makeManual(randInt(Math.random,2,3), Math.random)); // v0.51.3
+    else if (Math.random() < 0.03) addItemToList(items, makeManual(randInt(Math.random,0,1), Math.random));
     if (def.kind === 'monster' && !['rabbit','gull','fox','hawk'].includes(def.monsterId)) items.push(makeCorpse(def));
   } else if (def.kind === 'npc') {
     if (def.gold) { const g = makeItem('gold', 0, Math.random); g.amount = Math.round(def.gold * goldMult); addItemToList(items, g); }
@@ -25435,7 +26030,7 @@ function openDialogue(npc) {
   if (npc.dimensionNPC && DIMENSION_ERRAND_CONFIG[npc.dimensionId] && !player.quests.some(q => q.type === 'dimension_bounty' && q.dimId === npc.dimensionId && !q.done)) {
     opts.push({ key: nextKey(), label: 'Ask if there\'s work to do', action: () => offerDimensionErrand(npc, npc.dimensionId) });
   }
-  if ((npc.teachSpells && npc.teachSpells.length) || (npc.teachRecipes && npc.teachRecipes.length)) opts.push({ key: nextKey(), label: 'Learn', action: () => openTrain(npc) });
+  if ((npc.teachSpells && npc.teachSpells.length) || (npc.teachTechniques && npc.teachTechniques.length) || (npc.teachRecipes && npc.teachRecipes.length)) opts.push({ key: nextKey(), label: 'Learn', action: () => openTrain(npc) });
   // Lost & Found: any local of the matching settlement can pass a found keepsake along, no matter
   // who exactly lost it -- see generateLostKeepsake.
   const keepsake = player.inventory.find(it => it.isLostKeepsake && it.ownerHome === npc.home);
@@ -27100,7 +27695,7 @@ const Lighting = (function () {
 // EXTENDING: add an entry to AIM_KINDS keyed by pendingTarget.kind. footprint(p, x, y, api) returns
 //   { tiles: [[x, y], ...], path: [[x, y], ...], landing: [x, y] | null, damaging: bool, note: string }
 // and the engine adds the range / line-of-sight validity, the creature tally and the drawing.
-const AIM_AOE_THROWS = new Set(['aoefire', 'aoefrost', 'oilsplash', 'aoepoison', 'aoeconfuse']);
+const AIM_AOE_THROWS = new Set(['aoefire', 'aoefrost', 'oilsplash', 'soaksplash', 'scrollblast', 'aoepoison', 'aoeconfuse']);
 const AIM_REL_COLORS = { foe: '#ff4a3a', ally: '#58e058', self: '#4ad8ff', neutral: '#ffc23a' };
 const AIM_MOVE_KEYS = {
   ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
@@ -27532,7 +28127,7 @@ const AmbientLife = (function () {
 // EXTENDING: add a rule to SHOP_SIGN_RULES ({ id, glyph, roles }); roles not matched by any rule get the default '+'
 // in their own colour. Set ShopSigns.enabled = false to restore the plain doors on newly generated settlements.
 const SHOP_SIGN_RULES = [
-  { id: 'smith', glyph: '\u03a9', roles: ['blacksmith', 'cybersmith', 'armorer', 'silversmith', 'farrier', 'blacksmith_apprentice'] },
+  { id: 'smith', glyph: '\u03a9', roles: ['blacksmith', 'cybersmith', 'armorer', 'silversmith', 'farrier', 'blacksmith_apprentice', 'weaponmaster'] },
   { id: 'inn', glyph: '\u2229', roles: ['innkeeper', 'tavernkeeper'] },
   { id: 'holy', glyph: '\u2020', roles: ['priest', 'monk', 'healer', 'midwife'] },
   { id: 'arcane', glyph: '\u03a8', roles: ['trainer', 'necromancer_trainer', 'scholar', 'archivist', 'scribe', 'curator', 'cartographer', 'oracle'] },
@@ -28197,7 +28792,19 @@ function manaScalingSpellBonus() {
   if (!relic || !player.maxMp) return 0;
   return relic.manaScaling.maxAmount * (player.mp / player.maxMp);
 }
+// v0.51.3: every spell/technique effect now flows through this wrapper so data-driven "elemental primer" fields (soak/oil/oilGround/consumeWet) work on
+// ANY spell type without touching the per-type handlers. The handlers themselves live in applyEffectToTargetCore, unchanged.
 function applyEffectToTarget(spell, t) {
+  const wasWet = !!(t && t.wetTurns > 0);
+  if (spell.primeFirst && t && t.hp > 0) applyPrimers(spell, t, 'Your ' + spell.name); // set-up lands BEFORE the hit so the same cast can pay it off (Napalm)
+  const r = applyEffectToTargetCore(spell, t);
+  if (t && t.hp > 0 && t.alive !== false) {
+    if (spell.consumeWet && wasWet && t.wetTurns > 0) { t.wetTurns = 0; if (t === player || posVisibleToPlayer(t.x, t.y)) log(`The water on ${t === player ? 'you' : t.name} flashes to scalding steam!`); }
+    if (!spell.primeFirst) applyPrimers(spell, t, 'Your ' + spell.name);
+  }
+  return r;
+}
+function applyEffectToTargetCore(spell, t) {
   // Category-specific mutation damage bonuses (Predatory/Symbiotic/etc talent lines) live in this
   // lookup rather than as hardcoded per-category branches, so a future category (Plague, Void/
   // Cosmic, ...) just needs an entry here plus a talent that sets the field -- no formula changes.
@@ -28264,6 +28871,8 @@ function applyEffectToTarget(spell, t) {
     log(`Your ${spell.name} strikes ${t.name} for ${dmg}.`);
     if (spell.type === 'drain') { player.hp = Math.min(player.maxHp, player.hp + Math.floor(dmg * 0.5)); log('You feel invigorated.'); }
     if (spell.poison && t.hp > 0) { t.statusPoison = (t.statusPoison || 0) + spell.poison; log(`${t.name} is poisoned!`); }
+    // v0.51.3: data-driven slow rider for damage spells (Temporal Shear, Barbed Vines, Chrono Burst...), the same field debuff spells already use.
+    if (spell.slowStatus && t.hp > 0) { t.statusSlow = Math.max(t.statusSlow || 0, spell.slowStatus); log(`${t.name} is slowed!`); }
     if (spell.stagger && t.hp > 0) { t.statusSlow = Math.max(t.statusSlow || 0, 2); log(`${t.name} is staggered!`); }
     // BUG FIX (v0.40.26): Reckless Swing's own description ("an all-or-nothing swing that leaves
     // you exposed") explicitly promises a real drawback for the caster, not just a bigger number
@@ -29364,6 +29973,8 @@ function doAttack(att, def, skipDuplicate) {
     if (entityIsWet(def) && freezeEntitySolid(def, 3)) log(`The frost of ${att.name}'s attack seizes the water on ${defIsPlayer ? 'you' : def.name} -- frozen solid!`);
     else { def.statusSlow = (def.statusSlow||0) + 2; log(`The frost of ${att.name}'s attack chills ${defIsPlayer ? 'you' : def.name} to the bone.`); }
   }
+  // v0.51.3: monsters with soakStrike / oilStrike (tide-things, tar-things) prime their victim for the next hit, theirs or a friend's.
+  if (!isPlayer && (att.soakStrike || att.oilStrike) && Math.random() < 0.5) applyPrimers({ soak: att.soakStrike, oil: att.oilStrike }, def, att.name);
   if (!isPlayer && att.poison && (!defIsPlayer || getBuff('resistpoison') <= 0) && (def.poisonDmgReduction || 0) < 1 && Math.random() < 0.4) { def.statusPoison = (def.statusPoison || 0) + (def.poisonDmgReduction ? Math.round(att.poison * (1-def.poisonDmgReduction)) : att.poison); log(`${defYouAre} poisoned!`); }
   if (!isPlayer && att.causesFear && Math.random() < 0.35 * (1 - (def.fearResistBonus || 0))) { def.statusFear = addFearTurns(def.statusFear, 3); log(defIsPlayer ? 'Terror grips you!' : `Terror grips ${def.name}!`); }
   if (!isPlayer && att.causesConfuse && Math.random() < 0.35 * (1 - (def.confuseResistBonus || 0))) { def.statusConfuse = (def.statusConfuse || 0) + 3; log(defIsPlayer ? 'Your mind reels in confusion!' : `${def.name}'s mind reels in confusion!`); }
@@ -29458,6 +30069,9 @@ function processEntityStatus(e) {
   // (and stacked on top of) tile-based fire/gas damage above -- see the OIL/GREASE block near
   // igniteTile for the full design rationale. ----
   if (e.wetTurns > 0) e.wetTurns--;
+  // v0.51.3: permanently wet / oiled creatures re-soak themselves once whatever interrupted it (thawing, burning out) is over
+  if (e.alwaysWet && !(e.wetTurns > 0) && !(e.frozenSolidTurns > 0)) e.wetTurns = 9999;
+  if (e.alwaysOiled && !(e.oiledTurns > 0) && !(e.burningTurns > 0) && !(e.wetTurns > 0)) e.oiledTurns = 9999;
   if (e.oiledTurns > 0) e.oiledTurns--;
   if (e.frozenSolidTurns > 0) {
     e.frozenSolidTurns--;
@@ -29512,7 +30126,9 @@ function processEntityStatus(e) {
   // pattern already established above (poison, burning, frozen). ----
   if (e.bleedStacks > 0) {
     const bleedReduction = Math.min(0.95, e.bleedDmgReduction || 0);
-    const d = Math.max(1, Math.round((e.bleedStacks || 1) * 0.8 * (1 - bleedReduction)));
+    // v0.51.3: early grace, same ladder as monster attacks (EARLY_GRACE.atkScale): a flat per-stack tick is a far bigger share of a level 1-4 character's ~35-60 HP
+    const earlyK = (e === player && typeof EARLY_GRACE !== 'undefined') ? EARLY_GRACE.atkScale(player.level) : 1;
+    const d = Math.max(1, Math.round((e.bleedStacks || 1) * 0.8 * (1 - bleedReduction) * earlyK));
     e.hp -= d;
     e.bleedClotTurns = (e.bleedClotTurns || 0) + 1;
     if (e === player) { log(`You're bleeding! (${d} damage)`); lastDamageSource = 'bleeding'; }
@@ -29849,6 +30465,15 @@ function monsterSpendCost(m, ab) {
 }
 // executes a monster ability from MONSTER_ABILITY_LIBRARY against a target -- shares the same
 // damage/status vocabulary the player's own spells use (bolt/drain/debuff/heal/buff/summon).
+// v0.51.3: elemental resistance from gear/traits as a damage factor (1 = no resistance). Fire for the player is already applied inline in monsterCastAt's bolt branch (older code),
+// so callers pass only the elements they still need; the AoE branch uses all three.
+function elementResistFactor(e, element) {
+  const r = element === 'fire' ? e.fireDmgReduction : element === 'frost' ? e.frostDmgReduction : element === 'shock' ? e.shockDmgReduction : 0;
+  let f = r ? 1 - Math.min(0.9, Math.max(0, r)) : 1;
+  // a Resistance potion/food buff halves it too (the player only); stacks multiplicatively with gear
+  if (e === player && (element === 'fire' || element === 'frost' || element === 'shock') && getBuff('resist' + element) > 0) f *= 0.5;
+  return f;
+}
 function monsterCastAt(caster, ab, target) {
   const verb = ab.thrown ? 'hurls' : (ab.kind === 'heal' || ab.kind === 'buff' ? 'channels' : 'casts');
   const atWhom = (ab.kind === 'heal' || ab.kind === 'buff') ? '' : ` at ${target === player ? 'you' : target.name}`;
@@ -29861,27 +30486,24 @@ function monsterCastAt(caster, ab, target) {
       dmg = Math.round(dmg * (0.4 + 0.6 * (caster.powerScale || 1))); // gentler than raw powerScale so casters don't dwarf melee at high depth
       dmg = Math.round(dmg * weatherElementMultiplier(ab, target)); // Weather/Climate overhaul: monster bolts respect the same elemental weather swings player spells do, plus a wet target's conduction bonus
       dmg = Math.max(1, dmg - Math.floor(getArmorOf(target) / 2));
-      if (target === player) {
-        if (ab.element === 'fire' && player.fireDmgReduction) dmg = Math.max(0, Math.round(dmg * (1 - player.fireDmgReduction)));
-        if (ab.element === 'frost' && getBuff('resistfrost') > 0) dmg = Math.round(dmg * 0.5);
-      }
+      if (ab.element) dmg = Math.max(0, Math.round(dmg * elementResistFactor(target, ab.element))); // v0.51.3: one path for gear (xxxDmgReduction) and Resistance buffs, all three elements
       target.hp -= dmg;
       if (settings.showDamageNumbers) spawnFloatingText(target.x, target.y, String(dmg), '#c07af0');
       log(`${target === player ? 'You take' : target.name + ' takes'} ${dmg} damage${ab.element ? (' of ' + ab.element) : ''}.`);
       if (ab.slow) target.statusSlow = (target.statusSlow || 0) + ab.slow;
       if (ab.kind === 'drain') caster.hp = Math.min(caster.maxHp, caster.hp + Math.round(dmg * 0.5));
       if (target === player) lastDamageSource = `${caster.name}'s ${ab.name}`;
-      if (target.hp <= 0) onDeath(target, caster);
+      if (target.hp <= 0) onDeath(target, caster); else applyAbilityContact(ab, target, caster);
       break;
     }
     case 'aoe': {
       const hit = hostilesToEntity(caster, target.x, target.y, ab.radius || 2);
       for (const h of hit) {
-        let dmg = Math.max(1, randInt(Math.random, ab.power[0], ab.power[1]) - Math.floor(getArmorOf(h) / 2));
+        let dmg = Math.max(1, Math.round(randInt(Math.random, ab.power[0], ab.power[1]) * weatherElementMultiplier(ab, h) * elementResistFactor(h, ab.element)) - Math.floor(getArmorOf(h) / 2));
         h.hp -= dmg;
         if (settings.showDamageNumbers) spawnFloatingText(h.x, h.y, String(dmg), '#e0785a');
         if (h === player) lastDamageSource = `${caster.name}'s ${ab.name}`;
-        if (h.hp <= 0) onDeath(h, caster);
+        if (h.hp <= 0) onDeath(h, caster); else applyAbilityContact(ab, h, caster);
       }
       log(`The blast catches ${hit.length} nearby!`);
       if (ab.element === 'fire') igniteArea(target.x, target.y, 1);
@@ -29920,9 +30542,12 @@ function tryMonsterCast(m, target, dist) {
   if (!m.abilities || !m.abilities.length) return false;
   if (m.statusSilence > 0) return false; // BUG FIX (v0.40.24): see the Silence spell's own comment above
   if (Math.random() < 0.35) return false; // don't cast every single turn -- keep positioning/melee in the mix
-  for (const abId of m.abilities) {
+  // v0.51.3: try the ability that profits most from the target's current state first (fire on Oiled, frost on Wet, a primer on a bare target), and skip primers that would be wasted.
+  const order = m.abilities.slice().sort((a, b) => abilityComboScore(MONSTER_ABILITY_LIBRARY[b], target) - abilityComboScore(MONSTER_ABILITY_LIBRARY[a], target));
+  for (const abId of order) {
     const ab = MONSTER_ABILITY_LIBRARY[abId];
     if (!ab || (m.abilityCooldowns[abId] || 0) > 0) continue;
+    if (abilityComboScore(ab, target) < 0) continue;
     if (ab.range && dist > ab.range) continue;
     if (!monsterCanAfford(m, ab)) continue;
     if (ab.kind === 'heal' && m.hp > m.maxHp * 0.7) continue; // don't waste a heal near full HP
@@ -34447,6 +35072,26 @@ function pickGeneratorId(theme, meta, sizeTier, rng) {
 // ---- dungeon generation v7: layered/mixed procgen (see the generator registry above), size-
 // driven footprints, zone-aware feature and encounter placement, hazard tiles per theme
 // (traps/poison/water) + cyber/eldritch loot bias ----
+// ---- v0.51.3 dungeonMonsterPool: which ordinary monsters a floor of this theme may roll. Floor depth sets a tier ceiling (a third of the way down per tier);
+// a theme that locks to factions keeps only those factions. Previously a themed pool that was EMPTY at the ceiling silently fell back to every tier-1 monster
+// in the game, so floors 1-3 of sixteen themes (Sky Bastion, Derelict Hulk, Folded Vault, Wyrmreach Lair...) were full of generic skeletons and goblins, and a
+// themed pool of one or two (floors 4-6) repeated the same creature wall to wall. Now a themed pool is always topped up to MIN_THEMED_POOL with the theme's
+// cheapest next-tier monsters (still capped by the theme's dtierMax), so the identity of the place shows from the first floor. ----
+const MIN_THEMED_POOL = 4;
+function dungeonMonsterPool(meta, depth) {
+  const ceil = Math.min(meta.dtierMax || 2, Math.ceil(depth / 3));
+  let pool = Object.keys(MONSTER_BASES).filter(k => MONSTER_BASES[k].dtier && MONSTER_BASES[k].dtier <= ceil && !MONSTER_BASES[k].boss);
+  if (meta.factions && meta.factions.length) {
+    let themed = pool.filter(k => meta.factions.includes(MONSTER_BASES[k].faction));
+    if (themed.length < MIN_THEMED_POOL) {
+      const all = Object.keys(MONSTER_BASES).filter(k => { const b = MONSTER_BASES[k]; return b.dtier && !b.boss && b.dtier <= (meta.dtierMax || 2) && meta.factions.includes(b.faction); })
+        .sort((a, b) => MONSTER_BASES[a].dtier - MONSTER_BASES[b].dtier);
+      for (const k of all) { if (themed.length >= MIN_THEMED_POOL) break; if (!themed.includes(k)) themed.push(k); }
+    }
+    if (themed.length) pool = themed;
+  }
+  return pool;
+}
 function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthScaleBonus) {
   // depthScaleBonus (see dungeonDepthScaleBonus) folds the variant roll and this dungeon's
   // biome/dimension danger into every monster's actual depthScale below, not just its displayed
@@ -34528,11 +35173,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
   const areaScale = Math.sqrt((W * H) / (58 * 36));
 
   const dtierCeil = Math.min(meta.dtierMax || 2, Math.ceil(depth/3));
-  let pool = Object.keys(MONSTER_BASES).filter(k => MONSTER_BASES[k].dtier && MONSTER_BASES[k].dtier <= dtierCeil && !MONSTER_BASES[k].boss);
-  if (meta.factions && meta.factions.length) {
-    const themedPool = pool.filter(k => meta.factions.includes(MONSTER_BASES[k].faction));
-    if (themedPool.length) pool = themedPool;
-  }
+  let pool = dungeonMonsterPool(meta, depth); // v0.51.3: shared with the playtest kit's coverage probe, so what is measured is what is generated
   const usablePool = pool.length ? pool : ['giantrat','goblin'];
   // ---- zone-flavored species: a theme that explicitly locks its faction list (e.g. "The
   // Assembly Line" -> constructs only, "The Wyrm Hoard" -> dragons only) keeps that lock
@@ -34686,6 +35327,15 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
           ]);
         }
       }
+      // v0.51.3: the boss is created one tile left of the down stairs, but that tile is often a wall (corridor ends, mazes,
+      // cave edges), which entombed the floor boss in rock where it could never move or be fought. Use the first open tile
+      // beside the stairs instead (left first, so layouts that already worked are unchanged).
+      { const okTile = (x, y) => { const t = grid[y] && grid[y][x]; return t && t.walkable && !(x === up.x && y === up.y) && !occupiedInLevel(level, x, y); };
+        if (!okTile(boss.x, boss.y)) {
+          const offs = [[-1,0],[0,-1],[0,1],[1,0],[-1,-1],[-1,1],[1,-1],[1,1],[-2,0],[0,-2],[0,2],[2,0]];
+          const o = offs.find(([dx, dy]) => okTile(bc.x + dx, bc.y + dy));
+          if (o) { boss.x = bc.x + o[0]; boss.y = bc.y + o[1]; boss.homeX = boss.x; boss.homeY = boss.y; }
+        } }
       level.monsters.push(boss);
       // ---- honor guard: a couple of themed sentries stationed near the boss chamber, so the
       // final fight on this floor doesn't open in total silence right up to the boss's own tile.
@@ -34815,6 +35465,8 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
       if (t.walkable) { t.feature = 'poisongas'; t.glyph = '"'; t.color = '#5ac95a'; }
     }
   }
+  if (meta.hazard === 'oil') placeOilPatches(grid, floors, rng, up, down, 2 + Math.floor(rng() * 3));
+  if (meta.hazard === 'confluence') { placeWaterFeature(grid, floors, rng, up, down); placeWaterFeature(grid, floors, rng, up, down); placeOilPatches(grid, floors, rng, up, down, 3 + Math.floor(rng() * 3)); }
   if (meta.hazard === 'water') { placeWaterFeature(grid, floors, rng, up, down); if (rng() < 0.35) placeWaterFeature(grid, floors, rng, up, down); }
   else if (hasCaveZone && rng() < 0.3) placeWaterFeature(grid, floors, rng, up, down);
   if ((meta.genre === 'cave' || hasCaveZone) && rng() < 0.55) placeChasmFeature(grid, floors, rng, up, down);
@@ -34876,7 +35528,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
   }
 
   function occupiedInLevel(lv, x, y) {
-    return lv.monsters.some(m => m.x===x && m.y===y) || lv.items.some(it => it.x===x && it.y===y);
+    return lv.monsters.some(m => m.x===x && m.y===y) || lv.items.some(it => it.x===x && it.y===y) || (lv.npcs || []).some(n => n.x===x && n.y===y); // v0.51.3: NPCs (injured captives, prisoners) counted too
   }
   // ---- softlock guard: before turning any walkable tile into a blocking one (statue, pillar,
   // etc.), check whether doing so would sever the only path between the up and down stairs -- a
@@ -35013,6 +35665,20 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
       t.trapType = choice(prng, basePool);
       if (t.trapType === 'summon') { t.summonPool = summonPool.slice(); t.summonDepth = dpt; }
       if (t.trapType === 'mine') { t.minePower = [10 + dpt, 20 + dpt * 2]; t.mineRadius = 2; }
+    }
+  }
+  // v0.51.3: slicks of lamp oil / pitch laid down at generation (hazard:'oil'): a long-lived puddle, slick underfoot and volatile, where one spark
+  // detonates the whole connected patch. Kept off the stairs and clear of anything already placed, so nobody arrives standing in it.
+  function placeOilPatches(g, floorList, prng, upStairs, downStairs, count) {
+    for (let n = 0; n < count; n++) {
+      const c = choice(prng, floorList);
+      if (!c || chebyshev(c.x, c.y, upStairs.x, upStairs.y) < 5 || chebyshev(c.x, c.y, downStairs.x, downStairs.y) < 4) continue;
+      const r = prng() < 0.5 ? 1 : 2;
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (dx * dx + dy * dy > r * r + 1) continue;
+        const t = g[c.y + dy] && g[c.y + dy][c.x + dx];
+        if (t && t.walkable && t.feature === 'floor') t.oilTurns = 4000;
+      }
     }
   }
   function placeWaterFeature(g, floorList, prng, upStairs, downStairs) {
@@ -35244,7 +35910,8 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
         const guard = choice(prng, lvl.monsters);
         guard.guaranteedDrops = (guard.guaranteedDrops || []).concat([key]);
       } else {
-        const kc = choice(prng, floorList.filter(f => chebyshev(f.x,f.y,vx,vy) > 4));
+        // v0.51.3: floorList is a snapshot from before pillars/water/chasms were placed, so it can name tiles that are no longer walkable (the key ended up inside a pillar)
+        const kc = choice(prng, floorList.filter(f => chebyshev(f.x,f.y,vx,vy) > 4 && g[f.y] && g[f.y][f.x] && g[f.y][f.x].walkable && g[f.y][f.x].feature === 'floor'));
         if (kc) lvl.items.push({ x: kc.x, y: kc.y, item: key });
         else lvl.items.push({ x: c.x, y: c.y, item: key });
       }
@@ -35381,6 +36048,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
             if (prng() < 0.15) continue;
             const t = g[y] && g[y][x];
             if (!t || !t.walkable) continue;
+            if (occupiedInLevel(level, x, y)) continue;   // v0.51.3: pillars used to be dropped on top of monsters/items already placed there (found by the audit: monsters entombed in stone)
             if (wouldDisconnectStairs(g, x, y)) continue;
             t.walkable = false; t.feature = 'statue'; t.glyph = '\u2503'; t.color = '#5a5248'; t.statueName = 'stone pillar';
           }
@@ -35391,6 +36059,7 @@ function generateDungeonLevel(theme, depth, maxDepth, variantId, sizeId, depthSc
           const x = randInt(prng, r.x+1, r.x+r.w-2), y = randInt(prng, r.y+1, r.y+r.h-2);
           const t = g[y] && g[y][x];
           if (!t || !t.walkable) continue;
+          if (occupiedInLevel(level, x, y)) continue;
           if (wouldDisconnectStairs(g, x, y)) continue;
           t.walkable = false; t.feature = 'statue'; t.glyph = '\u2503'; t.color = '#5a5248'; t.statueName = 'stone pillar';
         }
@@ -36462,13 +37131,13 @@ const THROW_CONSUMED_EFFECTS = new Set([
   // grenades / aimed magical effects -- these are already fully resolved in the legacy switch
   // inside resolveThrowAtTile before resolveGenericThrow is ever reached; listed here too so
   // isThrowConsumed() (used by describeItem() etc.) agrees with what actually happens.
-  'aoefire', 'aoefrost', 'aoepoison', 'aoeconfuse', 'throwdmg', 'scrollfire', 'throwaoe', 'nukeblast', 'throwgas', 'throwemp', 'throwslow', 'throwsnare', 'oilsplash',
+  'aoefire', 'aoefrost', 'aoepoison', 'aoeconfuse', 'throwdmg', 'scrollfire', 'throwaoe', 'nukeblast', 'throwgas', 'throwemp', 'throwslow', 'throwsnare', 'oilsplash', 'soaksplash', 'scrollblast',
   // splash potions: consumed the instant they hit (see resolveThrownPotionSplash)
   'heal', 'poison', 'cureposion', 'cureconfuse', 'curefear', 'cureall',
   // every other bottled/vial liquid -- no bespoke thrown effect written for these yet, but a
   // glass vial still shatters and is gone even when it just deals plain impact damage
   'mana', 'stamina', 'charge', 'buffstr', 'buffdex', 'buffint', 'buffarmor', 'buffcrit', 'buffregen',
-  'resistfire', 'resistfrost', 'resistpoison', 'invisibility', 'waterbreathing', 'curseremove', 'escape', 'reveal',
+  'resistfire', 'resistfrost', 'resistshock', 'resistall', 'resistpoison', 'invisibility', 'waterbreathing', 'curseremove', 'escape', 'reveal',
   'phoenixcharge', 'ambrosia', 'titansfeast',
   // a mine/charge thrown instead of carefully placed goes off on impact instead of sitting there
   'planttrap',
@@ -36608,12 +37277,44 @@ function resolveThrowAtTile(it, wx, wy, fromSlot) {
     case 'oilsplash': {
       const direct = entityAt(wx, wy);
       if (direct && direct.alive !== false) {
-        direct.oiledTurns = Math.max(direct.oiledTurns || 0, it.oilTurns || 50);
-        log(`The oil flask shatters across ${direct.name}, soaking them in slick, volatile oil!`);
+        log(`The oil flask shatters across ${direct === player ? 'you' : direct.name}!`);
+        applyPrimers({ oil: it.oilTurns || 50 }, direct, it.name); // v0.51.3: same rules as every other source (a soaked target sheds it; a burning one flares)
       } else {
         const n = oilArea(wx, wy, radius, it.oilTurns || 50);
         log(n > 0 ? `The oil flask shatters, spreading a slick, volatile puddle across the ground!` : `The oil flask shatters uselessly.`);
       }
+      break;
+    }
+    // v0.51.3: area scroll with a real element. Reads weatherElementMultiplier (wet x1.6 shock, wet halves fire, frozen/oiled bonuses), honours immunities,
+    // and carries the element's combo rider: fire ignites (fails on a soaked target), frost freezes a WET target solid (and douses ground fire), shock needs no rider
+    // because the wet bonus is the combo. Hostiles only, like the older aoe scrolls.
+    case 'scrollblast': {
+      const hit = hostilesWithinRadius(wx, wy, radius);
+      const el = it.element || 'fire';
+      let n = 0;
+      hit.forEach(h => {
+        const mult = weatherElementMultiplier({ element: el, frost: el === 'frost', frozenMult: it.frozenMult }, h);
+        if (mult <= 0) { log(`${h.name} is unharmed by the ${el === 'shock' ? 'lightning' : el}.`); return; }
+        const wasWet = entityIsWet(h);
+        const dmg = Math.max(1, Math.round(randInt(Math.random, it.power[0], it.power[1]) * dmgMult * mult)) + shatterFrozenEntity(h);
+        h.hp -= dmg; n++;
+        log(`${h.name} takes ${dmg} ${el} damage${wasWet && el === 'shock' ? ' (the water conducts it!)' : ''}.`);
+        if (h.hp > 0) {
+          if (el === 'fire') { if (igniteEntity(h, it.igniteTurns || 5)) log(`${h.name} catches fire!`); }
+          else if (el === 'frost' && wasWet && freezeEntitySolid(h, it.freezeTurns || 4)) log(`${h.name} is frozen solid!`);
+        }
+        if (h.hp <= 0) onDeath(h, player);
+      });
+      if (el === 'fire') igniteArea(wx, wy, Math.max(1, radius - 1));
+      if (el === 'frost') { const d = extinguishArea(wx, wy, radius); if (d > 0) log('The cold snuffs out the flames nearby.'); }
+      if (!n) log(`${it.name} detonates, striking nothing.`);
+      break;
+    }
+    case 'soaksplash': {
+      let hit = 0;
+      for (const [tx, ty] of tilesInRadius(wx, wy, radius)) { const e = entityAt(tx, ty); if (e && e.alive !== false && e.hp > 0) { applyPrimers({ soak: it.soakTurns || 14 }, e, it.name); hit++; } }
+      const doused = extinguishArea(wx, wy, radius);
+      log(`${it.name} bursts in a wide splash${hit ? `, soaking ${hit}` : ''}${doused ? ' and hissing out the flames on the ground' : ''}.`);
       break;
     }
     case 'aoepoison': {
@@ -36642,7 +37343,7 @@ function resolveThrowAtTile(it, wx, wy, fromSlot) {
     case 'scrollfire': {
       const t = entityAt(wx, wy);
       const fireBlocked = (!it.dtype || it.dtype === 'fire') && t && t.fireImmune;
-      const dmg = t && t.alive !== false && !fireBlocked ? randInt(Math.random, it.power, it.power+8) : 0;
+      const dmg = t && t.alive !== false && !fireBlocked ? Math.max(1, Math.round(randInt(Math.random, it.power, it.power+8) * (it.dtype === 'lightning' ? weatherElementMultiplier({ element: 'shock' }, t) : (!it.dtype || it.dtype === 'fire') ? weatherElementMultiplier({ element: 'fire' }, t) : 1))) : 0; // v0.51.3: lightning scroll gets the wet-target conduction bonus, fire scroll the soaked-target penalty
       if (t && t.alive !== false) {
         t.hp -= dmg;
         if (fireBlocked) log(`${t.name} shrugs off the flames entirely.`);
@@ -37045,6 +37746,14 @@ function useItem(it) {
     updateSidebar(); return;
   }
   if (it.type === 'tome') {
+    if (it.techId) { // technique manual
+      const tech = TECHNIQUES.find(t => t.id === it.techId);
+      if (!tech) { log('The manual is too water-damaged to read.'); player.inventory = player.inventory.filter(i => i.uid !== it.uid); updateSidebar(); return; }
+      if (!(player.knownTechniques || []).includes(it.techId)) { (player.knownTechniques = player.knownTechniques || []).push(it.techId); log(`You work through the ${it.name} until the moves are second nature: you learn ${tech.name}!`); }
+      else log('You already know this technique -- the manual falls apart in your hands.');
+      player.inventory = player.inventory.filter(i => i.uid !== it.uid);
+      updateSidebar(); return;
+    }
     if (!player.knownSpells.includes(it.spellId)) { player.knownSpells.push(it.spellId); log(`You study the ${it.name} and learn ${SPELLS.find(s=>s.id===it.spellId).name}!`); }
     else if (hasProfession('scribe') && Math.random() < scribeWasteRefundChance()) {
       const refund = Math.max(5, Math.round((it.value || 20) * 0.6));
@@ -37182,7 +37891,7 @@ function useItem(it) {
     case 'cureall': { player.statusPoison = 0; player.statusFear = 0; player.statusConfuse = 0; stanchBleed(player); grantDiseaseCureProgress('remedyItem', 3); log('A wave of clarity washes over you — all afflictions cleansed, bleeding included.'); break; }
     case 'stamina': { const amt = Math.round(it.power * playerLevelPowerMult(player.level)); player.stamina = Math.min(player.maxStamina, player.stamina + amt); log(`You recover ${amt} Stamina.`); break; }
     case 'charge': { const amt = Math.round(it.power * playerLevelPowerMult(player.level)); player.charge = Math.min(player.maxCharge, (player.charge||0) + amt); log(`Your systems recharge ${amt} Charge.`); break; }
-    case 'aoefire': case 'aoefrost': case 'aoepoison': case 'aoeconfuse': case 'throwdmg': case 'scrollfire': case 'oilsplash':
+    case 'aoefire': case 'aoefrost': case 'aoepoison': case 'aoeconfuse': case 'throwdmg': case 'scrollfire': case 'oilsplash': case 'soaksplash': case 'scrollblast':
       // unreachable: THROWABLE_EFFECTS redirects these to beginThrowTargeting() before the
       // switch is ever entered. Cases kept only so this isn't mistaken for a missing effect.
       break;
@@ -37215,6 +37924,8 @@ function useItem(it) {
     case 'escape': { blinkPlayer(6); applyBuff('invis', 1, 8); log('You vanish in a puff of smoke!'); break; }
     case 'invisibility': { applyBuff('invis', 1, it.dur || 15); log('You fade from sight.'); break; }
     case 'resistfire': { applyBuff('resistfire', 1, it.dur || 25); log('Your skin feels warm and hardened against flame.'); break; }
+    case 'resistshock': { applyBuff('resistshock', 1, it.dur || 25); log('Your hair stands on end, then lies flat; the static slides off you.'); break; }
+    case 'resistall': { ['resistfire', 'resistfrost', 'resistshock'].forEach(b => applyBuff(b, 1, it.dur || 40)); log('A shimmering ward wraps you against fire, frost and lightning.'); break; }
     case 'resistfrost': { applyBuff('resistfrost', 1, it.dur || 25); log('A protective warmth surrounds you.'); break; }
     case 'resistpoison': { applyBuff('resistpoison', 1, it.dur || 25); log('Your blood runs strangely cool - toxins should slide off you now.'); break; }
     case 'resistbleed': { applyBuff('resistbleed', 1, it.dur || 25); log('Your blood thickens -- fresh wounds should stop taking hold.'); break; }
@@ -37593,8 +38304,9 @@ function describeItem(it) {
   } else if (it.type === 'chest') {
     lines.push('A locked chest. Pick it up to break it open.');
   } else if (it.type === 'tome') {
-    const s = SPELLS.find(x => x.id === it.spellId);
-    lines.push(`A spellbook. Use it to instantly learn ${s ? s.name : 'a spell'} (${s ? s.school : '?'}).`);
+    if (it.techId) { const tc = TECHNIQUES.find(x => x.id === it.techId); lines.push(`A training manual. Use it to instantly learn ${tc ? tc.name : 'a technique'} (${tc ? tc.school : '?'}, costs ${tc ? tc.mp : '?'} ${tc && tc.resource === 'stamina' ? 'stamina' : 'mana'}).`); } else
+    { const s = SPELLS.find(x => x.id === it.spellId);
+    lines.push(`A spellbook. Use it to instantly learn ${s ? s.name : 'a spell'} (${s ? s.school : '?'}).`); }
   } else if (it.type === 'cyberchip') {
     const c = CYBERNETICS.find(x => x.id === it.cyberId);
     lines.push(`A cyberware blueprint chip. Use it to learn ${c ? c.name : 'a cybernetic'} (${c ? c.category : '?'}, then install it via the Cybernetics screen).`);
@@ -37672,6 +38384,9 @@ function describeItem(it) {
   if (it.lifestealBonus) mech.push(`+${Math.round(it.lifestealBonus*100)}% lifesteal`);
   if (it.regen) mech.push(`Regenerates ${it.regen} point${it.regen === 1 ? '' : 's'} of HP per turn (scales with your max HP)`);
   if (it.poisonDmgReduction) mech.push(`-${Math.round(it.poisonDmgReduction*100)}% damage taken from poison`);
+  if (it.fireDmgReduction) mech.push(`-${Math.round(it.fireDmgReduction*100)}% fire damage taken`);
+  if (it.frostDmgReduction) mech.push(`-${Math.round(it.frostDmgReduction*100)}% frost damage taken`);
+  if (it.shockDmgReduction) mech.push(`-${Math.round(it.shockDmgReduction*100)}% shock damage taken (and a soaked wearer conducts it less)`);
   if (it.bleedResistChance) mech.push(`${Math.round(it.bleedResistChance*100)}% chance to resist being bled entirely`);
   if (it.bleedDmgReduction) mech.push(`-${Math.round(it.bleedDmgReduction*100)}% damage taken from bleeds`);
   if (it.fearResistBonus) mech.push(`${Math.round(it.fearResistBonus*100)}% resistance to fear`);
@@ -38150,7 +38865,7 @@ const ARCHETYPES = [
   { id:'berserker', name:'Berserker', desc:'Fights harder the more it costs — spends blood to buy fury.',
     apply: () => { player.str+=4; player.con+=3; player.gold+=70;
       player.equipment.hand=makeStarterItem('waraxe'); player.equipment.body=makeStarterItem('leather');
-      player.knownTechniques.push('ragingblow','recklessswing'); } },
+      player.knownTechniques.push('ragingblow','recklessswing','cleavingchop'); } },
   { id:'monk', name:'Monk', desc:'A disciplined martial artist who channels inner stillness into devastating strikes.',
     apply: () => { player.wil+=3; player.dex+=2; player.con+=1; player.gold+=55;
       player.equipment.body=makeStarterItem('robe'); player.equipment.gloves=makeStarterItem('gloves');
@@ -38158,7 +38873,7 @@ const ARCHETYPES = [
   { id:'commander', name:'Commander', desc:'A battlefield tactician who holds the line and turns the tide with a shout.',
     apply: () => { player.str+=2; player.cha+=2; player.con+=2; player.gold+=95;
       player.equipment.hand=makeStarterItem('longsword'); player.equipment.offhand=makeStarterItem('shield'); player.equipment.body=makeStarterItem('chainmail');
-      player.knownTechniques.push('battlecry','shieldwall'); } },
+      player.knownTechniques.push('battlecry','shieldwall','decisiveblow'); } },
   // ---- arcane & elemental casters ----
   { id:'mage', name:'Mage', desc:'A scholar of the raw arcane, wielding spells over steel.',
     apply: () => { player.int+=4; player.wil+=2; player.gold+=60;
@@ -38175,11 +38890,11 @@ const ARCHETYPES = [
   { id:'chronomancer', name:'Chronomancer', desc:'Bends the flow of time around themself, just slightly, just enough.',
     apply: () => { player.int+=3; player.dex+=2; player.wil+=1; player.gold+=65;
       player.equipment.hand=makeStarterItem('wand_arcane'); player.equipment.body=makeStarterItem('robe');
-      player.knownSpells.push('accelerate','foresight'); } },
+      player.knownSpells.push('accelerate','foresight','chronosting'); } },
   { id:'illusionist', name:'Illusionist', desc:'Wins fights by making sure the enemy can never quite tell where you are.',
     apply: () => { player.int+=3; player.dex+=3; player.gold+=65;
       player.equipment.hand=makeStarterItem('dagger'); player.equipment.body=makeStarterItem('robe');
-      player.knownSpells.push('mirrorimage','phantomstep'); } },
+      player.knownSpells.push('mirrorimage','phantomstep','phantomjab'); } },
   // ---- life, death & nature casters ----
   { id:'paladin', name:'Paladin', desc:'A holy warrior — armored, devout, and lethal to anything undead.',
     apply: () => { player.str+=2; player.wil+=2; player.cha+=1; player.con+=1; player.gold+=90;
@@ -38196,7 +38911,7 @@ const ARCHETYPES = [
   { id:'bloodmage', name:'Blood Mage', desc:'Pays for power in their own blood, and it always seems to be worth it.',
     apply: () => { player.int+=4; player.con+=1; player.gold+=60;
       player.equipment.hand=makeStarterItem('stiletto'); player.equipment.body=makeStarterItem('robe');
-      player.knownSpells.push('bloodpact','hemorrhage'); } },
+      player.knownSpells.push('bloodpact','hemorrhage','bloodbolt'); } },
   { id:'summoner', name:'Summoner', desc:'Prefers to let something else do the fighting, and calls it out of thin air.',
     apply: () => { player.int+=3; player.wil+=1; player.cha+=3; player.gold+=60;
       player.equipment.hand=makeStarterItem('staff'); player.equipment.body=makeStarterItem('robe');
@@ -38235,12 +38950,12 @@ const ARCHETYPES = [
   { id:'cyberadept', name:'Cyber-Adept', desc:'Augmented flesh and steel — you paid a fortune for your first implant.',
     apply: () => { player.dex+=2; player.int+=2; player.str+=1; player.gold+=50;
       player.equipment.hand=makeStarterItem('dagger'); player.equipment.body=makeStarterItem('leather');
-      player.knownCyberIds.push('reflexbooster'); player.installedCyber.push('reflexbooster');
+      player.knownTechniques.push('servostrike'); player.knownCyberIds.push('reflexbooster'); player.installedCyber.push('reflexbooster');
       const c=CYBERNETICS.find(x=>x.id==='reflexbooster'); if (c.apply) c.apply(); } },
   { id:'occultist', name:'Occultist', desc:'You have already glimpsed something you cannot unsee, and it changed you.',
     apply: () => { player.int+=2; player.wil+=2; player.con+=1; player.gold+=50;
       player.equipment.hand=makeStarterItem('dagger'); player.equipment.body=makeStarterItem('robe');
-      player.mutations.push('chitinoushide'); player.corruption=15;
+      player.knownSpells.push('eldritchbolt'); player.mutations.push('chitinoushide'); player.corruption=15;
       const m=MUTATIONS.find(x=>x.id==='chitinoushide'); if (m.apply) m.apply(); } },
 ];
 let creationDraft = null;
@@ -39145,6 +39860,10 @@ function archetypeChoice(letter) {
 function grantStartingBandages() {
   addItemToList(player.inventory, makeItem('bandage', 0, Math.random));
   addItemToList(player.inventory, makeItem('bandage', 0, Math.random));
+  // v0.51.3: same reasoning for poison, the other un-restable damage-over-time. A stack of 6 (three venomous bites from a Giant Spider or Scorpion)
+  // deals 18 damage in total, most of a starting mage's 28 hp, and a fresh character had nothing that cures it (autopilot matrix: 2 of 3 L1
+  // deaths to poison after the fight was already won). One Antidote (12g in shops) keeps poison a real threat that has a counter.
+  addItemToList(player.inventory, makeItem('antidote', 0, Math.random));
 }
 function showCreateStats() {
   gameState = 'create_stats';
@@ -39791,6 +40510,11 @@ const GUIDE_SECTIONS = [
     'cureconfuse' effect) clears Confused; a fear-cure item clears Afraid; a general cure-all item or the Cure spell
     school clears Poison, Afraid, and Confused together. Resistance potions (Fire/Frost/Poison) reduce or block their
     matching damage type but don't cure a status already applied.</div>
+    <div class="modal-opt"><b>Setting up combos:</b> Wet comes from water, rain, and now spells and attacks that soak (Drench,
+    Squall, Riptide, a Flask of Water, Pressure Hose; water elementals and drowned things soak whatever they hit). Oiled
+    comes from oil (Grease Flask, Tar Bolt, an Oil Flask, tar creatures, goblin greasers). Soaking douses a fire and rinses oil
+    away; oil won't stick to a soaked target; oil thrown on something already burning feeds the fire. The same rules apply to
+    you, so a Hydromancer's Frostbolt is far more dangerous right after its Water Jet.</div>
     <div class="modal-opt" style="margin-top:6px"><b>Wet</b> (swimming, wading, heavy rain) — extinguishes any fire
     burning on you outright, washes off Oiled, and blocks new ignition attempts entirely — but a wet target takes 60%
     <i>more</i> shock damage (a Chain Lightning hit, or standing in water near one) and, if a Frost attack lands while
@@ -44109,6 +44833,197 @@ GUIDE_SECTIONS.push(
     <div class="modal-opt"><b>Shrine trials:</b> at an unspent shrine, choose <i>Undertake the trial</i>. A champion with two affixes and its pack appear around you; slay them all for gold, XP, a rare weapon or armor, piety (if you serve a god) and progress toward the Trial-Bound feat. Walk away and the trial lapses harmlessly.</div>
     <div class="modal-opt">Bleeding and poison can be tended with <b>r</b>: a bandage stops bleeding, cloth makes a rough binding, an antidote or herb treats poison, and bare hands slow either.</div>` },
 );
+
+
+// ===================== v0.51.3 CONTENT PACK: MONSTER DESCRIPTIONS =====================
+// 167 monsters (about 60% of the bestiary) had no description at all, so inspecting them showed only stats.
+// Applied last, to every monster that still lacks a `desc`, so anything written elsewhere always wins. To describe a
+// new monster, add its id here (or set `desc` on its definition) -- the audit (`node playtest.js audit --warn`) lists any that are missing.
+const MONSTER_DESCRIPTIONS_PACK3 = {
+  // ---- beasts & predators ----
+  savanna_lion: "A tawny, heavy-shouldered lion that hunts the long grass at dusk, patient until the moment it is not.",
+  taiga_lynx: "A tuft-eared lynx on enormous snow-shoe paws. It does not chase; it waits above the trail and drops.",
+  cave_spider: "A pale, eyeless spider the size of a fist, quick in the dark and venomous in proportion to how unwelcome you are.",
+  broodmother_spider: "A swollen, bristling mother spider ringed by her own egg-sacs. What hatches from them does not stay small.",
+  giant_centipede: "Segment after glistening segment of chitin and legs, rippling over the stones. Its bite burns long after it lets go.",
+  tunnel_worm: "A blind, pale-ringed worm as thick as a man. The floor trembles a breath before it breaks the surface.",
+  razor_bat_swarm: "A shrieking cloud of bats with wings like torn knife-blades. Each is nothing; the cloud is a flensing.",
+  dire_wolf: "Half again the size of any wolf, grey-pelted and scarred, running with a speed that has no business in a body that big.",
+  wyrmling: "A young dragon no larger than a pony, wings still too big for it. Its breath is already hot enough to matter.",
+  drake: "A wingless-looking dragonkin, all muscle and bad temper, lumbering into a charge that ends in fire.",
+  frost_drake: "Rime-scaled and cold-eyed, trailing a fog of its own breath. The air around it crackles as it inhales.",
+  wyvern: "A leathery-winged cousin of dragons with a barbed, venom-slick tail. It strikes from above and does not stop to talk.",
+  young_dragon: "Not yet ancient, not remotely small. Its scales shed torchlight, and its patience is the thin kind that ends in flame.",
+  hoard_wyrmling: "A hatchling raised on a stolen hoard and fiercely possessive of every coin. It breathes fire at anything that looks at the gold.",
+  hoard_wyrm: "A mature wyrm coiled over a mountain of other people's wealth. It has not left its lair in a generation, and knows the exact weight of every piece.",
+  the_hatchling: "Something that should not have survived its own egg. It is small, hungry, and burning from the inside.",
+  giant_eel: "A mottled, arm-thick eel that lies in the shallows and strikes at ankles, then drags.",
+  drowned_sailor: "A bloated figure in the rags of a ship's uniform, still hauling at ropes that sank with it, and angry at anything that moves dry.",
+  siren: "A voice across the water that promises a warm hearth. By the time you notice the teeth, you are already wading in.",
+  kraken_spawn: "A young, thrashing tangle of tentacles. It is only a fraction of what its parent is, and it is more than enough.",
+  reef_shark: "A grey, sharp-finned patroller of the reef edge. It circles twice and then does not circle again.",
+  tide_reaver: "A crab-armoured thing with hooked claws that hauls itself up the tide line to take what the sea has not.",
+  giant_catfish: "Whisker-fringed and the size of a rowboat, it lies in the silt until something warm paddles overhead.",
+  abyssal_leviathan: "Something vast turns beneath the black water, and for a long moment the whole sea leans with it.",
+  // ---- goblinoids, orcs, giants ----
+  goblin_shaman: "A wizened goblin in a crown of bones, muttering curses that curdle in the air and stink of rot.",
+  goblin_brute: "A goblin that did not stop growing. It swings a log, and its tribe stays close for the protection.",
+  hobgoblin: "Disciplined, iron-helmed, and humourless. A hobgoblin fights like a soldier, which makes it far worse than a goblin.",
+  goblin_trapper: "A twitchy goblin with a bandolier of snares and a sling. The ground near it is rarely as safe as it looks.",
+  bugbear: "A shaggy, long-armed brute that moves quietly for its size, and strikes first from behind a doorframe.",
+  goblin_king: "A goblin who clawed his way to a throne of stolen chairs. His court of cutthroats comes at his whistle.",
+  goblin_overlord: "A war-leader of the goblin tribes, scarred and cunning, who has learned that numbers beat courage and brings plenty of both.",
+  orc_grunt: "A stocky orc in mismatched plate, with a notched blade and no particular grudge. Pay, or a good fight, will do.",
+  orc_berserker: "An orc shouting itself into a frenzy, wounds forgotten. The more it bleeds, the less it seems to mind.",
+  orc_shaman: "An orc crowned in feathers and teeth, chanting low as the fighters around it find their strength.",
+  orc_warchief: "Warlord of a hundred raiders, built like a siege engine. His charge has broken shield walls older than the kingdoms.",
+  ogre_brute: "Two heads taller than a man and not a great deal smarter. A club and a bad mood are all it needs.",
+  hill_giant: "A mountain-bred giant that hurls boulders for sport and chases down whatever dodges them.",
+  frost_giant: "A rime-bearded giant from the high ice, swinging a frozen tree trunk. Where it walks, the ground goes white.",
+  frost_giant_king: "A glacier given a crown and a grudge. His roar splits ice, and his hall is built of the bones of those who disagreed.",
+  // ---- undead ----
+  skeleton_archer: "A rattling skeleton still holding a bow, notching and loosing with an eerie, practiced calm.",
+  skeleton_warrior: "A skeleton in dented armour, advancing with a soldier's gait. It has forgotten why, and does not tire.",
+  zombie_crawler: "A legless corpse hauling itself along the ground by its fingers, moaning, patient, never stopping.",
+  banshee: "A pale woman wailing from just beyond sight. The sound lifts the hair on your neck and stops your legs.",
+  revenant: "A corpse that would not stay buried, driven by one purpose. Its blows steal warmth from the living.",
+  death_knight: "A knight who swore an oath that outlasted his life. He strikes twice as often as the living can bear.",
+  plague_zombie: "A bloated, weeping corpse trailing a sour green haze. Breathing near it is a mistake you only make once.",
+  lich_acolyte: "A gaunt, hooded figure learning the dark craft the hard way. It raises the dead to fight on its behalf.",
+  crypt_stalker: "A thin, pale shape that clings to the ceiling of a crypt and drops on whoever is walking last.",
+  fireelemental: "A dancing column of living flame that feeds on dry wood and warm air. It sets fire to anything it passes, whether it means to or not.",
+  spirit: "A drifting, half-seen shape. It has no quarrel with the living beyond the fact that they are living.",
+  grave_warden: "A hulking guardian of a tomb, bound by an oath to keep the dead undisturbed and unable to stop.",
+  the_wanderer: "A figure that has walked since before the road was laid, and never once looked back. It is not looking for you, but you are in its way.",
+  // ---- demons ----
+  lesser_imp: "A cackling, red-skinned imp spitting embers from the rafters. Annoying, until the third burn.",
+  hellhound: "A black hound with ember eyes and a smoking coat, hunting in great bounding charges that scorch the ground.",
+  succubus: "Beautiful, patient, and utterly without mercy. She does not fight; she waits until fear does the work.",
+  pit_fiend: "A towering, many-horned fiend wreathed in flame, who strikes with both fists and wings and hates to be kept waiting.",
+  shadow_demon: "A shape cut from the dark itself, passing through walls and arriving beside you without footsteps.",
+  demon_gatekeeper: "A brass-horned sentry set to guard a door that should stay shut. It summons its kin if anyone gets close.",
+  tormented_soul: "A shrieking ember of a mortal, burning in a hell it can never leave, flinging its anguish at the nearest living thing.",
+  brimstone_stalker: "A lean, sulphur-reeking hunter that lurks in smoke, then steps out to burn.",
+  bone_horror: "A shambling heap of fused bone and infernal sinew, fearless and slow to die, advancing steadily.",
+  warband_captain: "A horned officer of a demonic warband, sword-hand blackened by fire, barking orders in a tongue that sounds like cracking stone.",
+  the_nameless_one: "It was something else once. Whatever it was has burned to a shape without a name, and it remembers only how to hate.",
+  // ---- constructs & machines ----
+  stoneguardian: "A statue brought to ponderous life, its eyes glowing a dull orange. It will not tire, and it will not be talked out of anything.",
+  claygolem: "A lumpen golem of wet, red clay, shedding crumbs as it lurches. The ritual that woke it left no room for mercy.",
+  stonegolem: "A mountain-grey golem, blocky and slow, whose every swing carries the weight of a landslide.",
+  animatedarmor: "An empty suit of armour clanking through the halls it was left to guard, striking at anything that is not its master.",
+  spectralblade: "A sword hanging in the air with no hand to hold it, striking with the discipline of a long-dead master.",
+  turret_scraploader: "A crude turret bolted from salvage, spitting scrap at anything that moves in its arc. It runs on a power cell and spite.",
+  turret_autocannon: "A heavy, belt-fed autocannon on a rotating mount. It has a long reach and a loud voice.",
+  turret_flakbattery: "A rack of flak guns angled at the sky. Anything flying is its first priority; walkers are a second.",
+  turret_sentinel_prime: "The pinnacle of automated defence: a heavy turret with tracking optics, which reacts to your plan before you finish thinking it.",
+  bot_scrapwalker: "A gangling walker welded from junk and rust, bits falling off at every step. It still hits like a hammer.",
+  bot_combatdrone: "A hovering, armoured drone with a small gun and a patient, hungry sensor. It circles first, then fires.",
+  bot_warchassis: "A hulking tracked war machine designed to hold a line. It treats your armour as a suggestion.",
+  bot_prometheuscore: "A self-repairing machine intelligence in a steel shell, mending itself faster than most weapons can wound it.",
+  bot_repairdrone: "A small hovering medic that stitches other machines back together. Kill it first, or regret it.",
+  rust_drone: "A flaking, rust-bitten drone that fires corroded bolts from a safe distance and rattles when it moves.",
+  clockwork_sentinel: "A brass-and-spring sentinel that ticks like a pocket-watch the size of a person. It fires with mechanical, unblinking precision.",
+  rune_guardian: "A heavy construct inscribed with glowing runes. It stands where it was told to stand and hits whatever it was told to hit.",
+  mirror_wraith: "A figure of silvered glass that slides through walls and shows you a face you do not recognise as your own.",
+  animated_tome: "A fat, leather-bound book that flaps and snaps at readers. Its pages whisper nonsense that makes your eyes swim.",
+  gargoyle: "A perched, stone-winged horror that has watched the rooftops for centuries. When it moves, it moves fast.",
+  iron_golem: "A towering, rivet-studded golem with a forge-heart. It hits like a siege engine and shrugs off most steel.",
+  stone_titan: "A mountain-sized idol that has decided to leave its pedestal. Every step opens cracks in the floor.",
+  iron_sovereign: "A mechanical monarch in layered iron, wielding the authority of a court that no longer exists, and enforcing it.",
+  piston_wraith: "A steam-wreathed shape of valves and pistons hissing through the air, shrouded in the ghost of a long-dead engine.",
+  runaway_automaton: "A once-obedient automaton that slipped its leash and is now running on pure momentum, striking at anything that tries to stop it.",
+  // ---- cyber ----
+  cyborg_augmentedvagrant: "A drifter whose cheap augments are cracked and leaking. Their reflexes are far beyond what they can afford to maintain.",
+  cyborg_graftedmercenary: "A mercenary with grafted plates and a wired arm. They are professional about it, and expensive.",
+  cyborg_apexunit: "A top-of-the-line augmented killer. Every implant is current, and every move feeds its own healing.",
+  chrome_enforcer: "A hulking enforcer in chrome plating, a ceramic baton in one hand, a neural suppressor in the other.",
+  security_drone: "A small hovering drone that scans, locks, and fires. If it sees you, so does everything behind it.",
+  combat_android: "A humanlike chassis moving with a hunter's economy. Its eyes follow you with a faint, patient glow.",
+  hacker_construct: "A spindly, antenna-crowned machine that rattles your thoughts with static from a safe distance.",
+  cyber_hound: "A sleek, wired hound that runs at a gallop on piston legs, sensors panning for the scent of warm blood.",
+  turret_sentry: "A low-slung gun emplacement that swivels with a soft electronic whine, firing at anything that moves in its sight.",
+  nanite_swarm: "A hissing, glittering cloud of nanomachines. Individually invisible; collectively, they strip flesh.",
+  rogue_ai_core: "A bare machine mind in a shielded casing, calling its servants to its aid and calculating your every move.",
+  core_overmind: "A mechanical overmind running a thousand drones through a single throat. It does not want anything. That is what makes it worse.",
+  the_unlisted: "A figure that does not appear in any registry, and will not be found in a ledger of the dead either.",
+  // ---- celestial ----
+  choir_acolyte: "A robed singer of the Gilded Choir, voice still sweet, eyes long since gone. The song it sings is not a hymn.",
+  hymnal_construct: "A mechanical choirmaster of brass pipes and bellows, humming a chord that rattles your teeth.",
+  sundered_cherub: "A winged child's statue, cracked and weeping gold. It fires bolts of light in a manner that is far from innocent.",
+  choir_wraith: "A pale, flying shape within the hymn, unseen until the last note, striking with a shriek that stops hearts.",
+  reliquary_warden: "A towering guardian of gilded plate, sworn to protect relics that no longer belong to anyone, and crushing the unworthy.",
+  choir_enforcer: "A stern figure in gilded armour who ensures that nobody leaves the sermon early. Its voice is a command you want to obey.",
+  uninvited_chorister: "A voice that joined the choir uninvited and refuses to stop. It sings a note you can only describe as wrong.",
+  // ---- cosmic ----
+  void_drifter: "A shape that drifts through the dark, never quite where you looked. It has no face, and it does not need one.",
+  static_wraith: "A crackling shape of white noise that arrives out of dead air and leaves a taste of copper.",
+  husk_drone: "A dead, drifting drone whose guns still track. It shoots at anything left alive and cannot be reasoned with.",
+  star_leech: "A pale, ribbed worm of the dark between worlds, clinging to a hull and draining whatever warmth is left.",
+  null_sentinel: "A sentinel hollowed out by the void. It stands where it was told to, and it strikes at anything that is not nothing.",
+  the_unmoored: "A figure with no anchor, drifting between places and moments, striking from wherever it happens to be.",
+  // ---- non-Euclidean ----
+  fold_wraith: "A flicker at the edge of a corridor, arriving through a seam in the wall that was not there before.",
+  angle_eater: "A thin, many-jointed creature that gnaws at corners until the room seems wrong. Its bite makes angles bend.",
+  recursive_husk: "A husk of something that keeps splitting into smaller copies of itself, each as unconvinced of its own death as the last.",
+  still_walker: "A tall, motionless figure that is somehow closer each time you look. Its stare makes thoughts slide sideways.",
+  folded_sentinel: "A guardian folded in on itself so many times it is hard to say which part is facing you.",
+  the_off_beat: "A figure that moves a half-second out of sync with everything else, so that you flinch at the wrong moment.",
+  // ---- the drowned ----
+  drift_wraith: "A pale shape trailing seaweed through the air, drifting after the living with water running from its eyes.",
+  current_stalker: "A long, shadowy hunter that swims with the current, striking from the blind side of the tide.",
+  tideglass_horror: "A bulbous, glass-skinned thing from the deep trench, its fear-making glow the last thing many swimmers see.",
+  brinelord: "A crowned, barnacle-crusted master of the drowned court, whose touch leaves salt in the wound.",
+  the_fathom_touched: "A figure that has gone down too far and come back up changed, dripping and empty-eyed and awfully patient.",
+  // ---- plants ----
+  spore_walker: "A lurching mass of fungus on rootlike legs, trailing a cloud of spores that burn the lungs.",
+  bramble_knight: "A knight woven of thorned vines in an old suit of armour, still on patrol for a kingdom that grew over.",
+  poison_bloom: "A fat, gorgeous flower that wafts a sweet scent. The scent is a poison, and the flower knows it.",
+  thornling: "A small, spiny, root-footed sprout that darts at your ankles. Its barbs are laced with sap that stings.",
+  treant_sapling: "A young treant with the temper of a toddler and the reach of a lumberjack, mending as it fights.",
+  corpse_flower: "An enormous, stinking bloom whose rot-scented pollen makes fighters gag and wander.",
+  verdant_horror: "A vast thing of vines and rotting leaves that fills the air with a choking green haze. It grows back as fast as it is cut.",
+  the_first_bloom: "The first flower to push through the ash. It has grown a great deal since, and it is very hungry.",
+  // ---- virus / digital ----
+  glitch_wisp: "A flickering fragment of broken code, drifting and spitting corrupted bolts that hurt more than they should.",
+  corrupted_pixel: "A square of wrong colour that splits, again and again, each fragment a little more corrupt than the last.",
+  logic_bomb: "A small, ticking, innocuous-looking block of code that detonates in a cloud of damaging noise when disturbed.",
+  trojan_horse: "A friendly-looking gift that is anything but. It springs open when you are close enough to touch.",
+  worm_process: "A long, writhing process that copies itself endlessly through the system, spawning children and consuming resources.",
+  the_unindexed: "A thing that does not appear in any index and cannot be found, searched or cleanly deleted. It certainly finds you.",
+  // ---- ooze ----
+  slime_small: "A palm-sized puddle of green slime that creeps along the floor and flops onto things.",
+  acid_slime: "A sickly, glistening slime that eats armour and splits when struck, each piece as corrosive as the whole.",
+  gelatinous_cube: "A quivering, transparent cube that fills a corridor from wall to wall, engulfing whatever it touches and digesting at leisure.",
+  the_maw: "A single enormous mouth with an appetite to match, splitting and reforming as it chews through whatever is nearby.",
+  // ---- eldritch ----
+  tentacled_horror: "A heap of grasping tentacles with no discernible head. It flails wildly and seldom misses.",
+  mind_flayer: "A tall, squid-faced thing in robes that gazes into your mind and finds a way to make you afraid.",
+  star_spawn: "A dribbling, stunted horror from between the stars, whose very presence makes sane thought difficult.",
+  void_walker: "A silent figure of unlit space that steps through the wall and arrives beside you without a sound.",
+  whispering_shade: "A faint figure that murmurs your own name from the shadows until the dread becomes unbearable.",
+  corrupted_cultist: "A robed worshipper whose devotion has outrun their humanity. They gibber prayers and throw curses.",
+  gibbering_mouther: "A crawling mound of mouths, babbling in a hundred voices, each one exhaling a corrosive breath.",
+  elder_thing: "An ancient, barrel-bodied thing from before the world was cold. It looks at you with scholarly interest and does not blink.",
+  the_harbinger: "Something that arrives before the thing it announces. Its presence is a warning; its voice, a confirmation.",
+  // ---- humans & dreamers ----
+  alchemistfoe: "A soot-stained, wild-eyed alchemist hurling flasks of acid and venom at anyone who gets near the stock.",
+  darkpriest: "A black-robed priest of a god that is not named in daylight, calling down fire on the unfaithful.",
+  bloodmage: "A pale, scarred caster who pays for every spell in blood, and takes it back from you with interest.",
+  bandit_archer: "A bandit crouched at the tree line with a shortbow and a handful of throwing knives. Cover is your friend.",
+  bandit_thug: "A brawny, cudgel-wielding ruffian who wants your purse and has no interest in negotiating the price.",
+  mercenary: "A hired sword with a professional manner and a fair idea of what you are worth.",
+  rogue_assassin: "A lean figure that melts into the shadows, then reappears at your back. Few see the blade.",
+  war_priest: "An armoured priest who mends the wounded between blows and curses the enemy with the same breath.",
+  knight_captain: "A veteran knight in battered plate, commanding the field as much by example as by order. The lance is a formality.",
+  figment: "A shy, shifting shape from somebody's dream. It would rather flee than fight, and it is gone as soon as you look away.",
+  echo_child: "A small, laughing voice from no direction. It remembers being scared, and shares it.",
+  night_terror: "The thing under the bed, grown up. It lies still until you are almost past, then does what it was always going to do.",
+  unraveled_thing: "A shape coming apart at the seams, dragging threads of other dreams behind it.",
+  lucid_wisp: "A small, bright spark of a thought that hovers close and hurls light at anything that disturbs the dreamer.",
+  the_half_formed: "A figure still being drawn by whoever is dreaming it, all the more dangerous for being unfinished.",
+};
+for (const _id in MONSTER_DESCRIPTIONS_PACK3) if (MONSTER_BASES[_id] && !MONSTER_BASES[_id].desc) MONSTER_BASES[_id].desc = MONSTER_DESCRIPTIONS_PACK3[_id];
 
 </script>
 </body>
